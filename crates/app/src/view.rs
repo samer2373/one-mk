@@ -266,6 +266,8 @@ pub struct Prefs {
     pub history_persist: bool,
     pub history_enabled: bool,
     pub notify_files: bool,
+    /// `[window] appearance`: System (the default), Light or Dark.
+    pub appearance: crate::style::Appearance,
     /// Gaming mode: `off`, `on` or `auto`.
     pub gaming: String,
     pub typing: &'static str,
@@ -365,6 +367,7 @@ impl Prefs {
             history_persist: flag("clipboard", "history_persist", false),
             history_enabled: num("clipboard", "history_max", 0) > 0 && num("clipboard", "history_max_mb", 16) > 0,
             notify_files: flag("", "notify_files", true),
+            appearance: crate::style::Appearance::parse(&text("window", "appearance", "system")),
             gaming: text("", "gaming", "off"),
             typing: match text("typing", "keys", "physical").as_str() {
                 "characters" => "characters",

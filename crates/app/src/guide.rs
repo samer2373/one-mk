@@ -713,7 +713,7 @@ fn card_size(ctx: &egui::Context, v: &View) -> Vec2 {
         // The success title has the tick before it.
         let tw = if matches!(phase, Phase::Granted { .. }) { w - 30.0 } else { w };
         let h =
-            title_galley(ctx, &words.title, tw, INK).size().y + 6.0 + body_galley(ctx, &words.body, w, INK2).size().y;
+            title_galley(ctx, &words.title, tw, pal().ink).size().y + 6.0 + body_galley(ctx, &words.body, w, pal().ink2).size().y;
         tallest = tallest.max(h);
     }
     vec2(CARD_W, (PAD + HEADER_H + 14.0 + tallest + 16.0 + FOOTER_H + PAD).ceil())
@@ -762,11 +762,11 @@ fn draw_arrow(p: &egui::Painter, dir: ArrowDir, tip: Pos2, alpha: f32) {
         vec![tip + u * grow, base + n * (half + grow) - u * grow * 0.6, base - n * (half + grow) - u * grow * 0.6]
     };
     // A dark halo first, so it reads on light and dark windows alike.
-    let halo = GROUND.gamma_multiply(0.85 * alpha);
+    let halo = pal().bg.gamma_multiply(0.85 * alpha);
     p.line_segment([tail, base + u * 1.0], Stroke::new(9.0, halo));
     p.circle_filled(tail, 4.5, halo);
     p.add(egui::Shape::convex_polygon(tri(2.5), halo, Stroke::NONE));
-    let col = SIGNAL.gamma_multiply(alpha);
+    let col = pal().accent.gamma_multiply(alpha);
     p.line_segment([tail, base + u * 1.0], Stroke::new(4.0, col));
     p.circle_filled(tail, 2.0, col);
     p.add(egui::Shape::convex_polygon(tri(0.0), col, Stroke::NONE));
@@ -792,14 +792,11 @@ fn draw_card(
         offset: [0, 10],
         blur: 28,
         spread: 0,
-        color: Color32::from_black_alpha((120.0 * alpha) as u8),
+        color: pal().shadow((120.0 * alpha) as u8),
     };
     p.add(shadow.as_shape(card, CornerRadius::same(RADIUS)));
-    p.rect_filled(card, CornerRadius::same(RADIUS), POPOVER.gamma_multiply(alpha));
-    p.rect_stroke(card, CornerRadius::same(RADIUS), Stroke::new(1.0, Color32::from_white_alpha(16).gamma_multiply(alpha)), StrokeKind::Inside);
-    // A faint top light, as on the app's raised surfaces.
-    let top = Rect::from_min_size(card.min + vec2(RADIUS as f32, 0.5), vec2(card.width() - 2.0 * RADIUS as f32, 1.0));
-    p.rect_filled(top, 0.0, Color32::from_white_alpha((10.0 * alpha) as u8));
+    p.rect_filled(card, CornerRadius::same(RADIUS), pal().surface.gamma_multiply(alpha));
+    p.rect_stroke(card, CornerRadius::same(RADIUS), Stroke::new(1.0, pal().line2.gamma_multiply(alpha)), StrokeKind::Inside);
 
     let pointing = matches!(v.phase, Phase::Waiting) && v.settings.is_some();
     if let Some((dir, tip)) = arrow {
@@ -827,18 +824,18 @@ fn draw_card(
         for i in 0..v.of.min(2) {
             let r = Rect::from_min_size(pos2(x, hy - 2.0), vec2(18.0, 4.0));
             let col = if v.done[i] {
-                SIGNAL
+                pal().accent
             } else if i + 1 == v.step {
-                INK
+                pal().ink
             } else {
-                TRACK_OFF
+                pal().surface2
             };
             p.rect_filled(r, CornerRadius::same(2), ink(col));
             x += 22.0;
         }
         x += 4.0;
     }
-    p.text(pos2(x, hy), Align2::LEFT_CENTER, &label, regular(T_META), ink(INK2));
+    p.text(pos2(x, hy), Align2::LEFT_CENTER, &label, regular(T_META), ink(pal().ink2));
     let close = Rect::from_center_size(pos2(card.right() - 10.0 - 13.0, card.top() + 10.0 + 13.0), vec2(26.0, 26.0));
     let mut action = None;
     if widgets::icon_button(ui, close, Id::unique("guide-close"), "Close this guide", true, |p, r, c| {
@@ -859,18 +856,18 @@ fn draw_card(
         let draw = motion::progress(now, at + motion::space(0.12) as f64, motion::space(0.32), motion::out_cubic);
         let c = pos2(tx + 11.0, y + 10.0);
         let r = 11.0 * if motion::reduced() { 1.0 } else { 0.6 + 0.4 * pop };
-        p.circle_filled(c, r, SIGNAL.gamma_multiply(alpha * shown));
-        widgets::draw_check(&p, c, 13.0, SIGNAL_INK.gamma_multiply(alpha * shown), draw);
+        p.circle_filled(c, r, pal().accent.gamma_multiply(alpha * shown));
+        widgets::draw_check(&p, c, 13.0, pal().on_accent.gamma_multiply(alpha * shown), draw);
         tx += 30.0;
     }
-    let tg = title_galley(ui.ctx(), &words.title, inner.right() - tx, INK);
+    let tg = title_galley(ui.ctx(), &words.title, inner.right() - tx, pal().ink);
     let title_rect = Rect::from_min_size(pos2(tx, y), tg.size());
-    p.galley_with_override_text_color(title_rect.min, tg, wink(INK));
+    p.galley_with_override_text_color(title_rect.min, tg, wink(pal().ink));
     widgets::a11y_text(ui, Id::unique("guide-title"), title_rect, Role::Heading, &words.title, Some(Live::Polite));
     y = title_rect.bottom() + 6.0;
-    let bg = body_galley(ui.ctx(), &words.body, inner.width(), INK2);
+    let bg = body_galley(ui.ctx(), &words.body, inner.width(), pal().ink2);
     let body_rect = Rect::from_min_size(pos2(inner.left(), y), bg.size());
-    p.galley_with_override_text_color(body_rect.min, bg, wink(INK2));
+    p.galley_with_override_text_color(body_rect.min, bg, wink(pal().ink2));
     widgets::a11y_text(ui, Id::unique("guide-body"), body_rect, Role::Label, &words.body, None);
 
     // Footer: what's happening, or the one thing to do.
@@ -885,17 +882,17 @@ fn draw_card(
                 if nudging { 0.5 - 0.5 * ((now - v.phase_at) * std::f64::consts::TAU / 1.1).cos() as f32 } else { 0.0 };
             let c = pos2(inner.left() + 4.0, fy);
             // Waiting is a state, not an action: ink, never Volt.
-            p.circle_filled(c, 7.0, INK2.gamma_multiply(alpha * k * 0.16 * beat));
-            p.circle_filled(c, 3.5, wink(INK2));
+            p.circle_filled(c, 7.0, pal().ink2.gamma_multiply(alpha * k * 0.16 * beat));
+            p.circle_filled(c, 3.5, wink(pal().ink2));
             let text = if v.covered || v.settings.is_none() {
                 "Waiting for System Settings…"
             } else {
                 "Watching for the switch…"
             };
-            p.text(pos2(inner.left() + 16.0, fy), Align2::LEFT_CENTER, text, regular(T_META), wink(INK2));
+            p.text(pos2(inner.left() + 16.0, fy), Align2::LEFT_CENTER, text, regular(T_META), wink(pal().ink2));
         }
         Footer::Note(text) => {
-            p.text(pos2(inner.left(), fy), Align2::LEFT_CENTER, text, regular(T_META), wink(INK2));
+            p.text(pos2(inner.left(), fy), Align2::LEFT_CENTER, text, regular(T_META), wink(pal().ink2));
         }
         Footer::Button(label) => {
             let w = widgets::button_width(ui, label);
@@ -1487,19 +1484,19 @@ mod debug {
                 );
                 ui.set_clip_rect(all);
                 let p = ui.painter().clone();
-                p.rect_filled(all, 0.0, Color32::from_rgb(0x08, 0x0A, 0x0D));
+                p.rect_filled(all, 0.0, MAC_DESK);
                 for (i, s) in screen_rects.iter().enumerate() {
                     wallpaper(&p, *s, i);
                 }
                 if let Some(bar) = menu_bar {
-                    p.rect_filled(bar, 0.0, Color32::from_black_alpha(70));
-                    p.circle_filled(pos2(bar.left() + 22.0, bar.center().y), 5.0, Color32::from_white_alpha(200));
+                    p.rect_filled(bar, 0.0, black(70));
+                    p.circle_filled(pos2(bar.left() + 22.0, bar.center().y), 5.0, white(200));
                     for (k, w) in [34.0, 28.0, 30.0, 40.0].iter().enumerate() {
                         let x = bar.left() + 46.0 + k as f32 * 52.0;
                         p.rect_filled(
                             Rect::from_min_size(pos2(x, bar.center().y - 2.5), vec2(*w, 5.0)),
                             CornerRadius::same(2),
-                            Color32::from_white_alpha(120),
+                            white(120),
                         );
                     }
                 }
@@ -1514,11 +1511,7 @@ mod debug {
 
     fn wallpaper(p: &egui::Painter, s: Rect, i: usize) {
         // A quiet two-tone gradient, a little different per screen.
-        let (a, b) = if i == 0 {
-            (Color32::from_rgb(0x2B, 0x3A, 0x55), Color32::from_rgb(0x6B, 0x5B, 0x7A))
-        } else {
-            (Color32::from_rgb(0x24, 0x44, 0x4A), Color32::from_rgb(0x4E, 0x5F, 0x7A))
-        };
+        let [a, b] = MAC_WALLS[i.min(1)];
         let mut mesh = egui::Mesh::default();
         mesh.colored_vertex(s.left_top(), a);
         mesh.colored_vertex(s.right_top(), widgets::mix(a, b, 0.5));
@@ -1532,36 +1525,15 @@ mod debug {
     /// A drawing of System Settings' privacy list (not a copy of it): a
     /// sidebar, a title, a few apps with switches, oneMK's off.
     fn settings_window(p: &egui::Painter, r: Rect, dark: bool, view: &View) {
-        let (bg, side, card, line, ink, ink2, off) = if dark {
-            (
-                Color32::from_rgb(0x1E, 0x1E, 0x1E),
-                Color32::from_rgb(0x2A, 0x27, 0x2B),
-                Color32::from_rgb(0x2B, 0x2B, 0x2B),
-                Color32::from_rgb(0x3A, 0x3A, 0x3A),
-                Color32::from_rgb(0xEC, 0xEC, 0xEC),
-                Color32::from_rgb(0x9A, 0x9A, 0x9A),
-                Color32::from_rgb(0x48, 0x48, 0x4A),
-            )
-        } else {
-            (
-                Color32::from_rgb(0xF6, 0xF6, 0xF6),
-                Color32::from_rgb(0xE8, 0xE6, 0xEA),
-                Color32::WHITE,
-                Color32::from_rgb(0xE2, 0xE2, 0xE2),
-                Color32::from_rgb(0x1D, 0x1D, 0x1F),
-                Color32::from_rgb(0x86, 0x86, 0x8B),
-                Color32::from_rgb(0xE5, 0xE5, 0xEA),
-            )
-        };
-        let shadow =
-            egui::epaint::Shadow { offset: [0, 18], blur: 50, spread: 0, color: Color32::from_black_alpha(110) };
+        let [bg, side, card, line, ink, ink2, off] = if dark { MAC_DARK } else { MAC_LIGHT };
+        let shadow = egui::epaint::Shadow { offset: [0, 18], blur: 50, spread: 0, color: black(110) };
         p.add(shadow.as_shape(r, CornerRadius::same(12)));
         p.rect_filled(r, CornerRadius::same(12), bg);
         let sw = (r.width() * 0.3).clamp(160.0, 230.0);
         let sb = Rect::from_min_size(r.min, vec2(sw, r.height()));
         p.rect_filled(sb, CornerRadius { nw: 12, sw: 12, ne: 0, se: 0 }, side);
-        for (k, c) in [(0.0, (0xFF, 0x5F, 0x57)), (1.0, (0xFE, 0xBC, 0x2E)), (2.0, (0x28, 0xC8, 0x40))] {
-            p.circle_filled(r.min + vec2(20.0 + k * 20.0, 20.0), 6.0, Color32::from_rgb(c.0, c.1, c.2));
+        for (k, c) in MAC_BUTTONS.into_iter().enumerate() {
+            p.circle_filled(r.min + vec2(20.0 + k as f32 * 20.0, 20.0), 6.0, c);
         }
         // Sidebar: a search field and rows of grey, one chosen.
         p.rect_filled(Rect::from_min_size(r.min + vec2(12.0, 44.0), vec2(sw - 24.0, 26.0)), CornerRadius::same(7), off);
@@ -1569,9 +1541,9 @@ mod debug {
             let y = r.top() + 92.0 + i as f32 * 30.0;
             let row = Rect::from_min_size(pos2(r.left() + 10.0, y - 12.0), vec2(sw - 20.0, 26.0));
             if i == 5 {
-                p.rect_filled(row, CornerRadius::same(7), Color32::from_rgb(0x0A, 0x84, 0xFF));
+                p.rect_filled(row, CornerRadius::same(7), MAC_BLUE);
             }
-            let col = if i == 5 { Color32::WHITE } else { ink2.gamma_multiply(0.7) };
+            let col = if i == 5 { white(255) } else { ink2.gamma_multiply(0.7) };
             p.rect_filled(
                 Rect::from_min_size(pos2(row.left() + 8.0, y - 7.0), vec2(14.0, 14.0)),
                 CornerRadius::same(4),
@@ -1619,18 +1591,18 @@ mod debug {
             p.rect_filled(
                 icon,
                 CornerRadius::same(6),
-                if ours { Color32::from_rgb(0x13, 0x17, 0x1C) } else { ink2.gamma_multiply(0.5) },
+                if ours { MAC_OURS } else { ink2.gamma_multiply(0.5) },
             );
             if ours {
-                p.circle_filled(icon.center() - vec2(4.0, 0.0), 3.0, SIGNAL);
-                p.circle_filled(icon.center() + vec2(4.0, 0.0), 3.0, INK);
+                p.circle_filled(icon.center() - vec2(4.0, 0.0), 3.0, Palette::dark().accent);
+                p.circle_filled(icon.center() + vec2(4.0, 0.0), 3.0, SCREEN_INK);
             }
             p.text(pos2(x0 + 44.0, cy), Align2::LEFT_CENTER, *name, regular(T_BODY), ink);
             let on = !ours || granted;
             let track = Rect::from_center_size(pos2(list.right() - 34.0, cy), vec2(38.0, 22.0));
-            p.rect_filled(track, CornerRadius::same(11), if on { Color32::from_rgb(0x0A, 0x84, 0xFF) } else { off });
+            p.rect_filled(track, CornerRadius::same(11), if on { MAC_BLUE } else { off });
             let knob = if on { track.right() - 11.0 } else { track.left() + 11.0 };
-            p.circle_filled(pos2(knob, cy), 9.5, Color32::WHITE);
+            p.circle_filled(pos2(knob, cy), 9.5, white(255));
         }
         // The + and − buttons under the list.
         let by = list.bottom() + 22.0;

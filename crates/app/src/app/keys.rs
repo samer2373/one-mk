@@ -205,8 +205,8 @@ mod gesture_tests {
     #[test]
     fn compact_setup_surface_is_scoped_to_keyboard() {
         for hover in [0.0, 0.5, 1.0] {
-            assert_eq!(setup_fill(false, hover, false), mix(BUTTON, BUTTON_LIT, hover));
-            assert_eq!(setup_fill(true, hover, false), mix(THUMB, Color32::from_rgb(0x60, 0x6A, 0x76), hover));
+            assert_eq!(setup_fill(false, hover, false), mix(pal().surface2, pal().surface2_hover, hover));
+            assert_eq!(setup_fill(true, hover, false), mix(pal().accent_soft, pal().pressed(pal().accent_soft, 0.4), hover));
             assert_ne!(setup_fill(true, hover, true), setup_fill(true, hover, false));
         }
     }
@@ -312,7 +312,7 @@ fn card_begin(ui: &Ui, top: Pos2, w: f32, title: &str, strong: bool) -> Card {
     let r = Rect::from_min_size(top, vec2(w, 200.0));
     let p = ui.painter();
     // The title above the group, as every settings group has it.
-    p.text(r.left_top() + if strong { vec2(18.0, 17.0) } else { vec2(14.0, 13.0) }, Align2::LEFT_CENTER, title, semibold(if strong { T_TITLE } else { T_BODY }), if strong { INK } else { INK2 });
+    p.text(r.left_top() + if strong { vec2(18.0, 17.0) } else { vec2(14.0, 13.0) }, Align2::LEFT_CENTER, title, semibold(if strong { T_TITLE } else { T_BODY }), if strong { pal().ink } else { pal().ink2 });
     a11y_text(ui, Id::unique(("card", title)), Rect::from_min_size(r.min, vec2(w, 30.0)), Role::Heading, title, None);
     Card { bg, top, w, inner: Rect::from_min_max(r.min + vec2(18.0, if strong { 42.0 } else { 32.0 }), pos2(r.right() - 18.0, f32::INFINITY)) }
 }
@@ -353,10 +353,10 @@ fn flow(ui: &Ui, left: f32, top: f32, width: f32, labels: &[&str]) -> (Vec<Rect>
 /// A chip that is on or off: a quick setup.
 fn setup_fill(on: bool, hover: f32, compact: bool) -> Color32 {
     match (compact, on) {
-        (true, true) => mix(Color32::from_rgb(0x28, 0x36, 0x1C), Color32::from_rgb(0x35, 0x46, 0x25), hover),
-        (true, false) => mix(PANEL, BUTTON_LIT, hover),
-        (false, true) => mix(THUMB, Color32::from_rgb(0x60, 0x6A, 0x76), hover),
-        (false, false) => mix(BUTTON, BUTTON_LIT, hover),
+        (true, true) => mix(mix(pal().accent_soft, pal().accent, 0.08), mix(pal().pressed(pal().accent_soft, 0.4), pal().accent, 0.08), hover),
+        (true, false) => mix(pal().surface, pal().surface2_hover, hover),
+        (false, true) => mix(pal().accent_soft, pal().pressed(pal().accent_soft, 0.4), hover),
+        (false, false) => mix(pal().surface2, pal().surface2_hover, hover),
     }
 }
 
@@ -372,15 +372,15 @@ fn chip(ui: &mut Ui, rect: Rect, id: Id, label: &str, on: bool, enabled: bool, c
     // tick; not set: a quiet fill and regular words.
     let fill = setup_fill(on, hover, compact);
     let surface = widgets::pressed_lift(fill, press);
-    let ink = if !enabled { INK2 } else if on { INK } else { mix(INK2, INK, hover) };
+    let ink = if !enabled { pal().ink2 } else if on { pal().ink } else { mix(pal().ink2, pal().ink, hover) };
     let ink = if press > 0.0 { widgets::pressed_ink(surface, ink) } else { ink };
     p.rect_filled(rect, radius, surface);
     let font = if on { semibold(T_META + 1.0) } else { regular(T_META + 1.0) };
     let text = fit(p, label, &font, rect.width() - 24.0 - if on { 16.0 } else { 0.0 });
-    let text_width = p.layout_no_wrap(text.clone(), font.clone(), INK).size().x;
+    let text_width = p.layout_no_wrap(text.clone(), font.clone(), pal().ink).size().x;
     let mut x = rect.center().x - (text_width + if on { 16.0 } else { 0.0 }) / 2.0;
     if on {
-        widgets::draw_check(p, pos2(x + 5.0, rect.center().y), 11.0, if press > 0.0 { widgets::pressed_ink(surface, ACCENT) } else { ACCENT }, 1.0);
+        widgets::draw_check(p, pos2(x + 5.0, rect.center().y), 11.0, if press > 0.0 { widgets::pressed_ink(surface, pal().accent) } else { pal().accent }, 1.0);
         x += 16.0;
     }
     p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, text, font, ink);
@@ -487,16 +487,16 @@ fn slider(ui: &mut Ui, rect: Rect, id: Id, t: f32, name: &str, value: f64) -> (O
     }
     let shown = out.unwrap_or(t);
     let p = ui.painter();
-    p.rect_filled(track, CornerRadius::same(2), TRACK_OFF);
+    p.rect_filled(track, CornerRadius::same(2), pal().surface2);
     let x = track.left() + track.width() * shown;
-    p.rect_filled(Rect::from_min_max(track.min, pos2(x, track.bottom())), CornerRadius::same(2), INK2);
+    p.rect_filled(Rect::from_min_max(track.min, pos2(x, track.bottom())), CornerRadius::same(2), pal().ink2);
     // The middle is "as it is" (1×).
-    p.line_segment([pos2(track.center().x, track.top() - 5.0), pos2(track.center().x, track.top() - 2.0)], Stroke::new(1.0, KEY_EDGE));
+    p.line_segment([pos2(track.center().x, track.top() - 5.0), pos2(track.center().x, track.top() - 2.0)], Stroke::new(1.0, pal().key_edge));
     let knob = pos2(x, track.center().y);
     // Held, the knob dims a step: pressed, apart from hover and focus.
-    p.circle_filled(knob, 8.0, if r.is_pointer_button_down_on() || r.dragged() { INK2 } else if r.hovered() { Color32::WHITE } else { INK });
+    p.circle_filled(knob, 8.0, if r.is_pointer_button_down_on() || r.dragged() { pal().ink2 } else if r.hovered() { pal().tint_ink } else { pal().ink });
     if r.has_focus() && widgets::keyboard_focus(ui.ctx()) {
-        p.circle_stroke(knob, 11.0, Stroke::new(2.0, SIGNAL));
+        p.circle_stroke(knob, 11.0, Stroke::new(2.0, pal().accent));
     }
     if r.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -526,8 +526,8 @@ fn draw_cross(p: &Painter, rect: Rect, col: Color32) {
 
 /// An error line: a red dot and the message, wrapped. Its height.
 fn error_line(ui: &Ui, left: f32, y: f32, width: f32, text: &str) -> f32 {
-    ui.painter().circle_filled(pos2(left + 3.0, y + 9.0), 3.0, ERROR);
-    let h = widgets::para_code(ui, pos2(left + 14.0, y), width - 14.0, text, regular(T_BODY), INK);
+    ui.painter().circle_filled(pos2(left + 3.0, y + 9.0), 3.0, pal().danger);
+    let h = widgets::para_code(ui, pos2(left + 14.0, y), width - 14.0, text, regular(T_BODY), pal().ink);
     a11y_text(ui, Id::unique(("keys-error", text)), Rect::from_min_size(pos2(left, y), vec2(width, h)), Role::Alert, text, Some(Live::Assertive));
     h
 }
@@ -805,8 +805,8 @@ impl App {
         if self.tuning_busy() {
             let p = ui.painter();
             let x = track.right() + 16.0;
-            widgets::draw_refresh(p, Rect::from_center_size(pos2(x + 8.0, track.center().y), vec2(16.0, 16.0)), INK2, if motion::reduced() { 0.0 } else { (now * 5.0) as f32 });
-            p.text(pos2(x + 22.0, track.center().y), Align2::LEFT_CENTER, "Saving…", regular(T_META), INK2);
+            widgets::draw_refresh(p, Rect::from_center_size(pos2(x + 8.0, track.center().y), vec2(16.0, 16.0)), pal().ink2, if motion::reduced() { 0.0 } else { (now * 5.0) as f32 });
+            p.text(pos2(x + 22.0, track.center().y), Align2::LEFT_CENTER, "Saving…", regular(T_META), pal().ink2);
             ui.ctx().request_repaint_after_secs(1.0 / 30.0);
         }
 
@@ -856,16 +856,16 @@ impl App {
             "Not available on this desktop. Local rules need macOS or Windows; your rules still work on the other computers."
         };
         let mut bottom = row.bottom() + 6.0;
-        bottom += para(ui, pos2(content.left(), bottom), content.width(), text, regular(T_META), INK2);
+        bottom += para(ui, pos2(content.left(), bottom), content.width(), text, regular(T_META), pal().ink2);
         if input.local_rules && let Some(status) = self.running().and_then(|status| status.input.iter()
             .find(|line| line.starts_with("Local key rules "))).cloned() {
             bottom += 6.0;
-            bottom += para(ui, pos2(content.left(), bottom), content.width(), &status, regular(T_META), INK2);
+            bottom += para(ui, pos2(content.left(), bottom), content.width(), &status, regular(T_META), pal().ink2);
         }
         if cfg!(target_os = "macos") {
             bottom += 6.0;
             bottom += para(ui, pos2(content.left(), bottom), content.width(),
-                "Simple key swaps, including Caps Lock, use this Mac’s keyboard settings. Caps Lock can only map to one key, not a chord, layer or app-only rule. Fn and media keys are not available.", regular(T_META), INK2);
+                "Simple key swaps, including Caps Lock, use this Mac’s keyboard settings. Caps Lock can only map to one key, not a chord, layer or app-only rule. Fn and media keys are not available.", regular(T_META), pal().ink2);
         }
         if let Some((_, error)) = self.keys.error.clone().filter(|(area, _)| *area == "local-rules") {
             bottom += 6.0 + error_line(ui, content.left(), bottom + 6.0, content.width(), &error);
@@ -885,9 +885,9 @@ impl App {
         let shown = fit(ui.painter(), &label, &semibold(T_BODY), lw - 40.0);
         let resp = button(ui, r, Id::unique("keys-scope"), "", Look::Quiet, true, Some(&format!("{label}. Choose which computers the changes are for")));
         let p = ui.painter();
-        p.text(pos2(r.left() + 14.0, r.center().y), Align2::LEFT_CENTER, &shown, semibold(T_BODY), INK);
+        p.text(pos2(r.left() + 14.0, r.center().y), Align2::LEFT_CENTER, &shown, semibold(T_BODY), pal().ink);
         let c = pos2(r.right() - 16.0, r.center().y);
-        p.add(egui::Shape::line(vec![c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)], Stroke::new(1.5, INK2)));
+        p.add(egui::Shape::line(vec![c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)], Stroke::new(1.5, pal().ink2)));
         let peers = self.scope_peers();
         // Development aid (screenshots): the menu opens by itself.
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
@@ -911,7 +911,7 @@ impl App {
             opts.extend(peers.iter().map(|p| Scope::Peer(p.name.clone())));
             let heading = |ui: &mut Ui, text: &str| {
                 let (r, _) = ui.allocate_exact_size(vec2(260.0, 22.0), Sense::hover());
-                ui.painter().text(r.left_center() + vec2(8.0, 2.0), Align2::LEFT_CENTER, text, regular(T_META), INK2);
+                ui.painter().text(r.left_center() + vec2(8.0, 2.0), Align2::LEFT_CENTER, text, regular(T_META), pal().ink2);
                 a11y_text(ui, Id::unique(("keys-scope-heading", text)), r, Role::Heading, text, None);
             };
             // A choice: a check when it is the one in force, a second line
@@ -921,18 +921,18 @@ impl App {
                 // The painter of the area it is in: a list that scrolls clips it.
                 let p = ui.painter().clone();
                 let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
-                p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, PILL, hover));
+                p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, pal().hover, hover));
                 widgets::focus_ring(ui, &resp, r, 6);
                 let on = *s == current;
                 let mid = if sub.is_some() { r.top() + 14.0 } else { r.center().y };
                 if on {
-                    widgets::draw_check(&p, pos2(r.left() + 16.0, mid), 10.0, INK, 1.0);
+                    widgets::draw_check(&p, pos2(r.left() + 16.0, mid), 10.0, pal().ink, 1.0);
                 }
                 let text = fit(&p, title, &regular(T_BODY), r.width() - 40.0);
-                p.text(pos2(r.left() + 30.0, mid), Align2::LEFT_CENTER, &text, regular(T_BODY), if on { INK } else { INK_HOVER });
+                p.text(pos2(r.left() + 30.0, mid), Align2::LEFT_CENTER, &text, regular(T_BODY), if on { pal().ink } else { pal().ink_hover });
                 if let Some(sub) = sub {
                     let sub = fit(&p, sub, &regular(T_META), r.width() - 40.0);
-                    p.text(pos2(r.left() + 30.0, r.top() + 31.0), Align2::LEFT_CENTER, &sub, regular(T_META), INK2);
+                    p.text(pos2(r.left() + 30.0, r.top() + 31.0), Align2::LEFT_CENTER, &sub, regular(T_META), pal().ink2);
                 }
                 let name = match sub {
                     Some(sub) => format!("For: {title}, {sub}"),
@@ -952,9 +952,9 @@ impl App {
             }
             heading(ui, "One keyboard or mouse");
             let note = |ui: &mut Ui, text: &str| {
-                let galley = ui.painter().layout(text.to_owned(), regular(T_META), INK2, 236.0);
+                let galley = ui.painter().layout(text.to_owned(), regular(T_META), pal().ink2, 236.0);
                 let (r, _) = ui.allocate_exact_size(vec2(260.0, galley.size().y + 10.0), Sense::hover());
-                ui.painter().galley(r.left_top() + vec2(12.0, 4.0), galley, INK2);
+                ui.painter().galley(r.left_top() + vec2(12.0, 4.0), galley, pal().ink2);
                 a11y_text(ui, Id::unique(("keys-scope-note", text)), r, Role::Label, text, None);
             };
             match &devices {
@@ -1045,7 +1045,7 @@ impl App {
 
         let cy = top + kb_h + 14.0 + if editor_first { lower + GAP } else { 0.0 };
         let head = if side { pos2(all.left() + w - 18.0 - SIDE_W, top + 54.0 + 10.0) } else { pos2(all.left(), cy + 15.0) };
-        ui.painter().text(head, Align2::LEFT_CENTER, "Quick setups", semibold(T_BODY), INK);
+        ui.painter().text(head, Align2::LEFT_CENTER, "Quick setups", semibold(T_BODY), pal().ink);
         let busy = self.tuning_busy();
         for ((p, r), label) in presets.iter().zip(&chips).zip(preset_labels) {
             let on = tune::preset_on(&input, p, &self.keys.scope);
@@ -1101,11 +1101,11 @@ impl App {
         let response = button(ui, Rect::from_min_size(rect.min, vec2(picker_width, 30.0)), Id::unique("keyboard-navigator"), &name, Look::Quiet, true, Some("Choose a key to change"));
         if response.clicked() { self.keys.navigator_query.clear(); }
         if hint_width > 0.0 {
-            ui.painter().text(pos2(rect.right(), rect.center().y), Align2::RIGHT_CENTER, hint, regular(T_META), INK2);
+            ui.painter().text(pos2(rect.right(), rect.center().y), Align2::RIGHT_CENTER, hint, regular(T_META), pal().ink2);
             a11y_text(ui, Id::unique("keyboard-scroll-hint"), Rect::from_min_max(pos2(rect.right() - hint_width, rect.top()), rect.max), Role::Label, "Hold Shift and scroll, or drag the scrollbar, to see more keys", None);
         }
         let arrow = rect.min + vec2(picker_width - 16.0, 15.0);
-        ui.painter().add(egui::Shape::line(vec![arrow + vec2(-4.0, -2.0), arrow + vec2(0.0, 2.0), arrow + vec2(4.0, -2.0)], Stroke::new(1.5, INK2)));
+        ui.painter().add(egui::Shape::line(vec![arrow + vec2(-4.0, -2.0), arrow + vec2(0.0, 2.0), arrow + vec2(4.0, -2.0)], Stroke::new(1.5, pal().ink2)));
         let mut selected = None;
         let facts = self.facts();
         let specs = self.prefs.input.specs(&facts);
@@ -1168,7 +1168,7 @@ impl App {
             key_description(code, action)
         }).unwrap_or_else(|| "Click a key to zoom · drag to turn".to_owned());
         let iw = b.left() - r.left() - 30.0 - if self.keys.selected.is_some() && r.width() >= 420.0 { 122.0 } else { 0.0 };
-        p.text(pos2(r.left(), b.center().y), Align2::LEFT_CENTER, fit(&p, &intro, &regular(T_BODY), iw), regular(T_BODY), INK2);
+        p.text(pos2(r.left(), b.center().y), Align2::LEFT_CENTER, fit(&p, &intro, &regular(T_BODY), iw), regular(T_BODY), pal().ink2);
         let intro_rect = Rect::from_min_size(r.min, vec2(iw.max(0.0), 36.0));
         let guidance = "Click a key to zoom in and change it. Whole board zooms back out. Drag to turn the keyboard; double-click to reset its angle.";
         ui.interact(intro_rect, Id::unique("keys-intro-help"), Sense::hover()).on_hover_text(guidance);
@@ -1313,7 +1313,7 @@ impl App {
         let painter = ui.painter_at(area);
         board.paint(&painter, &held_i, under, chosen, &|size, _| regular(size));
         if let Some(i) = focused.filter(|_| widgets::keyboard_focus(ui.ctx())) {
-            painter.rect_stroke(board.bounds(i).expand(3.0), CornerRadius::same(6), Stroke::new(2.0, SIGNAL), StrokeKind::Outside);
+            painter.rect_stroke(board.bounds(i).expand(3.0), CornerRadius::same(6), Stroke::new(2.0, pal().accent), StrokeKind::Outside);
         }
         self.keys.board = Some(board);
         if let Some(code) = go {
@@ -1346,7 +1346,7 @@ impl App {
         }
         if n == 0 {
             let text = "No keys are changed yet. Click a key above, or start with a quick setup.";
-            y += para(ui, pos2(c.left(), y + 2.0), c.width(), text, regular(T_BODY), INK2) + 4.0;
+            y += para(ui, pos2(c.left(), y + 2.0), c.width(), text, regular(T_BODY), pal().ink2) + 4.0;
             return card.end_at_least(ui, y, minimum_height);
         }
         let busy = self.tuning_busy();
@@ -1374,14 +1374,14 @@ impl App {
             let x = if ok {
                 row.left()
             } else {
-                ui.painter().circle_filled(pos2(row.left() + 3.0, row.center().y), 3.0, ERROR);
+                ui.painter().circle_filled(pos2(row.left() + 3.0, row.center().y), 3.0, pal().danger);
                 row.left() + 14.0
             };
             let shown = fit(ui.painter(), &text, &regular(T_BODY), room);
-            ui.painter().text(pos2(x, row.center().y), Align2::LEFT_CENTER, &shown, regular(T_BODY), INK);
+            ui.painter().text(pos2(x, row.center().y), Align2::LEFT_CENTER, &shown, regular(T_BODY), pal().ink);
             if !tag.is_empty() {
                 let t = fit(ui.painter(), &tag, &regular(T_META), tw - 12.0);
-                ui.painter().text(pos2(edit.left() - 10.0, row.center().y), Align2::RIGHT_CENTER, t, regular(T_META), INK2);
+                ui.painter().text(pos2(edit.left() - 10.0, row.center().y), Align2::RIGHT_CENTER, t, regular(T_META), pal().ink2);
             }
             let hover_r = Rect::from_min_max(row.min, pos2(edit.left() - 8.0, row.bottom()));
             let full = if tag.is_empty() { text.clone() } else { format!("{text} ({tag})") };
@@ -1405,7 +1405,7 @@ impl App {
                 act = Some((i, false));
             }
             if i + 1 < n {
-                ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
+                ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, pal().line));
             }
             y += 34.0;
         }
@@ -1468,7 +1468,7 @@ impl App {
             _ => format!("Types {name}, as it is."),
         };
         let mut y = c.top();
-        y += widgets::para_code(ui, pos2(c.left(), y), c.width(), &format!("Now: {now_text}"), regular(T_BODY), INK) + 2.0;
+        y += widgets::para_code(ui, pos2(c.left(), y), c.width(), &format!("Now: {now_text}"), regular(T_BODY), pal().ink) + 2.0;
         let scope_note = match &self.keys.scope {
             Scope::All => "Changes here are for every computer.".to_owned(),
             Scope::Os(o) => format!("Changes here are only for {}.", tune::os_plural(*o)),
@@ -1479,7 +1479,7 @@ impl App {
             Some(a) => format!("{}, {}.", scope_note.trim_end_matches('.'), tune::app_text(a)),
             None => scope_note,
         };
-        y += para(ui, pos2(c.left(), y), c.width(), &scope_note, regular(T_META), INK2) + 10.0;
+        y += para(ui, pos2(c.left(), y), c.width(), &scope_note, regular(T_META), pal().ink2) + 10.0;
         let busy = self.tuning_busy();
         y = self.app_field(ui, pos2(c.left(), y), c.width(), &name);
         let mut action_bottom = y + 42.0;
@@ -1516,14 +1516,14 @@ impl App {
                 let resp = ui.interact(dr, Id::unique("key-more"), widgets::sense(ui, Sense::click()));
                 let p = ui.painter();
                 if resp.is_pointer_button_down_on() {
-                    p.rect_filled(dr, CornerRadius::same(6), widgets::pressed(BUTTON, 1.0));
+                    p.rect_filled(dr, CornerRadius::same(6), widgets::pressed(pal().surface2, 1.0));
                 } else if resp.hovered() {
-                    p.rect_filled(dr, CornerRadius::same(6), BUTTON.gamma_multiply(0.6));
+                    p.rect_filled(dr, CornerRadius::same(6), pal().surface2.gamma_multiply(0.6));
                 }
                 let m = pos2(dr.left() + 10.0, dr.center().y);
                 let pts = if open { vec![m + vec2(-4.0, -2.0), m + vec2(0.0, 2.0), m + vec2(4.0, -2.0)] } else { vec![m + vec2(-2.0, -4.0), m + vec2(2.0, 0.0), m + vec2(-2.0, 4.0)] };
-                p.add(egui::Shape::line(pts, Stroke::new(1.5, INK2)));
-                p.text(pos2(dr.left() + 22.0, dr.center().y), Align2::LEFT_CENTER, "More: hold for another key", regular(T_BODY), if resp.hovered() { INK } else { INK2 });
+                p.add(egui::Shape::line(pts, Stroke::new(1.5, pal().ink2)));
+                p.text(pos2(dr.left() + 22.0, dr.center().y), Align2::LEFT_CENTER, "More: hold for another key", regular(T_BODY), if resp.hovered() { pal().ink } else { pal().ink2 });
                 widgets::focus_ring(ui, &resp, dr, 6);
                 let label = "More: a different key when held";
                 resp.widget_info(move || egui::WidgetInfo::selected(Role::Button, true, open, label));
@@ -1534,7 +1534,7 @@ impl App {
                 if open {
                     let hold = own.as_ref().and_then(|r| r.hold.clone());
                     let hold_text = hold.as_ref().and_then(|h| h.parse().ok()).map_or("nothing else yet: it types the same".to_owned(), |o| tune::out_text(&o));
-                    y += para(ui, pos2(c.left(), y), c.width(), &format!("Tapped, it types what is chosen above. Held, it gives: {hold_text}."), regular(T_META), INK2) + 8.0;
+                    y += para(ui, pos2(c.left(), y), c.width(), &format!("Tapped, it types what is chosen above. Held, it gives: {hold_text}."), regular(T_META), pal().ink2) + 8.0;
                     let mut labels = vec!["Press the key for holding", "Choose from a list"];
                     if hold.is_some() {
                         labels.push("Not when held");
@@ -1558,9 +1558,9 @@ impl App {
                     y = bottom + 8.0;
                     if let Some(r) = own.clone().filter(|r| r.hold.is_some()) {
                         let row = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), ROW));
-                        ui.painter().text(row.left_center(), Align2::LEFT_CENTER, "Held after", regular(T_BODY), INK);
+                        ui.painter().text(row.left_center(), Align2::LEFT_CENTER, "Held after", regular(T_BODY), pal().ink);
                         let fr = Rect::from_min_size(pos2(c.left() + text_width(ui, "Held after", regular(T_BODY)) + 12.0, row.center().y - 13.0), vec2(64.0, 26.0));
-                        ui.painter().text(pos2(fr.right() + 8.0, row.center().y), Align2::LEFT_CENTER, "ms", regular(T_META), INK2);
+                        ui.painter().text(pos2(fr.right() + 8.0, row.center().y), Align2::LEFT_CENTER, "ms", regular(T_META), pal().ink2);
                         let cur = r.timeout_ms.unwrap_or(input.tap_ms.unwrap_or(200)).to_string();
                         if let Some(text) = self.edit_field(ui, fr, "key-timeout", &cur, "200", "Held after this many milliseconds", !busy, true) {
                             match text.parse::<u32>() {
@@ -1592,7 +1592,7 @@ impl App {
         let busy = self.tuning_busy();
         let label = "Only in app";
         let row = Rect::from_min_size(pos2(left, y), vec2(w, ROW));
-        ui.painter().text(row.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
+        ui.painter().text(row.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), pal().ink);
         let x = left + text_width(ui, label, regular(T_BODY)) + 12.0;
         let fr = Rect::from_min_size(pos2(x, row.center().y - 13.0), vec2((row.right() - x).min(240.0), 26.0));
         let cur = self.keys.app.clone().unwrap_or_default();
@@ -1618,7 +1618,7 @@ impl App {
         // be able to tell which app has the focus.
         let covered: Vec<u8> = self.scope_peers().iter().filter(|p| scope_covers(&self.keys.scope, p)).map(|p| p.os).collect();
         if let Some(note) = crate::desktop::app_rule_note(self.running().map_or(&[][..], |s| &s.tuning[..]), &covered) {
-            y += para(ui, pos2(left, y), w, &note, regular(T_META), INK3) + 6.0;
+            y += para(ui, pos2(left, y), w, &note, regular(T_META), pal().ink3) + 6.0;
         }
         y
     }
@@ -1635,7 +1635,7 @@ impl App {
         let tw = w - bw - 38.0;
         // Measure first: the box is as tall as what it says.
         let lay = |text: &str, font: egui::FontId| {
-            let mut job = egui::text::LayoutJob::simple(text.to_owned(), font.clone(), INK, tw);
+            let mut job = egui::text::LayoutJob::simple(text.to_owned(), font.clone(), pal().ink, tw);
             job.sections[0].format.line_height = Some((font.size * LEADING).round());
             ui.painter().layout_job(job).size().y
         };
@@ -1646,9 +1646,9 @@ impl App {
         if !ui.clip_rect().contains_rect(r.expand(4.0)) {
             ui.scroll_to_rect(r.expand(6.0), None);
         }
-        ui.painter().rect(r, CornerRadius::same(9), GROUND, Stroke::new(1.5, SIGNAL), StrokeKind::Inside);
-        para(ui, pos2(left + 14.0, y + 12.0), tw, &ask, semibold(T_BODY), INK);
-        para(ui, pos2(left + 14.0, y + 16.0 + ah), tw, note, regular(T_META), INK2);
+        ui.painter().rect(r, CornerRadius::same(9), pal().bg, Stroke::new(1.5, pal().accent), StrokeKind::Inside);
+        para(ui, pos2(left + 14.0, y + 12.0), tw, &ask, semibold(T_BODY), pal().ink);
+        para(ui, pos2(left + 14.0, y + 16.0 + ah), tw, note, regular(T_META), pal().ink2);
         let full = format!("{ask} Esc cancels. Note: {}.", tune::NOT_REPORTED);
         widgets::a11y(&resp, Role::Label, &full, None);
         let resp = ui.interact(r.shrink2(vec2(bw + 20.0, 0.0)).translate(vec2(-(bw + 20.0) / 2.0, 0.0)), id.with("tip"), Sense::hover());
@@ -1695,9 +1695,9 @@ impl App {
         if !ui.clip_rect().contains_rect(controls) {
             ui.scroll_to_rect(controls, None);
         }
-        ui.painter().rect(list, CornerRadius::same(8), GROUND, Stroke::new(1.0, LINE), StrokeKind::Inside);
+        ui.painter().rect(list, CornerRadius::same(8), pal().bg, Stroke::new(1.0, pal().line), StrokeKind::Inside);
         if hits.is_empty() {
-            ui.painter().text(list.center(), Align2::CENTER_CENTER, "Nothing is called that. Try another word.", regular(T_BODY), INK2);
+            ui.painter().text(list.center(), Align2::CENTER_CENTER, "Nothing is called that. Try another word.", regular(T_BODY), pal().ink2);
         }
         let mut child = ui.new_child(UiBuilder::new().max_rect(list.shrink(3.0)));
         child.set_clip_rect(list.shrink(2.0));
@@ -1707,11 +1707,11 @@ impl App {
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), widgets::sense(ui, Sense::click()));
                 let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered() || resp.has_focus()), 0.1, motion::out_cubic);
                 let p = ui.painter();
-                p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, PILL, hover));
+                p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, pal().hover, hover));
                 widgets::focus_ring(ui, &resp, r.shrink(2.0), 5);
                 let vw = text_width(ui, &c.value, mono(T_META)).min(r.width() * 0.4);
-                p.text(pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, fit(p, &c.label, &regular(T_BODY), r.width() - vw - 30.0), regular(T_BODY), INK);
-                widgets::mono_text(p, pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, &c.value, T_META, INK2, vw);
+                p.text(pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, fit(p, &c.label, &regular(T_BODY), r.width() - vw - 30.0), regular(T_BODY), pal().ink);
+                widgets::mono_text(p, pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, &c.value, T_META, pal().ink2, vw);
                 widgets::a11y(&resp, Role::ListItem, &c.label, None);
                 if resp.clicked() {
                     picked = Some(c.value.clone());
@@ -1745,7 +1745,7 @@ impl App {
             Scope::Peer(p) => format!("Type in the box to see what {p} would get. Nothing is sent."),
             Scope::Device(fp, _) => format!("Type in the box to see what typing on {} would send. Nothing is sent.", tune::device_name(fp)),
         };
-        y += para(ui, pos2(c.left(), y), c.width(), &intro, regular(T_BODY), INK2) + 10.0;
+        y += para(ui, pos2(c.left(), y), c.width(), &intro, regular(T_BODY), pal().ink2) + 10.0;
         let id = Id::unique(TEST_ID);
         let r = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), 78.0));
         let resp = ui.interact(r, id, widgets::sense(ui, Sense::click()));
@@ -1755,22 +1755,22 @@ impl App {
         let focused = resp.has_focus();
         let _ = self.tester();
         let p = ui.painter().clone();
-        p.rect(r, CornerRadius::same(9), Color32::from_black_alpha(70), Stroke::new(1.0, if focused || resp.hovered() { FIELD_EDGE_LIT } else { FIELD_EDGE }), StrokeKind::Inside);
+        p.rect(r, CornerRadius::same(9), pal().bg, Stroke::new(1.0, if focused || resp.hovered() { pal().field_edge_lit } else { pal().line2 }), StrokeKind::Inside);
         if focused {
-            p.rect_stroke(r.expand(2.0), CornerRadius::same(11), Stroke::new(2.0, SIGNAL), StrokeKind::Outside);
+            p.rect_stroke(r.expand(2.0), CornerRadius::same(11), Stroke::new(2.0, pal().accent), StrokeKind::Outside);
         }
         let lw = text_width(ui, "They get", regular(T_META)).max(text_width(ui, "You press", regular(T_META))) + 14.0;
         let empty = self.keys.tester.as_ref().is_none_or(|(t, ..)| t.pressed.chips.is_empty());
         let mut spoken = String::new();
         if let Some(e) = &self.keys.tester_error {
-            para(ui, pos2(r.left() + 12.0, r.top() + 10.0), r.width() - 24.0, &format!("These rules can't be tried: {e}"), regular(T_META), INK);
+            para(ui, pos2(r.left() + 12.0, r.top() + 10.0), r.width() - 24.0, &format!("These rules can't be tried: {e}"), regular(T_META), pal().ink);
         } else if empty {
             let hint = if focused { "Type now: try the keys you changed. Tab leaves." } else { "Click here, then type" };
-            p.text(r.center(), Align2::CENTER_CENTER, hint, regular(T_BODY), INK2);
+            p.text(r.center(), Align2::CENTER_CENTER, hint, regular(T_BODY), pal().ink2);
         } else if let Some((t, ..)) = &self.keys.tester {
             for (k, (label, log)) in [("You press", &t.pressed), ("They get", &t.sent)].into_iter().enumerate() {
                 let ly = r.top() + 22.0 + 34.0 * k as f32;
-                p.text(pos2(r.left() + 12.0, ly), Align2::LEFT_CENTER, label, regular(T_META), INK2);
+                p.text(pos2(r.left() + 12.0, ly), Align2::LEFT_CENTER, label, regular(T_META), pal().ink2);
                 // Newest last; the oldest drop off the left when there's no room.
                 let mut x = r.right() - 10.0;
                 let mut shown = vec![];
@@ -1790,8 +1790,8 @@ impl App {
                 let dx = shown.last().map_or(0.0, |(rr, _)| rr.left() - (r.left() + 12.0 + lw));
                 for (rr, text) in shown.iter().rev() {
                     let rr = rr.translate(vec2(-dx, 0.0));
-                    p.rect(rr, CornerRadius::same(5), BUTTON, Stroke::new(1.0, KEY_EDGE), StrokeKind::Inside);
-                    widgets::mono_text(&p, rr.center(), Align2::CENTER_CENTER, text, T_META, INK, rr.width());
+                    p.rect(rr, CornerRadius::same(5), pal().surface2, Stroke::new(1.0, pal().key_edge), StrokeKind::Inside);
+                    widgets::mono_text(&p, rr.center(), Align2::CENTER_CENTER, text, T_META, pal().ink, rr.width());
                 }
                 spoken += &format!("{label}: {}. ", log.chips.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(", "));
             }
@@ -1813,13 +1813,13 @@ impl App {
         }
         // How a tap/hold key was decided, once there is one.
         if let Some(note) = note {
-            y += para(ui, pos2(c.left(), y), c.width(), &note, regular(T_META), INK2) + 10.0;
+            y += para(ui, pos2(c.left(), y), c.width(), &note, regular(T_META), pal().ink2) + 10.0;
         }
-        ui.painter().hline(c.x_range(), y, Stroke::new(1.0, LINE));
+        ui.painter().hline(c.x_range(), y, Stroke::new(1.0, pal().line));
         y += 10.0;
         let safe = format!("{} always brings the mouse and keyboard back here. No rule can change it.", crate::view::chord_label("ctrl+alt+shift+esc", mac()));
         let safety_at = pos2(c.left(), y);
-        let safety_height = widgets::para_code(ui, safety_at, c.width(), &safe, regular(T_META), INK2);
+        let safety_height = widgets::para_code(ui, safety_at, c.width(), &safe, regular(T_META), pal().ink2);
         y += safety_height;
         a11y_text(ui, Id::unique("keys-safe"), Rect::from_min_size(safety_at, vec2(c.width(), safety_height)), Role::Label, &safe.replace('`', ""), None);
         let _ = now;
@@ -1858,7 +1858,7 @@ impl App {
         let content = card.inner;
         let mut top = content.top();
         if matches!(self.keys.scope, Scope::Device(..)) {
-            top += para(ui, pos2(content.left(), top), content.width(), "Autoscroll and gestures apply to every mouse during a visit, not to one device. Choose All computers, an OS, or a computer in For: to change them.", regular(T_BODY), INK2);
+            top += para(ui, pos2(content.left(), top), content.width(), "Autoscroll and gestures apply to every mouse during a visit, not to one device. Choose All computers, an OS, or a computer in For: to change them.", regular(T_BODY), pal().ink2);
             return card.end(ui, top);
         }
         if let Some(Ok(problems)) = &self.keys.problems {
@@ -1884,7 +1884,7 @@ impl App {
         }
         top += 38.0;
         let instructions = format!("Click {}, then move away to scroll the other computer. Click again or press Esc to stop.", tune::mouse_button_label(button));
-        let height = para(ui, pos2(content.left(), top), content.width(), &instructions, regular(T_BODY), INK2);
+        let height = para(ui, pos2(content.left(), top), content.width(), &instructions, regular(T_BODY), pal().ink2);
         a11y_text(ui, Id::unique("autoscroll-instructions"), Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), height)), Role::Label, &instructions, None);
         top += height;
         let rect = Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), ROW));
@@ -1894,7 +1894,7 @@ impl App {
             self.tune_cmds("autoscroll speed", "mouse-modes", vec![args], Some("autoscroll-speed".into()));
         }
         top += ROW + 8.0;
-        top += para(ui, pos2(content.left(), top), content.width(), "Gestures", regular(T_BODY), INK);
+        top += para(ui, pos2(content.left(), top), content.width(), "Gestures", regular(T_BODY), pal().ink);
         let rect = Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), 30.0));
         let preset = ui.add_enabled_ui(!busy, |ui| chip(ui, rect, Id::unique("gesture-side-swipe"), "Set up side-button desktop swipes", false, true, false)).inner;
         widgets::a11y(&preset, Role::Button, "Set up side-button desktop swipes", None);
@@ -1907,11 +1907,11 @@ impl App {
         let gestures: Vec<_> = input.gestures.iter().filter(|row| !matches!(row.scope, Scope::Device(..)))
             .filter(|row| !tune::primary_mouse_button(&row.button)).filter(|row| row.scope.rank(facts).is_some()).collect();
         if gestures.is_empty() {
-            top += para(ui, pos2(content.left(), top), content.width(), "No gestures yet. A short click still clicks normally. Use the preset or add your own below.", regular(T_BODY), INK2);
+            top += para(ui, pos2(content.left(), top), content.width(), "No gestures yet. A short click still clicks normally. Use the preset or add your own below.", regular(T_BODY), pal().ink2);
         }
         for row in gestures {
             let description = format!("Hold {} and swipe {} to {}{}.", tune::mouse_button_label(&row.button), row.direction, row.to.describe(), row.app.as_ref().map_or(String::new(), |app| format!(" in app {app}")));
-            let height = para(ui, pos2(content.left(), top), content.width(), &description, regular(T_BODY), INK);
+            let height = para(ui, pos2(content.left(), top), content.width(), &description, regular(T_BODY), pal().ink);
             a11y_text(ui, Id::unique(("gesture-description", &row.button, &row.direction, row.scope.label(), &row.app)),
                 Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), height)), Role::Label, &description, None);
             top += height;
@@ -1934,7 +1934,7 @@ impl App {
     }
 
     fn gesture_editor(&mut self, ui: &mut Ui, left: f32, mut top: f32, width: f32) -> f32 {
-        top += para(ui, pos2(left, top), width, "Add a gesture", semibold(T_BODY), INK) + 8.0;
+        top += para(ui, pos2(left, top), width, "Add a gesture", semibold(T_BODY), pal().ink) + 8.0;
         for (key, choices, default) in [
             ("Gesture button", &[("middle", "Middle"), ("button4", "Back"), ("button5", "Forward")][..], "button4"),
             ("Swipe direction", &[("left", "Left"), ("right", "Right"), ("up", "Up"), ("down", "Down")][..], "left"),
@@ -2040,9 +2040,9 @@ impl App {
             let ex = if *left { lr.right() + 6.0 } else { lr.left() - 6.0 };
             let ey = lr.top() + 32.0;
             let mid = ex + if *left { 16.0 } else { -16.0 };
-            let line = if changed { SIGNAL } else if sel { INK } else { Color32::from_white_alpha(if lit { 150 } else { 90 }) };
+            let line = if changed { pal().accent } else if sel { pal().ink } else { pal().tint(if lit { 150 } else { 90 }) };
             painter.line(vec![pos2(ex, ey), pos2(mid, ey), *anchor], Stroke::new(1.0, line));
-            painter.circle(*anchor, 4.0, if changed { SIGNAL } else if sel { INK } else { GROUND }, Stroke::new(1.5, if changed || sel { GROUND } else { INK }));
+            painter.circle(*anchor, 4.0, if changed { pal().accent } else if sel { pal().ink } else { pal().bg }, Stroke::new(1.5, if changed || sel { pal().bg } else { pal().ink }));
         }
         for (n, lr, _, left) in &labels {
             let name = tune::BUTTONS.iter().find(|b| b.0 == *n).map_or("Button", |b| b.1);
@@ -2058,29 +2058,28 @@ impl App {
             let hover = tween(ui.ctx(), id.with("hover"), f32::from(lit), 0.12, motion::out_cubic);
             // Each label floats over the mouse on a near-solid plate, so it
             // reads whatever part of the mouse is behind it.
-            let plate = Color32::from_rgba_unmultiplied(0x1A, 0x1E, 0x25, 214);
-            painter.rect_filled(*lr, CornerRadius::same(10), mix(plate, Color32::from_rgb(0x25, 0x29, 0x31), hover));
+            painter.rect_filled(*lr, CornerRadius::same(10), mix(pal().surface, pal().surface2, hover));
             if sel {
-                painter.rect_stroke(*lr, CornerRadius::same(10), Stroke::new(1.5, INK), StrokeKind::Inside);
+                painter.rect_stroke(*lr, CornerRadius::same(10), Stroke::new(1.5, pal().ink), StrokeKind::Inside);
             } else if changed {
-                painter.rect_stroke(*lr, CornerRadius::same(10), Stroke::new(1.0, SIGNAL.gamma_multiply(0.45)), StrokeKind::Inside);
+                painter.rect_stroke(*lr, CornerRadius::same(10), Stroke::new(1.0, pal().accent.gamma_multiply(0.45)), StrokeKind::Inside);
             } else {
-                painter.rect_stroke(*lr, CornerRadius::same(10), Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
+                painter.rect_stroke(*lr, CornerRadius::same(10), Stroke::new(1.0, pal().line2), StrokeKind::Inside);
             }
             widgets::focus_ring(ui, &lresp, *lr, 10);
             let (align, tx) = if *left { (Align2::RIGHT_CENTER, lr.right() - 12.0) } else { (Align2::LEFT_CENTER, lr.left() + 12.0) };
             let heading = if sel {
                 format!("{} · Done", name.trim_end_matches(" (side)").trim_end_matches(" button").trim_end_matches(" click"))
             } else { name.to_owned() };
-            painter.text(pos2(tx, lr.top() + 13.0), align, &heading, regular(T_META), INK3);
-            let col = if changed { SIGNAL } else { INK };
+            painter.text(pos2(tx, lr.top() + 13.0), align, &heading, regular(T_META), pal().ink3);
+            let col = if changed { pal().accent } else { pal().ink };
             let text = fit(&painter, &does, &regular(T_TITLE), co_w - 44.0);
             let tw = text_width(ui, &text, regular(T_TITLE));
             let (vx, chev_x) = if *left { (tx - 18.0, tx - 12.0) } else { (tx, tx + tw + 4.0) };
             painter.text(pos2(vx, lr.top() + 32.0), align, &text, regular(T_TITLE), col);
-            crate::icons::draw(&painter, crate::icons::Icon::Chevron, Rect::from_min_size(pos2(chev_x, lr.top() + 25.0), vec2(14.0, 14.0)), if changed { SIGNAL } else { INK3 });
+            crate::icons::draw(&painter, crate::icons::Icon::Chevron, Rect::from_min_size(pos2(chev_x, lr.top() + 25.0), vec2(14.0, 14.0)), if changed { pal().accent } else { pal().ink3 });
             if changed && lr.height() > 46.0 {
-                painter.text(pos2(tx, lr.top() + 50.0), align, format!("Was {}", tune::button_default(*n).to_lowercase()), regular(T_META), INK2);
+                painter.text(pos2(tx, lr.top() + 50.0), align, format!("Was {}", tune::button_default(*n).to_lowercase()), regular(T_META), pal().ink2);
             }
             widgets::a11y(&lresp, Role::Button, &format!("{name}: {does}. Change it"), Some(sel));
             let help = if sel { "Activate again to return to the whole mouse." } else { "Select this button to zoom in and change its action." };
@@ -2147,8 +2146,8 @@ impl App {
         if let Some(n) = self.keys.button {
             let name = tune::BUTTONS.iter().find(|b| b.0 == n).map_or("Button", |b| b.1);
             let changed = shown.iter().any(|(k, _, ch)| *k == n && *ch);
-            ui.painter().hline(c.x_range(), y - 6.0, Stroke::new(1.0, LINE));
-            ui.painter().text(pos2(c.left(), y + 12.0), Align2::LEFT_CENTER, format!("{name}: what should it do?"), semibold(T_BODY), INK);
+            ui.painter().hline(c.x_range(), y - 6.0, Stroke::new(1.0, pal().line));
+            ui.painter().text(pos2(c.left(), y + 12.0), Align2::LEFT_CENTER, format!("{name}: what should it do?"), semibold(T_BODY), pal().ink);
             if std::mem::take(&mut self.keys.reveal) {
                 ui.scroll_to_rect(Rect::from_min_size(pos2(c.left(), y - 8.0), vec2(c.width(), 90.0)), None);
             }
@@ -2176,7 +2175,7 @@ impl App {
                     y = bottom + 10.0;
                     // Rare: run a command.
                     let row = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), ROW));
-                    ui.painter().text(row.left_center(), Align2::LEFT_CENTER, "Or run a command", regular(T_BODY), INK2);
+                    ui.painter().text(row.left_center(), Align2::LEFT_CENTER, "Or run a command", regular(T_BODY), pal().ink2);
                     let lw = text_width(ui, "Or run a command", regular(T_BODY)) + 12.0;
                     let fr = Rect::from_min_max(pos2(row.left() + lw, row.center().y - 14.0), pos2(row.right(), row.center().y + 14.0));
                     if let Some(cmd) = self.edit_field(ui, fr, "button-run", "", "Type a command, then Enter", &format!("{name}: a command to run when it's pressed (Enter saves)"), !busy, true)
@@ -2188,12 +2187,12 @@ impl App {
                 }
             }
         } else {
-            y += para(ui, pos2(c.left(), y), c.width(), "Click a part of the mouse above, or its label, to change what it does.", regular(T_BODY), INK2);
+            y += para(ui, pos2(c.left(), y), c.width(), "Click a part of the mouse above, or its label, to change what it does.", regular(T_BODY), pal().ink2);
         }
         if input.local_rules && cfg!(any(windows, target_os = "macos")) {
             for rule in input.buttons.iter().filter(|rule| rule.scope.includes_local_os(one_mk_proto::os::local())) {
                 y += 6.0;
-                y += para(ui, pos2(c.left(), y), c.width(), &format!("{} → {} · Also here", rule.from, rule.to.describe()), regular(T_META), INK2);
+                y += para(ui, pos2(c.left(), y), c.width(), &format!("{} → {} · Also here", rule.from, rule.to.describe()), regular(T_META), pal().ink2);
             }
         }
         if let Some((_, e)) = self.keys.error.clone().filter(|(a, _)| *a == "buttons") {
@@ -2219,7 +2218,7 @@ impl App {
             }
         }
         let fr = Rect::from_min_size(pos2(row.right() - fw - suffix, row.center().y - 13.0), vec2(fw, 26.0));
-        ui.painter().text(pos2(row.right(), row.center().y), Align2::RIGHT_CENTER, "× speed", regular(T_META), INK2);
+        ui.painter().text(pos2(row.right(), row.center().y), Align2::RIGHT_CENTER, "× speed", regular(T_META), pal().ink2);
         let cur = tune::speed_text(shown).trim_end_matches('×').to_owned();
         if let Some(text) = self.edit_field(ui, fr, key, &cur, "1", &format!("{label}, from 0.1 to 10 times"), true, true) {
             match tune::parse_speed(&text) {
@@ -2337,7 +2336,7 @@ impl App {
             Some("off") => "Content moves against your fingers on every computer.",
             _ => "Scrolling feels on the other computers as it does here.",
         };
-        y += para(ui, pos2(c.left(), y), c.width(), explain, regular(T_META), INK2) + 8.0;
+        y += para(ui, pos2(c.left(), y), c.width(), explain, regular(T_META), pal().ink2) + 8.0;
         let alt = if mac() { "Option" } else { "Alt" };
         if switch_help(ui, row(y), Id::unique("scroll-shift"), "Hold Shift to scroll sideways", "scroll-shift", s.shift_sideways, true).clicked() {
             change = Some(ScrollChange::Modifier("shift", if s.shift_sideways { "unchanged" } else { "horizontal" }));

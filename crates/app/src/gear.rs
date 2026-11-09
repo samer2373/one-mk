@@ -10,6 +10,7 @@
 
 use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Rgba, Shape, Stroke, pos2};
 use std::sync::Arc;
+use crate::style::pal;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::ops::{Add, Mul, Neg, Sub};
 
@@ -67,8 +68,7 @@ impl P3 {
 }
 
 fn lerp_col(a: Color32, b: Color32, t: f32) -> Color32 {
-    let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t) as u8;
-    Color32::from_rgb(f(a.r(), b.r()), f(a.g(), b.g()), f(a.b(), b.b()))
+    crate::style::mix(a, b, t)
 }
 fn lerp3(a: P3, b: P3, t: f32) -> P3 {
     a + (b - a) * t
@@ -448,12 +448,9 @@ pub struct Cap {
     pub modifier: bool,
 }
 
-const CASE: Finish = Finish { albedo: Color32::from_rgb(0x3A, 0x3E, 0x45), gloss: 40.0, spec: 0.22 };
-const CAP: Finish = Finish { albedo: Color32::from_rgb(0x34, 0x37, 0x3D), gloss: 18.0, spec: 0.08 };
-const CAP_MOD: Finish = Finish { albedo: Color32::from_rgb(0x55, 0x52, 0x4D), gloss: 18.0, spec: 0.08 };
-const DESK_LIT: Color32 = Color32::from_rgb(0x3B, 0x30, 0x27);
-/// The brand's Volt: a changed key's new legend, the chosen key or button.
-pub const SIGNAL: Color32 = crate::style::SIGNAL;
+const CASE: Finish = Finish { albedo: crate::style::KEY_CASE, gloss: 40.0, spec: 0.22 };
+const CAP: Finish = Finish { albedo: crate::style::KEY_CAP, gloss: 18.0, spec: 0.08 };
+const CAP_MOD: Finish = Finish { albedo: crate::style::KEY_CAP_MOD, gloss: 18.0, spec: 0.08 };
 
 /// A legend to print on a key: where, how big, which colour, and whether
 /// it is the key's new job (printed on its front, in Volt).
@@ -474,7 +471,7 @@ fn legend_size(height: f32) -> f32 {
 }
 
 fn legend_font(painter: &Painter, text: &str, size: f32, minimum: f32, max_w: f32, font: &dyn Fn(f32) -> FontId) -> FontId {
-    let fits = |candidate: FontId| painter.layout_no_wrap(text.to_owned(), candidate, Color32::WHITE).size().x <= max_w;
+    let fits = |candidate: FontId| painter.layout_no_wrap(text.to_owned(), candidate, Color32::PLACEHOLDER).size().x <= max_w;
     let mut current = size.max(minimum);
     loop {
         let primary = font(current);
@@ -504,7 +501,7 @@ fn adaptive_legend(painter: &Painter, text: &str, size: f32, max_w: f32, font: &
     for (index, &choice) in choices.iter().enumerate() {
         let minimum = if index + 1 < choices.len() { (size * 0.85).max(9.0) } else { 9.0 };
         let chosen = legend_font(painter, choice, size, minimum, max_w, font);
-        if painter.layout_no_wrap(choice.to_owned(), chosen.clone(), Color32::WHITE).size().x <= max_w {
+        if painter.layout_no_wrap(choice.to_owned(), chosen.clone(), Color32::PLACEHOLDER).size().x <= max_w {
             return Some((choice.to_owned(), chosen));
         }
     }
@@ -523,7 +520,7 @@ fn board_legend(painter: &Painter, text: &str, size: f32, max_w: f32, turned: bo
     adaptive_legend(painter, text, size, max_w, &crate::style::mono).or_else(|| {
         let short = legend_variants(text).last().copied().unwrap_or(text);
         let font = legend_font(painter, short, size, TURNED_LEGEND_FLOOR, max_w, &crate::style::mono);
-        (turned && painter.layout_no_wrap(short.to_owned(), font.clone(), Color32::WHITE).size().x <= max_w).then(|| (short.to_owned(), font))
+        (turned && painter.layout_no_wrap(short.to_owned(), font.clone(), Color32::PLACEHOLDER).size().x <= max_w).then(|| (short.to_owned(), font))
     })
 }
 
@@ -533,6 +530,8 @@ pub struct Keyboard {
     flat: bool,
     returning: bool,
     built_for: (Rect, Vec<Cap>, View, Option<usize>),
+    /// The floor it was built on: a new theme builds it again.
+    floor: Color32,
     /// Where the camera is headed, and whether it was still moving when this
     /// was built.
     target: Cam,
@@ -564,7 +563,7 @@ impl Keyboard {
             }
         }
         let target = Self::aim(rect, caps, View::default(), None);
-        *slot = Some(Keyboard { #[cfg(test)] case_bounds: rect, flat: true, returning: false, built_for: (rect, caps.to_vec(), View::default(), None), target, moving: false, mesh: Arc::new(Mesh::default()), tops, legends });
+        *slot = Some(Keyboard { #[cfg(test)] case_bounds: rect, flat: true, returning: false, built_for: (rect, caps.to_vec(), View::default(), None), floor: pal().floor, target, moving: false, mesh: Arc::new(Mesh::default()), tops, legends });
     }
 
     /// The keyboard for `caps` filling `rect`, turned by `view`, and zoomed
@@ -572,7 +571,7 @@ impl Keyboard {
     /// nothing changed, else built anew. The camera eases there by `glide`;
     /// true while it is still moving, so the caller keeps drawing.
     pub fn get(slot: &mut Option<Keyboard>, rect: Rect, caps: &[Cap], view: View, focus: Option<usize>, glide: &mut Glide, dt: f32) -> bool {
-        let same = slot.as_ref().filter(|k| !k.flat && k.built_for.0 == rect && k.built_for.1 == caps && k.built_for.2 == view && k.built_for.3 == focus);
+        let same = slot.as_ref().filter(|k| !k.flat && k.built_for.0 == rect && k.built_for.1 == caps && k.built_for.2 == view && k.built_for.3 == focus && k.floor == pal().floor);
         let mut step = None;
         if let Some(k) = same {
             let s = glide.step(k.target, dt, false);
@@ -655,7 +654,7 @@ impl Keyboard {
         let top = rring(0.0, 0.0, hw - 2.0, hd - 2.0, 8.0, 0.0);
         walls(&mut t, &cam, &lit, CASE, &bottom, &side_top, p3(0.0, 0.0, 0.0));
         walls(&mut t, &cam, &lit, CASE, &side_top, &top, p3(0.0, 0.0, 0.0));
-        fan(&mut t, &cam, &lit, Finish { albedo: Color32::from_rgb(0x1C, 0x1E, 0x22), ..CASE }, &top, p3(0.0, 0.0, 0.0), p3(0.0, 1.0, 0.0));
+        fan(&mut t, &cam, &lit, Finish { albedo: crate::style::KEY_PLATE, ..CASE }, &top, p3(0.0, 0.0, 0.0), p3(0.0, 1.0, 0.0));
         t.into_mesh(&mut m);
         // Keys, back to front, each with its legend on top.
         let mut order: Vec<usize> = (0..caps.len()).collect();
@@ -686,7 +685,7 @@ impl Keyboard {
             legends.push(Legend { at, size, text: k.label.clone(), to: k.to.is_some(), modifier: k.modifier, max_w });
         }
         keys.into_mesh(&mut m);
-        Keyboard { #[cfg(test)] case_bounds: Rect::from_points(&Self::case_corners(caps).iter().map(|point| cam.pt(*point)).collect::<Vec<_>>()), flat: false, returning: false, built_for: (rect, caps.to_vec(), view, focus), target, moving, mesh: Arc::new(m), tops, legends }
+        Keyboard { #[cfg(test)] case_bounds: Rect::from_points(&Self::case_corners(caps).iter().map(|point| cam.pt(*point)).collect::<Vec<_>>()), flat: false, returning: false, built_for: (rect, caps.to_vec(), view, focus), floor: pal().floor, target, moving, mesh: Arc::new(m), tops, legends }
     }
 
     /// Draws the kept mesh, then what changes from frame to frame: the
@@ -696,7 +695,7 @@ impl Keyboard {
         p.add(Shape::Mesh(self.mesh.clone()));
         if self.flat {
             for key in &self.tops {
-                p.rect(Rect::from_points(key), egui::CornerRadius::same(4), crate::style::BUTTON, Stroke::new(1.0, crate::style::KEY_EDGE), egui::StrokeKind::Inside);
+                p.rect(Rect::from_points(key), egui::CornerRadius::same(4), crate::style::pal().surface2, Stroke::new(1.0, crate::style::pal().key_edge), egui::StrokeKind::Inside);
             }
         }
         let fill = |i: usize, col: Color32| {
@@ -705,13 +704,21 @@ impl Keyboard {
             }
         };
         for &i in held {
-            fill(i, Color32::from_black_alpha(90));
+            fill(i, crate::style::black(90));
         }
         if let Some(i) = hovered.filter(|i| Some(*i) != chosen) {
-            fill(i, Color32::from_white_alpha(18));
+            fill(i, crate::style::white(18));
         }
         for l in self.legends.iter().filter(|legend| !legend.text.is_empty()) {
-            let col = if l.modifier { Color32::from_rgb(0xD9, 0xD3, 0xC8) } else { Color32::from_rgb(0xC6, 0xCB, 0xD3) };
+            // On the dark caps the legends are light, in both themes; drawn
+            // flat (on the theme's own key fill), they take the theme's ink.
+            let col = match (self.flat, l.to, l.modifier) {
+                (true, true, _) => pal().accent_text,
+                (true, false, _) => pal().ink,
+                (false, true, _) => crate::style::KEY_LEGEND_CHANGED,
+                (false, false, true) => crate::style::KEY_LEGEND_MOD,
+                (false, false, false) => crate::style::KEY_LEGEND,
+            };
             let base_font = |size| font(size, l.to);
             let (text, chosen_font) = if self.flat {
                 let chosen = legend_font(p, &l.text, l.size, 11.0, l.max_w, &base_font);
@@ -732,15 +739,18 @@ impl Keyboard {
             if let Some(top) = self.tops.get(index).filter(|top| top.len() > 2) {
                 let mut outline = top.clone();
                 outline.push(outline[0]);
-                p.add(Shape::line(outline, Stroke::new(1.0, SIGNAL.gamma_multiply(0.55))));
+                p.add(Shape::line(outline, Stroke::new(1.0, pal().accent.gamma_multiply(0.55))));
             }
             let bounds = self.bounds(index);
-            p.line_segment([bounds.center_bottom() + egui::vec2(-4.0, -3.0), bounds.center_bottom() + egui::vec2(4.0, -3.0)], Stroke::new(2.0, SIGNAL));
+            p.line_segment([bounds.center_bottom() + egui::vec2(-4.0, -3.0), bounds.center_bottom() + egui::vec2(4.0, -3.0)], Stroke::new(2.0, pal().accent));
         }
         if let Some(t) = chosen.and_then(|i| self.tops.get(i)).filter(|t| t.len() > 2) {
-            let mut ring = t.clone();
-            ring.push(ring[0]);
-            p.add(Shape::line(ring, Stroke::new(2.0, crate::style::INK)));
+            // The selection: a soft ring of the accent round a 2-point outline.
+            let ring = grown(t, 3.5);
+            p.add(Shape::closed_line(ring, Stroke::new(5.0, pal().ring)));
+            let mut outline = t.clone();
+            outline.push(outline[0]);
+            p.add(Shape::line(outline, Stroke::new(2.0, pal().accent)));
         }
     }
 
@@ -761,6 +771,21 @@ impl Keyboard {
         let bounds = self.bounds(index);
         Rect::from_center_size(bounds.center(), bounds.size().max(egui::vec2(24.0, 24.0)))
     }
+}
+
+/// A convex outline moved `by` points outward (a ring drawn round it).
+fn grown(pts: &[Pos2], by: f32) -> Vec<Pos2> {
+    let n = pts.len();
+    // Which way is out: the outline may wind either way.
+    let area: f32 = (0..n).map(|i| pts[i].x * pts[(i + 1) % n].y - pts[(i + 1) % n].x * pts[i].y).sum();
+    let out = if area > 0.0 { -1.0 } else { 1.0 };
+    (0..n).map(|i| {
+        let (a, b, c) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
+        let normal = |d: egui::Vec2| egui::vec2(d.y, -d.x).normalized() * out;
+        let bis = (normal(b - a) + normal(c - b)).normalized();
+        let cos = bis.dot(normal(c - b)).max(0.35);
+        b + bis * (by / cos)
+    }).collect()
 }
 
 pub fn inside(p: Pos2, poly: &[Pos2]) -> bool {
@@ -822,7 +847,7 @@ fn desk(m: &mut Mesh, cam: &Cam, c: P3, rx: f32, rz: f32) {
     const NZ: usize = 16;
     let base = m.vertices.len() as u32;
     // Lit wood fading to nothing, so it sits on whatever is behind.
-    let shade = |k: f32| DESK_LIT.gamma_multiply(k);
+    let shade = |k: f32| pal().floor.gamma_multiply(k);
     for j in 0..=NZ {
         for i in 0..=NX {
             let (u, w) = (i as f32 / NX as f32 * 2.0 - 1.0, j as f32 / NZ as f32 * 2.0 - 1.0);
@@ -854,7 +879,7 @@ fn fade_to_edges(m: &mut Mesh, from: usize, rect: Rect, feather: f32) {
 /// A soft shadow following an outline on the desk.
 fn soft_blob(m: &mut Mesh, cam: &Cam, ring: &[P3], c: P3, feather: f32, alpha: u8) {
     let b = m.vertices.len() as u32;
-    let col = Color32::from_black_alpha(alpha);
+    let col = pal().shadow(alpha);
     m.colored_vertex(cam.pt(c), col);
     let n = ring.len() as u32;
     for p in ring {
@@ -964,7 +989,7 @@ impl Model {
             };
             let pos = v3(nv)?;
             let nrm = v3(nv)?;
-            let col = take(nv * 3)?.as_chunks::<3>().0.iter().map(|c| Color32::from_rgb(c[0], c[1], c[2])).collect();
+            let col = take(nv * 3)?.as_chunks::<3>().0.iter().map(|c| crate::style::rgb_from(c[0], c[1], c[2])).collect();
             let idx: Vec<u32> = take(ni * 4)?.as_chunks::<4>().0.iter().map(|c| u32_(c)).collect();
             if idx.iter().any(|i| *i as usize >= nv) {
                 return None;
@@ -982,7 +1007,7 @@ impl Model {
 /// A built model view: the lit mesh, and each part's outline and the
 /// point its label line goes to.
 pub struct ModelView {
-    built_for: (Rect, Rect, Option<String>, [u32; 3], Option<String>),
+    built_for: (Rect, Rect, Option<String>, [u32; 3], Option<String>, Color32),
     /// Where the camera is headed, and whether it was still moving when this
     /// was built.
     target: Cam,
@@ -1013,7 +1038,7 @@ impl ModelView {
     /// one when nothing changed; true while the camera is still moving.
     #[allow(clippy::too_many_arguments)]
     pub fn get(slot: &mut Option<ModelView>, m: &Model, rect: Rect, room: Rect, yaw: f32, cam_yaw: f32, pitch: f32, chosen: Option<&str>, focus: Option<&str>, glide: &mut Glide, dt: f32) -> bool {
-        let key = (rect, room, chosen.map(str::to_owned), [yaw.to_bits(), cam_yaw.to_bits(), pitch.to_bits()], focus.map(str::to_owned));
+        let key = (rect, room, chosen.map(str::to_owned), [yaw.to_bits(), cam_yaw.to_bits(), pitch.to_bits()], focus.map(str::to_owned), pal().floor);
         let same = slot.as_ref().filter(|v| v.built_for == key);
         let mut step = None;
         if let Some(v) = same {
@@ -1068,8 +1093,8 @@ impl ModelView {
         let mut t = Tris::default();
         let mut parts = Vec::with_capacity(m.parts.len());
         for part in &m.parts {
-            let f = Finish { albedo: Color32::GRAY, gloss: part.gloss.max(2.0), spec: part.spec };
-            let tint = |c: Color32| if chosen == Some(part.name.as_str()) { lerp_col(c, SIGNAL, 0.55) } else { c };
+            let f = Finish { albedo: crate::style::MOUSE_SHELL, gloss: part.gloss.max(2.0), spec: part.spec };
+            let tint = |c: Color32| if chosen == Some(part.name.as_str()) { lerp_col(c, pal().accent, 0.55) } else { c };
             // The buttons sit on the shell (named Material.…).
             t.bias = if part.name.starts_with("Material") { 0.0 } else { 0.6 };
             let mut tris = Vec::new();
@@ -1103,7 +1128,7 @@ impl ModelView {
             for t in &h.tris {
                 let i = m.vertices.len() as u32;
                 for q in t {
-                    m.colored_vertex(*q, Color32::from_white_alpha(22));
+                    m.colored_vertex(*q, crate::style::white(22));
                 }
                 m.add_triangle(i, i + 1, i + 2);
             }

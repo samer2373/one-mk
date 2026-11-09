@@ -76,7 +76,7 @@ impl App {
 impl App {
     pub(super) fn updates_card_h(&self, ui: &Ui, width: f32) -> f32 {
         let rollback = self.update_ui.status.as_ref().is_some_and(|s| s.rollback_available);
-        let note_h = self.update_ui.status.as_ref().map_or(26.0, |status| ui.painter().layout(update_note(status).to_owned(), regular(T_META), INK3, (width - 36.0).max(1.0)).size().y);
+        let note_h = self.update_ui.status.as_ref().map_or(26.0, |status| ui.painter().layout(update_note(status).to_owned(), regular(T_META), pal().ink3, (width - 36.0).max(1.0)).size().y);
         48.0 + 2.0 * 36.0 + 44.0 + if rollback { 44.0 } else { 0.0 } + note_h.max(26.0) + 14.0
     }
 
@@ -86,7 +86,7 @@ impl App {
     pub(super) fn updates_card(&mut self, ui: &mut Ui, r: Rect) {
         let c = super::pages::card(ui, r, "Updates");
         let Some(status) = self.update_ui.status.clone() else {
-            ui.painter().text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, "Checking how updates work here…", regular(T_BODY), INK2);
+            ui.painter().text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, "Checking how updates work here…", regular(T_BODY), pal().ink2);
             return;
         };
         let busy = self.busy.contains(&Job::Update) || self.busy.contains(&Job::UpdateSettings);
@@ -128,7 +128,7 @@ impl App {
             else if self.update_ui.checked { format!("You're up to date. oneMK {}.", env!("CARGO_PKG_VERSION")) }
             else { format!("oneMK {}", env!("CARGO_PKG_VERSION")) };
         let tx = b.right() + 12.0;
-        ui.painter().text(pos2(tx, b.center().y), Align2::LEFT_CENTER, fit(ui.painter(), &said, &regular(T_BODY), (c.right() - tx).max(40.0)), regular(T_BODY), INK2);
+        ui.painter().text(pos2(tx, b.center().y), Align2::LEFT_CENTER, fit(ui.painter(), &said, &regular(T_BODY), (c.right() - tx).max(40.0)), regular(T_BODY), pal().ink2);
         y += 44.0;
         if status.rollback_available {
             let label = "Go back to the previous version";
@@ -141,7 +141,7 @@ impl App {
         }
         // The last check failed (offline, or a release without its signed
         // list): say so rather than look up to date.
-        para(ui, pos2(c.left(), y), c.width(), update_note(&status), regular(T_META), INK3);
+        para(ui, pos2(c.left(), y), c.width(), update_note(&status), regular(T_META), pal().ink3);
     }
 }
 

@@ -28,9 +28,9 @@ pub(super) fn toast_lay(ui: &Ui, t: &Toast, w: f32) -> (std::sync::Arc<egui::Gal
     // Otherwise why goes on the lines below, whole: never cut off.
     if t.error {
         let mut job = egui::text::LayoutJob::default();
-        job.append(&t.text, 0.0, egui::TextFormat::simple(regular(T_BODY), INK));
+        job.append(&t.text, 0.0, egui::TextFormat::simple(regular(T_BODY), pal().ink));
         if let Some(d) = &t.detail {
-            job.append(&format!("  {d}"), 0.0, egui::TextFormat::simple(regular(T_META), INK2));
+            job.append(&format!("  {d}"), 0.0, egui::TextFormat::simple(regular(T_META), pal().ink2));
         }
         job.wrap = egui::text::TextWrapping { max_width: text_w, max_rows: 1, break_anywhere: false, overflow_character: Some('…') };
         let line = ui.painter().layout_job(job);
@@ -38,8 +38,8 @@ pub(super) fn toast_lay(ui: &Ui, t: &Toast, w: f32) -> (std::sync::Arc<egui::Gal
             return (line, None, 46.0);
         }
     }
-    let g = ui.painter().layout(t.text.clone(), regular(T_BODY), INK, text_w);
-    let d = t.detail.as_ref().map(|d| ui.painter().layout(d.clone(), regular(T_META), INK2, text_w));
+    let g = ui.painter().layout(t.text.clone(), regular(T_BODY), pal().ink, text_w);
+    let d = t.detail.as_ref().map(|d| ui.painter().layout(d.clone(), regular(T_META), pal().ink2, text_w));
     let h = 10.0 + g.size().y + d.as_ref().map_or(0.0, |d| d.size().y + 4.0) + 10.0;
     (g, d, h.max(if t.error { 52.0 } else { 0.0 }))
 }
@@ -95,14 +95,14 @@ fn ghost(ui: &mut Ui, at: Pos2, h: f32, id: Id, icon: Option<Icon>, label: &str,
     let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && resp.hovered()), 0.1, motion::out_cubic);
     let p = ui.painter();
     if enabled && resp.is_pointer_button_down_on() {
-        p.rect_filled(r, CornerRadius::same(8), widgets::pressed(BUTTON, 1.0));
+        p.rect_filled(r, CornerRadius::same(8), widgets::pressed(pal().surface2, 1.0));
     } else if hover > 0.01 {
-        p.rect_filled(r, CornerRadius::same(8), BUTTON.gamma_multiply(hover));
+        p.rect_filled(r, CornerRadius::same(8), pal().surface2.gamma_multiply(hover));
     }
-    let col = if enabled { mix(INK2, INK, hover) } else { INK3 };
+    let col = if enabled { mix(pal().ink2, pal().ink, hover) } else { pal().ink3 };
     let mut x = r.left() + if label.is_empty() { (w - 16.0) / 2.0 } else { 9.0 };
     if let Some(i) = icon {
-        icons::draw(p, i, Rect::from_min_size(pos2(x, r.center().y - 8.0), vec2(16.0, 16.0)), if enabled { mix(INK3, INK, hover) } else { INK3 });
+        icons::draw(p, i, Rect::from_min_size(pos2(x, r.center().y - 8.0), vec2(16.0, 16.0)), if enabled { mix(pal().ink3, pal().ink, hover) } else { pal().ink3 });
         x += 22.0;
     }
     if !label.is_empty() {
@@ -143,24 +143,24 @@ fn chart(p: &Painter, r: Rect, ring: &Ring, now: f64, summary: Option<rtt::Summa
     let left = 30.0;
     let plot = Rect::from_min_max(pos2(r.left() + left, r.top() + 8.0), pos2(r.right() - 6.0, r.bottom() - 20.0));
     let t = ring.trace(now, plot.width(), plot.height());
-    let grid = Stroke::new(1.0, Color32::from_white_alpha(14));
+    let grid = Stroke::new(1.0, pal().grid);
     for (frac, us) in [(0.0, 0), (1.0, t.top_us)] {
         let y = plot.bottom() - frac * plot.height();
         p.hline(plot.x_range(), y, grid);
         let label = if us == 0 { "0".to_owned() } else { rtt::ms_number(us) };
-        p.text(pos2(plot.left() - 8.0, y), Align2::RIGHT_CENTER, label, mono(T_META), INK3);
+        p.text(pos2(plot.left() - 8.0, y), Align2::RIGHT_CENTER, label, mono(T_META), pal().ink3);
     }
-    p.text(pos2(plot.left(), r.bottom() - 6.0), Align2::LEFT_CENTER, format!("{} ago", rtt::span_words()), regular(T_META), INK3);
-    p.text(pos2(plot.right(), r.bottom() - 6.0), Align2::RIGHT_CENTER, "now", regular(T_META), INK3);
+    p.text(pos2(plot.left(), r.bottom() - 6.0), Align2::LEFT_CENTER, format!("{} ago", rtt::span_words()), regular(T_META), pal().ink3);
+    p.text(pos2(plot.right(), r.bottom() - 6.0), Align2::RIGHT_CENTER, "now", regular(T_META), pal().ink3);
     for line in &t.lines {
         let pts: Vec<Pos2> = line.iter().map(|[x, y]| plot.min + vec2(*x, *y)).collect();
         match pts[..] {
             [] => {}
             [one] => {
-                p.circle_filled(one, 1.5, INK);
+                p.circle_filled(one, 1.5, pal().ink);
             }
             _ => {
-                p.add(egui::Shape::line(smooth(&pts), Stroke::new(1.6, INK)));
+                p.add(egui::Shape::line(smooth(&pts), Stroke::new(1.6, pal().ink)));
             }
         }
     }
@@ -169,22 +169,22 @@ fn chart(p: &Painter, r: Rect, ring: &Ring, now: f64, summary: Option<rtt::Summa
         && let Some(peak) = t.lines.iter().flatten().min_by(|a, b| a[1].total_cmp(&b[1]))
     {
         let at = plot.min + vec2(peak[0], peak[1]);
-        p.circle_filled(at, 2.5, INK);
+        p.circle_filled(at, 2.5, pal().ink);
         let right = at.x + 60.0 < plot.right();
-        p.text(at + vec2(if right { 8.0 } else { -8.0 }, 2.0), if right { Align2::LEFT_CENTER } else { Align2::RIGHT_CENTER }, rtt::ms(s.max_us), mono(T_META), INK2);
+        p.text(at + vec2(if right { 8.0 } else { -8.0 }, 2.0), if right { Align2::LEFT_CENTER } else { Align2::RIGHT_CENTER }, rtt::ms(s.max_us), mono(T_META), pal().ink2);
     }
     if let Some([x, y]) = t.lines.last().and_then(|l| l.last()) {
         let at = plot.min + vec2(*x, *y);
-        p.circle_filled(at, 4.5, GROUND);
+        p.circle_filled(at, 4.5, pal().bg);
         // Live and connected: cyan (Volt is never a status).
-        p.circle_filled(at, 3.5, OK);
+        p.circle_filled(at, 3.5, pal().ok);
     }
     // Lost packets: a short amber tick from the top, with a ring, so they
     // read apart from a slow reading and not only by colour.
     for x in &t.losses {
         let x = plot.left() + x;
-        p.line_segment([pos2(x, plot.top() + 4.0), pos2(x, plot.bottom())], Stroke::new(1.0, WARN.gamma_multiply(0.5)));
-        p.circle_stroke(pos2(x, plot.top() + 2.5), 2.5, Stroke::new(1.0, WARN));
+        p.line_segment([pos2(x, plot.top() + 4.0), pos2(x, plot.bottom())], Stroke::new(1.0, pal().warn.gamma_multiply(0.5)));
+        p.circle_stroke(pos2(x, plot.top() + 2.5), 2.5, Stroke::new(1.0, pal().warn));
     }
 }
 
@@ -200,26 +200,26 @@ impl App {
         // Title row: whether it is there, its name, what it is and where.
         let mut cy = c.top() + 12.0;
         if peer.online {
-            p.circle_filled(pos2(c.left() + 4.0, cy), 3.5, OK);
+            p.circle_filled(pos2(c.left() + 4.0, cy), 3.5, pal().ok);
         } else {
-            p.circle_stroke(pos2(c.left() + 4.0, cy), 3.0, Stroke::new(1.5, INK3));
+            p.circle_stroke(pos2(c.left() + 4.0, cy), 3.0, Stroke::new(1.5, pal().ink3));
         }
         let side = self.side_shown(&peer.id, peer.side);
         let seg_w = if c.width() > 560.0 { 248.0 } else { 204.0 };
         let col_w = 200.0f32.min(c.width() * 0.4);
         let long_name = text_width(ui, &peer.name, semibold(T_TITLE)) > col_w - 16.0;
         let header_height = if long_name {
-            let galley = p.layout(peer.name.clone(), semibold(T_TITLE), INK, c.width() - 16.0);
+            let galley = p.layout(peer.name.clone(), semibold(T_TITLE), pal().ink, c.width() - 16.0);
             let height = galley.size().y;
-            p.galley(c.min + vec2(16.0, 2.0), galley, INK);
+            p.galley(c.min + vec2(16.0, 2.0), galley, pal().ink);
             cy += height + 12.0;
             height + 12.0
         } else {
-            p.text(pos2(c.left() + 16.0, cy), Align2::LEFT_CENTER, &peer.name, semibold(T_TITLE), INK);
+            p.text(pos2(c.left() + 16.0, cy), Align2::LEFT_CENTER, &peer.name, semibold(T_TITLE), pal().ink);
             0.0
         };
         let words = format!("{} · {}", os_name(peer.os), if peer.online { on_your(side) } else { "offline" });
-        p.text(pos2(c.left(), cy + if long_name { 0.0 } else { 22.0 }), Align2::LEFT_CENTER, fit(&p, &words, &regular(T_BODY), col_w), regular(T_BODY), INK3);
+        p.text(pos2(c.left(), cy + if long_name { 0.0 } else { 22.0 }), Align2::LEFT_CENTER, fit(&p, &words, &regular(T_BODY), col_w), regular(T_BODY), pal().ink3);
         // Where it sits: a control, so it can be set without dragging.
         let mut x = c.right();
         let (rm, rw) = {
@@ -248,7 +248,7 @@ impl App {
             self.choose_side(&peer.id, PLACES[k].0, true);
         }
         if track.left() - 40.0 > c.left() + col_w + 24.0 {
-            p.text(pos2(track.left() - 8.0, cy), Align2::RIGHT_CENTER, "Sits", regular(T_META), INK3);
+            p.text(pos2(track.left() - 8.0, cy), Align2::RIGHT_CENTER, "Sits", regular(T_META), pal().ink3);
         }
 
         // Left: the number now, what it means; actions at the bottom.
@@ -259,20 +259,20 @@ impl App {
         let big = mono_medium(30.0);
         if !peer.online {
             // No reading to show: what is wrong and what to do, as words.
-            p.text(pos2(body.left(), body.top() + 10.0), Align2::LEFT_CENTER, "Not found on the network", semibold(T_BODY), INK);
-            let mut hint = egui::text::LayoutJob::simple("Start oneMK on it, on the same network as this computer.".into(), regular(T_BODY), INK2, col_w);
+            p.text(pos2(body.left(), body.top() + 10.0), Align2::LEFT_CENTER, "Not found on the network", semibold(T_BODY), pal().ink);
+            let mut hint = egui::text::LayoutJob::simple("Start oneMK on it, on the same network as this computer.".into(), regular(T_BODY), pal().ink2, col_w);
             hint.wrap.max_rows = 3;
-            p.galley(pos2(body.left(), body.top() + 22.0), p.layout_job(hint), INK2);
+            p.galley(pos2(body.left(), body.top() + 22.0), p.layout_job(hint), pal().ink2);
         } else if let Some(s) = summary {
             let n = rtt::ms_number(s.now_us);
             let nw = text_width(ui, &n, big.clone());
-            p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, &n, big, INK);
-            p.text(pos2(body.left() + nw + 4.0, body.top() + 23.0), Align2::LEFT_CENTER, "ms", regular(T_BODY), INK2);
+            p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, &n, big, pal().ink);
+            p.text(pos2(body.left() + nw + 4.0, body.top() + 23.0), Align2::LEFT_CENTER, "ms", regular(T_BODY), pal().ink2);
             // A number is already shown: say how much it rests on, not "Measuring…".
             let word = q.map_or("Few readings so far", Quality::word);
             let ww = text_width(ui, word, regular(T_BODY));
             let quality_at = if graphed { pos2(body.left(), body.top() + 48.0) } else { pos2(body.left() + nw + 58.0, body.top() + 18.0) };
-            p.text(quality_at, Align2::LEFT_CENTER, word, regular(T_BODY), if matches!(q, Some(Quality::Stalls | Quality::Slow)) { WARN } else { INK2 });
+            p.text(quality_at, Align2::LEFT_CENTER, word, regular(T_BODY), if matches!(q, Some(Quality::Stalls | Quality::Slow)) { pal().warn } else { pal().ink2 });
             if q.is_some() {
                 let (lo, hi) = (rtt::ms_number(s.min_us), rtt::ms(s.p95_us));
                 // Lost packets are named apart from slowness (stalls).
@@ -282,12 +282,12 @@ impl App {
                     1 => " · 1 packet lost".to_owned(),
                     n => format!(" · {n} packets lost"),
                 };
-                p.text(quality_at + vec2(ww, 0.0), Align2::LEFT_CENTER, fit(&p, &usual, &regular(T_BODY), if graphed { col_w - ww } else { c.width() - nw - 58.0 - ww }), regular(T_BODY), INK3);
+                p.text(quality_at + vec2(ww, 0.0), Align2::LEFT_CENTER, fit(&p, &usual, &regular(T_BODY), if graphed { col_w - ww } else { c.width() - nw - 58.0 - ww }), regular(T_BODY), pal().ink3);
             }
         } else {
             let text = if !status.broadcast.is_empty() { "Latency unavailable during broadcast" } else { "No samples yet" };
             let _ = big;
-            para(ui, body.left_top(), c.width(), text, regular(T_BODY), INK2);
+            para(ui, body.left_top(), c.width(), text, regular(T_BODY), pal().ink2);
         }
         if peer.online && (self.latency.contains(&peer.id) || self.failed_measure.contains(&peer.id)) {
             let busy = self.measuring.is_some();
@@ -323,17 +323,17 @@ impl App {
             Some(_) if summary.is_some_and(|s| s.count < 8) => {
                 let n = summary.map_or(0, |s| s.count);
                 let text = format!("{n} {} so far · the graph fills in over {}", if n == 1 { "reading" } else { "readings" }, rtt::span_words());
-                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, fit(&p, &text, &regular(T_META), graph.width() - 30.0), regular(T_META), INK3);
+                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, fit(&p, &text, &regular(T_META), graph.width() - 30.0), regular(T_META), pal().ink3);
             }
             Some(ring) if summary.is_some() => {
-                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, format!("Round trip, last {}", rtt::span_words()), regular(T_META), INK3);
+                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, format!("Round trip, last {}", rtt::span_words()), regular(T_META), pal().ink3);
                 chart(&p, plot, ring, self.rtt_now(), summary);
             }
             _ => {
                 // No readings: no empty axes, one quiet line where the
                 // graph's title would be.
                 let text = if !peer.online { "No round trips while it is offline" } else { "The round-trip graph starts with the first replies" };
-                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, fit(&p, text, &regular(T_META), graph.width() - 30.0), regular(T_META), INK3);
+                p.text(pos2(graph.left() + 30.0, graph.top() + 6.0), Align2::LEFT_CENTER, fit(&p, text, &regular(T_META), graph.width() - 30.0), regular(T_META), pal().ink3);
             }
         }
     }
@@ -373,9 +373,9 @@ impl App {
         let p = ui.painter().clone();
         // Nothing paired: this card is the first step, with the one action.
         if status.peers.is_empty() {
-            let th = para(ui, c.left_top(), c.width(), "Pair your first computer", semibold(T_TITLE), INK);
+            let th = para(ui, c.left_top(), c.width(), "Pair your first computer", semibold(T_TITLE), pal().ink);
             let text = "Open oneMK on both computers on the same network. Compare the six-digit codes to pair securely.";
-            let sh = para(ui, c.left_top() + vec2(0.0, th + 6.0), c.width().min(520.0), text, regular(T_BODY), INK2);
+            let sh = para(ui, c.left_top() + vec2(0.0, th + 6.0), c.width().min(520.0), text, regular(T_BODY), pal().ink2);
             let bw = button_width(ui, "Pair a computer") + 8.0;
             let b = Rect::from_min_size(pos2(c.left(), c.top() + th + 6.0 + sh + 16.0), vec2(bw, 36.0));
             if button(ui, b, Id::unique("pair-in-card"), "Pair a computer", Look::Primary, !self.sheet_open(), None).clicked() {
@@ -386,10 +386,10 @@ impl App {
             return;
         }
         let cy = c.top() + 12.0;
-        icons::pointer(&p, pos2(c.left(), cy - 7.0), 14.0, SIGNAL);
+        icons::pointer(&p, pos2(c.left(), cy - 7.0), 14.0, pal().accent);
         let name = fit(&p, &status.name, &semibold(T_TITLE), c.width() - 22.0);
-        p.text(pos2(c.left() + 22.0, cy), Align2::LEFT_CENTER, &name, semibold(T_TITLE), INK);
-        p.text(pos2(c.left(), cy + 22.0), Align2::LEFT_CENTER, fit(&p, &format!("This computer · {}", os_name(me_os())), &regular(T_BODY), c.width()), regular(T_BODY), INK3);
+        p.text(pos2(c.left() + 22.0, cy), Align2::LEFT_CENTER, &name, semibold(T_TITLE), pal().ink);
+        p.text(pos2(c.left(), cy + 22.0), Align2::LEFT_CENTER, fit(&p, &format!("This computer · {}", os_name(me_os())), &regular(T_BODY), c.width()), regular(T_BODY), pal().ink3);
         if name != status.name {
             ui.interact(Rect::from_min_size(c.min, vec2(c.width(), 44.0)), Id::unique("local-card-name"), Sense::hover()).on_hover_text(&status.name);
         }
@@ -402,8 +402,8 @@ impl App {
         info_row(ui, c, c.top() + 76.0, "ID", &status.id, true, 1.0);
         if status.peers.is_empty() && c.height() > 150.0 {
             // What pairing needs, so the first step is clear from here too.
-            p.hline(c.x_range(), c.top() + 100.0, Stroke::new(1.0, LINE));
-            para(ui, pos2(c.left(), c.top() + 114.0), c.width().min(460.0), "To share this keyboard and mouse, open oneMK on the other computer as well, then choose Pair a computer. Both need to be on the same network.", regular(T_BODY), INK2);
+            p.hline(c.x_range(), c.top() + 100.0, Stroke::new(1.0, pal().line));
+            para(ui, pos2(c.left(), c.top() + 114.0), c.width().min(460.0), "To share this keyboard and mouse, open oneMK on the other computer as well, then choose Pair a computer. Both need to be on the same network.", regular(T_BODY), pal().ink2);
         }
         self.quick_actions(ui, c, c.bottom() - 32.0, None);
     }
@@ -465,10 +465,10 @@ impl App {
         {
             let response = button(ui, rect, Id::unique("desk-computers-menu"), "", Look::Glass, !self.sheet_open(), Some("Choose a computer: show full names and connection states"));
             let painter = ui.painter();
-            painter.text(pos2(rect.left() + 14.0, rect.center().y), Align2::LEFT_CENTER, menu_label, semibold(T_BODY), INK);
+            painter.text(pos2(rect.left() + 14.0, rect.center().y), Align2::LEFT_CENTER, menu_label, semibold(T_BODY), pal().ink);
             let center = pos2(rect.right() - 14.0, rect.center().y);
-            painter.line_segment([center + vec2(-3.0, -1.5), center + vec2(0.0, 1.5)], Stroke::new(1.5, INK2));
-            painter.line_segment([center + vec2(0.0, 1.5), center + vec2(3.0, -1.5)], Stroke::new(1.5, INK2));
+            painter.line_segment([center + vec2(-3.0, -1.5), center + vec2(0.0, 1.5)], Stroke::new(1.5, pal().ink2));
+            painter.line_segment([center + vec2(0.0, 1.5), center + vec2(3.0, -1.5)], Stroke::new(1.5, pal().ink2));
             if let Some(id) = shell::computers_menu(&response, &status, self.selected_id().as_deref()) {
                 self.select(id);
             }
@@ -483,9 +483,9 @@ impl App {
                 let enabled = !busy && !on;
                 resp.widget_info(|| egui::WidgetInfo::selected(Role::Switch, enabled, on, "Type on every computer"));
                 if on {
-                    ui.painter().rect_stroke(r, CornerRadius::same(17), Stroke::new(1.5, SIGNAL), StrokeKind::Inside);
+                    ui.painter().rect_stroke(r, CornerRadius::same(17), Stroke::new(1.5, pal().accent), StrokeKind::Inside);
                 }
-                icons::draw(ui.painter(), Icon::Broadcast, Rect::from_center_size(r.center(), vec2(16.0, 16.0)), if on { SIGNAL } else { INK2 });
+                icons::draw(ui.painter(), Icon::Broadcast, Rect::from_center_size(r.center(), vec2(16.0, 16.0)), if on { pal().accent } else { pal().ink2 });
                 if resp.on_hover_text(&name).clicked() {
                     self.ask_broadcast(!on);
                 }
@@ -494,14 +494,14 @@ impl App {
                 // A switch, with its state, for screen readers too.
                 let enabled = !busy && !on;
                 resp.widget_info(|| egui::WidgetInfo::selected(Role::Switch, enabled, on, "Type on every computer"));
-                icons::draw(ui.painter(), Icon::Broadcast, Rect::from_min_size(pos2(r.left() + 12.0, r.center().y - 8.0), vec2(16.0, 16.0)), INK2);
-                ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, bc_label, semibold(T_BODY), INK);
+                icons::draw(ui.painter(), Icon::Broadcast, Rect::from_min_size(pos2(r.left() + 12.0, r.center().y - 8.0), vec2(16.0, 16.0)), pal().ink2);
+                ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, bc_label, semibold(T_BODY), pal().ink);
                 // A small switch, drawn as the window's other switches are.
                 let track = Rect::from_min_size(pos2(r.right() - 46.0, r.center().y - 9.0), vec2(32.0, 18.0));
                 let knob_t = tween(ui.ctx(), Id::unique("broadcast-knob"), f32::from(on), motion::space(0.2), motion::out_cubic);
-                ui.painter().rect_filled(track, CornerRadius::same(9), mix(SWITCH_OFF, ACCENT, knob_t));
-                ui.painter().rect_stroke(track, CornerRadius::same(9), Stroke::new(1.0, mix(SWITCH_EDGE, Color32::TRANSPARENT, knob_t)), StrokeKind::Inside);
-                ui.painter().circle_filled(pos2(track.left() + 9.0 + 14.0 * knob_t, track.center().y), 7.0, Color32::WHITE);
+                ui.painter().rect_filled(track, CornerRadius::same(9), mix(pal().switch_off, pal().accent, knob_t));
+                ui.painter().rect_stroke(track, CornerRadius::same(9), Stroke::new(1.0, mix(pal().line, Color32::TRANSPARENT, knob_t)), StrokeKind::Inside);
+                ui.painter().circle_filled(pos2(track.left() + 9.0 + 14.0 * knob_t, track.center().y), 7.0, pal().switch_knob);
                 if resp.on_hover_text(format!("Everything you type, click and scroll here goes to every connected computer at once.{key}")).clicked() {
                     self.ask_broadcast(!on);
                 }
@@ -512,9 +512,9 @@ impl App {
             let name = "Timer: when typing on every computer stops by itself";
             let response = button(ui, rect, Id::unique("broadcast-options"), "", Look::Glass, !on, Some(name));
             let icon = if tiny { rect.center() - vec2(8.0, 8.0) } else { pos2(rect.left() + 12.0, rect.center().y - 8.0) };
-            icons::draw(ui.painter(), Icon::Clock, Rect::from_min_size(icon, vec2(16.0, 16.0)), if on { INK3 } else { INK2 });
+            icons::draw(ui.painter(), Icon::Clock, Rect::from_min_size(icon, vec2(16.0, 16.0)), if on { pal().ink3 } else { pal().ink2 });
             if !tiny {
-                ui.painter().text(pos2(rect.left() + 34.0, rect.center().y), Align2::LEFT_CENTER, "Timer", semibold(T_BODY), if on { INK3 } else { INK });
+                ui.painter().text(pos2(rect.left() + 34.0, rect.center().y), Align2::LEFT_CENTER, "Timer", semibold(T_BODY), if on { pal().ink3 } else { pal().ink });
             }
             let response = response.on_hover_text(name);
             egui::Popup::menu(&response).width(280.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
@@ -529,9 +529,9 @@ impl App {
             self.link.lock_all();
         }
         let icon = if tiny { lock_r.center() - vec2(8.0, 8.0) } else { pos2(lock_r.left() + 12.0, lock_r.center().y - 8.0) };
-        icons::draw(ui.painter(), Icon::Lock, Rect::from_min_size(icon, vec2(16.0, 16.0)), INK2);
+        icons::draw(ui.painter(), Icon::Lock, Rect::from_min_size(icon, vec2(16.0, 16.0)), pal().ink2);
         if !tiny {
-            ui.painter().text(pos2(lock_r.left() + 34.0, lock_r.center().y), Align2::LEFT_CENTER, lock_label, semibold(T_BODY), INK);
+            ui.painter().text(pos2(lock_r.left() + 34.0, lock_r.center().y), Align2::LEFT_CENTER, lock_label, semibold(T_BODY), pal().ink);
         }
     }
 
@@ -545,7 +545,7 @@ impl App {
         if hovering_files {
             let r = Rect::from_center_size(pos2(desk.center().x, desk.bottom() - 24.0), vec2(280.0, 40.0));
             widgets::glass_panel(ui, "drop-hint", r, 14);
-            p.text(r.center(), Align2::CENTER_CENTER, "Drop on a computer to send", semibold(T_BODY), SIGNAL);
+            p.text(r.center(), Align2::CENTER_CENTER, "Drop on a computer to send", semibold(T_BODY), pal().accent);
             return;
         }
         // What needs saying right now (broadcasting, being controlled,
@@ -558,11 +558,11 @@ impl App {
             let title_h = n.title.size().y;
             // Volt only while something is on (typing on every computer);
             // a plain notice (waiting, being controlled) gets a neutral dot.
-            let dot = if self.broadcasting() { SIGNAL } else { INK2 };
+            let dot = if self.broadcasting() { pal().accent } else { pal().ink2 };
             p.circle_filled(pos2(r.left() + 18.0, r.top() + 14.0 + title_h / 2.0), 4.0, dot);
             let label = format!("{}. {}", n.title.text(), n.sub.text());
-            p.galley(pos2(r.left() + 32.0, r.top() + 14.0), n.title, INK);
-            p.galley(pos2(r.left() + 32.0, r.top() + 14.0 + title_h + 4.0), n.sub, INK2);
+            p.galley(pos2(r.left() + 32.0, r.top() + 14.0), n.title, pal().ink);
+            p.galley(pos2(r.left() + 32.0, r.top() + 14.0 + title_h + 4.0), n.sub, pal().ink2);
             if n.take_back {
                 // Being controlled: the way back, named, where the eye already is.
                 let bw = button_width(ui, "Take back");
@@ -595,11 +595,11 @@ impl App {
             let y = top;
             let r = Rect::from_min_size(pos2(desk.left(), y), vec2(w, 52.0));
             widgets::glass_panel(ui, "transfer", r, 14);
-            p.text(pos2(r.left() + 14.0, r.top() + 16.0), Align2::LEFT_CENTER, fit(&p, &title, &regular(T_BODY), w - 28.0), regular(T_BODY), INK);
-            p.text(pos2(r.left() + 14.0, r.top() + 33.0), Align2::LEFT_CENTER, fit(&p, &detail, &regular(T_META), w - 28.0), regular(T_META), INK2);
+            p.text(pos2(r.left() + 14.0, r.top() + 16.0), Align2::LEFT_CENTER, fit(&p, &title, &regular(T_BODY), w - 28.0), regular(T_BODY), pal().ink);
+            p.text(pos2(r.left() + 14.0, r.top() + 33.0), Align2::LEFT_CENTER, fit(&p, &detail, &regular(T_META), w - 28.0), regular(T_META), pal().ink2);
             let bar = Rect::from_min_size(pos2(r.left() + 14.0, r.bottom() - 9.0), vec2(w - 28.0, 3.0));
-            p.rect_filled(bar, CornerRadius::same(2), Color32::from_white_alpha(30));
-            p.rect_filled(Rect::from_min_size(bar.min, vec2((bar.width() * frac.unwrap_or(0.18)).max(3.0), 3.0)), CornerRadius::same(2), SIGNAL);
+            p.rect_filled(bar, CornerRadius::same(2), pal().surface2);
+            p.rect_filled(Rect::from_min_size(bar.min, vec2((bar.width() * frac.unwrap_or(0.18)).max(3.0), 3.0)), CornerRadius::same(2), pal().accent);
             a11y_text(ui, Id::unique("transfer"), r, Role::ProgressIndicator, &format!("{title}. {detail}"), Some(Live::Polite));
         }
         let several = self.running().is_some_and(|s| !s.peers.is_empty());
@@ -619,8 +619,8 @@ impl App {
             if desk.width() > 860.0 {
                 let r = Rect::from_min_size(pos2(desk.right() - w, desk.bottom() - 36.0), vec2(w, 36.0));
                 widgets::glass_panel(ui, "drag-hint", r, 12);
-                icons::draw(&p, Icon::Move, Rect::from_min_size(pos2(r.left() + 14.0, r.center().y - 8.0), vec2(16.0, 16.0)), INK3);
-                p.text(pos2(r.left() + 38.0, r.center().y), Align2::LEFT_CENTER, text, regular(T_BODY), INK2);
+                icons::draw(&p, Icon::Move, Rect::from_min_size(pos2(r.left() + 14.0, r.center().y - 8.0), vec2(16.0, 16.0)), pal().ink3);
+                p.text(pos2(r.left() + 38.0, r.center().y), Align2::LEFT_CENTER, text, regular(T_BODY), pal().ink2);
             }
         }
     }
@@ -637,7 +637,7 @@ impl App {
             j.wrap.max_rows = 3;
             ui.painter().layout_job(j)
         };
-        let (title, sub) = (job(&title, semibold(T_BODY), INK), job(&sub, regular(T_META), INK2));
+        let (title, sub) = (job(&title, semibold(T_BODY), pal().ink), job(&sub, regular(T_META), pal().ink2));
         let h = (14.0 + title.size().y + 4.0 + sub.size().y + 14.0).max(if take_back { 56.0 } else { 0.0 });
         Some(NoticeLay { title, sub, h, w, take_back })
     }
@@ -718,29 +718,29 @@ impl App {
                 let resp = ui.interact(cr, rid, widgets::sense(ui, Sense::click()));
                 let hover = tween(ui.ctx(), rid.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
                 let chosen = sel.as_deref() == Some(id.as_str());
-                let fill = if chosen { BUTTON_LIT } else { mix(ELEVATED, BUTTON, hover) };
+                let fill = if chosen { pal().surface2_hover } else { mix(pal().surface, pal().surface2, hover) };
                 let p = ui.painter();
-                p.rect(cr, CornerRadius::same(R_INNER), widgets::pressed(fill, f32::from(resp.is_pointer_button_down_on())), Stroke::new(if chosen { 1.5 } else { 1.0 }, if chosen { INK2 } else { ELEVATED_EDGE }), StrokeKind::Inside);
+                p.rect(cr, CornerRadius::same(R_INNER), widgets::pressed(fill, f32::from(resp.is_pointer_button_down_on())), Stroke::new(if chosen { 1.5 } else { 1.0 }, if chosen { pal().ink2 } else { pal().line }), StrokeKind::Inside);
                 let mark = pos2(cr.left() + 18.0, cr.center().y);
                 if pointer.as_deref() == Some(id.as_str()) {
-                    icons::pointer(p, mark - vec2(5.0, 7.0), 13.0, SIGNAL);
+                    icons::pointer(p, mark - vec2(5.0, 7.0), 13.0, pal().accent);
                 } else if *online {
-                    p.circle_filled(mark, 3.5, OK);
+                    p.circle_filled(mark, 3.5, pal().ok);
                 } else {
-                    p.circle_stroke(mark, 3.0, Stroke::new(1.5, INK3));
+                    p.circle_stroke(mark, 3.0, Stroke::new(1.5, pal().ink3));
                 }
                 // On Clipboard & files each chip is a drop target too.
                 let target = self.tab == Tab::Files && *online && id != "me";
                 let words: &str = if target && hovering_files { "Drop here" } else { words };
                 if target && hovering_files {
-                    p.rect_stroke(cr.expand(2.0), CornerRadius::same(R_INNER + 2), Stroke::new(1.5, SIGNAL), StrokeKind::Outside);
+                    p.rect_stroke(cr.expand(2.0), CornerRadius::same(R_INNER + 2), Stroke::new(1.5, pal().accent), StrokeKind::Outside);
                 }
                 if target && let Some(paths) = dropped.as_ref().filter(|_| drop_at.is_some_and(|q| cr.contains(q))) {
                     drop_to = Some((id.clone(), paths.clone()));
                 }
                 let tw = cr.width() - 46.0;
-                p.text(pos2(cr.left() + 34.0, cr.top() + 15.0), Align2::LEFT_CENTER, fit(p, name, &semibold(T_BODY), tw), semibold(T_BODY), if *online { INK } else { INK2 });
-                p.text(pos2(cr.left() + 34.0, cr.top() + 31.0), Align2::LEFT_CENTER, fit(p, words, &regular(T_META), tw), regular(T_META), INK3);
+                p.text(pos2(cr.left() + 34.0, cr.top() + 15.0), Align2::LEFT_CENTER, fit(p, name, &semibold(T_BODY), tw), semibold(T_BODY), if *online { pal().ink } else { pal().ink2 });
+                p.text(pos2(cr.left() + 34.0, cr.top() + 31.0), Align2::LEFT_CENTER, fit(p, words, &regular(T_META), tw), regular(T_META), pal().ink3);
                 widgets::focus_ring(ui, &resp, cr, R_INNER);
                 if resp.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

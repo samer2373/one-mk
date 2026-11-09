@@ -58,7 +58,7 @@ impl App {
             let copy = Rect::from_min_size(pos2(rect.right() - 58.0, top), vec2(58.0, 28.0));
             if button(ui, copy, Id::unique("pair-copy-invite"), "Copy", Look::Quiet, true, None).clicked() { ui.ctx().copy_text(link); }
         } else {
-            para(ui, pos2(rect.left(), top), rect.width(), "Share the private link only with the person pairing.", regular(T_META), INK2);
+            para(ui, pos2(rect.left(), top), rect.width(), "Share the private link only with the person pairing.", regular(T_META), pal().ink2);
         }
         top += 40.0;
         for (key, label, hint) in [("join-link", "Join", "Join with a link"), ("connect-address", "Connect", "Connect by address")] {
@@ -74,7 +74,7 @@ impl App {
             }
             top += 38.0;
         }
-        para(ui, pos2(rect.left(), top), rect.width(), "Address: a computer name or IP, with its pairing port after a colon.", regular(T_META), INK2);
+        para(ui, pos2(rect.left(), top), rect.width(), "Address: a computer name or IP, with its pairing port after a colon.", regular(T_META), pal().ink2);
         if let Some(method) = method {
             ui.ctx().data_mut(|data| data.remove::<String>(link_id));
             let port = self.running().map_or(one_mk_proto::DEFAULT_PORT, |status| status.port);
@@ -127,16 +127,16 @@ impl App {
             let kw = (text_width(ui, &shown, font.clone()) + 24.0).max(112.0).min(row.width() * 0.55);
             let kr = Rect::from_min_size(pos2(row.right() - kw, row.center().y - 14.0), vec2(kw, 28.0));
             let room = kr.left() - row.left() - 12.0;
-            ui.painter().text(row.left_center(), Align2::LEFT_CENTER, fit(ui.painter(), label, &regular(T_BODY), room), regular(T_BODY), INK);
+            ui.painter().text(row.left_center(), Align2::LEFT_CENTER, fit(ui.painter(), label, &regular(T_BODY), room), regular(T_BODY), pal().ink);
             let id = Id::unique(("shortcut-change", index));
             let resp = ui.interact(kr, id, widgets::sense(ui, Sense::click()));
             let hover = tween(ui.ctx(), id.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
             let p = ui.painter();
-            let well = if resp.is_pointer_button_down_on() { Color32::from_black_alpha(130) } else { mix(Color32::from_black_alpha(70), Color32::from_black_alpha(40), hover) };
+            let well = if resp.is_pointer_button_down_on() { pal().pressed(pal().bg, 0.3) } else { mix(pal().bg, pal().surface2, hover) };
             p.rect_filled(kr, CornerRadius::same(8), well);
-            let edge = if listening { Stroke::new(1.5, ACCENT) } else { Stroke::new(1.0, mix(FIELD_EDGE, FIELD_EDGE_LIT, hover)) };
+            let edge = if listening { Stroke::new(1.5, pal().accent) } else { Stroke::new(1.0, mix(pal().line2, pal().field_edge_lit, hover)) };
             p.rect_stroke(kr, CornerRadius::same(8), edge, StrokeKind::Inside);
-            widgets::mono_text(p, kr.center(), Align2::CENTER_CENTER, &shown, T_META, if listening { INK2 } else { INK }, kw - 16.0);
+            widgets::mono_text(p, kr.center(), Align2::CENTER_CENTER, &shown, T_META, if listening { pal().ink2 } else { pal().ink }, kw - 16.0);
             widgets::focus_ring(ui, &resp, kr, 8);
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -148,7 +148,7 @@ impl App {
                 started = !listening;
             }
             if index + 1 < shortcuts.len() {
-                ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
+                ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, pal().line));
             }
             a11y_text(ui, Id::unique(("shortcut-value", index)), Rect::from_min_max(row.min, pos2(kr.left() - 4.0, row.bottom())), Role::Label, &format!("{label}: {shown}"), None);
             top += SHORTCUT_ROW;
@@ -163,10 +163,10 @@ impl App {
         }
         ui.ctx().data_mut(|data| { if let Some(index) = recording { data.insert_temp(recorder, index); } else { data.remove::<usize>(recorder); } });
         let emergency = crate::view::chord_label("ctrl+alt+shift+esc", cfg!(target_os = "macos"));
-        top += para(ui, pos2(rect.left(), top), rect.width(), &format!("Always back here: {emergency}. While changing: Esc cancels; Backspace turns it off. For computer numbers, press a number from 1 to 9."), regular(T_META), INK2) + 8.0;
+        top += para(ui, pos2(rect.left(), top), rect.width(), &format!("Always back here: {emergency}. While changing: Esc cancels; Backspace turns it off. For computer numbers, press a number from 1 to 9."), regular(T_META), pal().ink2) + 8.0;
         // "Ready, change them in Settings" says nothing here, in Settings.
         if let Some(note) = self.running().filter(|status| status.hotkeys != "on").and_then(|status| crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail)) {
-            para(ui, pos2(rect.left(), top), rect.width(), &crate::view::window_issue(&note), regular(T_META), INK2);
+            para(ui, pos2(rect.left(), top), rect.width(), &crate::view::window_issue(&note), regular(T_META), pal().ink2);
         }
     }
 
@@ -176,7 +176,7 @@ impl App {
             // One event: its name and which computer it is about; the
             // command with its button; then the time limit and the shell.
             if index > 0 {
-                ui.painter().hline(rect.x_range(), top - 9.0, Stroke::new(1.0, HAIRLINE));
+                ui.painter().hline(rect.x_range(), top - 9.0, Stroke::new(1.0, pal().line));
             }
             let current = self.prefs.hooks.iter().find(|(event, _)| event == label).map(|(_, command)| command.as_str()).unwrap_or("").to_owned();
             let event = key.trim_start_matches("on_");
@@ -186,7 +186,7 @@ impl App {
             let mut seconds = self.drafts.get(&format!("{key}-seconds")).cloned().unwrap_or(timeout.to_string());
             let mut use_shell = self.drafts.get(&format!("{key}-shell")).map_or(shell, |value| value == "on");
             let head = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), 28.0));
-            ui.painter().text(head.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), INK);
+            ui.painter().text(head.left_center(), Align2::LEFT_CENTER, label, regular(T_BODY), pal().ink);
             let mut options = vec![(String::new(), "Any computer".to_owned())];
             if let Some(status) = self.running() { options.extend(status.peers.iter().map(|peer| (peer.id.clone(), peer.name.clone()))); }
             let shown = options.iter().find(|(id, _)| id.is_empty() && chosen.is_empty() || !id.is_empty() && chosen.replace('-', "").starts_with(&id.replace('-', ""))).map_or("A computer that's gone".to_owned(), |(_, name)| name.clone());
@@ -211,10 +211,10 @@ impl App {
                 }
             }
             let opts_y = top + 70.0;
-            ui.painter().text(pos2(rect.left(), opts_y + 15.0), Align2::LEFT_CENTER, "Stop it after", regular(T_META), INK2);
+            ui.painter().text(pos2(rect.left(), opts_y + 15.0), Align2::LEFT_CENTER, "Stop it after", regular(T_META), pal().ink2);
             let after = text_width(ui, "Stop it after", regular(T_META));
             widgets::field(ui, Rect::from_min_size(pos2(rect.left() + after + 8.0, opts_y + 2.0), vec2(40.0, 26.0)), Id::unique(("hook-seconds", key)), &mut seconds, "5", "Time limit in seconds, 1 to 60", true, true);
-            ui.painter().text(pos2(rect.left() + after + 56.0, opts_y + 15.0), Align2::LEFT_CENTER, "seconds", regular(T_META), INK2);
+            ui.painter().text(pos2(rect.left() + after + 56.0, opts_y + 15.0), Align2::LEFT_CENTER, "seconds", regular(T_META), pal().ink2);
             let shell_row = Rect::from_min_size(pos2(rect.right() - 170.0, opts_y), vec2(170.0, 30.0));
             if switch_help(ui, shell_row, Id::unique(("hook-shell", key)), "Run in a shell", "hook-shell", use_shell, true).clicked() { use_shell = !use_shell; }
             self.drafts.insert((*key).into(), command.clone());
@@ -223,7 +223,7 @@ impl App {
             self.drafts.insert(format!("{key}-shell"), if use_shell { "on" } else { "off" }.into());
             top += HOOK_H;
         }
-        para(ui, pos2(rect.left(), top), rect.width(), "Commands run here with your permissions. Arrivals and departures refer to this computer. Only add commands you trust.", regular(T_META), INK2);
+        para(ui, pos2(rect.left(), top), rect.width(), "Commands run here with your permissions. Arrivals and departures refer to this computer. Only add commands you trust.", regular(T_META), pal().ink2);
     }
 
     pub(super) fn extra_controls(&mut self, ui: &mut Ui, rect: Rect) {
@@ -274,22 +274,22 @@ pub(super) const SHORTCUT_ROW: f32 = 44.0;
 pub(super) fn chooser(ui: &mut Ui, r: Rect, id: Id, shown: &str, name: &str, options: &[(String, String)], current: &str) -> Option<String> {
     let resp = button(ui, r, id, "", Look::Quiet, true, Some(name));
     let p = ui.painter();
-    p.text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, fit(p, shown, &regular(T_META), r.width() - 36.0), regular(T_META), INK);
+    p.text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, fit(p, shown, &regular(T_META), r.width() - 36.0), regular(T_META), pal().ink);
     let c = pos2(r.right() - 14.0, r.center().y);
-    p.add(egui::Shape::line(vec![c + vec2(-3.5, -1.5), c + vec2(0.0, 2.0), c + vec2(3.5, -1.5)], Stroke::new(1.5, INK2)));
+    p.add(egui::Shape::line(vec![c + vec2(-3.5, -1.5), c + vec2(0.0, 2.0), c + vec2(3.5, -1.5)], Stroke::new(1.5, pal().ink2)));
     let mut picked = None;
     egui::Popup::menu(&resp).width(220.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
         for (value, title) in options {
             let (row, item) = ui.allocate_exact_size(vec2(220.0, 28.0), Sense::click());
             let hover = tween(ui.ctx(), item.id.with("hover"), f32::from(item.hovered()), 0.1, motion::out_cubic);
             let p = ui.painter().clone();
-            p.rect_filled(row, CornerRadius::same(6), if item.is_pointer_button_down_on() { widgets::pressed(BUTTON, 1.0) } else { mix(Color32::TRANSPARENT, BUTTON, hover) });
+            p.rect_filled(row, CornerRadius::same(6), if item.is_pointer_button_down_on() { widgets::pressed(pal().surface2, 1.0) } else { mix(Color32::TRANSPARENT, pal().surface2, hover) });
             widgets::focus_ring(ui, &item, row, 6);
             let on = value == current;
             if on {
-                widgets::draw_check(&p, pos2(row.left() + 16.0, row.center().y), 10.0, INK, 1.0);
+                widgets::draw_check(&p, pos2(row.left() + 16.0, row.center().y), 10.0, pal().ink, 1.0);
             }
-            p.text(pos2(row.left() + 30.0, row.center().y), Align2::LEFT_CENTER, fit(&p, title, &regular(T_BODY), row.width() - 40.0), regular(T_BODY), if on { INK } else { INK_HOVER });
+            p.text(pos2(row.left() + 30.0, row.center().y), Align2::LEFT_CENTER, fit(&p, title, &regular(T_BODY), row.width() - 40.0), regular(T_BODY), if on { pal().ink } else { pal().ink_hover });
             item.widget_info(|| egui::WidgetInfo::selected(Role::MenuItemRadio, true, on, title));
             if item.clicked() {
                 picked = Some(value.clone());

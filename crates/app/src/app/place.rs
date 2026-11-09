@@ -42,8 +42,8 @@ impl App {
         // room beside the buttons (a long name wraps there).
         let w = (desk.width() - 48.0).min(720.0);
         let text_w = w - buttons_w - 48.0;
-        let q = ui.painter().layout(question.clone(), semibold(T_BODY), INK, text_w);
-        let d = ui.painter().layout(SUGGEST_WHY.to_owned(), regular(T_META), INK2, text_w);
+        let q = ui.painter().layout(question.clone(), semibold(T_BODY), pal().ink, text_w);
+        let d = ui.painter().layout(SUGGEST_WHY.to_owned(), regular(T_META), pal().ink2, text_w);
         let h = (q.size().y + 2.0 + d.size().y).max(32.0) + 24.0;
         let rect = Rect::from_min_size(pos2(desk.center().x - w / 2.0, desk.bottom() - 14.0 - h), vec2(w, h));
         Some(SuggestionCard { g, question, rect, buttons_w, q, d })
@@ -58,8 +58,8 @@ impl App {
         let p = ui.painter();
         let qh = q.size().y;
         let text_top = rect.center().y - (qh + 2.0 + d.size().y) / 2.0;
-        p.galley(pos2(rect.left() + 16.0, text_top), q, INK);
-        p.galley(pos2(rect.left() + 16.0, text_top + qh + 2.0), d, INK2);
+        p.galley(pos2(rect.left() + 16.0, text_top), q, pal().ink);
+        p.galley(pos2(rect.left() + 16.0, text_top + qh + 2.0), d, pal().ink2);
         a11y_text(ui, Id::unique(("suggestion", &g.id)), rect, Role::Status, &format!("{question} {SUGGEST_WHY}"), Some(Live::Polite));
         let row_y = rect.center().y - 16.0;
         let yes_r = Rect::from_min_size(pos2(rect.right() - 16.0 - buttons_w, row_y), vec2(button_width(ui, SUGGEST_YES), 32.0));
@@ -93,9 +93,9 @@ impl App {
                 1 => format!("One monitor, {} × {}.", b.w, b.h),
                 n => format!("{n} monitors, {} × {} in all.", b.w, b.h),
             };
-            let h = para(ui, pos2(c.left(), c.top() + 30.0), c.width(), &text, regular(T_BODY), INK2);
+            let h = para(ui, pos2(c.left(), c.top() + 30.0), c.width(), &text, regular(T_BODY), pal().ink2);
             let more = if status.peers.is_empty() { "Pair a computer to place it around this one." } else { "Choose a computer on the desk to place it." };
-            para(ui, pos2(c.left(), c.top() + 30.0 + h + 6.0), c.width(), more, regular(T_BODY), INK2);
+            para(ui, pos2(c.left(), c.top() + 30.0 + h + 6.0), c.width(), more, regular(T_BODY), pal().ink2);
             a11y_text(ui, Id::unique("arrange-me"), c, Role::Label, &format!("{}. {text} {more}", status.name), None);
             return;
         };
@@ -125,7 +125,7 @@ impl App {
             Some(_) => format!("{} is {}, beside your monitors: the pointer crosses where its screens touch yours.", peer.name, on_your(side)),
         };
         let mut y = c.top() + 66.0;
-        y += para(ui, pos2(c.left(), y), c.width(), &sentence, regular(T_BODY), INK2) + 6.0;
+        y += para(ui, pos2(c.left(), y), c.width(), &sentence, regular(T_BODY), pal().ink2) + 6.0;
         a11y_text(ui, Id::unique(("arrange-sentence", &peer.id)), Rect::from_min_size(pos2(c.left(), c.top() + 66.0), vec2(c.width(), 20.0)), Role::Label, &sentence, Some(Live::Polite));
         // The daemon's warnings (two computers on one stretch of edge,
         // screens that don't touch), and screens drawn apart here.
@@ -139,8 +139,8 @@ impl App {
             None
         };
         if let Some(text) = text {
-            p_dot(ui, pos2(c.left() + 3.0, y + 9.0), ERROR);
-            para(ui, pos2(c.left() + 14.0, y), c.width() - 14.0, text, regular(T_META), INK);
+            p_dot(ui, pos2(c.left() + 3.0, y + 9.0), pal().danger);
+            para(ui, pos2(c.left() + 14.0, y), c.width() - 14.0, text, regular(T_META), pal().ink);
             a11y_text(ui, Id::unique(("arrange-warning", &peer.id)), Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), 30.0)), Role::Alert, text, None);
         }
     }
@@ -149,10 +149,10 @@ impl App {
     /// along its side.
     pub(super) fn line_up_cell(&mut self, ui: &mut Ui, c: Rect, sel: Option<String>) {
         let Some(status) = self.running().cloned() else { return };
-        para(ui, c.left_top(), c.width(), "Exact place", semibold(T_TITLE), INK);
+        para(ui, c.left_top(), c.width(), "Exact place", semibold(T_TITLE), pal().ink);
         let Some(peer) = status.peers.iter().find(|p| Some(&p.id) == sel.as_ref()).cloned() else {
             let text = "Drag a computer next to one of your monitors on the desk. It then crosses only where its screens touch yours, at the same scale, like another monitor.";
-            para(ui, c.left_top() + vec2(0.0, 26.0), c.width(), text, regular(T_BODY), INK2);
+            para(ui, c.left_top() + vec2(0.0, 26.0), c.width(), text, regular(T_BODY), pal().ink2);
             return;
         };
         let (side, offset) = self.place_shown(&peer.id, (peer.side, status.offset_of(&peer.id)));
@@ -161,7 +161,7 @@ impl App {
             None if peer.screens.is_empty() => "Its monitors are known once it is connected; then drag it beside one of yours.".to_owned(),
             None => format!("Anywhere along your {} edge. Drag it next to a monitor to place it exactly.", edge_word(side)),
         };
-        let h = para(ui, c.left_top() + vec2(0.0, 26.0), c.width(), &text, regular(T_BODY), INK2);
+        let h = para(ui, c.left_top() + vec2(0.0, 26.0), c.width(), &text, regular(T_BODY), pal().ink2);
         a11y_text(ui, Id::unique(("exact-place", &peer.id)), Rect::from_min_size(c.left_top() + vec2(0.0, 26.0), vec2(c.width(), h)), Role::Label, &text, Some(Live::Polite));
         if offset.is_some() {
             let label = "Anywhere along the side";
@@ -232,7 +232,7 @@ impl App {
         // the rest), never through the middle of one.
         let network_label = if !network.ssids.is_empty() { format!("Current network: {}", network.ssids.join(", ")) } else if network.permission == one_mk_ctl::wifi::Permission::Allowed && !network.unavailable { "Not connected to Wi-Fi".to_owned() } else { "Current network: unavailable".to_owned() };
         let measure_width = c.width() - 24.0;
-        let measured = |text: &str| ui.painter().layout(text.to_owned(), regular(T_META), INK2, measure_width).size().y;
+        let measured = |text: &str| ui.painter().layout(text.to_owned(), regular(T_META), pal().ink2, measure_width).size().y;
         let mut used = measured(&network_label) + 8.0;
         if let Some(explanation) = network.explanation() {
             used += measured(explanation) + 6.0 + if network.permission_button().is_some() { 34.0 } else { 0.0 };
@@ -262,12 +262,12 @@ impl App {
             } else {
                 "Current network: unavailable".to_owned()
             };
-            let label_height = ui.painter().layout(label.clone(), regular(T_META), INK2, ui.available_width() - 8.0).size().y;
+            let label_height = ui.painter().layout(label.clone(), regular(T_META), pal().ink2, ui.available_width() - 8.0).size().y;
             let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), label_height + 8.0), Sense::hover());
-            para(ui, row.min + vec2(4.0, 4.0), row.width() - 8.0, &label, regular(T_META), INK2);
+            para(ui, row.min + vec2(4.0, 4.0), row.width() - 8.0, &label, regular(T_META), pal().ink2);
             if let Some(explanation) = network.explanation() {
                 let origin = ui.cursor().min + vec2(4.0, 0.0);
-                let height = para(ui, origin, ui.available_width() - 8.0, explanation, regular(T_META), INK2);
+                let height = para(ui, origin, ui.available_width() - 8.0, explanation, regular(T_META), pal().ink2);
                 ui.allocate_space(vec2(ui.available_width(), height + 6.0));
                 if let Some(label) = network.permission_button() {
                     let (row, _) = ui.allocate_exact_size(vec2(button_width(ui, label), 28.0), Sense::hover());
@@ -285,7 +285,7 @@ impl App {
                 } else {
                     "Save where every computer is now, to switch back in one click."
                 };
-                para(ui, ui.cursor().min + vec2(4.0, 2.0), ui.available_width() - 8.0, text, regular(T_META), INK2);
+                para(ui, ui.cursor().min + vec2(4.0, 2.0), ui.available_width() - 8.0, text, regular(T_META), pal().ink2);
             }
             // The open profile first, so its options sit in view.
             let mut names = names.clone();
@@ -296,7 +296,7 @@ impl App {
                 let expanded = open.as_ref() == Some(n);
                 let auto_text = self.prefs.auto.get(n).cloned();
                 let auto_label = auto_text.as_ref().map(|text| format!("Comes on by itself on {text}"));
-                let auto_height = auto_label.as_ref().map_or(0.0, |text| ui.painter().layout(text.clone(), regular(T_META), INK2, ui.available_width() - 8.0).size().y + 8.0);
+                let auto_height = auto_label.as_ref().map_or(0.0, |text| ui.painter().layout(text.clone(), regular(T_META), pal().ink2, ui.available_width() - 8.0).size().y + 8.0);
                 let h = 30.0 + auto_height + if expanded { 36.0 } else { 0.0 };
                 let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
                 if expanded && just_opened {
@@ -312,14 +312,14 @@ impl App {
                 let text_w = use_r.left() - line.left() - 10.0;
                 let shown = fit(&p, n, &regular(T_BODY), text_w);
                 let nw = text_width(ui, &shown, regular(T_BODY));
-                p.text(pos2(line.left(), line.center().y), Align2::LEFT_CENTER, &shown, regular(T_BODY), INK);
+                p.text(pos2(line.left(), line.center().y), Align2::LEFT_CENTER, &shown, regular(T_BODY), pal().ink);
                 if shown != *n {
                     ui.interact(Rect::from_min_size(line.min, vec2(nw, 30.0)), Id::unique(("profile-name", n)), Sense::hover()).on_hover_text(n);
                 }
                 // Beside the name only the word; open, the network gets a
                 // line of its own (a button never sits over words).
                 if let Some(text) = auto_label.as_ref() {
-                    para(ui, pos2(line.left(), line.bottom() + 4.0), row.width(), text, regular(T_META), INK2);
+                    para(ui, pos2(line.left(), line.bottom() + 4.0), row.width(), text, regular(T_META), pal().ink2);
                 }
                 let label = if in_use { "In use" } else { "Use" };
                 if button(ui, use_r, Id::unique(("profile-use", n)), label, Look::Quiet, !in_use, Some(&format!("Use profile {n}"))).clicked() {
@@ -366,7 +366,7 @@ impl App {
                         act = Some(("delete", n.clone()));
                     }
                 }
-                p.hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
+                p.hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, pal().line));
             }
         });
         if let Some(n) = toggle_open {

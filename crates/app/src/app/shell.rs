@@ -11,7 +11,7 @@ use super::*;
 fn show_broadcast_status(width: f32) -> bool { width >= 100.0 }
 
 fn rail_section(ui: &Ui, rect: Rect) {
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, "PCs", regular(T_META), INK2);
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, "PCs", regular(T_META), pal().ink2);
     a11y_text(ui, Id::unique("rail-computers"), rect, Role::Label, "PCs", None);
 }
 use crate::chrome;
@@ -47,13 +47,13 @@ pub(super) fn computers_menu(response: &egui::Response, status: &Status, current
                 let label = computer_menu_label(name, id, online, chosen);
                 let (title, detail) = label.split_once('\n').unwrap();
                 let mut text = egui::text::LayoutJob::default();
-                text.append(&format!("    {title}"), 0.0, egui::TextFormat { font_id: regular(T_BODY), color: INK, ..Default::default() });
-                text.append(&format!("\n    {detail}"), 0.0, egui::TextFormat { font_id: regular(T_META), color: INK2, ..Default::default() });
+                text.append(&format!("    {title}"), 0.0, egui::TextFormat { font_id: regular(T_BODY), color: pal().ink, ..Default::default() });
+                text.append(&format!("\n    {detail}"), 0.0, egui::TextFormat { font_id: regular(T_META), color: pal().ink2, ..Default::default() });
                 let row = egui::Button::new(text).wrap().min_size(vec2(ui.available_width(), 44.0));
-                let row = if chosen { row.fill(BUTTON_LIT) } else { row };
+                let row = if chosen { row.fill(pal().surface2_hover) } else { row };
                 let response = ui.add(row);
                 widgets::a11y(&response, Role::Button, &label, None);
-                ui.painter().circle_filled(response.rect.left_top() + vec2(10.0, 12.0), 3.0, if online { OK } else { INK2 });
+                ui.painter().circle_filled(response.rect.left_top() + vec2(10.0, 12.0), 3.0, if online { pal().ok } else { pal().ink2 });
                 if response.clicked() {
                     selected = Some(id.to_owned());
                     ui.close();
@@ -111,7 +111,7 @@ pub(super) fn cmd() -> &'static str {
 /// How tall `text` sets in the sidebar's small paragraphs.
 fn para_h(ui: &Ui, text: &str, w: f32) -> f32 {
     let f = regular(T_META);
-    let mut job = egui::text::LayoutJob::simple(text.to_owned(), f.clone(), INK, w);
+    let mut job = egui::text::LayoutJob::simple(text.to_owned(), f.clone(), pal().ink, w);
     job.sections[0].format.line_height = Some((f.size * LEADING).round());
     ui.painter().layout_job(job).size().y
 }
@@ -130,16 +130,16 @@ fn row_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, role: Role, chosen: b
     let p = ui.painter();
     if chosen {
         // Chosen: a lighter fill and a visible edge, a step above hover.
-        let fill = mix(SIDE_CHOSEN, Color32::from_rgb(0x24, 0x28, 0x30), 0.5);
-        p.rect(rect, CornerRadius::same(8), if down { Color32::from_rgb(0x4B, 0x54, 0x61) } else { fill }, Stroke::new(1.0, Color32::from_white_alpha(22)), StrokeKind::Inside);
+        let fill = pal().surface2;
+        p.rect(rect, CornerRadius::same(8), if down { pal().pressed(pal().surface2_hover, 0.3) } else { fill }, Stroke::new(1.0, pal().line), StrokeKind::Inside);
     } else if down {
         // Pressed: a deeper well than the hover, never the chosen look.
         // rest < hover < pressed < chosen (which adds its edge).
-        p.rect_filled(rect, CornerRadius::same(8), Color32::from_rgb(0x4B, 0x54, 0x61));
+        p.rect_filled(rect, CornerRadius::same(8), pal().pressed(pal().surface2_hover, 0.3));
     } else if hover > 0.01 {
         // Hover is a hint, clearly weaker than the chosen page: half way
         // from the sidebar to the hover tone, no edge.
-        p.rect_filled(rect, CornerRadius::same(8), mix(SIDEBAR, SIDE_HOVER, 0.25 * hover));
+        p.rect_filled(rect, CornerRadius::same(8), mix(pal().sidebar, mix(pal().sidebar, pal().surface2, 0.5), 0.25 * hover));
     }
     widgets::focus_ring(ui, &r, rect, 8);
     if r.hovered() && enabled {
@@ -169,7 +169,7 @@ impl App {
     }
 
     fn health_tone(&self) -> Color32 {
-        if self.running().is_some_and(|status| status.input_lines().iter().any(|line| line.severity == one_mk_ctl::status::Severity::Problem)) || self.health_checks().is_some_and(|checks| checks.iter().any(|check| check.verdict == crate::view::Verdict::Fail)) { ERROR } else { WARN }
+        if self.running().is_some_and(|status| status.input_lines().iter().any(|line| line.severity == one_mk_ctl::status::Severity::Problem)) || self.health_checks().is_some_and(|checks| checks.iter().any(|check| check.verdict == crate::view::Verdict::Fail)) { pal().danger } else { pal().warn }
     }
 
     /// The top-bar action, done.
@@ -189,8 +189,8 @@ impl App {
     }
 
     pub(super) fn sidebar(&mut self, ui: &mut Ui, f: &Frame, now: f64) {
-        ui.painter().rect_filled(f.side, 0.0, SIDEBAR);
-        ui.painter().vline(f.side.right() - 0.5, f.side.y_range(), Stroke::new(1.0, HAIRLINE));
+        ui.painter().rect_filled(f.side, 0.0, pal().sidebar);
+        ui.painter().vline(f.side.right() - 0.5, f.side.y_range(), Stroke::new(1.0, pal().line));
         let mut ui = ui.new_child(UiBuilder::new().max_rect(f.side).id_salt("sidebar"));
         ui.set_clip_rect(f.side);
         if f.rail { self.rail(&mut ui, f.side, now) } else { self.side_full(&mut ui, f.side, now) }
@@ -215,15 +215,15 @@ impl App {
         let sr = Rect::from_min_size(pos2(x, y), vec2(w, 30.0));
         let resp = ui.interact(sr, Id::unique("search"), widgets::sense(ui, Sense::click()));
         let hover = tween(ui.ctx(), Id::unique("search-hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
-        let fill = if resp.is_pointer_button_down_on() { widgets::pressed(SIDE_HOVER, 1.0) } else { mix(SEARCH_FILL, SIDE_HOVER, hover) };
-        ui.painter().rect(sr, CornerRadius::same(8), fill, Stroke::new(1.0, SIDE_CHOSEN_EDGE), StrokeKind::Inside);
-        icons::search(ui.painter(), pos2(sr.left() + 16.0, sr.center().y), INK3);
-        ui.painter().text(pos2(sr.left() + 30.0, sr.center().y), Align2::LEFT_CENTER, "Search", regular(T_BODY), INK3);
+        let fill = if resp.is_pointer_button_down_on() { widgets::pressed(mix(pal().sidebar, pal().surface2, 0.5), 1.0) } else { mix(pal().surface2, mix(pal().sidebar, pal().surface2, 0.5), hover) };
+        ui.painter().rect(sr, CornerRadius::same(8), fill, Stroke::new(1.0, pal().line), StrokeKind::Inside);
+        icons::search(ui.painter(), pos2(sr.left() + 16.0, sr.center().y), pal().ink3);
+        ui.painter().text(pos2(sr.left() + 30.0, sr.center().y), Align2::LEFT_CENTER, "Search", regular(T_BODY), pal().ink3);
         let kc = format!("{}K", cmd());
         let kw = text_width(ui, &kc, regular(T_META)) + 10.0;
         let kr = Rect::from_min_size(pos2(sr.right() - 8.0 - kw, sr.center().y - 9.0), vec2(kw, 18.0));
-        ui.painter().rect(kr, CornerRadius::same(5), Color32::from_white_alpha(10), Stroke::new(0.5, Color32::from_white_alpha(36)), StrokeKind::Inside);
-        ui.painter().text(kr.center(), Align2::CENTER_CENTER, kc, regular(T_META), INK3);
+        ui.painter().rect(kr, CornerRadius::same(5), pal().hover, Stroke::new(0.5, pal().line2), StrokeKind::Inside);
+        ui.painter().text(kr.center(), Align2::CENTER_CENTER, kc, regular(T_META), pal().ink3);
         widgets::focus_ring(ui, &resp, sr, 8);
         // A button that opens the command palette (where the typing
         // happens, in a real text field): not a text field itself.
@@ -241,10 +241,10 @@ impl App {
             let enabled = self.nav_enabled(tab);
             let on = nav_of(self.tab) == tab;
             let (resp, hover) = row_button(ui, r, Id::unique(("nav", name)), name, Role::Tab, on, enabled);
-            let col = if !enabled { INK3.gamma_multiply(0.6) } else if on { INK } else { mix(INK2, INK, hover) };
+            let col = if !enabled { pal().ink3.gamma_multiply(0.6) } else if on { pal().ink } else { mix(pal().ink2, pal().ink, hover) };
             icons::draw(ui.painter(), icon, Rect::from_center_size(pos2(r.left() + 17.0, r.center().y), vec2(15.0, 15.0)), col);
             ui.painter().text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, name, regular(T_BODY), col);
-            ui.painter().text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, format!("{}{key}", cmd()), mono(T_META), if on { INK3 } else { SHORTCUT_INK });
+            ui.painter().text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, format!("{}{key}", cmd()), mono(T_META), pal().ink3);
             if resp.clicked() {
                 self.set_tab(tab);
             }
@@ -258,18 +258,18 @@ impl App {
         {
             let pointer = self.pointer_on();
             y += 14.0;
-            ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "This computer", semibold(T_META), INK3);
+            ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "This computer", semibold(T_META), pal().ink3);
             y += 22.0;
             let r = Rect::from_min_size(pos2(x, y), vec2(w, ROW_H));
             let here = pointer.as_deref() == Some("me");
             self.computer_row(ui, r, "me", &status.name, here, true, "", false);
             y += ROW_H + 12.0;
             if y + 22.0 + ROW_H <= list_bottom {
-                ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "Paired", semibold(T_META), INK3);
-                ui.painter().text(pos2(x + w - 10.0, y + 8.0), Align2::RIGHT_CENTER, status.peers.len().to_string(), mono(T_META), INK3);
+                ui.painter().text(pos2(x + 10.0, y + 8.0), Align2::LEFT_CENTER, "Paired", semibold(T_META), pal().ink3);
+                ui.painter().text(pos2(x + w - 10.0, y + 8.0), Align2::RIGHT_CENTER, status.peers.len().to_string(), mono(T_META), pal().ink3);
                 y += 22.0;
                 if status.peers.is_empty() {
-                    ui.painter().text(pos2(x + 10.0, y + ROW_H / 2.0), Align2::LEFT_CENTER, "None yet", regular(T_BODY), INK3);
+                    ui.painter().text(pos2(x + 10.0, y + ROW_H / 2.0), Align2::LEFT_CENTER, "None yet", regular(T_BODY), pal().ink3);
                 }
                 let sel = self.selected_id().filter(|_| self.tab.desk());
                 let n = status.peers.len();
@@ -292,7 +292,7 @@ impl App {
                     let r = Rect::from_min_size(pos2(x, y), vec2(w, ROW_H));
                     let more = format!("{} more on the desk", n - shown);
                     let (resp, _) = row_button(ui, r, Id::unique("side-more"), &more, Role::Button, false, true);
-                    ui.painter().text(pos2(r.left() + 36.0, r.center().y), Align2::LEFT_CENTER, &more, regular(T_BODY), INK2);
+                    ui.painter().text(pos2(r.left() + 36.0, r.center().y), Align2::LEFT_CENTER, &more, regular(T_BODY), pal().ink2);
                     if resp.clicked() {
                         self.set_tab(Tab::Desk);
                     }
@@ -315,19 +315,19 @@ impl App {
         let p = ui.painter();
         let mark = pos2(r.left() + 18.0, r.center().y);
         if here {
-            icons::pointer(p, mark - vec2(4.0, 7.0), 14.0, SIGNAL);
+            icons::pointer(p, mark - vec2(4.0, 7.0), 14.0, pal().accent);
         } else if online {
-            p.circle_filled(mark, 3.5, OK);
+            p.circle_filled(mark, 3.5, pal().ok);
         } else {
-            p.circle_stroke(mark, 3.0, Stroke::new(1.5, INK3));
+            p.circle_stroke(mark, 3.0, Stroke::new(1.5, pal().ink3));
         }
         let vw = if value.is_empty() { 0.0 } else { text_width(ui, value, if value.ends_with("ms") { mono(T_META) } else { regular(T_META) }) + 12.0 };
         let font = regular(T_BODY);
         let shown = fit(p, name, &font, r.width() - 46.0 - vw);
-        p.text(pos2(r.left() + 36.0, r.center().y), Align2::LEFT_CENTER, shown, font, if online || id == "me" { if chosen { INK } else { INK2 } } else { INK3 });
+        p.text(pos2(r.left() + 36.0, r.center().y), Align2::LEFT_CENTER, shown, font, if online || id == "me" { if chosen { pal().ink } else { pal().ink2 } } else { pal().ink3 });
         if !value.is_empty() {
             let f = if value.ends_with("ms") { mono(T_META) } else { regular(T_META) };
-            p.text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, value, f, INK3);
+            p.text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, value, f, pal().ink3);
         }
         if resp.clicked() {
             self.set_tab(Tab::Desk);
@@ -374,24 +374,24 @@ impl App {
                 UpdateBox::Working { .. } => "Updating oneMK".into(),
                 UpdateBox::Failed { .. } => "The update didn't finish".into(),
             };
-            p.text(pos2(tx, r.top() + 22.0), Align2::LEFT_CENTER, fit(&p, &title, &semibold(T_BODY), tw), semibold(T_BODY), INK);
+            p.text(pos2(tx, r.top() + 22.0), Align2::LEFT_CENTER, fit(&p, &title, &semibold(T_BODY), tw), semibold(T_BODY), pal().ink);
             let b = Rect::from_min_size(pos2(r.left() + 10.0, r.bottom() - 42.0), vec2(w - 20.0, 32.0));
             let locked = self.sheet_open();
             match what {
                 UpdateBox::Ready { version, can: true, password, .. } => {
-                    line(r.top() + 44.0, if password { "Asks for your password, then restarts" } else { "Restarts in a few seconds" }, INK2);
+                    line(r.top() + 44.0, if password { "Asks for your password, then restarts" } else { "Restarts in a few seconds" }, pal().ink2);
                     if button(ui, b, Id::unique("update"), "Update now", Look::Quiet, !locked, Some(&format!("Update oneMK to {version}"))).clicked() {
                         self.begin_update();
                     }
                 }
                 UpdateBox::Ready { can: false, advice, .. } => {
-                    para(ui, pos2(tx, r.top() + 36.0), tw, &advice, regular(T_META), INK2);
+                    para(ui, pos2(tx, r.top() + 36.0), tw, &advice, regular(T_META), pal().ink2);
                     if button(ui, b, Id::unique("update-download"), "Download", Look::Quiet, !locked, Some("Open the download page")).clicked() {
                         self.link.download_update();
                     }
                 }
                 UpdateBox::MoveFirst => {
-                    line(r.top() + 44.0, "It's running from the disk image", INK2);
+                    line(r.top() + 44.0, "It's running from the disk image", pal().ink2);
                     if button(ui, b, Id::unique("update-move"), "Move to Applications", Look::Quiet, !locked, None).clicked() {
                         self.update_ui.failed = false;
                         self.busy.push(Job::Update);
@@ -399,11 +399,11 @@ impl App {
                     }
                 }
                 UpdateBox::Working { done, said } => {
-                    line(r.top() + 44.0, &said, INK2);
+                    line(r.top() + 44.0, &said, pal().ink2);
                     // A capsule that fills; without a percentage, a short
                     // bead that travels along it.
                     let track = Rect::from_min_size(pos2(b.left() + 4.0, b.center().y - 3.0), vec2(b.width() - 8.0, 6.0));
-                    p.rect_filled(track, CornerRadius::same(3), Color32::from_white_alpha(28));
+                    p.rect_filled(track, CornerRadius::same(3), pal().surface2);
                     let fill = match done {
                         Some(k) => Rect::from_min_size(track.min, vec2(track.width() * k.clamp(0.04, 1.0), track.height())),
                         None => {
@@ -412,16 +412,16 @@ impl App {
                             Rect::from_min_size(pos2(track.left() + (track.width() - bw) * t, track.top()), vec2(bw, track.height()))
                         }
                     };
-                    p.rect_filled(fill, CornerRadius::same(3), ACCENT);
+                    p.rect_filled(fill, CornerRadius::same(3), pal().accent);
                     ui.ctx().request_repaint_after_secs(1.0 / 30.0);
                     widgets::a11y_text(ui, Id::unique("update-progress"), r, Role::ProgressIndicator, &said, Some(Live::Polite));
                 }
                 UpdateBox::Failed { said } => {
                     let shown = if said.is_empty() { "Get the new version from the download page." } else { said.as_str() };
-                    let mut job = egui::text::LayoutJob::simple(shown.to_owned(), regular(T_META), INK2, tw);
+                    let mut job = egui::text::LayoutJob::simple(shown.to_owned(), regular(T_META), pal().ink2, tw);
                     job.wrap.max_rows = 3;
                     let g = p.layout_job(job);
-                    p.galley(pos2(tx, r.top() + 36.0), g, INK2);
+                    p.galley(pos2(tx, r.top() + 36.0), g, pal().ink2);
                     if button(ui, b, Id::unique("update-download"), "Download", Look::Quiet, !locked, Some("Open the download page")).clicked() {
                         self.link.download_update();
                     }
@@ -449,21 +449,21 @@ impl App {
         let row = Rect::from_min_size(pos2(x, y), vec2(w, 28.0));
         let trouble = self.health_trouble();
         let (dot, text) = match self.status.as_ref() {
-            None => (INK3, "Looking for oneMK…".to_owned()),
-            Some(None) => (INK3, "Sharing is off".to_owned()),
+            None => (pal().ink3, "Looking for oneMK…".to_owned()),
+            Some(None) => (pal().ink3, "Sharing is off".to_owned()),
             Some(Some(_)) if trouble => (self.health_tone(), "On · check Health".to_owned()),
             // Only "all good" when a computer is actually connected.
-            Some(Some(s)) if s.peers.is_empty() => (INK3, "On · not paired".to_owned()),
-            Some(Some(s)) if !s.peers.iter().any(|p| p.online) => (INK3, "On · none connected".to_owned()),
-            Some(Some(s)) if s.peers.iter().any(|peer| !peer.online) => (WARN, "On · some offline".to_owned()),
-            Some(Some(_)) => (OK, "On · connected".to_owned()),
+            Some(Some(s)) if s.peers.is_empty() => (pal().ink3, "On · not paired".to_owned()),
+            Some(Some(s)) if !s.peers.iter().any(|p| p.online) => (pal().ink3, "On · none connected".to_owned()),
+            Some(Some(s)) if s.peers.iter().any(|peer| !peer.online) => (pal().warn, "On · some offline".to_owned()),
+            Some(Some(_)) => (pal().ok, "On · connected".to_owned()),
         };
         let stop_w = if self.running().is_some() { text_width(ui, "Stop", regular(T_META)) + 16.0 } else { 0.0 };
         let status_r = Rect::from_min_max(row.min, pos2(row.right() - stop_w - 4.0, row.bottom()));
         let (resp, hover) = row_button(ui, status_r, Id::unique("health-line"), &format!("{text}. Open Health"), Role::Link, self.tab == Tab::Health, true);
         let p = ui.painter();
         p.circle_filled(pos2(status_r.left() + 12.0, row.center().y), 3.0, dot);
-        p.text(pos2(status_r.left() + 24.0, row.center().y), Align2::LEFT_CENTER, fit(p, &text, &regular(T_META), status_r.width() - 30.0), regular(T_META), mix(INK2, INK, hover));
+        p.text(pos2(status_r.left() + 24.0, row.center().y), Align2::LEFT_CENTER, fit(p, &text, &regular(T_META), status_r.width() - 30.0), regular(T_META), mix(pal().ink2, pal().ink, hover));
         if resp.clicked() {
             self.set_tab(Tab::Health);
         }
@@ -473,7 +473,7 @@ impl App {
             let bw = text_width(ui, label, regular(T_META)) + 16.0;
             let b = Rect::from_min_size(pos2(row.right() - bw, row.top()), vec2(bw, 28.0));
             let (resp, hover) = row_button(ui, b, Id::unique("stop"), "Stop oneMK: turn off sharing on this computer", Role::Button, false, !busy);
-            ui.painter().text(b.center(), Align2::CENTER_CENTER, label, regular(T_META), mix(INK3, INK, hover));
+            ui.painter().text(b.center(), Align2::CENTER_CENTER, label, regular(T_META), mix(pal().ink3, pal().ink, hover));
             if resp.clicked() {
                 self.busy.push(Job::Stop);
                 self.link.stop();
@@ -491,7 +491,7 @@ impl App {
             chrome::BUTTONS_Y.max + 6.0
         } else {
             let (h, c) = (20.0, pos2(cx, side.top() + 26.0));
-            icons::pointer(ui.painter(), c - vec2(67.5, 62.0) * (h / 127.0), h, SIGNAL);
+            icons::pointer(ui.painter(), c - vec2(67.5, 62.0) * (h / 127.0), h, pal().accent);
             side.top() + 52.0
         };
         let trouble = self.health_trouble();
@@ -501,7 +501,7 @@ impl App {
             let enabled = self.nav_enabled(tab);
             let (resp, hover) = row_button(ui, r, Id::unique(("nav", name)), name, Role::Tab, self.tab == tab, enabled);
             let on = self.tab == tab;
-            let col = if !enabled { mix(INK3, GLASS_SOLID, 0.45) } else if on { INK } else { mix(INK3, INK, hover) };
+            let col = if !enabled { mix(pal().ink3, pal().surface, 0.45) } else if on { pal().ink } else { mix(pal().ink3, pal().ink, hover) };
             icons::draw(ui.painter(), icon, Rect::from_center_size(r.center(), vec2(18.0, 18.0)), col);
             if tab == Tab::Health && trouble {
                 ui.painter().circle_filled(r.right_top() + vec2(-8.0, 8.0), 3.0, self.health_tone());
@@ -512,7 +512,7 @@ impl App {
             y += 38.0;
         }
         y += 6.0;
-        ui.painter().hline((cx - 12.0)..=(cx + 12.0), y, Stroke::new(1.0, Color32::from_white_alpha(18)));
+        ui.painter().hline((cx - 12.0)..=(cx + 12.0), y, Stroke::new(1.0, pal().line2));
         y += 8.0;
         if let Some(status) = self.running().cloned() {
             let expander = Rect::from_center_size(pos2(cx, y + 14.0), vec2(side.width() - 12.0, 28.0));
@@ -535,13 +535,13 @@ impl App {
                 let p = ui.painter();
                 let mark = pos2(r.left() + 9.0, r.center().y);
                 if pointer.as_deref() == Some(id.as_str()) {
-                    icons::pointer(p, mark - vec2(3.0, 5.0), 10.0, SIGNAL);
+                    icons::pointer(p, mark - vec2(3.0, 5.0), 10.0, pal().accent);
                 } else if online {
-                    p.circle_filled(mark, 3.0, OK);
+                    p.circle_filled(mark, 3.0, pal().ok);
                 } else {
-                    p.circle_stroke(mark, 2.5, Stroke::new(1.5, INK3));
+                    p.circle_stroke(mark, 2.5, Stroke::new(1.5, pal().ink3));
                 }
-                p.text(pos2(r.left() + 19.0, r.center().y), Align2::LEFT_CENTER, shown, regular(T_META), if online { INK2 } else { INK3 });
+                p.text(pos2(r.left() + 19.0, r.center().y), Align2::LEFT_CENTER, shown, regular(T_META), if online { pal().ink2 } else { pal().ink3 });
                 if resp.on_hover_text(&name).clicked() {
                     self.set_tab(Tab::Desk);
                     self.select(id.clone());
@@ -576,7 +576,7 @@ impl App {
                 None => format!("Update oneMK to {version}"),
             };
             let resp = widgets::icon_button(ui, r, Id::unique("update"), &name, !busy && !self.sheet_open(), |p, rr, col| icons::draw(p, Icon::Update, Rect::from_center_size(rr.center(), vec2(16.0, 16.0)), col));
-            ui.painter().circle_filled(r.right_top() + vec2(-9.0, 7.0), 3.0, SIGNAL);
+            ui.painter().circle_filled(r.right_top() + vec2(-9.0, 7.0), 3.0, pal().accent);
             if resp.clicked() {
                 self.update_output = None;
                 self.busy.push(Job::Update);
@@ -591,7 +591,7 @@ impl App {
         let shown = !self.sheet_open() && self.status.is_some();
         if self.broadcasting() { self.broadcast_status(ui, a); return; }
         let r = button(ui, a, Id::unique("action"), "", look, enabled && shown, Some(&label));
-        let col = if look == Look::Primary && enabled { SIGNAL_INK } else { INK };
+        let col = if look == Look::Primary && enabled { pal().on_accent } else { pal().ink };
         let icon = match job {
             Some(Job::Start) => Icon::Power,
             Some(Job::TakeBack) => Icon::Desk,
@@ -610,8 +610,8 @@ impl App {
         if !show_broadcast_status(rect.width()) { return; }
         let hint = self.broadcast_stop_hint();
         let shortcut = hint.strip_prefix("Press ").and_then(|text| text.split_once(" to stop").map(|(key, _)| key)).unwrap_or(&hint);
-        ui.painter().text(rect.center_top() + vec2(0.0, 7.0), Align2::CENTER_TOP, "Keyboard stop", regular(12.0), INK2);
-        ui.painter().text(rect.center_bottom() - vec2(0.0, 2.0), Align2::CENTER_BOTTOM, shortcut, regular(12.0), INK2);
+        ui.painter().text(rect.center_top() + vec2(0.0, 7.0), Align2::CENTER_TOP, "Keyboard stop", regular(12.0), pal().ink2);
+        ui.painter().text(rect.center_bottom() - vec2(0.0, 2.0), Align2::CENTER_BOTTOM, shortcut, regular(12.0), pal().ink2);
         a11y_text(ui, Id::unique("broadcast-stop-status"), rect, Role::Label, &format!("Keyboard stop. {hint}"), None);
     }
 
@@ -624,11 +624,11 @@ impl App {
         // beside it, quieter.
         let big = semibold(T_TITLE);
         let tw = text_width(ui, title, big.clone());
-        p.text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, title, big, INK);
+        p.text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, title, big, pal().ink);
         if !sub.is_empty() {
             let small = regular(T_BODY);
             let room = (r.width() * 0.6 - tw - 12.0).max(0.0);
-            p.text(pos2(r.left() + tw + 10.0, r.center().y + 0.5), Align2::LEFT_CENTER, fit(p, sub, &small, room), small, INK3);
+            p.text(pos2(r.left() + tw + 10.0, r.center().y + 0.5), Align2::LEFT_CENTER, fit(p, sub, &small, room), small, pal().ink3);
         }
         a11y_text(ui, Id::unique(("page", title)), r, Role::Heading, &format!("{title} {sub}"), None);
         r

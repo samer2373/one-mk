@@ -47,12 +47,6 @@ fn truncated_name_target(focused: Option<usize>, hovered: Option<usize>, truncat
     focused.filter(|index| truncated.contains(index)).map(|index| (index, true))
         .or_else(|| hovered.filter(|index| truncated.contains(index)).map(|index| (index, false)))
 }
-/// Wallpapers for paired computers: low chroma, about equal lightness.
-/// Each computer's wallpaper on the desk: a light colour and a deep one,
-/// as desktop pictures are (dusk violet, lagoon, ember, ocean); deep
-/// enough that white names on them stay readable.
-const WALLS: [[u32; 2]; 4] = [[0x7B68E0, 0x191338], [0x2E9F96, 0x08262D], [0xD9714A, 0x34101E], [0x3D7FE6, 0x0A1838]];
-const ME_WALL: [u32; 2] = [0x3D7FE6, 0x0A1838];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tab {
@@ -226,6 +220,8 @@ struct Slot {
 
 pub struct App {
     glass: Glass,
+    /// Light or dark, following Settings → Appearance (and the system).
+    themer: crate::style::Themer,
     /// A computer has been dragged into place: the drag hint goes.
     dragged_once: bool,
     /// What was behind the glass last frame, and whether the desk moved.
@@ -437,14 +433,14 @@ fn chip(ui: &Ui, c: Rect, label: &str, dot: Option<bool>) -> f32 {
     let p = ui.painter();
     let mid = c.top() + 10.0;
     let tw = text_width(ui, label, regular(T_META));
-    p.text(pos2(c.right(), mid), Align2::RIGHT_CENTER, label, regular(T_META), INK2);
+    p.text(pos2(c.right(), mid), Align2::RIGHT_CENTER, label, regular(T_META), pal().ink2);
     let at = pos2(c.right() - tw - 9.0, mid);
     match dot {
         Some(true) => {
-            p.circle_filled(at, 3.0, OK);
+            p.circle_filled(at, 3.0, pal().ok);
         }
         Some(false) => {
-            p.circle_stroke(at, 2.6, Stroke::new(1.5, OFF));
+            p.circle_stroke(at, 2.6, Stroke::new(1.5, pal().ink3));
         }
         None => {}
     }
@@ -455,7 +451,7 @@ fn chip(ui: &Ui, c: Rect, label: &str, dot: Option<bool>) -> f32 {
 fn title_row(ui: &Ui, c: Rect, name: &str, room: f32) {
     let font = semibold(T_TITLE);
     let text = fit(ui.painter(), name, &font, c.width() - room);
-    ui.painter().text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, &text, font, INK);
+    ui.painter().text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, &text, font, pal().ink);
     if text != name {
         ui.interact(Rect::from_min_size(c.min, vec2(c.width() - room, 20.0)), Id::unique(("title", name)), Sense::hover()).on_hover_text(name);
     }
@@ -464,10 +460,10 @@ fn title_row(ui: &Ui, c: Rect, name: &str, room: f32) {
 /// A key on the left and its value on the right, centred on `y`.
 fn info_row(ui: &Ui, c: Rect, y: f32, key: &str, val: &str, mono_val: bool, alpha: f32) {
     let p = ui.painter();
-    p.text(pos2(c.left(), y), Align2::LEFT_CENTER, key, regular(T_BODY), INK2);
+    p.text(pos2(c.left(), y), Align2::LEFT_CENTER, key, regular(T_BODY), pal().ink2);
     let font = if mono_val { mono(T_META) } else { regular(T_BODY) };
     let val = fit(p, val, &font, c.width() - text_width(ui, key, regular(T_BODY)) - 12.0);
-    p.text(pos2(c.right(), y), Align2::RIGHT_CENTER, &val, font, INK.gamma_multiply(alpha));
+    p.text(pos2(c.right(), y), Align2::RIGHT_CENTER, &val, font, pal().ink.gamma_multiply(alpha));
     let r = Rect::from_min_max(pos2(c.left(), y - 10.0), pos2(c.right(), y + 10.0));
     a11y_text(ui, Id::unique(("row", key)), r, Role::Label, &format!("{key}: {val}"), None);
 }
@@ -509,6 +505,7 @@ impl App {
         widgets::set_glass(&cc.egui_ctx, glass.clone());
         Ok(Self {
             glass,
+            themer: crate::style::Themer::default(),
             // Dragged once, or the hint already shown in full once: no hint.
             dragged_once: link.dir.join(".window-dragged").exists() || link.dir.join(".window-hinted").exists(),
             backdrop_was: 0,
@@ -1204,7 +1201,7 @@ pub fn draw_lockup(p: &Painter, tex: &egui::TextureHandle, left_center: Pos2, he
     let [w, h] = tex.size();
     let min = left_center - vec2(LOCKUP_INK_LEFT * height, LOCKUP_INK_MID * height);
     let rect = Rect::from_min_size(min, vec2(height * w as f32 / h as f32, height));
-    p.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    p.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), pal().tint_ink);
 }
 
 /// How wide the lockup's ink is at `height`.
@@ -1602,18 +1599,18 @@ impl App {
         let p = ui.painter().clone();
         let head = fit(&p, &format!("Where is {name}?"), &regular(T_META), width - 16.0);
         let (r, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
-        p.text(r.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, head, regular(T_META), INK2);
+        p.text(r.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, head, regular(T_META), pal().ink2);
         let current = self.side_of(&id);
         for (side, label) in [(Side::Left, "On the left"), (Side::Right, "On the right"), (Side::Top, "Above"), (Side::Bottom, "Below")] {
             let (r, resp) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
             let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
-            p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, PILL, hover));
+            p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, pal().hover, hover));
             widgets::focus_ring(ui, &resp, r, 6);
             let on = current == Some(side);
             if on {
-                widgets::draw_check(&p, pos2(r.left() + 16.0, r.center().y), 10.0, INK, 1.0);
+                widgets::draw_check(&p, pos2(r.left() + 16.0, r.center().y), 10.0, pal().ink, 1.0);
             }
-            p.text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, label, regular(T_BODY), if on { INK } else { INK_HOVER });
+            p.text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, label, regular(T_BODY), if on { pal().ink } else { pal().ink_hover });
             widgets::a11y(&resp, Role::MenuItemRadio, &format!("{name}: {label}"), Some(on));
             if resp.clicked() {
                 self.choose_side(&id, side, true);
@@ -1942,8 +1939,8 @@ impl App {
     fn draw_cell(&mut self, ui: &mut Ui, cell: &Cell, r: Rect, now: f64) {
         match cell {
             Cell::Head(title, sub) => {
-                let th = para(ui, r.left_top(), r.width(), title, semibold(T_TITLE), INK);
-                let sh = para(ui, r.left_top() + vec2(0.0, th + 6.0), r.width(), sub, regular(T_BODY), INK2);
+                let th = para(ui, r.left_top(), r.width(), title, semibold(T_TITLE), pal().ink);
+                let sh = para(ui, r.left_top() + vec2(0.0, th + 6.0), r.width(), sub, regular(T_BODY), pal().ink2);
                 let at = Rect::from_min_size(r.min, vec2(r.width(), th + sh + 6.0));
                 a11y_text(ui, Id::unique("headline"), at, Role::Status, &format!("{title}. {sub}"), Some(Live::Polite));
                 // Off: the way to turn it on, in the card that says so.
@@ -1971,7 +1968,7 @@ impl App {
     pub(super) fn swaps(&mut self, ui: &mut Ui, c: Rect) {
         let peers: Vec<_> = self.running().map(|s| s.peers.clone()).unwrap_or_default();
         if peers.is_empty() {
-            para(ui, c.left_top(), c.width(), "Pair a computer to choose how Ctrl and Cmd work when you type on it.", regular(T_BODY), INK2);
+            para(ui, c.left_top(), c.width(), "Pair a computer to choose how Ctrl and Cmd work when you type on it.", regular(T_BODY), pal().ink2);
             return;
         }
         let arrowed = self.arrowed;
@@ -1993,8 +1990,8 @@ impl App {
             let name_room = if stacked { row.width() } else { seg.left() - row.left() - 12.0 };
             let name = fit(&p, &peer.name, &regular(T_BODY), name_room - ow - 8.0);
             let nw = text_width(ui, &name, regular(T_BODY));
-            p.text(pos2(row.left(), name_y), Align2::LEFT_CENTER, &name, regular(T_BODY), INK);
-            p.text(pos2(row.left() + nw + 8.0, name_y), Align2::LEFT_CENTER, os_label, regular(T_META), INK2);
+            p.text(pos2(row.left(), name_y), Align2::LEFT_CENTER, &name, regular(T_BODY), pal().ink);
+            p.text(pos2(row.left() + nw + 8.0, name_y), Align2::LEFT_CENTER, os_label, regular(T_META), pal().ink2);
             if name != peer.name {
                 ui.interact(Rect::from_min_size(pos2(row.left(), name_y - 10.0), vec2(nw, 20.0)), Id::unique(("swap-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
             }
@@ -2144,7 +2141,7 @@ impl App {
         let x = desk.center().x - width / 2.0 + 18.0;
         let inner = width - 36.0;
         let sub_g = {
-            let mut job = egui::text::LayoutJob::simple(view.sub.clone(), regular(T_BODY), INK2, inner);
+            let mut job = egui::text::LayoutJob::simple(view.sub.clone(), regular(T_BODY), pal().ink2, inner);
             job.sections[0].format.line_height = Some((T_BODY * LEADING).round());
             ui.painter().layout_job(job)
         };
@@ -2158,10 +2155,10 @@ impl App {
             view.focus = view.focus.saturating_sub(1);
         }
         let widths: Vec<f32> = view.buttons.iter().map(|(l, _, _)| button_width(ui, l).min(inner)).collect();
-        let button_labels: Vec<_> = view.buttons.iter().map(|(label, _, _)| ui.painter().layout(label.clone(), regular(T_BODY), INK, inner - 28.0)).collect();
+        let button_labels: Vec<_> = view.buttons.iter().map(|(label, _, _)| ui.painter().layout(label.clone(), regular(T_BODY), pal().ink, inner - 28.0)).collect();
         let button_heights: Vec<f32> = button_labels.iter().map(|label| (label.size().y + 16.0).max(34.0)).collect();
         let btn_h = if view.buttons.is_empty() { 0.0 } else if row { 34.0 } else { button_heights.iter().sum::<f32>() + 8.0 * button_heights.len().saturating_sub(1) as f32 };
-        let title_g = ui.painter().layout(view.title.clone(), semibold(T_TITLE), INK, inner - if view.check.is_some() { 26.0 } else { 0.0 });
+        let title_g = ui.painter().layout(view.title.clone(), semibold(T_TITLE), pal().ink, inner - if view.check.is_some() { 26.0 } else { 0.0 });
         let title_h = title_g.size().y.max(22.0);
         let alternatives = leaving.is_none() && self.pairing.as_ref().is_some_and(|pair| matches!(pair.step, Step::Searching { .. } | Step::Hint));
         let height = 18.0 + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { 18.0 + btn_h } else { 0.0 } + 18.0 + if alternatives { 212.0 } else { 0.0 };
@@ -2194,24 +2191,24 @@ impl App {
         // The sheet is modal: what is behind it doesn't get its clicks.
         child.interact(rect, Id::unique("sheet-body"), Sense::CLICK | Sense::DRAG);
         let p = child.painter().clone();
-        p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: Color32::from_black_alpha(115) }.as_shape(rect, CornerRadius::same(R_PANEL)));
-        p.rect(rect, CornerRadius::same(R_PANEL), POPOVER, Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
-        p.hline(rect.x_range().shrink(f32::from(R_PANEL)), rect.top() + 1.0, Stroke::new(1.0, Color32::from_white_alpha(28)));
+        p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: pal().shadow(115) }.as_shape(rect, CornerRadius::same(R_PANEL)));
+        p.rect(rect, CornerRadius::same(R_PANEL), pal().surface, Stroke::new(1.0, pal().line2), StrokeKind::Inside);
+        p.hline(rect.x_range().shrink(f32::from(R_PANEL)), rect.top() + 1.0, Stroke::new(1.0, pal().glass_edge));
         let mut y = rect.top() + 18.0;
         let mut tx = x;
         if let Some(t0) = view.check {
             // A tick drawn in, then it holds.
             let k = motion::progress(now, t0, motion::fade(0.24), motion::out_cubic);
-            widgets::draw_check(&p, pos2(x + 8.0, y + title_h / 2.0), 16.0, INK, k);
+            widgets::draw_check(&p, pos2(x + 8.0, y + title_h / 2.0), 16.0, pal().ink, k);
             tx += 26.0;
             if k < 1.0 {
                 ui.ctx().request_repaint();
             }
         }
-        p.galley(pos2(tx, y), title_g, INK);
+        p.galley(pos2(tx, y), title_g, pal().ink);
         y += title_h + 4.0;
         let sub_h = sub_g.size().y;
-        p.galley(pos2(x, y), sub_g, INK2);
+        p.galley(pos2(x, y), sub_g, pal().ink2);
         y += sub_h;
         a11y_text(&child, Id::unique("sheet-dialog"), rect, Role::Dialog, &format!("{}. {}", view.title, view.sub), Some(Live::Polite));
         if let Some((code, _)) = &view.code {
@@ -2223,7 +2220,7 @@ impl App {
                 if i == 3 {
                     cx += 12.0;
                 }
-                p.text(pos2(cx, y + 14.0), Align2::LEFT_TOP, ch, font.clone(), INK);
+                p.text(pos2(cx, y + 14.0), Align2::LEFT_TOP, ch, font.clone(), pal().ink);
                 cx += adv;
             }
             let digits: Vec<String> = code.chars().map(String::from).collect();
@@ -2251,7 +2248,7 @@ impl App {
             let resp = button(&mut child, r, id, shown, *look, true, Some(label));
             widgets::a11y(&resp, Role::Button, label, None);
             if !row {
-                p.galley(r.center() - button_labels[k].size() / 2.0, button_labels[k].clone(), if *look == Look::Primary { SIGNAL_INK } else { INK });
+                p.galley(r.center() - button_labels[k].size() / 2.0, button_labels[k].clone(), if *look == Look::Primary { pal().on_accent } else { pal().ink });
             }
             if k == view.focus && self.sheet_key != view.key && o >= 0.5 {
                 resp.request_focus();
@@ -2359,9 +2356,9 @@ impl App {
         let body = if t.error { Rect::from_min_max(rect.min, pos2(rect.right() - desk_cards::toast_action_w(ui, t), rect.bottom())) } else { rect };
         let resp = child.interact(body, Id::unique("toast-body"), Sense::CLICK);
         let p = child.painter().clone();
-        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(rect, CornerRadius::same(12)));
-        p.rect(rect, CornerRadius::same(12), POPOVER, Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
-        let dot = if t.error { ERROR } else { INK };
+        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: pal().shadow(90) }.as_shape(rect, CornerRadius::same(12)));
+        p.rect(rect, CornerRadius::same(12), pal().surface, Stroke::new(1.0, pal().line2), StrokeKind::Inside);
+        let dot = if t.error { pal().danger } else { pal().ink };
         let gh = g.size().y;
         // An error that fits on one line is centred on the band; a longer
         // one says why on the line below, as other messages do.
@@ -2370,9 +2367,9 @@ impl App {
         if t.error && g.elided {
             resp.clone().on_hover_text(format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}"))));
         }
-        p.galley(pos2(rect.left() + 30.0, gy), g, INK);
+        p.galley(pos2(rect.left() + 30.0, gy), g, pal().ink);
         if let Some(d) = d {
-            p.galley(pos2(rect.left() + 30.0, rect.top() + 14.0 + gh), d, INK2);
+            p.galley(pos2(rect.left() + 30.0, rect.top() + 14.0 + gh), d, pal().ink2);
         }
         // An error says what to do next: try again (the first thing to try,
         // first in Tab order too), its own way out, or Health's checks.
@@ -2487,6 +2484,8 @@ impl eframe::App for App {
         let ui_started = std::time::Instant::now();
         let now = ui.input(|i| i.time);
         self.now = now;
+        // The theme first: everything below paints with it.
+        self.themer.frame(ui.ctx(), self.prefs.appearance, now);
         if self.size.x > 0.0 {
             // Some desktops (GNOME on Wayland) ignore the size asked for at
             // start; asking again once the window is mapped works.
@@ -2711,6 +2710,9 @@ impl eframe::App for App {
 ///   58d0,58u85` types into the test box (code, down/up, ms).
 /// - `ONE_MK_APP_BROADCAST=1` turns broadcast on (or off), as the Desk's
 ///   switch does.
+/// - `ONE_MK_APP_THEME=light|dark|system` paints with that theme whatever
+///   Settings → Appearance says; `ONE_MK_APP_THEME_FLIP=secs` turns to the
+///   other theme that many seconds in (the cross-fade) (style.rs `Themer`).
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
 #[cfg(any(debug_assertions, feature = "design-evidence"))]
 mod debug {

@@ -41,21 +41,21 @@ impl App {
         } else {
             "Memory only; hidden until Show. Unmarked secrets may be retained."
         };
-        let mut height = para(ui, pos2(rect.left(), rect.top() + 72.0), rect.width(), privacy, regular(T_META), INK2);
+        let mut height = para(ui, pos2(rect.left(), rect.top() + 72.0), rect.width(), privacy, regular(T_META), pal().ink2);
         let failure = history_failure(self.running());
         let text = history_message(online, self.clipboard_history.as_ref(), self.prefs.history_enabled, failure);
         // A saved-history failure next to a list: say so above it, or the
         // list reads as everything there is.
         if let Some(failure) = failure.filter(|failure| text != Some(*failure)) {
             let top = rect.top() + 72.0 + height;
-            let shown = para(ui, pos2(rect.left(), top), rect.width(), failure, regular(T_META), ERROR);
+            let shown = para(ui, pos2(rect.left(), top), rect.width(), failure, regular(T_META), pal().danger);
             a11y_text(ui, Id::unique("history-failure"), Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), shown)), Role::Status, failure, Some(Live::Polite));
             height += 8.0 + shown;
         }
         let area = Rect::from_min_max(pos2(rect.left(), rect.top() + 72.0 + height), rect.max);
         if !area.is_positive() { return; }
         if let Some(text) = text {
-            let color = if failure == Some(text) { ERROR } else { INK2 };
+            let color = if failure == Some(text) { pal().danger } else { pal().ink2 };
             para(ui, area.min, area.width(), text, regular(T_BODY), color);
             a11y_text(ui, Id::unique("history-state"), area, Role::Status, text, Some(Live::Polite));
             return;
@@ -82,11 +82,11 @@ impl App {
                 let hover = tween(ui.ctx(), id.with("hover"), f32::from(response.hovered()), 0.12, motion::out_cubic);
                 let down = tween(ui.ctx(), id.with("press"), f32::from(response.is_pointer_button_down_on()), 0.08, motion::out_cubic);
                 let p = ui.painter();
-                p.rect_filled(copy, CornerRadius::same(8), mix(mix(Color32::TRANSPARENT, BUTTON, hover), BUTTON_LIT, down));
+                p.rect_filled(copy, CornerRadius::same(8), mix(mix(Color32::TRANSPARENT, pal().surface2, hover), pal().surface2_hover, down));
                 let tx = copy.left() + 10.0;
                 let tw = copy.width() - 20.0;
-                p.text(pos2(tx, copy.top() + 15.0), Align2::LEFT_CENTER, fit(p, preview, &regular(T_BODY), tw), regular(T_BODY), if revealed.is_some() { INK } else { INK2 });
-                p.text(pos2(tx, copy.top() + 32.0), Align2::LEFT_CENTER, fit(p, &detail, &regular(T_META), tw), regular(T_META), INK3);
+                p.text(pos2(tx, copy.top() + 15.0), Align2::LEFT_CENTER, fit(p, preview, &regular(T_BODY), tw), regular(T_BODY), if revealed.is_some() { pal().ink } else { pal().ink2 });
+                p.text(pos2(tx, copy.top() + 32.0), Align2::LEFT_CENTER, fit(p, &detail, &regular(T_META), tw), regular(T_META), pal().ink3);
                 widgets::focus_ring(ui, &response, copy, 8);
                 if response.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -102,7 +102,7 @@ impl App {
                     if revealed.is_some() { self.clipboard_reveal = None; }
                     else { self.link.history_reveal(item.id, self.clipboard_reveal_epoch); }
                 }
-                ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
+                ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, pal().line));
             }
         });
     }

@@ -67,7 +67,7 @@ impl App {
             let stage = Rect::from_min_size(origin, vec2(width, screens_h + 20.0 + 26.0 + 64.0));
             widgets::group(ui, stage, R_GROUP);
             if hovering && enabled {
-                ui.painter().rect_stroke(stage, CornerRadius::same(R_GROUP), Stroke::new(1.5, ACCENT), StrokeKind::Inside);
+                ui.painter().rect_stroke(stage, CornerRadius::same(R_GROUP), Stroke::new(1.5, pal().accent), StrokeKind::Inside);
             }
             let screens = Rect::from_min_max(stage.min + vec2(24.0, 26.0), stage.max - vec2(24.0, 84.0));
             draw_canvas(ui, screens, &canvas, plan.map(|plan| &plan.media), fit_now, self.wallpaper_ui.poster.as_ref(), &computers);
@@ -89,12 +89,12 @@ impl App {
                 if room > 60.0 {
                     let chip = Rect::from_min_size(pos2(x, foot_y), vec2(text_width(ui, &shown, regular(T_META)) + 28.0, 32.0));
                     let p = ui.painter();
-                    p.rect(chip, CornerRadius::same(16), Color32::from_black_alpha(90), Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
-                    p.text(chip.center(), Align2::CENTER_CENTER, shown, regular(T_META), INK2);
+                    p.rect(chip, CornerRadius::same(16), pal().surface, Stroke::new(1.0, pal().line2), StrokeKind::Inside);
+                    p.text(chip.center(), Align2::CENTER_CENTER, shown, regular(T_META), pal().ink2);
                 }
             } else {
                 let hint = if status.is_none() { "Start oneMK to choose a wallpaper" } else if !wallpaper.available { "Wallpaper isn't available on this computer" } else { "Choose a video or picture" };
-                ui.painter().text(pos2(x + 2.0, foot_y + 16.0), Align2::LEFT_CENTER, hint, regular(T_BODY), INK2);
+                ui.painter().text(pos2(x + 2.0, foot_y + 16.0), Align2::LEFT_CENTER, hint, regular(T_BODY), pal().ink2);
             }
             let choose = Rect::from_min_size(pos2(stage.right() - 18.0 - 170.0, foot_y), vec2(170.0, 32.0));
             if button(ui, choose, Id::unique("choose-video"), "Choose…", Look::Primary, enabled && self.wallpaper_ui.picker.is_none(), None).clicked() {
@@ -133,12 +133,12 @@ impl App {
             let play_on = Rect::from_min_size(at, vec2(col_w, GROUP_TITLE + 8.0 + n as f32 * ROW));
             let rows = list(ui, play_on, "Play on", n);
             if computers.is_empty() {
-                ui.painter().text(rows[0].left_center(), Align2::LEFT_CENTER, "Your computers appear here", regular(T_BODY), INK2);
+                ui.painter().text(rows[0].left_center(), Align2::LEFT_CENTER, "Your computers appear here", regular(T_BODY), pal().ink2);
             }
             for ((id, name, online), row) in computers.iter().zip(rows) {
                 let p = ui.painter();
                 let dot = pos2(row.left() + 4.0, row.center().y);
-                if *online { p.circle_filled(dot, 3.5, OK); } else { p.circle_stroke(dot, 3.0, Stroke::new(1.5, INK3)); }
+                if *online { p.circle_filled(dot, 3.5, pal().ok); } else { p.circle_stroke(dot, 3.0, Stroke::new(1.5, pal().ink3)); }
                 let on = plan.is_none_or(|plan| plan.computers.contains(id));
                 let screens = canvas.monitors.iter().filter(|monitor| &monitor.computer == id).count();
                 // Why a computer can't play it is often a sentence: the row
@@ -156,7 +156,7 @@ impl App {
                     let room = row.width() - 18.0 - label_w - 10.0 - 50.0;
                     if room > 40.0 {
                         let shown = fit_text(ui, &note, room);
-                        ui.painter().text(pos2(row.left() + 18.0 + label_w + 10.0, row.center().y), Align2::LEFT_CENTER, shown, regular(T_META), if failed.is_some() { WARN } else { INK3 });
+                        ui.painter().text(pos2(row.left() + 18.0 + label_w + 10.0, row.center().y), Align2::LEFT_CENTER, shown, regular(T_META), if failed.is_some() { pal().warn } else { pal().ink3 });
                     }
                 }
                 let switch_row = Rect::from_min_max(pos2(row.left() + 18.0, row.top()), row.max);
@@ -176,14 +176,14 @@ impl App {
                 if let Some(one_mk_wallpaper::Playback::Error(reason)) = wallpaper.computers.get(id)
                     && *online && plan.is_none_or(|plan| plan.computers.contains(id)) && reason != &wallpaper.message {
                     bottom += 14.0;
-                    bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &format!("{name}: {reason}"), regular(T_BODY), WARN);
+                    bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &format!("{name}: {reason}"), regular(T_BODY), pal().warn);
                 }
             }
             if let Some(setup) = &wallpaper.gnome {
                 bottom += 22.0;
-                ui.painter().text(pos2(origin.x + 14.0, bottom), Align2::LEFT_TOP, "GNOME video setup", regular(T_BODY), INK);
+                ui.painter().text(pos2(origin.x + 14.0, bottom), Align2::LEFT_TOP, "GNOME video setup", regular(T_BODY), pal().ink);
                 bottom += 28.0;
-                bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &setup.message, regular(T_BODY), INK2);
+                bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &setup.message, regular(T_BODY), pal().ink2);
                 let action = if setup.can_install { Some((one_mk_wallpaper::ExtensionAction::Install, "Install GNOME extension")) }
                     else if setup.can_enable { Some((one_mk_wallpaper::ExtensionAction::Enable, "Switch on GNOME extension")) } else { None };
                 if let Some((action, label)) = action {
@@ -198,12 +198,12 @@ impl App {
             let message = if status.is_none() || wallpaper.message.is_empty() || plan.is_some_and(|plan| [plan.playing_message(), plan.playing_summary(&wallpaper.computers)].contains(&wallpaper.message)) { String::new() } else { wallpaper.message.clone() };
             if !message.is_empty() {
                 bottom += 14.0;
-                bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &message, regular(T_BODY), INK2);
+                bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &message, regular(T_BODY), pal().ink2);
             }
             // What isn't proven on this computer yet is said, never hidden.
             if let Some(note) = wallpaper.experimental.as_ref().filter(|_| status.is_some()) {
                 bottom += 14.0;
-                bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &format!("Experimental: {note}"), regular(T_META), INK2);
+                bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &format!("Experimental: {note}"), regular(T_META), pal().ink2);
             }
             ui.allocate_space(vec2(width, bottom - origin.y + 8.0));
         });
@@ -240,14 +240,14 @@ fn more_below(ui: &Ui, inner: Rect) {
     use egui::epaint::{Mesh, Vertex, WHITE_UV};
     let fade = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 40.0), inner.right_bottom());
     let mut mesh = Mesh::default();
-    for (pos, color) in [(fade.left_top(), Color32::TRANSPARENT), (fade.right_top(), Color32::TRANSPARENT), (fade.right_bottom(), ROOM), (fade.left_bottom(), ROOM)] {
+    for (pos, color) in [(fade.left_top(), Color32::TRANSPARENT), (fade.right_top(), Color32::TRANSPARENT), (fade.right_bottom(), pal().bg), (fade.left_bottom(), pal().bg)] {
         mesh.vertices.push(Vertex { pos, uv: WHITE_UV, color });
     }
     mesh.indices.extend([0, 1, 2, 0, 2, 3]);
     let painter = ui.painter().with_clip_rect(inner);
     painter.add(egui::Shape::mesh(mesh));
     let c = pos2(inner.center().x, inner.bottom() - 12.0);
-    painter.add(egui::Shape::line(vec![c + vec2(-5.0, -2.5), c + vec2(0.0, 2.5), c + vec2(5.0, -2.5)], Stroke::new(1.5, INK3)));
+    painter.add(egui::Shape::line(vec![c + vec2(-5.0, -2.5), c + vec2(0.0, 2.5), c + vec2(5.0, -2.5)], Stroke::new(1.5, pal().ink3)));
 }
 
 #[cfg(test)]
@@ -287,7 +287,7 @@ fn list(ui: &Ui, r: Rect, title: &str, n: usize) -> Vec<Rect> {
     (0..n.max(1)).map(|k| {
         let row = Rect::from_min_max(pos2(left, top + k as f32 * ROW), pos2(right, top + (k + 1) as f32 * ROW));
         if k + 1 < n {
-            p.hline(row.x_range(), row.bottom(), Stroke::new(1.0, HAIRLINE));
+            p.hline(row.x_range(), row.bottom(), Stroke::new(1.0, pal().line));
         }
         row
     }).collect()
@@ -303,7 +303,7 @@ fn clock(ms: u64) -> String {
 /// named by computer under the first of each.
 fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit: Fit, poster: Option<&egui::TextureHandle>, computers: &[(String, String, bool)]) {
     let Some(bounds) = canvas.bounds() else {
-        ui.painter().text(area.center(), Align2::CENTER_CENTER, "Your screens appear here", regular(T_BODY), INK2);
+        ui.painter().text(area.center(), Align2::CENTER_CENTER, "Your screens appear here", regular(T_BODY), pal().ink2);
         return;
     };
     let gap = 10.0;
@@ -320,8 +320,8 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
         if screen.width() < 4.0 || screen.height() < 4.0 {
             continue;
         }
-        p.add(egui::epaint::Shadow { offset: [0, 14], blur: 30, spread: 0, color: Color32::from_black_alpha(130) }.as_shape(screen, CornerRadius::same(6)));
-        p.add(widgets::rounded_gradient(screen, 6.0, Color32::from_rgb(0x1A, 0x1E, 0x26), Color32::from_rgb(0x10, 0x13, 0x18)));
+        p.add(egui::epaint::Shadow { offset: [0, 14], blur: 30, spread: 0, color: pal().shadow(130) }.as_shape(screen, CornerRadius::same(6)));
+        p.rect_filled(screen, CornerRadius::same(6), BEZEL);
         if let (Some(texture), Some(image_rect)) = (poster, image_rect) {
             // Each screen shows the part of the picture that falls on it.
             let picture = image_rect;
@@ -331,21 +331,21 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
                     pos2((inside.left() - picture.left()) / picture.width(), (inside.top() - picture.top()) / picture.height()),
                     pos2((inside.right() - picture.left()) / picture.width(), (inside.bottom() - picture.top()) / picture.height()),
                 );
-                p.add(egui::Shape::Rect(egui::epaint::RectShape::filled(inside, CornerRadius::same(5), Color32::WHITE).with_texture(texture.id(), uv)));
+                p.add(egui::Shape::Rect(egui::epaint::RectShape::filled(inside, CornerRadius::same(5), UNTINTED).with_texture(texture.id(), uv)));
             }
         }
         // Glass on the screen: a soft light from the top left.
-        p.add(widgets::rounded_gradient(screen, 6.0, Color32::from_white_alpha(22), Color32::TRANSPARENT));
+        p.add(widgets::rounded_gradient(screen, 6.0, white(22), Color32::TRANSPARENT));
         if !monitor.online {
-            p.rect_filled(screen, CornerRadius::same(6), Color32::from_black_alpha(150));
+            p.rect_filled(screen, CornerRadius::same(6), black(150));
         }
-        p.rect_stroke(screen, CornerRadius::same(6), Stroke::new(2.0, Color32::from_rgb(0x1B, 0x1F, 0x26)), StrokeKind::Outside);
+        p.rect_stroke(screen, CornerRadius::same(6), Stroke::new(2.0, BEZEL), StrokeKind::Outside);
         if named.insert(monitor.computer.clone()) {
             let name = computers.iter().find(|c| c.0 == monitor.computer).map_or(monitor.name.as_str(), |c| c.1.as_str());
             let name = fit_text(ui, name, screen.width() - 14.0);
             let at = screen.left_bottom() + vec2(8.0, -7.0);
-            p.text(at + vec2(0.0, 1.0), Align2::LEFT_BOTTOM, &name, regular(T_META), Color32::from_black_alpha(160));
-            p.text(at, Align2::LEFT_BOTTOM, name, regular(T_META), if monitor.online { Color32::WHITE } else { INK2 });
+            p.text(at + vec2(0.0, 1.0), Align2::LEFT_BOTTOM, &name, regular(T_META), black(160));
+            p.text(at, Align2::LEFT_BOTTOM, name, regular(T_META), if monitor.online { white(255) } else { SCREEN_INK2 });
         }
     }
 }

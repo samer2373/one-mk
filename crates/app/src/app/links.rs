@@ -12,8 +12,8 @@ pub(super) const ROW_H: f32 = 34.0;
 /// The word beside it says the same, so colour is never the only signal.
 fn tone(q: Option<Quality>) -> Color32 {
     match q {
-        Some(Quality::Stalls | Quality::Slow) => WARN,
-        _ => INK2,
+        Some(Quality::Stalls | Quality::Slow) => pal().warn,
+        _ => pal().ink2,
     }
 }
 
@@ -23,7 +23,7 @@ fn sparkline(p: &Painter, r: Rect, ring: &Ring, now: f64, q: Option<Quality>) {
     let t = ring.trace(now, r.width(), r.height());
     let col = tone(q);
     let width = if q == Some(Quality::Slow) { 2.0 } else { 1.5 };
-    p.hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0, LINE));
+    p.hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0, pal().line));
     for line in &t.lines {
         let pts: Vec<Pos2> = line.iter().map(|[x, y]| r.min + vec2(*x, *y)).collect();
         match pts[..] {
@@ -39,14 +39,14 @@ fn sparkline(p: &Painter, r: Rect, ring: &Ring, now: f64, q: Option<Quality>) {
     if let Some([x, y]) = t.lines.last().and_then(|l| l.last()) {
         // The newest reading: cyan while it answers well (live, connected),
         // amber when it doesn't.
-        p.circle_filled(r.min + vec2(*x, *y), 2.5, if col == INK2 { OK } else { col });
+        p.circle_filled(r.min + vec2(*x, *y), 2.5, if col == pal().ink2 { pal().ok } else { col });
     }
     // Lost packets: a thin amber line top to bottom ending in a ring, so
     // it reads apart from a slow reading and not only by colour.
     for x in &t.losses {
         let x = r.left() + x;
-        p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom())], Stroke::new(1.0, WARN.gamma_multiply(0.6)));
-        p.circle_stroke(pos2(x, r.top() + 2.5), 2.5, Stroke::new(1.0, WARN));
+        p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom())], Stroke::new(1.0, pal().warn.gamma_multiply(0.6)));
+        p.circle_stroke(pos2(x, r.top() + 2.5), 2.5, Stroke::new(1.0, pal().warn));
     }
 }
 
@@ -122,10 +122,10 @@ impl App {
         let head = 36.0;
         let h = head + ROW_H * s.peers.len() as f32 + 8.0;
         let boxr = Rect::from_min_size(pos2(x, y), vec2(w, h));
-        p.rect(boxr, CornerRadius::same(10), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
-        p.text(pos2(x + 16.0, y + 20.0), Align2::LEFT_CENTER, "Connection to each computer", semibold(T_BODY), INK);
+        p.rect(boxr, CornerRadius::same(10), pal().surface, Stroke::new(1.0, pal().line), StrokeKind::Inside);
+        p.text(pos2(x + 16.0, y + 20.0), Align2::LEFT_CENTER, "Connection to each computer", semibold(T_BODY), pal().ink);
         let sub = format!("last {}", rtt::span_words());
-        p.text(pos2(x + w - 16.0, y + 20.0), Align2::RIGHT_CENTER, &sub, regular(T_META), INK2);
+        p.text(pos2(x + w - 16.0, y + 20.0), Align2::RIGHT_CENTER, &sub, regular(T_META), pal().ink2);
         a11y_text(ui, Id::unique("latency-head"), Rect::from_min_size(boxr.min, vec2(w, head)), Role::Heading, "Connection to each computer", None);
         let now = self.rtt_now();
         // Narrow: the graph goes first, the numbers and the word stay.
@@ -135,7 +135,7 @@ impl App {
         for (k, peer) in s.peers.iter().enumerate() {
             let row = Rect::from_min_size(pos2(x + 8.0, y + head + ROW_H * k as f32), vec2(w - 16.0, ROW_H));
             if k > 0 {
-                p.hline(row.x_range().shrink(8.0), row.top() - 0.5, Stroke::new(1.0, LINE));
+                p.hline(row.x_range().shrink(8.0), row.top() - 0.5, Stroke::new(1.0, pal().line));
             }
             let mid = row.center().y;
             let word_right = row.right() - 8.0;
@@ -143,19 +143,19 @@ impl App {
             let (words, summary) = (self.latency_words(peer), self.summary_of(&peer.id).filter(|_| peer.online));
             let name_w = row.width() - 16.0 - word_w - num_w - graph_w - if graph_w > 0.0 { 16.0 } else { 8.0 };
             let name = fit(p, &peer.name, &regular(T_BODY), name_w);
-            p.text(pos2(row.left() + 8.0, mid), Align2::LEFT_CENTER, &name, regular(T_BODY), INK);
+            p.text(pos2(row.left() + 8.0, mid), Align2::LEFT_CENTER, &name, regular(T_BODY), pal().ink);
             if name != peer.name {
                 ui.interact(Rect::from_min_size(pos2(row.left() + 8.0, row.top()), vec2(name_w, ROW_H)), Id::unique(("latency-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
             }
             if !peer.online {
-                p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, "offline", regular(T_META), INK2);
+                p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, "offline", regular(T_META), pal().ink2);
             } else {
                 let q = summary.and_then(|s| s.quality());
                 let waiting = "No samples yet";
                 let word = q.map_or(waiting, Quality::word);
-                p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, word, regular(T_META), if q.is_some() { tone(q) } else { INK2 });
+                p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, word, regular(T_META), if q.is_some() { tone(q) } else { pal().ink2 });
                 if let Some(s) = summary {
-                    p.text(pos2(num_right, mid), Align2::RIGHT_CENTER, rtt::ms(s.now_us), mono(T_META), INK);
+                    p.text(pos2(num_right, mid), Align2::RIGHT_CENTER, rtt::ms(s.now_us), mono(T_META), pal().ink);
                 }
                 if let (true, Some(ring), Some(s)) = (graph_w > 0.0, self.rtts.of(&peer.id), summary.filter(|s| s.count >= rtt::MIN_SAMPLES)) {
                     let g = Rect::from_min_size(pos2(num_right - num_w - 8.0 - graph_w, mid - ROW_GRAPH_H / 2.0), vec2(graph_w, ROW_GRAPH_H));

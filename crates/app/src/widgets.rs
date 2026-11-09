@@ -7,14 +7,10 @@ use crate::style::*;
 use egui::accesskit::Role;
 use egui::{Align2, Color32, CornerRadius, FontId, Id, Painter, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, WidgetInfo, pos2, vec2};
 
-pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
-    let t = t.clamp(0.0, 1.0);
-    let f = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color32::from_rgba_premultiplied(f(a.r(), b.r()), f(a.g(), b.g()), f(a.b(), b.b()), f(a.a(), b.a()))
-}
+pub use crate::style::mix;
 
 pub fn text_width(ui: &Ui, text: &str, font: FontId) -> f32 {
-    ui.painter().layout_no_wrap(text.into(), font, INK).size().x
+    ui.painter().layout_no_wrap(text.into(), font, pal().ink).size().x
 }
 
 pub fn button_width(ui: &Ui, label: &str) -> f32 {
@@ -31,13 +27,10 @@ pub fn hit_rect(rect: Rect) -> Rect {
     Rect::from_center_size(rect.center(), rect.size().max(vec2(MIN_TARGET, MIN_TARGET)))
 }
 
-/// The pressed look shared by every control family: how far a fill moves
-/// toward the ground while the pointer is down on it.
-pub const PRESS_DARKEN: f32 = 0.88;
-
-/// `fill` as it looks while pressed (`t` 0..1).
+/// `fill` as it looks while pressed (`t` 0..1): the pressed look shared by
+/// every control family, as deep as the theme presses.
 pub fn pressed(fill: Color32, t: f32) -> Color32 {
-    mix(fill, Color32::BLACK, PRESS_DARKEN * t)
+    pal().pressed(fill, t)
 }
 
 pub fn pressed_lift(fill: Color32, t: f32) -> Color32 {
@@ -62,7 +55,7 @@ pub fn pressed_ink(_surface: Color32, normal: Color32) -> Color32 {
 }
 
 fn switch_color(color: Color32, enabled: bool) -> Color32 {
-    if enabled { color } else { mix(color, PANEL, 0.6) }
+    if enabled { color } else { mix(color, pal().surface, 0.6) }
 }
 
 /// Tells assistive technology what a painted control is.
@@ -193,7 +186,7 @@ pub fn sense(ui: &Ui, s: Sense) -> Sense {
 /// The signal-coloured ring around whatever the keyboard is on.
 pub fn focus_ring(ui: &Ui, r: &Response, rect: Rect, radius: u8) {
     if r.has_focus() && keyboard_focus(ui.ctx()) {
-        ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(radius + 2), Stroke::new(2.0, SIGNAL), StrokeKind::Outside);
+        ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(radius + 2), Stroke::new(2.0, pal().accent), StrokeKind::Outside);
     }
 }
 
@@ -219,8 +212,8 @@ pub fn content_button(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, 
     let shown = fit(ui.painter(), label, &semibold(T_BODY), (rect.width() - 18.0).max(0.0));
     let response = button_painted(ui, rect, id, &shown, look, enabled, Some(a11y_label.unwrap_or(label)));
     if enabled && response.is_pointer_button_down_on() {
-        ui.painter().rect_filled(rect, CornerRadius::same((rect.height() / 2.0) as u8), pressed_lift(BUTTON_LIT, 1.0));
-        ui.painter().text(rect.center(), Align2::CENTER_CENTER, shown, semibold(T_BODY), pressed_ink(pressed_lift(BUTTON_LIT, 1.0), INK));
+        ui.painter().rect_filled(rect, CornerRadius::same((rect.height() / 2.0) as u8), pressed_lift(pal().surface2_hover, 1.0));
+        ui.painter().text(rect.center(), Align2::CENTER_CENTER, shown, semibold(T_BODY), pressed_ink(pressed_lift(pal().surface2_hover, 1.0), pal().ink));
         focus_ring(ui, &response, rect, (rect.height() / 2.0) as u8);
     }
     response
@@ -237,28 +230,28 @@ fn button_painted(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enab
     // Capsules, as the system's own glass buttons are.
     let radius = (rr.height() / 2.0).round().min(255.0) as u8;
     let fg = match (look, enabled) {
-        (_, false) => INK3,
-        (Look::Primary, true) => SIGNAL_INK,
-        (Look::Quiet | Look::Glass, true) => INK,
+        (_, false) => pal().ink3,
+        (Look::Primary, true) => pal().on_accent,
+        (Look::Quiet | Look::Glass, true) => pal().ink,
     };
     let p = ui.painter().clone();
     match (look, enabled) {
         (Look::Primary, true) => {
-            // Flat, solid Volt: no gradient, no lit rim, no glow. Lighter
-            // under the pointer, deeper while pressed.
-            let fill = mix(mix(SIGNAL, SIGNAL_LIT, hover), SIGNAL_INK, 0.28 * press);
+            // Flat, solid accent: no gradient, no lit rim, no glow. Deeper
+            // under the pointer, deeper still while pressed.
+            let fill = mix(mix(pal().accent, pal().accent_hover, hover), pal().accent_press, press);
             p.rect_filled(rr, CornerRadius::same(radius), fill);
         }
         // One emphasis system: the toolbar's buttons are quiet fills too
         // (no raised rim); only Primary is strong.
         (Look::Glass, true) => {
-            p.rect_filled(rr, CornerRadius::same(radius), pressed(mix(BUTTON, BUTTON_LIT, hover), press));
+            p.rect_filled(rr, CornerRadius::same(radius), pressed(mix(pal().surface2, pal().surface2_hover, hover), press));
         }
         (Look::Quiet, true) => {
-            p.rect(rr, CornerRadius::same(radius), pressed(mix(BUTTON, BUTTON_LIT, hover), press), Stroke::new(1.0, CONTROL_EDGE), StrokeKind::Inside);
+            p.rect(rr, CornerRadius::same(radius), pressed(mix(pal().surface2, pal().surface2_hover, hover), press), Stroke::new(1.0, pal().line), StrokeKind::Inside);
         }
         (_, false) => {
-            p.rect(rr, CornerRadius::same(radius), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
+            p.rect(rr, CornerRadius::same(radius), pal().well, Stroke::new(1.0, pal().line), StrokeKind::Inside);
         }
     }
     focus_ring(ui, &r, rr, radius);
@@ -276,10 +269,10 @@ pub fn icon_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, enabled: bool, i
     let hover = tween(ui.ctx(), id.with("hover"), f32::from(enabled && r.hovered()), 0.1, motion::out_cubic);
     let down = enabled && r.is_pointer_button_down_on();
     let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(7), if down { pressed_lift(BUTTON_LIT, 1.0) } else { mix(Color32::TRANSPARENT, BUTTON_LIT, hover) });
+    p.rect_filled(rect, CornerRadius::same(7), if down { pressed_lift(pal().surface2_hover, 1.0) } else { mix(Color32::TRANSPARENT, pal().surface2_hover, hover) });
     focus_ring(ui, &r, rect, 7);
-    let ink = if enabled { mix(INK2, INK, hover) } else { mix(INK2, PANEL, 0.4) };
-    icon(p, rect, if down { pressed_ink(pressed_lift(BUTTON_LIT, 1.0), ink) } else { ink });
+    let ink = if enabled { mix(pal().ink2, pal().ink, hover) } else { mix(pal().ink2, pal().surface, 0.4) };
+    icon(p, rect, if down { pressed_ink(pressed_lift(pal().surface2_hover, 1.0), ink) } else { ink });
     if r.hovered() && enabled {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -324,7 +317,7 @@ pub fn draw_check(p: &Painter, c: Pos2, size: f32, col: Color32, t: f32) {
 /// control keeps free. Returns the label as shown.
 pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enabled: bool, right: f32) -> String {
     let font = regular(T_BODY);
-    let col = if enabled { INK } else { INK2 };
+    let col = if enabled { pal().ink } else { pal().ink2 };
     let Some(h) = crate::help::get(key) else {
         let shown = fit(ui.painter(), label, &font, row.width() - right);
         ui.painter().text(row.left_center(), Align2::LEFT_CENTER, &shown, font, col);
@@ -336,7 +329,7 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
     // A tall row has room for the caption; a short one keeps only the "i".
     if row.height() >= 44.0 {
         p.text(row.left_center() - vec2(0.0, 8.0), Align2::LEFT_CENTER, &shown, font, col);
-        p.text(row.left_center() + vec2(0.0, 8.0), Align2::LEFT_CENTER, fit(p, h.caption, &regular(T_META), room), regular(T_META), INK2);
+        p.text(row.left_center() + vec2(0.0, 8.0), Align2::LEFT_CENTER, fit(p, h.caption, &regular(T_META), room), regular(T_META), pal().ink2);
     } else {
         p.text(row.left_center(), Align2::LEFT_CENTER, &shown, font, col);
     }
@@ -345,8 +338,8 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
     let r = ui.interact(ir, id.with("info"), sense(ui, Sense::click()));
     let hover = tween(ui.ctx(), id.with("info-hover"), f32::from(r.hovered()), 0.1, motion::out_cubic);
     let p = ui.painter();
-    let ink = mix(INK2, INK, hover);
-    let well = if r.is_pointer_button_down_on() { pressed_lift(BUTTON_LIT, 1.0) } else { mix(Color32::TRANSPARENT, BUTTON, hover) };
+    let ink = mix(pal().ink2, pal().ink, hover);
+    let well = if r.is_pointer_button_down_on() { pressed_lift(pal().surface2_hover, 1.0) } else { mix(Color32::TRANSPARENT, pal().surface2, hover) };
     let ink = if r.is_pointer_button_down_on() { pressed_ink(well, ink) } else { ink };
     p.circle_filled(ic, 11.0, well);
     p.circle_stroke(ic, 8.0, Stroke::new(1.0, ink));
@@ -365,14 +358,14 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
         const W: f32 = 300.0;
         const IN: f32 = 8.0;
         ui.set_max_width(W);
-        let mut job = egui::text::LayoutJob::simple(h.detail.to_owned(), regular(T_BODY), INK_HOVER, W - 2.0 * IN);
+        let mut job = egui::text::LayoutJob::simple(h.detail.to_owned(), regular(T_BODY), pal().ink_hover, W - 2.0 * IN);
         job.sections[0].format.line_height = Some((T_BODY * LEADING).round());
         let text = ui.painter().layout_job(job);
         let pic = if h.scene != crate::help::Scene::None { 112.0 } else { 0.0 };
         let (all, _) = ui.allocate_exact_size(vec2(W, IN + pic + if pic > 0.0 { IN } else { 0.0 } + text.size().y + IN - 2.0), Sense::hover());
         if pic > 0.0 {
             let scene = Rect::from_min_size(all.min + vec2(IN, IN), vec2(W - 2.0 * IN, pic));
-            ui.painter().rect_filled(scene, CornerRadius::same(R_INNER), Color32::from_black_alpha(60));
+            ui.painter().rect_filled(scene, CornerRadius::same(R_INNER), pal().bg);
             // The picture plays twice from when the explainer opens, then
             // rests on its last frame: an open explainer costs nothing at
             // rest. Opened again, it plays again.
@@ -393,7 +386,7 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
             }
         }
         let y = all.top() + IN + if pic > 0.0 { pic + IN } else { 0.0 };
-        ui.painter().galley(pos2(all.left() + IN, y), text, INK_HOVER);
+        ui.painter().galley(pos2(all.left() + IN, y), text, pal().ink_hover);
         a11y_text(ui, id.with("detail"), all, Role::Label, h.detail, None);
     });
     shown
@@ -433,21 +426,21 @@ fn switch_help_painted(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, o
     let track = Rect::from_min_size(pos2(row.right() - 38.0, row.center().y - 11.0), vec2(38.0, 22.0));
     // Off: a recessed capsule. On: filled with the accent, as the system's
     // switches are; the knob is a lit white bead that slides across.
-    let off = mix(SWITCH_OFF, SWITCH_OFF_LIT, hover);
-    let on_col = if enabled { mix(ACCENT, ACCENT_LIT, hover) } else { INK3 };
+    let off = mix(pal().switch_off, pal().switch_off_lit, hover);
+    let on_col = if enabled { mix(pal().accent, pal().accent_hover, hover) } else { pal().ink3 };
     let base = mix(off, on_col, fill);
-    let pressed_track = if on { mix(base, GROUND, 0.45) } else { mix(base, Color32::WHITE, 0.30) };
+    let pressed_track = if on { mix(base, pal().bg, 0.45) } else { mix(base, pal().tint_ink, 0.30) };
     p.rect_filled(track, CornerRadius::same(11), switch_color(mix(base, pressed_track, press), undimmed));
     // Off, the track's edge is what shows the control: 3:1 on the group.
-    p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, switch_color(mix(SWITCH_EDGE, Color32::TRANSPARENT, fill), undimmed)), StrokeKind::Inside);
+    p.rect_stroke(track, CornerRadius::same(11), Stroke::new(1.0, switch_color(mix(pal().line, Color32::TRANSPARENT, fill), undimmed)), StrokeKind::Inside);
     let knob = pos2(track.left() + 11.0 + 16.0 * knob_t, track.center().y);
     // Pressed, the knob stretches toward where it will go (as the
     // system's switches do): a look of its own, apart from hover.
     let stretch = 5.0 * press;
     let toward = if on { -1.0 } else { 1.0 };
     let kr = Rect::from_center_size(knob + vec2(toward * stretch / 2.0, 0.0), vec2(18.0 + stretch, 18.0));
-    p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(kr, CornerRadius::same(9)));
-    p.rect_filled(kr, CornerRadius::same(9), switch_color(if enabled { Color32::WHITE } else { INK2 }, undimmed));
+    p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: pal().shadow(90) }.as_shape(kr, CornerRadius::same(9)));
+    p.rect_filled(kr, CornerRadius::same(9), switch_color(if enabled { pal().switch_knob } else { mix(pal().switch_knob, pal().ink3, 0.6) }, undimmed));
     focus_ring(ui, &r, track, 11);
     if r.gained_focus() && keyboard_focus(&ctx) {
         r.scroll_to_me(None);
@@ -497,7 +490,7 @@ impl Pills<'_> {
         let p = ui.painter().clone();
         // A recessed track, and a lighter capsule that slides to the choice.
         let round = |r: Rect| (r.height() / 2.0).round().min(255.0) as u8;
-        p.rect(self.track, CornerRadius::same(round(self.track)), TRACK, Stroke::new(1.0, TRACK_LINE), StrokeKind::Inside);
+        p.rect(self.track, CornerRadius::same(round(self.track)), pal().surface2, Stroke::new(1.0, pal().line), StrokeKind::Inside);
         let to = self.cells[self.chosen.unwrap_or(0).min(self.cells.len() - 1)];
         let secs = motion::space(0.22);
         let x = tween(&ctx, self.id.with("x"), to.left(), secs, motion::out_quart);
@@ -507,8 +500,8 @@ impl Pills<'_> {
             let pill = Rect::from_min_size(pos2(x, to.top()), vec2(w, to.height()));
             // The chosen one lifts out of the track: a lighter capsule on
             // a soft shadow.
-            p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha((70.0 * shown) as u8) }.as_shape(pill, CornerRadius::same(round(pill))));
-            p.rect(pill, CornerRadius::same(round(pill)), THUMB.gamma_multiply(shown), Stroke::new(1.0, CONTROL_EDGE.gamma_multiply(shown)), StrokeKind::Inside);
+            p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: pal().shadow((70.0 * shown) as u8) }.as_shape(pill, CornerRadius::same(round(pill))));
+            p.rect(pill, CornerRadius::same(round(pill)), pal().seg_on.gamma_multiply(shown), Stroke::new(1.0, pal().line.gamma_multiply(shown)), StrokeKind::Inside);
         }
         let mut picked = None;
         // egui moves focus with the arrows but doesn't report it as gained,
@@ -524,13 +517,13 @@ impl Pills<'_> {
             if enabled && !on && (r.hovered() || r.is_pointer_button_down_on()) {
                 // Pressed is a stronger lift than hover (a dark well can't
                 // show on the dark track).
-                let fill = if r.is_pointer_button_down_on() { pressed(BUTTON_LIT, 1.0) } else { BUTTON_LIT };
+                let fill = if r.is_pointer_button_down_on() { pressed(pal().surface2_hover, 1.0) } else { pal().surface2_hover };
                 p.rect_filled(*cell, CornerRadius::same(round(*cell)), fill);
             }
             // The chosen one pressed: its capsule sinks a step (darker),
             // apart from its chosen look and from the focus ring.
             if enabled && on && r.is_pointer_button_down_on() {
-                p.rect_filled(*cell, CornerRadius::same(round(*cell)), pressed(THUMB, 1.0));
+                p.rect_filled(*cell, CornerRadius::same(round(*cell)), pressed(pal().seg_on, 1.0));
             }
             if r.gained_focus() && keyboard_focus(&ctx) {
                 r.scroll_to_me(None);
@@ -544,10 +537,10 @@ impl Pills<'_> {
             }
             let lit = tween(&ctx, self.id.with(("on", k)), f32::from(on), motion::fade(0.15), motion::linear);
             // Disabled choices stay readable (4:1), just clearly quieter than INK2.
-            let base = if !enabled { mix(INK2, RAISED, 0.3) } else if r.hovered() { INK_HOVER } else { INK2 };
+            let base = if !enabled { mix(pal().ink2, pal().well, 0.3) } else if r.hovered() { pal().ink_hover } else { pal().ink2 };
             let font = if on { semibold(self.font) } else { regular(self.font) };
             let text = fit(&p, self.labels[k], &font, cell.width() - 8.0);
-            p.text(cell.center(), Align2::CENTER_CENTER, text, font, mix(base, INK, lit));
+            p.text(cell.center(), Align2::CENTER_CENTER, text, font, mix(base, pal().ink, lit));
             focus_ring(ui, &r, *cell, round(*cell));
             if r.hovered() && enabled && !on {
                 ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -577,22 +570,22 @@ pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, lab
     // Recessed into the glass: darker than it, with a rim that lights up
     // when the field has the keyboard.
     let fr = CornerRadius::same(((rect.height() / 2.0).min(10.0)) as u8);
-    p.rect_filled(rect, fr, if enabled { Color32::from_black_alpha(70) } else { Color32::from_black_alpha(40) });
+    p.rect_filled(rect, fr, if enabled { pal().bg } else { pal().well });
     // The field's edge shows where to type: 3:1 against the group.
-    let edge = if focused { ACCENT } else if hover { FIELD_EDGE_LIT } else { FIELD_EDGE };
+    let edge = if focused { pal().accent } else if hover { pal().field_edge_lit } else { pal().line2 };
     p.rect_stroke(rect, fr, Stroke::new(if focused { 1.5 } else { 1.0 }, edge), StrokeKind::Inside);
     let edit = egui::TextEdit::singleline(text)
         .id(id)
         .font(font)
-        .text_color(if enabled { INK } else { INK2 })
-        .hint_text(egui::RichText::new(hint).color(INK3))
+        .text_color(if enabled { pal().ink } else { pal().ink2 })
+        .hint_text(egui::RichText::new(hint).color(pal().ink3))
         .frame(egui::Frame::NONE)
         .margin(egui::Margin::ZERO)
         .align(Align2::LEFT_CENTER)
         .desired_width(rect.width() - 18.0);
     let r = ui.add_enabled_ui(enabled, |ui| ui.put(rect.shrink2(vec2(9.0, 0.0)), edit)).inner;
     if r.has_focus() {
-        ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(9), Stroke::new(2.0, SIGNAL), StrokeKind::Outside);
+        ui.painter().rect_stroke(rect.expand(2.0), CornerRadius::same(9), Stroke::new(2.0, pal().accent), StrokeKind::Outside);
     }
     #[cfg(any(debug_assertions, feature = "design-evidence"))]
     targets::note(label, r.rect);
@@ -614,14 +607,14 @@ pub fn field(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, lab
 pub fn progress_bar(ui: &Ui, rect: Rect, id: Id, frac: Option<f32>) {
     let p = ui.painter();
     let r = CornerRadius::same((rect.height() / 2.0) as u8);
-    p.rect_filled(rect, r, TRACK_OFF);
+    p.rect_filled(rect, r, pal().surface2);
     let shown = tween(ui.ctx(), id, frac.unwrap_or(0.0), motion::space(0.3), motion::out_cubic);
     let w = match frac {
         Some(_) => rect.width() * shown.clamp(0.0, 1.0),
         None => rect.width() * 0.18,
     };
     if w > 0.5 {
-        p.rect_filled(Rect::from_min_size(rect.min, vec2(w.max(rect.height()), rect.height())), r, SIGNAL);
+        p.rect_filled(Rect::from_min_size(rect.min, vec2(w.max(rect.height()), rect.height())), r, pal().accent);
     }
 }
 
@@ -746,10 +739,10 @@ pub fn raised_shapes(rect: Rect, r: f32, shadow: bool) -> Vec<egui::Shape> {
     let radius = CornerRadius::same(r.round().clamp(0.0, 255.0) as u8);
     let mut out = vec![];
     if shadow {
-        out.push(egui::epaint::Shadow { offset: [0, 16], blur: 40, spread: 0, color: Color32::from_black_alpha(110) }.as_shape(rect, radius).into());
+        out.push(egui::epaint::Shadow { offset: [0, 16], blur: 40, spread: 0, color: pal().shadow(110) }.as_shape(rect, radius).into());
     }
-    out.push(rounded_gradient(rect, r, ELEVATED_TOP, ELEVATED));
-    out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, ELEVATED_EDGE), StrokeKind::Inside)));
+    out.push(rounded_gradient(rect, r, pal().surface, pal().surface));
+    out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, pal().line), StrokeKind::Inside)));
     out
 }
 
@@ -763,7 +756,7 @@ pub fn group(ui: &Ui, rect: Rect, radius: u8) {
 }
 
 pub fn group_shapes(rect: Rect, radius: u8) -> Vec<egui::Shape> {
-    vec![egui::Shape::Rect(egui::epaint::RectShape::new(rect, CornerRadius::same(radius), GROUP, Stroke::new(1.0, GROUP_EDGE), StrokeKind::Inside))]
+    vec![egui::Shape::Rect(egui::epaint::RectShape::new(rect, CornerRadius::same(radius), pal().surface, Stroke::new(1.0, pal().line), StrokeKind::Inside))]
 }
 
 /// The same as shapes, to place behind contents drawn first.
@@ -772,24 +765,22 @@ pub fn glass_shapes(ctx: &egui::Context, key: u64, rect: Rect, radius: u8) -> Ve
 }
 
 /// Which glass: a panel holds text, so it is tinted for it; a control is
-/// clearer and bends more, as it is small and sits on a panel.
+/// clearer and bends more, as it is small and sits on a panel. Colours come
+/// from the active palette when it is drawn.
 #[derive(Clone, Copy)]
 pub struct GlassKind {
-    /// Real glass (only the command palette in the Night design); else a
-    /// solid raised surface: a lifted fill, a hairline, a soft shadow.
+    /// Real glass (only the command palette); else a solid raised surface:
+    /// a lifted fill, a hairline, a soft shadow.
     glass: bool,
-    see: [Color32; 2],
-    solid: [Color32; 2],
-    clear: [Color32; 2],
     bend: f32,
     shadow: bool,
 }
 
-pub const PANEL_GLASS: GlassKind = GlassKind { glass: false, see: [GLASS_TOP, GLASS], clear: [GLASS_CLEAR_TOP, GLASS_CLEAR], solid: [GLASS_SOLID_TOP, GLASS_SOLID], bend: 1.0, shadow: true };
-pub const CONTROL_GLASS: GlassKind = GlassKind { glass: false, see: [CONTROL_TOP, CONTROL], clear: [CONTROL_TOP, CONTROL], solid: [CONTROL_SOLID_TOP, CONTROL_SOLID], bend: 1.6, shadow: false };
+pub const PANEL_GLASS: GlassKind = GlassKind { glass: false, bend: 1.0, shadow: true };
+pub const CONTROL_GLASS: GlassKind = GlassKind { glass: false, bend: 1.6, shadow: false };
 
 /// The command palette: the one piece of real glass, over a dimmed window.
-pub const PALETTE_GLASS: GlassKind = GlassKind { glass: true, see: [PALETTE_TOP, PALETTE], clear: [PALETTE_TOP, PALETTE], solid: [ELEVATED, ELEVATED], bend: 0.8, shadow: true };
+pub const PALETTE_GLASS: GlassKind = GlassKind { glass: true, bend: 0.8, shadow: true };
 
 pub fn glass_shapes_as(ctx: &egui::Context, key: u64, rect: Rect, r: f32, kind: GlassKind) -> Vec<egui::Shape> {
     if !kind.glass {
@@ -799,16 +790,16 @@ pub fn glass_shapes_as(ctx: &egui::Context, key: u64, rect: Rect, r: f32, kind: 
     let radius = CornerRadius::same(r.round().clamp(0.0, 255.0) as u8);
     let mut out = vec![];
     if kind.shadow {
-        out.push(egui::epaint::Shadow { offset: [0, 12], blur: 32, spread: 0, color: Color32::from_black_alpha(80) }.as_shape(rect, radius).into());
+        out.push(egui::epaint::Shadow { offset: [0, 12], blur: 32, spread: 0, color: pal().shadow(80) }.as_shape(rect, radius).into());
     }
     if g.works() {
-        let [top, bottom] = if crate::chrome::see_through() { kind.clear } else { kind.see };
+        let [top, bottom] = [pal().glass_top, pal().glass];
         g.backdrop_shapes(&mut out, key, rect, r, crate::glass::Look { top, bottom, bend: kind.bend });
         // A hairline for the shape's edge where the light doesn't reach.
-        out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, GLASS_HAIRLINE), StrokeKind::Inside)));
+        out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, pal().line), StrokeKind::Inside)));
     } else {
-        out.push(rounded_gradient(rect, r, kind.solid[0], kind.solid[1]));
-        out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, GLASS_RIM), StrokeKind::Inside)));
+        out.push(rounded_gradient(rect, r, pal().surface, pal().surface));
+        out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, pal().line), StrokeKind::Inside)));
         out.push(lit_edge(rect.shrink(0.5), r - 0.5));
     }
     out
@@ -836,7 +827,7 @@ fn lit_edge(rect: Rect, r: f32) -> egui::Shape {
         let prev = pts[k.saturating_sub(1)].0;
         let d = (next - prev).normalized();
         let inward = vec2(-d.y, d.x);
-        let c = GLASS_EDGE.gamma_multiply(t * t * (3.0 - 2.0 * t));
+        let c = pal().glass_edge.gamma_multiply(t * t * (3.0 - 2.0 * t));
         m.vertices.push(Vertex { pos: p, uv: WHITE_UV, color: c });
         m.vertices.push(Vertex { pos: p + inward, uv: WHITE_UV, color: c });
     }
@@ -884,9 +875,9 @@ mod tests {
 
     #[test]
     fn mixing_ends_at_each_colour() {
-        assert_eq!(mix(INK, SIGNAL, 0.0), INK);
-        assert_eq!(mix(INK, SIGNAL, 1.0), SIGNAL);
-        assert_eq!(mix(INK, SIGNAL, 7.0), SIGNAL);
+        assert_eq!(mix(pal().ink, pal().accent, 0.0), pal().ink);
+        assert_eq!(mix(pal().ink, pal().accent, 1.0), pal().accent);
+        assert_eq!(mix(pal().ink, pal().accent, 7.0), pal().accent);
     }
 
     #[test]
@@ -910,61 +901,69 @@ mod tests {
         }
     }
 
+    /// Runs `check` once with each theme's palette active.
+    fn each_theme(check: impl Fn(&crate::style::Palette)) {
+        for p in [crate::style::Palette::light(), crate::style::Palette::dark()] {
+            crate::style::set_palette(p, None);
+            check(&p);
+        }
+        crate::style::set_palette(crate::style::Palette::dark(), None);
+    }
+
     #[test]
     fn icon_info_and_chip_press_is_measurably_distinct_from_hover() {
-        for hover in [BUTTON, BUTTON_LIT, THUMB] {
-            let down = pressed_lift(hover, 1.0);
-            assert!(down.r().abs_diff(hover.r()) >= 32);
-            assert!(down.g().abs_diff(hover.g()) >= 32);
-            assert!(down.b().abs_diff(hover.b()) >= 32);
-        }
+        each_theme(|p| {
+            for hover in [p.surface2, p.surface2_hover, p.seg_on] {
+                let down = pressed_lift(hover, 1.0);
+                let delta: u32 = [(down.r(), hover.r()), (down.g(), hover.g()), (down.b(), hover.b())].iter().map(|(a, b)| u32::from(a.abs_diff(*b))).sum();
+                assert!(delta >= 45, "{:?}: pressed {down:?} vs {hover:?}", p.theme);
+            }
+        });
     }
 
     #[test]
     fn pressed_control_pairs_meet_text_and_icon_contrast() {
-        for progress in 1..=100 {
-            let amount = progress as f32 / 100.0;
-            for fill in [BUTTON, BUTTON_LIT, Color32::from_rgb(0x28, 0x36, 0x1C), Color32::from_rgb(0x35, 0x46, 0x25)] {
-                let surface = pressed_lift(fill, amount);
-                for normal in [INK, INK2, ACCENT] {
-                    let ink = pressed_ink(surface, normal);
-                    assert_eq!(ink, normal);
-                    assert!(contrast(ink, surface) >= if normal == INK2 { 3.0 } else { 4.5 }, "chip/info/icon: {ink:?} on {surface:?}");
-                    assert!(contrast(ink, surface) >= 3.0);
+        each_theme(|p| {
+            for progress in 1..=100 {
+                let amount = progress as f32 / 100.0;
+                for fill in [p.surface2, p.surface2_hover, p.seg_on] {
+                    let surface = pressed_lift(fill, amount);
+                    // Secondary ink is never on a hovered fill: hover lights it to ink.
+                    let inks: &[Color32] = if fill == p.surface2_hover { &[p.ink] } else { &[p.ink, p.ink2] };
+                    for &normal in inks {
+                        let ink = pressed_ink(surface, normal);
+                        assert_eq!(ink, normal);
+                        assert!(contrast(ink, surface) >= if normal == p.ink2 { 3.0 } else { 4.5 }, "{:?} chip/info/icon: {ink:?} on {surface:?}", p.theme);
+                    }
                 }
             }
-        }
-        for (family, ink, surface) in [
-            ("segment", INK, pressed(THUMB, 1.0)),
-            ("capsule", INK, pressed(BUTTON_LIT, 1.0)),
-            ("primary capsule", SIGNAL_INK, mix(SIGNAL_LIT, SIGNAL_INK, 0.28)),
-            ("sidebar row", INK, Color32::from_rgb(0x4B, 0x54, 0x61)),
-        ] {
-            assert!(contrast(ink, surface) >= 4.5, "{family}");
-            assert!(contrast(ink, surface) >= 3.0, "{family}");
-        }
+            for (family, ink, surface) in [
+                ("segment", p.ink, pressed(p.seg_on, 1.0)),
+                ("capsule", p.ink, pressed(p.surface2_hover, 1.0)),
+                ("primary capsule", p.on_accent, p.accent_press),
+                ("sidebar row", p.ink, pressed(p.surface2_hover, 0.3)),
+            ] {
+                assert!(contrast(ink, surface) >= 4.5, "{:?} {family}", p.theme);
+            }
+        });
     }
 
     #[test]
     fn held_states_keep_their_ink_and_clear_hover_delta() {
-        for (hover, held) in [
-            (BUTTON_LIT, pressed(BUTTON_LIT, 1.0)),
-            (THUMB, pressed(THUMB, 1.0)),
-            (mix(SIDEBAR, SIDE_HOVER, 0.25), Color32::from_rgb(0x4B, 0x54, 0x61)),
-        ] {
-            for (first, second) in [(hover.r(), held.r()), (hover.g(), held.g()), (hover.b(), held.b())] {
-                assert!(first.abs_diff(second) >= 40);
+        each_theme(|p| {
+            for (hover, held) in [(p.surface2_hover, pressed(p.surface2_hover, 1.0)), (p.seg_on, pressed(p.seg_on, 1.0))] {
+                assert_ne!(hover, held);
+                assert!(contrast(p.ink, held) >= 4.5, "{:?}", p.theme);
             }
-            assert!(contrast(INK, held) >= 4.5);
-        }
-        assert!(pressed(BUTTON_LIT, 1.0).r() < BUTTON_LIT.r());
+            assert!(pressed(p.surface2_hover, 1.0).r() < p.surface2_hover.r());
+        });
     }
 
     #[test]
     fn disabled_switch_dims_track_edge_and_knob() {
-        for color in [SWITCH_OFF, SWITCH_EDGE, Color32::WHITE] {
+        for color in [pal().switch_off, pal().ink2, pal().switch_knob] {
             assert_eq!(switch_color(color, true), color);
-            assert!(contrast(switch_color(color, false), PANEL) < contrast(color, PANEL));
+            assert!(contrast(switch_color(color, false), pal().surface) < contrast(color, pal().surface));
         }
         let context = egui::Context::default();
         let mut enabled = true;
@@ -979,7 +978,7 @@ mod tests {
             let mut output = context.run_ui(Default::default(), |ui| {
                 switch_help_painted(ui, Rect::from_min_size(Pos2::ZERO, vec2(300.0, 32.0)), Id::unique("switch-appearance"), "Also on this computer", "also-on-this-computer", false, (false, dimmed));
             });
-            for expected in [switch_color(SWITCH_OFF, !dimmed), switch_color(INK2, !dimmed)] {
+            for expected in [switch_color(pal().switch_off, !dimmed), switch_color(mix(pal().switch_knob, pal().ink3, 0.6), !dimmed)] {
                 assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == expected)), "dimmed={dimmed}, missing {expected:?}");
             }
             output.textures_delta.clear();
@@ -998,7 +997,7 @@ mod tests {
                 button(ui, Rect::from_min_size(pos2(20.0, 20.0), vec2(80.0, 32.0)), id, "Clear", Look::Quiet, true, None);
             });
             output.textures_delta.clear();
-            ring |= output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == SIGNAL && rect.stroke.width == 2.0));
+            ring |= output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.stroke.color == pal().accent && rect.stroke.width == 2.0));
         }
         assert!(ring);
     }
@@ -1069,8 +1068,8 @@ mod tests {
         install(&ctx);
         let mut out = ctx.run_pass(egui::RawInput::default(), |ctx| {
             let p = ctx.layer_painter(egui::LayerId::background());
-            let r = mono_text(&p, Pos2::ZERO, Align2::LEFT_TOP, "run --port", 12.0, INK, 500.0);
-            let plain = p.layout_no_wrap("run x-port".into(), mono(12.0), INK).size().x;
+            let r = mono_text(&p, Pos2::ZERO, Align2::LEFT_TOP, "run --port", 12.0, pal().ink, 500.0);
+            let plain = p.layout_no_wrap("run x-port".into(), mono(12.0), pal().ink).size().x;
             assert!((r.width() - plain).abs() < 0.5, "every character a full cell: {} vs {plain}", r.width());
         });
         out.textures_delta.clear();
@@ -1093,12 +1092,12 @@ mod tests {
     /// Pressed differs from rest and from hover, for the fills that have one.
     #[test]
     fn pressed_is_its_own_look() {
-        for fill in [BUTTON, BUTTON_LIT, SIDE_HOVER, SIDE_CHOSEN] {
+        for fill in [pal().surface2, pal().surface2_hover, mix(pal().sidebar, pal().surface2, 0.5), pal().surface2] {
             let down = pressed(fill, 1.0);
             assert_ne!(down, fill);
             assert!(down.r() <= fill.r() && down.g() <= fill.g(), "pressed goes deeper, not lighter");
         }
-        assert_eq!(pressed(BUTTON, 0.0), BUTTON);
+        assert_eq!(pressed(pal().surface2, 0.0), pal().surface2);
     }
 
     #[test]

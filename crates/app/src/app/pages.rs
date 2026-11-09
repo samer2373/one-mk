@@ -20,7 +20,7 @@ pub(super) fn card(ui: &Ui, r: Rect, title: &str) -> Rect {
     let glass = Rect::from_min_max(r.min + vec2(0.0, GROUP_TITLE), r.max);
     widgets::group(ui, glass, R_GROUP);
     let p = ui.painter();
-    p.text(r.left_top() + vec2(14.0, 13.0), Align2::LEFT_CENTER, title, semibold(T_BODY), INK2);
+    p.text(r.left_top() + vec2(14.0, 13.0), Align2::LEFT_CENTER, title, semibold(T_BODY), pal().ink2);
     a11y_text(ui, Id::unique(("card", title)), Rect::from_min_size(r.min, vec2(r.width(), GROUP_TITLE)), Role::Heading, title, None);
     Rect::from_min_max(r.min + vec2(18.0, 48.0), r.max - vec2(18.0, 14.0))
 }
@@ -45,7 +45,7 @@ fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
     // One family: a 14-point round badge each, told apart by its mark (and
     // by the word beside the title), never by colour alone.
     let r = 7.0;
-    let colour = match v { Verdict::Pass => OK, Verdict::Skip => INK2, Verdict::Warn => WARN, Verdict::Fail => ERROR };
+    let colour = match v { Verdict::Pass => pal().ok, Verdict::Skip => pal().ink2, Verdict::Warn => pal().warn, Verdict::Fail => pal().danger };
     match v {
         Verdict::Pass => widgets::draw_check(p, c, 12.0, colour, 1.0),
         Verdict::Skip => {
@@ -102,7 +102,7 @@ struct Item {
 
 fn text_height(ui: &Ui, text: &str, width: f32) -> f32 {
     let f = regular(T_BODY);
-    let mut job = egui::text::LayoutJob::simple(text.to_owned(), f.clone(), INK, width);
+    let mut job = egui::text::LayoutJob::simple(text.to_owned(), f.clone(), pal().ink, width);
     job.sections[0].format.line_height = Some((f.size * LEADING).round());
     ui.painter().layout_job(job).size().y
 }
@@ -172,13 +172,13 @@ impl App {
     /// Lines under the Health title that come from the daemon itself.
     fn live_lines(&self) -> Vec<(Color32, String)> {
         let Some(s) = self.running() else {
-            return vec![(INK2, "Sharing is stopped. Choose Start to turn it on.".into())];
+            return vec![(pal().ink2, "Sharing is stopped. Choose Start to turn it on.".into())];
         };
         let mut out: Vec<(Color32, String)> = s.input_lines().into_iter().map(|line| (
-            if line.severity == one_mk_ctl::status::Severity::Problem { ERROR } else { INK2 }, line.detail,
+            if line.severity == one_mk_ctl::status::Severity::Problem { pal().danger } else { pal().ink2 }, line.detail,
         )).collect();
         if let Some(h) = s.hotkeys_line() {
-            out.push((INK2, h));
+            out.push((pal().ink2, h));
         }
         out
     }
@@ -208,7 +208,7 @@ impl App {
         // happening now), then the checks, worst first.
         // Off, the checks say so themselves (with Start).
         let live = if self.running().is_some() { self.live_lines() } else { vec![] };
-        let mut needs: Vec<Item> = live.iter().filter(|(c, _)| *c == ERROR).map(|(_, l)| Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Fail, here: None, k: usize::MAX }).collect();
+        let mut needs: Vec<Item> = live.iter().filter(|(c, _)| *c == pal().danger).map(|(_, l)| Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Fail, here: None, k: usize::MAX }).collect();
         // A line that waits on the person (a permission dialog to answer)
         // or on oneMK (still setting up) is pending: never a tick.
         // On a Mac the guide walks through the permission; elsewhere the
@@ -219,7 +219,7 @@ impl App {
         // check says: one row, not two.
         let has_hotkeys_check = checks.as_ref().is_some_and(|c| c.iter().any(|c| c.id == "hotkeys"));
         let hotkeys_line = self.running().and_then(|s| s.hotkeys_line());
-        for (c, l) in live.iter().filter(|(c, _)| *c != ERROR) {
+        for (c, l) in live.iter().filter(|(c, _)| *c != pal().danger) {
             let _ = c;
             if has_hotkeys_check && hotkeys_line.as_deref() == Some(l.as_str()) {
                 continue;
@@ -280,11 +280,11 @@ impl App {
             let fails = needs.iter().filter(|i| i.verdict == Verdict::Fail).count();
             let steps_only = !needs.is_empty() && needs.iter().all(|i| i.verdict == Verdict::Skip);
             let (headline, tone) = if running && checks.is_none() {
-                ("Checking this computer…".to_owned(), INK2)
+                ("Checking this computer…".to_owned(), pal().ink2)
             } else if needs.is_empty() && checks.is_some() {
-                ("Checks pass".to_owned(), OK)
+                ("Checks pass".to_owned(), pal().ok)
             } else if needs.is_empty() {
-                ("Not checked yet".to_owned(), INK2)
+                ("Not checked yet".to_owned(), pal().ink2)
             } else {
                 // The count names the groups below it: problems under Needs
                 // you, the rest under Pending.
@@ -296,9 +296,9 @@ impl App {
                     (n, true) => format!("{n} awaiting you"),
                     (n, false) => format!("{n} pending"),
                 };
-                let tone = if fails > 0 { ERROR } else { WARN };
+                let tone = if fails > 0 { pal().danger } else { pal().warn };
                 match (problems, steps_only) {
-                    (_, true) => (p_words, INK),
+                    (_, true) => (p_words, pal().ink),
                     (n, _) if pending == 0 => (format!("{n} {} attention", if n == 1 { "needs" } else { "need" }), tone),
                     (n, _) => (format!("{n} {} attention · {p_words}", if n == 1 { "needs" } else { "need" }), tone),
                 }
@@ -321,7 +321,7 @@ impl App {
             p.circle_stroke(medal, 22.0, Stroke::new(1.0, tone.gamma_multiply(0.5)));
             if running && checks.is_none() {
                 let turn = if motion::reduced() { 0.0 } else { (now * 5.0) as f32 };
-                widgets::draw_refresh(&p, Rect::from_center_size(medal, vec2(18.0, 18.0)), INK2, turn);
+                widgets::draw_refresh(&p, Rect::from_center_size(medal, vec2(18.0, 18.0)), pal().ink2, turn);
                 ui.ctx().request_repaint_after_secs(1.0 / 30.0);
             } else {
                 verdict_icon(&p, medal, if steps_only || checks.is_none() { Verdict::Skip } else if needs.is_empty() { Verdict::Pass } else if fails > 0 { Verdict::Fail } else { Verdict::Warn });
@@ -329,9 +329,9 @@ impl App {
             let bw = button_width(ui, "Recheck");
             let tx = hero.left() + 84.0;
             let tw = hero.width() - 84.0 - bw - 36.0;
-            p.text(pos2(tx, hero.center().y - (if sub.is_empty() { 0.0 } else { 11.0 })), Align2::LEFT_CENTER, fit(&p, &headline, &semibold(T_TITLE + 3.0), tw), semibold(T_TITLE + 3.0), INK);
+            p.text(pos2(tx, hero.center().y - (if sub.is_empty() { 0.0 } else { 11.0 })), Align2::LEFT_CENTER, fit(&p, &headline, &semibold(T_TITLE + 3.0), tw), semibold(T_TITLE + 3.0), pal().ink);
             if !sub.is_empty() {
-                p.text(pos2(tx, hero.center().y + 13.0), Align2::LEFT_CENTER, fit(&p, &sub, &regular(T_BODY), tw), regular(T_BODY), INK2);
+                p.text(pos2(tx, hero.center().y + 13.0), Align2::LEFT_CENTER, fit(&p, &sub, &regular(T_BODY), tw), regular(T_BODY), pal().ink2);
             }
             let b = Rect::from_min_size(pos2(hero.right() - 18.0 - bw, hero.center().y - 16.0), vec2(bw, 32.0));
             let label = if running { "Checking…" } else { "Recheck" };
@@ -366,15 +366,15 @@ impl App {
                     let mut ty = row.top() + 12.0;
                     if !i.title.is_empty() {
                         let tw = text_width(ui, &i.title, semibold(T_BODY));
-                        p.text(pos2(tx, ty + 10.0), Align2::LEFT_CENTER, &i.title, semibold(T_BODY), INK);
-                        p.text(pos2(tx + tw + 8.0, ty + 10.5), Align2::LEFT_CENTER, verdict_word(i.verdict), regular(T_META), INK3);
+                        p.text(pos2(tx, ty + 10.0), Align2::LEFT_CENTER, &i.title, semibold(T_BODY), pal().ink);
+                        p.text(pos2(tx + tw + 8.0, ty + 10.5), Align2::LEFT_CENTER, verdict_word(i.verdict), regular(T_META), pal().ink3);
                         ty += 24.0;
                     }
                     // What is wrong in ink; what to do, quieter, under it.
-                    ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, regular(T_BODY), INK);
+                    ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, regular(T_BODY), pal().ink);
                     let fix_text = i.fix.clone().filter(|_| shows_fix_text(&i.here));
                     if let Some(f) = &fix_text {
-                        widgets::para_code(ui, pos2(tx, ty + 6.0), text_w, f, regular(T_BODY), INK2);
+                        widgets::para_code(ui, pos2(tx, ty + 6.0), text_w, f, regular(T_BODY), pal().ink2);
                     }
                     let br = Rect::from_min_size(pos2(row.right() - bw, row.top() + 6.0), vec2(bw, 32.0));
                     if let Some((label, job)) = &i.here {
@@ -389,7 +389,7 @@ impl App {
                                     "3. Back here, choose Recheck. Dismissed it? Stop and start oneMK to be asked again.",
                                 ];
                                 for t in steps {
-                                    ui.add(egui::Label::new(egui::RichText::new(t).font(regular(T_BODY)).color(INK_HOVER)).wrap());
+                                    ui.add(egui::Label::new(egui::RichText::new(t).font(regular(T_BODY)).color(pal().ink_hover)).wrap());
                                     ui.add_space(4.0);
                                 }
                             });
@@ -410,7 +410,7 @@ impl App {
                     let label = if i.title.is_empty() { format!("{}{fix}", i.detail) } else { format!("{} {state}. {}{fix}", i.title, i.detail) };
                     a11y_text(ui, Id::unique(("need", group_title, n)), row, Role::ListItem, &label, None);
                     if n + 1 < needs.len() {
-                        ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, LINE));
+                        ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, pal().line));
                     }
                     y += ih;
                 }
@@ -448,10 +448,10 @@ impl App {
                     let tx = r.left() + 18.0 + 26.0;
                     verdict_icon(&p, pos2(r.left() + 26.0, y + 20.0), Verdict::Pass);
                     if i.title.is_empty() {
-                        widgets::para_code(ui, pos2(tx, y + 10.0), text_w, &i.detail, regular(T_BODY), INK);
+                        widgets::para_code(ui, pos2(tx, y + 10.0), text_w, &i.detail, regular(T_BODY), pal().ink);
                     } else {
-                        p.text(pos2(tx, y + 20.0), Align2::LEFT_CENTER, line(i), regular(T_BODY), INK);
-                        widgets::para_code(ui, pos2(tx, y + 32.0), text_w, &i.detail, regular(T_META), INK3);
+                        p.text(pos2(tx, y + 20.0), Align2::LEFT_CENTER, line(i), regular(T_BODY), pal().ink);
+                        widgets::para_code(ui, pos2(tx, y + 32.0), text_w, &i.detail, regular(T_META), pal().ink3);
                     }
                     a11y_text(ui, Id::unique(("works", n)), Rect::from_min_size(pos2(r.left(), y), vec2(w, *ih)), Role::ListItem, &if i.title.is_empty() { i.detail.clone() } else { format!("{} passed. {}", line(i), i.detail) }, None);
                     y += ih;
@@ -503,14 +503,16 @@ impl App {
             48.0 + 96.0 + 14.0,
             48.0 + 260.0 + 14.0,
             self.updates_card_h(ui, col_w),
+            48.0 + HELP_ROW - 6.0 + 14.0,
         ];
         // Two columns: crossing, power, games, pointer and layout, and
         // updates on the left; keys and commands on the right. One column
         // below 700 points.
-        let mut at = [(0usize, 0.0f32); 9];
+        let mut at = [(0usize, 0.0f32); 10];
         let mut ys = [0.0f32; 2];
-        // Updates first: it is the one card people come to Settings for.
-        for k in [8, 0, 1, 2, 3, 4, 5, 6, 7] {
+        // Updates first: it is the one card people come to Settings for;
+        // then Appearance, the rest of General.
+        for k in [8, 9, 0, 1, 2, 3, 4, 5, 6, 7] {
             let h = &heights[k];
             let col = if two { usize::from((3..7).contains(&k)) } else { 0 };
             at[k] = (col, ys[col]);
@@ -527,13 +529,15 @@ impl App {
             let r = |k: usize| Rect::from_min_size(pos2(all.left() + at[k].0 as f32 * (col_w + gap), all.top() + at[k].1), vec2(col_w, heights[k]));
             // Updates first: first on the page, first in Tab order.
             self.updates_card(ui, r(8));
+            let c = card(ui, r(9), "Appearance");
+            self.appearance_row(ui, Rect::from_min_size(pos2(c.left(), c.top() - 6.0), vec2(c.width(), HELP_ROW)));
             self.edges_card(ui, r(0));
             self.power_card(ui, r(1));
             let c = card(ui, r(2), "Games");
             self.gaming_row(ui, Rect::from_min_size(pos2(c.left(), c.top() - 6.0), vec2(c.width(), HELP_ROW)));
             self.keys_card(ui, r(3));
             let c = card(ui, r(4), "Ctrl and Cmd");
-            ui.painter().text(pos2(c.left(), c.top() + 2.0), Align2::LEFT_CENTER, fit(ui.painter(), "Auto swaps them only between a Mac and a PC.", &regular(T_META), c.width()), regular(T_META), INK2);
+            ui.painter().text(pos2(c.left(), c.top() + 2.0), Align2::LEFT_CENTER, fit(ui.painter(), "Auto swaps them only between a Mac and a PC.", &regular(T_META), c.width()), regular(T_META), pal().ink2);
             self.swaps(ui, Rect::from_min_max(pos2(c.left(), c.top() + 18.0), c.max));
             self.hooks_card(ui, r(5));
             self.typing_card(ui, r(6));
@@ -546,7 +550,7 @@ impl App {
             let shown = fit(ui.painter(), credit, &regular(T_META), all.width() - 8.0);
             let link = ui.interact(widgets::hit_rect(Rect::from_min_size(credit_at - vec2(0.0, 9.0), vec2(text_width(ui, &shown, regular(T_META)), 18.0))), Id::unique("credit-mouse"), Sense::click());
             let lr = link.rect;
-            ui.painter().text(credit_at, Align2::LEFT_CENTER, &shown, regular(T_META), if link.hovered() { INK } else { INK3 });
+            ui.painter().text(credit_at, Align2::LEFT_CENTER, &shown, regular(T_META), if link.hovered() { pal().ink } else { pal().ink3 });
             if link.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
@@ -560,7 +564,7 @@ impl App {
 
     /// Room under "Stay in fullscreen windows" for what this desktop can't do.
     fn fullscreen_note_h(&self, ui: &Ui, width: f32) -> f32 {
-        crate::desktop::Session::current().fullscreen_note().map_or(0.0, |note| ui.painter().layout(note.to_owned(), regular(T_META), INK3, width.max(1.0)).size().y + 4.0)
+        crate::desktop::Session::current().fullscreen_note().map_or(0.0, |note| ui.painter().layout(note.to_owned(), regular(T_META), pal().ink3, width.max(1.0)).size().y + 4.0)
     }
 
     fn edges_card(&mut self, ui: &mut Ui, r: Rect) {
@@ -591,7 +595,7 @@ impl App {
             let rr = row(k);
             label_help(ui, rr, Id::unique(("edge-label", key)), label, &format!("edge-{key}"), true, 72.0 + uw + 12.0);
             let fr = Rect::from_min_size(pos2(rr.right() - 72.0 - uw, rr.center().y - 13.0), vec2(72.0, 26.0));
-            ui.painter().text(pos2(rr.right(), rr.center().y), Align2::RIGHT_CENTER, unit, regular(T_META), INK2);
+            ui.painter().text(pos2(rr.right(), rr.center().y), Align2::RIGHT_CENTER, unit, regular(T_META), pal().ink2);
             let a11y = format!("{label}, in {}", if unit == "px" { "pixels (0: off)" } else { "milliseconds (0: off)" });
             if let Some(text) = self.edit_field(ui, fr, &format!("edge-{key}"), &cur.to_string(), "0", &a11y, true, true) {
                 match text.parse::<u32>() {
@@ -632,7 +636,7 @@ impl App {
         }
         // Where this desktop can't see every fullscreen window, say so under the switch.
         if let Some(note) = crate::desktop::Session::current().fullscreen_note() {
-            para(ui, pos2(c.left(), row(4).top() - 8.0), c.width(), note, regular(T_META), INK3);
+            para(ui, pos2(c.left(), row(4).top() - 8.0), c.width(), note, regular(T_META), pal().ink3);
         }
         let reset = Rect::from_min_size(pos2(c.left(), row(4).top() + self.fullscreen_note_h(ui, c.width())), vec2(c.width(), 28.0));
         if !side.is_empty() && button(ui, reset, Id::unique("edge-reset-side"), "Use shared rules", Look::Quiet, true, None).clicked() {

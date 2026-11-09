@@ -5,8 +5,7 @@
 //! moves toward them on a clock and reports when everything has settled.
 
 use crate::motion::{self, Tween};
-use crate::style::{GROUND, INK, INK_HOVER, INK2, SIGNAL, fit, mono_medium, regular, semibold};
-use crate::widgets::mix;
+use crate::style::{self, fit, mix, mono_medium, pal, regular, semibold};
 use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, Stroke, pos2, vec2};
 use one_mk_proto::{Desktop, Edge, Rect as Monitor, Side};
 use std::ops::{Add, Mul, Sub};
@@ -71,7 +70,7 @@ pub fn approach(cur: f32, target: f32, rate: f32, dt: f32, eps: f32) -> f32 {
 }
 fn rgba(c: [u8; 3], k: f32, a: f32) -> Color32 {
     let f = |x: u8| (x as f32 * k).clamp(0.0, 255.0) as u8;
-    Color32::from_rgba_unmultiplied(f(c[0]), f(c[1]), f(c[2]), (a.clamp(0.0, 1.0) * 255.0) as u8)
+    style::rgba_from(f(c[0]), f(c[1]), f(c[2]), (a.clamp(0.0, 1.0) * 255.0) as u8)
 }
 fn hex(n: u32) -> [u8; 3] {
     [(n >> 16) as u8, (n >> 8) as u8, n as u8]
@@ -87,7 +86,7 @@ fn split_screen_name<'a>(painter: &Painter, name: &'a str, font: &egui::FontId, 
         if first.is_empty() || second.is_empty() {
             return None;
         }
-        let measure = |text: &str| painter.layout_no_wrap(text.to_owned(), font.clone(), INK).size().x;
+        let measure = |text: &str| painter.layout_no_wrap(text.to_owned(), font.clone(), pal().ink).size().x;
         let width = measure(first).max(measure(second));
         (width <= room).then_some((first, second, width))
     }).min_by(|left, right| left.2.total_cmp(&right.2)).map(|(first, second, _)| (first, second))
@@ -605,10 +604,10 @@ impl Device {
                     if !held {
                         // A stand and base in proportion, as for a monitor alone.
                         let (mx, m) = ((a.0 + a.1) / 2.0, (a.1 - a.0).max(b.1 - b.0) / 58.0);
-                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 12.0)), a: (-11.0 * m, 11.0 * m), b: (0.0, BASE_H), c: (-8.0 * m, 8.0 * m), col: 0x8E949D, screen: None });
-                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 15.6)), a: (-3.0 * m, 3.0 * m), b: (0.0, cy + (b.0 + b.1) / 2.0), c: (-1.1, 1.1), col: 0x8E949D, screen: None });
+                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 12.0)), a: (-11.0 * m, 11.0 * m), b: (0.0, BASE_H), c: (-8.0 * m, 8.0 * m), col: style::STAND, screen: None });
+                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 15.6)), a: (-3.0 * m, 3.0 * m), b: (0.0, cy + (b.0 + b.1) / 2.0), c: (-1.1, 1.1), col: style::STAND, screen: None });
                     }
-                    boxes.push(Box3 { fr: scr, a, b, c: (-2.2, 0.0), col: 0x2B2F36, screen: Some(0x0B0D10) });
+                    boxes.push(Box3 { fr: scr, a, b, c: (-2.2, 0.0), col: style::MONITOR_BODY, screen: Some(style::SCREEN_OFF) });
                 }
                 Geo { boxes, screen, deck: None, foot: [x, z - 12.0, hw, 8.0 * s] }
             }
@@ -618,9 +617,9 @@ impl Device {
                 let scr = Frame3::axes(v(x, y + cy, z - 14.0));
                 Geo {
                     boxes: vec![
-                        Box3 { fr: Frame3::axes(v(x, y, z - 12.0)), a: (-11.0 * s, 11.0 * s), b: (0.0, 0.8), c: (-8.0 * s, 8.0 * s), col: 0x8E949D, screen: None },
-                        Box3 { fr: Frame3::axes(v(x, y, z - 15.6)), a: (-3.0 * s, 3.0 * s), b: (0.0, cy), c: (-1.1, 1.1), col: 0x8E949D, screen: None },
-                        Box3 { fr: scr, a: (-hw, hw), b: (-hh, hh), c: (-2.2, 0.0), col: 0x2B2F36, screen: Some(0x0B0D10) },
+                        Box3 { fr: Frame3::axes(v(x, y, z - 12.0)), a: (-11.0 * s, 11.0 * s), b: (0.0, 0.8), c: (-8.0 * s, 8.0 * s), col: style::STAND, screen: None },
+                        Box3 { fr: Frame3::axes(v(x, y, z - 15.6)), a: (-3.0 * s, 3.0 * s), b: (0.0, cy), c: (-1.1, 1.1), col: style::STAND, screen: None },
+                        Box3 { fr: scr, a: (-hw, hw), b: (-hh, hh), c: (-2.2, 0.0), col: style::MONITOR_BODY, screen: Some(style::SCREEN_OFF) },
                     ],
                     screen: Plane { fr: scr, u: (-hw + 0.9, hw - 0.9), w: (hh - 0.9, -hh + 0.9) },
                     deck: None,
@@ -632,8 +631,8 @@ impl Device {
                 let lid = Frame3 { o: v(x, y + 1.4 * s, z - 6.5 * s), ex: v(1.0, 0.0, 0.0), ey: v(0.0, ca, -sa), ez: v(0.0, sa, ca) };
                 Geo {
                     boxes: vec![
-                        Box3 { fr: Frame3::axes(v(x, y, z + 4.0 * s)), a: (-15.5 * s, 15.5 * s), b: (0.0, 1.4 * s), c: (-10.5 * s, 10.5 * s), col: 0xAEB3BB, screen: None },
-                        Box3 { fr: lid, a: (-15.5 * s, 15.5 * s), b: (0.0, 20.4 * s), c: (-0.6, 0.0), col: 0xAEB3BB, screen: Some(0x0B0D10) },
+                        Box3 { fr: Frame3::axes(v(x, y, z + 4.0 * s)), a: (-15.5 * s, 15.5 * s), b: (0.0, 1.4 * s), c: (-10.5 * s, 10.5 * s), col: style::LAPTOP_BODY, screen: None },
+                        Box3 { fr: lid, a: (-15.5 * s, 15.5 * s), b: (0.0, 20.4 * s), c: (-0.6, 0.0), col: style::LAPTOP_BODY, screen: Some(style::SCREEN_OFF) },
                     ],
                     screen: Plane { fr: lid, u: (-14.4 * s, 14.4 * s), w: (19.5 * s, 1.3 * s) },
                     deck: Some(Frame3::axes(v(x, y + 1.41 * s, z + 4.0 * s))),
@@ -1319,10 +1318,10 @@ impl Scene {
                 // Being paired: opaque faces (so nothing shows through),
                 // and only the screen and the base outlined.
                 let o = d.a.max(d.w);
-                quad(painter, f.pts, fade(mix(GROUND, f.fill, d.a), o));
+                quad(painter, f.pts, fade(mix(pal().bg, f.fill, d.a), o));
                 if f.outline {
                     let path = partial(&f.pts, d.w);
-                    painter.add(Shape::line(path, Stroke::new(1.25, fade(SIGNAL, 0.85 * d.w * (1.0 - d.a)))));
+                    painter.add(Shape::line(path, Stroke::new(1.25, fade(pal().accent, 0.85 * d.w * (1.0 - d.a)))));
                 }
             } else if d.a < 0.99 {
                 quad(painter, f.pts, fade(f.fill, d.a));
@@ -1334,7 +1333,7 @@ impl Scene {
                 let k = |p: Pos2| 1.10 - 0.2 * ((p.y - y0) / (y1 - y0).max(1.0));
                 let shade = |p: Pos2| {
                     let m = k(p);
-                    Color32::from_rgb((f.fill.r() as f32 * m).min(255.0) as u8, (f.fill.g() as f32 * m).min(255.0) as u8, (f.fill.b() as f32 * m).min(255.0) as u8)
+                    style::rgb_from((f.fill.r() as f32 * m).min(255.0) as u8, (f.fill.g() as f32 * m).min(255.0) as u8, (f.fill.b() as f32 * m).min(255.0) as u8)
                 };
                 quad_colors(painter, f.pts, f.pts.map(shade), None);
             }
@@ -1347,9 +1346,9 @@ impl Scene {
             {
                 let s = d.scale * d.k;
                 let well = [k.at(-13.0 * s, 0.0, -9.5 * s), k.at(13.0 * s, 0.0, -9.5 * s), k.at(13.0 * s, 0.0, 1.0 * s), k.at(-13.0 * s, 0.0, 1.0 * s)];
-                quad(painter, well.map(|p| cam.pt(p)), fade(Color32::from_rgb(20, 22, 26), 0.85 * d.a));
+                quad(painter, well.map(|p| cam.pt(p)), fade(style::LAPTOP_WELL, 0.85 * d.a));
                 let pad = [k.at(-5.5 * s, 0.0, 3.0 * s), k.at(5.5 * s, 0.0, 3.0 * s), k.at(5.5 * s, 0.0, 9.0 * s), k.at(-5.5 * s, 0.0, 9.0 * s)];
-                quad(painter, pad.map(|p| cam.pt(p)), fade(Color32::WHITE, 0.12 * d.a));
+                quad(painter, pad.map(|p| cam.pt(p)), style::white((0.12 * d.a * 255.0) as u8));
             }
         }
         self.faces = faces;
@@ -1361,29 +1360,32 @@ impl Scene {
         }
     }
 
-    /// The line round a screen: where files can go (Volt), which one is
-    /// selected or hovered (white). Keyboard focus is drawn round the whole computer in `paint`.
+    /// The line round a screen: where files can go (the accent), which one
+    /// is selected (the accent, in a soft ring) or hovered (a faint line).
+    /// Keyboard focus is drawn round the whole computer in `paint`.
     fn screen_outline(&self, painter: &Painter, f: &Face, d: &Device, preview: f32) {
         if self.focused == Some(f.owner) {
-            painter.add(Shape::closed_line(grown(&f.pts, 3.0), Stroke::new(2.0, SIGNAL)));
+            painter.add(Shape::closed_line(grown(&f.pts, 3.0), Stroke::new(2.0, pal().accent)));
             return;
         }
         let target = d.online && !d.me && !d.leaving && d.w < 0.01;
         if self.drop_targets && target {
-            painter.add(Shape::closed_line(grown(&f.pts, 2.5), Stroke::new(1.5, fade(SIGNAL, 0.9 * d.a))));
+            painter.add(Shape::closed_line(grown(&f.pts, 2.5), Stroke::new(1.5, fade(pal().accent, 0.9 * d.a))));
         } else if preview > 0.01 && target {
             let mut pts = grown(&f.pts, 3.0);
             pts.push(pts[0]);
             let path = partial(&pts[..4], preview);
-            painter.extend(Shape::dashed_line(&path, Stroke::new(1.2, fade(SIGNAL, 0.45 * d.a)), 6.0, 5.0));
+            painter.extend(Shape::dashed_line(&path, Stroke::new(1.2, fade(pal().accent, 0.45 * d.a)), 6.0, 5.0));
         }
         let (sel, hover) = (d.sel.value(self.now), d.hover.value(self.now));
         if sel > 0.01 {
-            // Closes in on the screen as it is chosen.
-            let st = Stroke::new(1.5, Color32::from_white_alpha((150.0 * sel * d.a) as u8));
-            painter.add(Shape::closed_line(grown(&f.pts, lerp(6.0, 2.5, sel)), st));
+            // Closes in on the screen as it is chosen: a 2-point outline
+            // of the accent in a soft ring of it.
+            let by = lerp(6.0, 2.5, sel);
+            painter.add(Shape::closed_line(grown(&f.pts, by + 3.5), Stroke::new(5.0, fade(pal().ring, sel * d.a))));
+            painter.add(Shape::closed_line(grown(&f.pts, by), Stroke::new(2.0, fade(pal().accent, sel * d.a))));
         } else if hover > 0.01 {
-            painter.add(Shape::closed_line(grown(&f.pts, 2.5), Stroke::new(1.0, Color32::from_white_alpha((60.0 * hover) as u8))));
+            painter.add(Shape::closed_line(grown(&f.pts, 2.5), Stroke::new(1.0, pal().tint((60.0 * hover) as u8))));
         }
     }
 
@@ -1412,14 +1414,14 @@ impl Scene {
         let lit = self.slot_hover || self.slot_focus;
         let k = if lit { 1.0 } else { 0.85 };
         let pts: Vec<Pos2> = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)].iter().map(|(u, w)| cam.pt(g.screen.at(*u, *w))).collect();
-        let st = Stroke::new(1.2, if lit { fade(SIGNAL, 0.9) } else { Color32::from_white_alpha(60) });
+        let st = Stroke::new(1.2, if lit { fade(pal().accent, 0.9) } else { pal().tint(60) });
         painter.extend(Shape::dashed_line(&pts, st, 6.0, 5.0));
         if self.slot_focus {
-            painter.add(Shape::closed_line(grown(&[pts[0], pts[1], pts[2], pts[3]], 4.0), Stroke::new(2.0, SIGNAL)));
+            painter.add(Shape::closed_line(grown(&[pts[0], pts[1], pts[2], pts[3]], 4.0), Stroke::new(2.0, pal().accent)));
         }
         let (h, w) = (pts[0].distance(pts[3]), pts[0].distance(pts[1]));
         let c = cam.pt(g.screen.at(0.5, 0.5));
-        let col = if lit { SIGNAL } else { rgba([0xC4, 0xCA, 0xD2], 1.0, k) };
+        let col = if lit { pal().accent } else { fade(pal().ink_hover, k) };
         // A small window makes a small slot: the title gets smaller (down
         // to 10 pt) before it is shortened, and the line below only shows
         // when it fits inside the outline.
@@ -1428,47 +1430,36 @@ impl Scene {
         let title = semibold(size);
         painter.text(c - vec2(0.0, 2.0), egui::Align2::CENTER_BOTTOM, fit(painter, "Add a computer", &title, w * 0.9), title, col);
         let sub = regular((h * 0.07).clamp(10.0, 13.0));
-        let mut job = egui::text::LayoutJob::simple("Pair another computer to share this mouse and keyboard".into(), sub, rgba(hex(0x9DA6B1), 1.0, k), w * 0.84);
+        let mut job = egui::text::LayoutJob::simple("Pair another computer to share this mouse and keyboard".into(), sub, fade(pal().ink2, k), w * 0.84);
         job.halign = egui::Align::Center;
         let g = painter.layout_job(job);
-        if g.size().y <= h * 0.5 - 10.0 { painter.galley(c + vec2(0.0, 4.0), g, INK2); }
+        if g.size().y <= h * 0.5 - 10.0 { painter.galley(c + vec2(0.0, 4.0), g, pal().ink2); }
     }
 
     fn room(&self, painter: &Painter, cam: &Camera, geo: &[Geo], rect: Rect) {
-        // The room behind is the window's own (chrome::paint_room): the
-        // desk's far edge melts into it, as the desk is the lit wood laid
-        // over it at the light's strength (the same as mixing towards the
-        // room's colour on a solid window, and see-through on a clear one).
-        // No coloured wash on the room: the screens' colour stays on the
+        // The room behind is the window's own ground (chrome::paint_room),
+        // the theme's `bg`: no stage of its own. Under the computers lies a
+        // soft ellipse of the theme's floor, with no edges, nothing to
+        // suggest a box they sit in; the screens' colour stays on the
         // screens, with only a small neutral pool of light under each one.
-        let _ = geo;
-        // The desk is lit around the computers and falls off into the room:
-        // no edges, nothing to suggest a box the computers sit in.
-        let (cx, cz) = (self.focus_x, -4.0);
-        // The desk's front edge, a little in front of the nearest device.
-        let mut front = geo.iter().map(|g| g.foot[1] + g.foot[3]).fold(f32::MIN, f32::max).max(cz) + 34.0;
-        // On past the bottom of the window, so the glass over the lower
-        // part of the window floats over the desk, not over nothing.
-        let bottom = rect.bottom();
-        for _ in 0..24 {
-            if cam.pt(v(cx, 0.0, front)).y > bottom + 8.0 {
-                break;
-            }
-            front += 12.0;
-        }
-        let (rx, rz) = (150.0 + self.dist * 0.4, (front - cz + 26.0).max(70.0));
+        let _ = rect;
+        // As wide as the computers stand, a little over; centred under them.
+        let shown = || self.devices.iter().zip(geo).filter(|(d, _)| d.visible() > 0.01).map(|(_, g)| g.foot);
+        let (x0, x1, z) = shown().fold((f32::MAX, f32::MIN, 0.0f32), |(a, b, z), [fx, fz, hx, _]| (a.min(fx - hx), b.max(fx + hx), z.max(fz)));
+        let (cx, half) = if x0 < x1 { ((x0 + x1) / 2.0, (x1 - x0) / 2.0) } else { (self.focus_x, 30.0) };
+        let (rx, cz) = (half * 1.25 + 40.0, z + 4.0);
+        let rz = (rx * 0.42).clamp(34.0, 90.0);
         let light = |x: f32, z: f32| {
             let d = (((x - cx) / rx).powi(2) + ((z - cz) / rz).powi(2)).sqrt();
-            (1.0 - d).clamp(0.0, 1.0).powf(1.4)
+            let k = (1.0 - d).clamp(0.0, 1.0);
+            k * k * (3.0 - 2.0 * k)
         };
-        // A dark walnut desk, lit only by its screens.
-        // A dark, neutral desk (no walnut warmth), lit only by the screens.
-        let lit = Color32::from_rgb(0x24, 0x2A, 0x2D);
-        let shade = |k: f32| lit.gamma_multiply(k.clamp(0.0, 1.0));
+        let floor = pal().floor;
+        let shade = |k: f32| floor.gamma_multiply(k.clamp(0.0, 1.0));
         const NX: usize = 24;
-        const NZ: usize = 10;
+        const NZ: usize = 12;
         let xs: Vec<f32> = (0..=NX).map(|i| cx - rx + 2.0 * rx * i as f32 / NX as f32).collect();
-        let zs: Vec<f32> = (0..=NZ).map(|j| lerp(cz - rz, front, j as f32 / NZ as f32)).collect();
+        let zs: Vec<f32> = (0..=NZ).map(|j| lerp(cz - rz, cz + rz, j as f32 / NZ as f32)).collect();
         let mut m = Mesh::default();
         for &z in &zs {
             for &x in &xs {
@@ -1484,29 +1475,6 @@ impl Scene {
             }
         }
         painter.add(Shape::mesh(m));
-        // The front edge: a lit lip, then the desk's 3 cm thickness in shade.
-        let mut lip = Mesh::default();
-        for &x in &xs {
-            let k = light(x, front - 10.0);
-            lip.colored_vertex(cam.pt(v(x, 0.0, front)), shade((k * 1.35).min(1.0)));
-            lip.colored_vertex(cam.pt(v(x, -3.2, front)), Color32::from_rgb(0x0B, 0x09, 0x08).gamma_multiply(k));
-        }
-        for i in 0..NX as u32 {
-            let k = i * 2;
-            lip.add_triangle(k, k + 2, k + 3);
-            lip.add_triangle(k, k + 3, k + 1);
-        }
-        painter.add(Shape::mesh(lip));
-        // Grain: long faint streaks along the desk, fading with the light.
-        for j in 0..34 {
-            let z = lerp(cz - rz * 0.8, front - 2.0, (j as f32 * 0.618_034).fract());
-            let x0 = cx - rx + ((j * 37) % 100) as f32 / 100.0 * rx;
-            let len = 30.0 + ((j * 53) % 70) as f32;
-            let k = light(x0 + len / 2.0, z);
-            if k > 0.05 {
-                painter.line_segment([cam.pt(v(x0, 0.0, z)), cam.pt(v(x0 + len, 0.0, z + 0.6))], Stroke::new(1.0, Color32::from_rgba_unmultiplied(0, 0, 0, (38.0 * k) as u8)));
-            }
-        }
         // Light from each screen on the desk, and contact shadows that
         // soften as a device is lifted.
         for (d, g) in self.devices.iter().zip(geo) {
@@ -1529,9 +1497,9 @@ impl Scene {
             let shadow = |[fx, fz, rx, rz]: [f32; 4]| {
                 if d.target.y < 1.0 {
                     let (k, feather) = (lerp(1.0, 0.85, up), lerp(5.0, 9.0, up));
-                    soft_rect(painter, cam, [fx, fz, rx * k, rz * k], 0.0, feather, Color32::from_black_alpha((lerp(140.0, 70.0, up) * a) as u8));
+                    soft_rect(painter, cam, [fx, fz, rx * k, rz * k], 0.0, feather, pal().shadow((lerp(140.0, 70.0, up) * a) as u8));
                 } else {
-                    soft_rect(painter, cam, [fx, fz, rx * 0.8, rz * 0.8], 0.0, 9.0, Color32::from_black_alpha((60.0 * a) as u8));
+                    soft_rect(painter, cam, [fx, fz, rx * 0.8, rz * 0.8], 0.0, 9.0, pal().shadow((60.0 * a) as u8));
                 }
             };
             if wall {
@@ -1546,7 +1514,7 @@ impl Scene {
         // The flying pointer lights the desk under it.
         if let Some((f, p)) = self.flight.as_ref().filter(|f| f.ribbon).and_then(|f| self.flight_head(geo, f).map(|p| (f, p))) {
             let s = (std::f32::consts::PI * f.u(self.now)).sin();
-            pool(painter, cam, v(p.x, 0.0, p.z), 26.0, 20.0, Color32::from_rgba_unmultiplied(255, 190, 110, (56.0 * s) as u8));
+            pool(painter, cam, v(p.x, 0.0, p.z), 26.0, 20.0, fade(pal().accent, 0.22 * s));
         }
     }
 
@@ -1581,8 +1549,9 @@ impl Scene {
         let pts: Vec<Pos2> = (0..=N).map(|i| cam.pt(bez(p0, p1, p2, p3, lerp(tail, head, i as f32 / N as f32)))).collect();
         // A strip that widens and brightens toward the head, with a one
         // point feather on each side so its edges stay smooth.
-        // Volt: something crossing between computers, lighter at its head.
-        let (tail_col, head_col) = if f.cargo == Cargo::Parcel { ([198, 244, 50], [215, 255, 94]) } else { ([198, 244, 50], [232, 255, 170]) };
+        // The accent: something crossing between computers, lighter at its head.
+        let tail_col = pal().accent;
+        let head_col = mix(tail_col, style::white(255), if f.cargo == Cargo::Parcel { 0.25 } else { 0.5 });
         let mut m = Mesh::default();
         for i in 0..=N {
             let k = i as f32 / N as f32;
@@ -1590,8 +1559,7 @@ impl Scene {
             let len = dir.length();
             let n = if len > 1e-4 { vec2(-dir.y, dir.x) / len } else { egui::Vec2::ZERO };
             let w = 0.6 + 2.0 * k;
-            let c = |j: usize| (tail_col[j] as f32 + (head_col[j] as f32 - tail_col[j] as f32) * k) as u8;
-            let col = Color32::from_rgba_unmultiplied(c(0), c(1), c(2), ((0.15 + 0.85 * k) * 255.0) as u8);
+            let col = mix(tail_col, head_col, k).gamma_multiply(0.15 + 0.85 * k);
             let clear = Color32::TRANSPARENT;
             m.colored_vertex(pts[i] + n * (w + 1.0), clear);
             m.colored_vertex(pts[i] + n * w, col);
@@ -1608,19 +1576,19 @@ impl Scene {
         painter.add(Shape::mesh(m));
         if head < 1.0 {
             let hp = cam.pt(bez(p0, p1, p2, p3, head));
-            let rim = Stroke::new(1.0, Color32::from_rgb(0xF6, 0xFF, 0xE0));
+            let rim = Stroke::new(1.0, style::white(255));
             if f.cargo == Cargo::Parcel {
                 let r = 4.5;
-                painter.add(Shape::convex_polygon(vec![hp + vec2(0.0, -r), hp + vec2(r, 0.0), hp + vec2(0.0, r), hp + vec2(-r, 0.0)], SIGNAL, rim));
+                painter.add(Shape::convex_polygon(vec![hp + vec2(0.0, -r), hp + vec2(r, 0.0), hp + vec2(0.0, r), hp + vec2(-r, 0.0)], pal().accent, rim));
             } else {
-                painter.circle(hp, 3.5, Color32::from_rgb(0xE8, 0xFF, 0xAA), rim);
+                painter.circle(hp, 3.5, mix(pal().accent, style::white(255), 0.6), rim);
             }
         }
         if let Some(label) = self.latency_label.as_ref().filter(|_| f.cargo == Cargo::Probe) {
             let u = f.u(self.now);
             let a = (((u - 0.25) * f.secs) / 0.12).clamp(0.0, 1.0).min(((1.0 - u) / 0.2).clamp(0.0, 1.0));
             let apex = cam.pt(bez(p0, p1, p2, p3, 0.5));
-            painter.text(apex - vec2(0.0, 14.0), egui::Align2::CENTER_BOTTOM, label, regular(12.0), fade(INK, a));
+            painter.text(apex - vec2(0.0, 14.0), egui::Align2::CENTER_BOTTOM, label, regular(12.0), fade(pal().ink, a));
         }
     }
 
@@ -1650,14 +1618,14 @@ impl Scene {
             // deeper in the far corner, so it reads as an image, not a tile.
             let [c0, c1] = d.wall.map(|c| fade(rgba(hex(c), 1.0, 1.0), lit));
             let mid = mix(c0, c1, 0.5);
-            let edge = Some(fade(rgba(hex(0x30353E), 0.9, 1.0), lit));
+            let edge = Some(fade(style::SCREEN_EDGE, lit));
             let _ = mid;
             // A real wallpaper, made from the computer's two colours, laid
             // on the screen in perspective (a grid, so it doesn't skew).
             let tex = wallpaper(painter.ctx(), d.wall);
             const N: usize = 8;
             let mut mesh = Mesh::with_texture(tex.id());
-            let tint = Color32::from_white_alpha((lit * 255.0) as u8);
+            let tint = style::white((lit * 255.0) as u8);
             for j in 0..=N {
                 for i in 0..=N {
                     let (u, w) = (i as f32 / N as f32, j as f32 / N as f32);
@@ -1678,21 +1646,21 @@ impl Scene {
         }
         // Every screen is glass: it catches the room's light across its
         // upper part, on or off.
-        let sheen = |k: f32| Color32::from_white_alpha((k * a * 255.0) as u8);
+        let sheen = |k: f32| style::white((k * a * 255.0) as u8);
         quad_colors(painter, rect(0.0, 0.0, 1.0, 0.5), [sheen(0.10), sheen(0.04), sheen(0.0), sheen(0.02)], None);
 
         if let Some((_, code, t0)) = self.code.as_ref().filter(|(ids, _, _)| ids.contains(&d.id)) {
             if !named {
                 return;
             }
-            quad(painter, rect(0.12, 0.24, 0.88, 0.76), fade(Color32::from_rgb(14, 17, 21), 0.9 * a));
+            quad(painter, rect(0.12, 0.24, 0.88, 0.76), fade(style::SCREEN_PLATE, 0.9 * a));
             // The label only where it fits above the digits.
             let digits_w = if h > 90.0 { 0.62 } else { 0.5 };
             if h > 90.0 {
-                painter.text(at(0.5, 0.38), egui::Align2::CENTER_CENTER, "Pairing code", regular((h * 0.07).clamp(11.0, 14.0)), fade(INK2, a));
+                painter.text(at(0.5, 0.38), egui::Align2::CENTER_CENTER, "Pairing code", regular((h * 0.07).clamp(11.0, 14.0)), fade(style::SCREEN_INK2, a));
             }
             let font = mono_medium((h * 0.15).clamp(12.0, 26.0));
-            let adv = painter.layout_no_wrap("0".into(), font.clone(), INK).size().x + font.size * 0.1;
+            let adv = painter.layout_no_wrap("0".into(), font.clone(), pal().ink).size().x + font.size * 0.1;
             let gap = font.size * 0.4;
             let total = adv * code.len() as f32 + gap;
             let mut x = at(0.5, digits_w).x - total / 2.0;
@@ -1702,7 +1670,7 @@ impl Scene {
                 }
                 let e = digit_t(k, *t0, now);
                 let y = at(0.5, digits_w).y + motion::space(6.0) * (1.0 - e);
-                painter.text(pos2(x + adv / 2.0, y), egui::Align2::CENTER_CENTER, ch, font.clone(), fade(INK, a * e));
+                painter.text(pos2(x + adv / 2.0, y), egui::Align2::CENTER_CENTER, ch, font.clone(), fade(style::SCREEN_INK, a * e));
                 x += adv;
             }
             return;
@@ -1710,19 +1678,20 @@ impl Scene {
 
         // The computer's own name, as the system's display settings show it.
         let ghost = d.w > 0.01 && d.a < 0.5;
+        // On the screen, so light in both themes.
         let (name_col, sub_col) = if ghost {
-            (fade(INK2, a), fade(INK2, 0.7 * a))
+            (fade(style::SCREEN_INK2, a), fade(style::SCREEN_INK2, 0.7 * a))
         } else if d.online {
-            (fade(INK, a), fade(INK_HOVER, a))
+            (fade(style::SCREEN_INK, a), fade(style::SCREEN_INK_SUB, a))
         } else {
-            (fade(INK2, a), fade(INK2, 0.85 * a))
+            (fade(style::SCREEN_INK2, a), fade(style::SCREEN_INK2, 0.85 * a))
         };
         // A monitor of a wall is narrow for the whole wall's name: use its
         // glass, and a point smaller type if need be.
         let room = width * if wall { 0.96 } else { 0.9 };
         // The name a point or two smaller before it is ever shortened.
         let mut name_size = (h * 0.11).clamp(if wall { 11.0 } else { 12.0 }, 22.0);
-        while name_size > 10.0 && painter.layout_no_wrap(d.name.clone(), semibold(name_size), INK).size().x > room {
+        while name_size > 10.0 && painter.layout_no_wrap(d.name.clone(), semibold(name_size), pal().ink).size().x > room {
             name_size -= 0.5;
         }
         let name_font = semibold(name_size);
@@ -1732,7 +1701,7 @@ impl Scene {
             // desktop labels: they stay readable on any wallpaper.
             if d.online && !ghost {
                 let c = at(0.5, 0.5);
-                crate::chrome::light(painter, c, (room * 0.42).min(h * 0.6), Color32::from_black_alpha((90.0 * a) as u8));
+                crate::chrome::light(painter, c, (room * 0.42).min(h * 0.6), style::black((90.0 * a) as u8));
             }
             let shown = fit(painter, &d.name, &name_font, room);
             let wrapped = if shown != d.name && h >= 36.0 && let Some((first, second)) = split_screen_name(painter, &d.name, &name_font, room) {
@@ -1798,9 +1767,9 @@ impl Scene {
                 let (u0, u1) = if u == 0.0 { (0.0, 0.012) } else { (0.988, 1.0) };
                 rect(u0, 0.08, u1, 0.92)
             };
-            quad(painter, strip, Color32::from_white_alpha((18.0 * d.a) as u8));
+            quad(painter, strip, style::white((18.0 * d.a) as u8));
             if glow > 0.01 {
-                quad(painter, strip, fade(SIGNAL, 0.9 * glow * d.a));
+                quad(painter, strip, fade(pal().accent, 0.9 * glow * d.a));
             }
         }
 
@@ -1831,11 +1800,11 @@ impl Scene {
             };
             let arrow = [(0.0, 0.0), (0.0, 17.0), (4.2, 13.2), (7.2, 19.6), (9.8, 18.4), (6.9, 12.2), (12.2, 11.8)];
             let pts: Vec<Pos2> = arrow.iter().map(|(x, y)| on_pl(cu + x * su, cw + y * sw)).collect();
-            let white = fade(Color32::WHITE, d.a);
+            let white = fade(style::POINTER, d.a);
             // Not convex: draw it as two convex parts.
             painter.add(Shape::convex_polygon(vec![pts[0], pts[1], pts[2], pts[5], pts[6]], white, Stroke::NONE));
             painter.add(Shape::convex_polygon(vec![pts[2], pts[3], pts[4], pts[5]], white, Stroke::NONE));
-            painter.add(Shape::closed_line(pts, Stroke::new(0.8, fade(Color32::from_rgb(0x11, 0x11, 0x11), d.a))));
+            painter.add(Shape::closed_line(pts, Stroke::new(0.8, fade(style::POINTER_EDGE, d.a))));
         }
     }
 }
@@ -1926,7 +1895,7 @@ mod tests {
         let mut output = ctx.run_ui(Default::default(), |ui| {
             let painter = ui.painter();
             let font = semibold(12.0);
-            let width = |text: &str| painter.layout_no_wrap(text.to_owned(), font.clone(), INK).size().x;
+            let width = |text: &str| painter.layout_no_wrap(text.to_owned(), font.clone(), pal().ink).size().x;
             let room = width("Мастерская").max(width("MacBook")) + 1.0;
             assert_eq!(split_screen_name(painter, "MacBook Pro", &font, room), Some(("MacBook", "Pro")));
             assert_eq!(split_screen_name(painter, "Мастерская ПК", &font, room), Some(("Мастерская", "ПК")));

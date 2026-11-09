@@ -35,6 +35,7 @@ enum Act {
     WallChoose,
     WallPause(bool),
     WallOff,
+    Appearance(crate::style::Appearance),
 }
 
 struct Entry {
@@ -163,6 +164,10 @@ impl App {
         if let Some(v) = &self.update_available {
             out.push(act(format!("Update oneMK to {v}"), "", Act::Update));
         }
+        for a in crate::style::Appearance::ALL {
+            let hint = if a == self.prefs.appearance { "Now" } else { "" };
+            out.push(Entry { group: "Settings", title: format!("Appearance: {}", a.label()), hint: hint.into(), act: Act::Appearance(a) });
+        }
         for (title, t) in SETTINGS {
             let page = if *t == Tab::Arrange { "Desk" } else { TABS.iter().find(|x| x.0 == *t).map_or("", |x| x.1) };
             out.push(Entry { group: "Settings", title: (*title).into(), hint: page.into(), act: Act::Tab(*t) });
@@ -213,6 +218,7 @@ impl App {
             }
             Act::WallPause(paused) => self.wallpaper_command(one_mk_wallpaper::Command::Pause { paused }),
             Act::WallOff => self.wallpaper_command(one_mk_wallpaper::Command::Off),
+            Act::Appearance(a) => self.set_appearance(a),
         }
     }
 
@@ -226,7 +232,7 @@ impl App {
         if fade < 1.0 {
             ctx.request_repaint();
         }
-        ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("palette-dim"))).rect_filled(screen, 0.0, Color32::from_black_alpha((140.0 * fade) as u8));
+        ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("palette-dim"))).rect_filled(screen, 0.0, pal().shadow((140.0 * fade) as u8));
 
         let q = self.palette.query.trim().to_owned();
         let mut found: Vec<(Entry, Vec<std::ops::Range<usize>>)> = self.palette_entries().into_iter().filter_map(|e| {
@@ -298,23 +304,23 @@ impl App {
             let p = ui.painter().clone();
             // The query.
             let input = Rect::from_min_size(r.min, vec2(r.width(), 56.0));
-            icons::search(&p, pos2(input.left() + 26.0, input.center().y), INK2);
+            icons::search(&p, pos2(input.left() + 26.0, input.center().y), pal().ink2);
             let field = Rect::from_min_max(pos2(input.left() + 46.0, input.top() + 12.0), pos2(input.right() - 18.0, input.bottom() - 12.0));
             let mut child = ui.new_child(UiBuilder::new().max_rect(field));
             let edit = egui::TextEdit::singleline(&mut self.palette.query)
                 .id(Id::unique("palette-query"))
                 .font(regular(17.0))
-                .text_color(INK)
-                .hint_text(egui::RichText::new("Search actions, computers and settings").color(INK3))
+                .text_color(pal().ink)
+                .hint_text(egui::RichText::new("Search actions, computers and settings").color(pal().ink3))
                 .frame(egui::Frame::NONE)
                 .desired_width(field.width());
             let resp = child.add(edit);
             resp.request_focus();
-            p.hline(input.x_range(), input.bottom() - 0.5, Stroke::new(1.0, HAIRLINE));
+            p.hline(input.x_range(), input.bottom() - 0.5, Stroke::new(1.0, pal().line));
             // The results.
             let list = Rect::from_min_size(pos2(r.left(), input.bottom() + 4.0), vec2(r.width(), list_h));
             if n == 0 {
-                p.text(list.center(), Align2::CENTER_CENTER, "Nothing found. Try another word.", regular(T_BODY), INK3);
+                p.text(list.center(), Align2::CENTER_CENTER, "Nothing found. Try another word.", regular(T_BODY), pal().ink3);
             }
             let mut child = ui.new_child(UiBuilder::new().max_rect(list));
             child.set_clip_rect(list);
@@ -323,7 +329,7 @@ impl App {
                 for (head, k) in &rows {
                     if let Some(g) = head {
                         let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEAD), Sense::hover());
-                        ui.painter().text(pos2(hr.left() + 16.0, hr.center().y + 3.0), Align2::LEFT_CENTER, g.to_uppercase(), semibold(T_META - 1.5), INK3);
+                        ui.painter().text(pos2(hr.left() + 16.0, hr.center().y + 3.0), Align2::LEFT_CENTER, g.to_uppercase(), semibold(T_META - 1.5), pal().ink3);
                         continue;
                     }
                     let (e, lit) = &found[*k];
@@ -342,17 +348,17 @@ impl App {
                     if chosen {
                         // The chosen row: a quiet lift, as a system list does; its icon
                         // tile carries the Volt.
-                        ui.painter().rect(row, CornerRadius::same(10), ON_GLASS_LIT, Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
+                        ui.painter().rect(row, CornerRadius::same(10), pal().accent_soft, Stroke::new(1.0, pal().line), StrokeKind::Inside);
                         if down || up {
                             ui.scroll_to_rect(rr, None);
                         }
                     }
                     let ic = Rect::from_center_size(pos2(row.left() + 22.0, row.center().y), vec2(26.0, 26.0));
-                    ui.painter().rect_filled(ic, CornerRadius::same(7), if chosen { SIGNAL } else { Color32::from_white_alpha(18) });
+                    ui.painter().rect_filled(ic, CornerRadius::same(7), if chosen { pal().accent } else { pal().hover });
                     let icon = match e.act {
                         Act::Tab(Tab::Files) => Icon::Clipboard,
                         Act::Tab(Tab::Keys) => Icon::Keys,
-                        Act::Tab(Tab::Settings) => Icon::Settings,
+                        Act::Tab(Tab::Settings) | Act::Appearance(_) => Icon::Settings,
                         Act::Tab(Tab::Health) | Act::Recheck => Icon::Health,
                         Act::Tab(Tab::Arrange) => Icon::Arrange,
                         Act::Tab(Tab::Wallpaper) | Act::WallChoose | Act::WallPause(_) | Act::WallOff => Icon::Wallpaper,
@@ -367,7 +373,7 @@ impl App {
                         Act::Update => Icon::Update,
                         Act::Received => Icon::Clipboard,
                     };
-                    icons::draw(ui.painter(), icon, ic.shrink(5.5), if chosen { SIGNAL_INK } else { INK });
+                    icons::draw(ui.painter(), icon, ic.shrink(5.5), if chosen { pal().on_accent } else { pal().ink });
                     // The title with what was typed lit up.
                     let mut job = egui::text::LayoutJob::default();
                     let mut at = 0;
@@ -379,17 +385,17 @@ impl App {
                         }
                         // Only the typed characters stand out: in full ink and
                         // semibold, the rest of the title a step quieter.
-                        job.append(&e.title[at..range.start], 0.0, egui::TextFormat::simple(regular(14.0), INK_HOVER));
-                        job.append(&e.title[range.clone()], 0.0, egui::TextFormat::simple(semibold(14.0), INK));
+                        job.append(&e.title[at..range.start], 0.0, egui::TextFormat::simple(regular(14.0), pal().ink_hover));
+                        job.append(&e.title[range.clone()], 0.0, egui::TextFormat::simple(semibold(14.0), pal().ink));
                         at = range.end;
                     }
-                    job.append(&e.title[at..], 0.0, egui::TextFormat::simple(regular(14.0), INK_HOVER));
+                    job.append(&e.title[at..], 0.0, egui::TextFormat::simple(regular(14.0), pal().ink_hover));
                     let g = ui.painter().layout_job(job);
-                    ui.painter().galley(pos2(ic.right() + 12.0, row.center().y - g.size().y / 2.0), g, INK);
+                    ui.painter().galley(pos2(ic.right() + 12.0, row.center().y - g.size().y / 2.0), g, pal().ink);
                     if !e.hint.is_empty() {
-                        ui.painter().text(pos2(row.right() - 12.0, row.center().y), Align2::RIGHT_CENTER, &e.hint, regular(T_META), INK3);
+                        ui.painter().text(pos2(row.right() - 12.0, row.center().y), Align2::RIGHT_CENTER, &e.hint, regular(T_META), pal().ink3);
                     } else if chosen {
-                        ui.painter().text(pos2(row.right() - 12.0, row.center().y), Align2::RIGHT_CENTER, "↵", regular(T_BODY), INK2);
+                        ui.painter().text(pos2(row.right() - 12.0, row.center().y), Align2::RIGHT_CENTER, "↵", regular(T_BODY), pal().ink2);
                     }
                     widgets::a11y(&resp, Role::Button, &e.title, Some(chosen));
                     if resp.clicked() {
@@ -399,16 +405,16 @@ impl App {
             });
             // What the keys do.
             let foot = Rect::from_min_max(pos2(r.left(), r.bottom() - 40.0), r.max);
-            p.hline(foot.x_range(), foot.top() + 0.5, Stroke::new(1.0, HAIRLINE));
-            p.text(pos2(foot.left() + 16.0, foot.center().y), Align2::LEFT_CENTER, "oneMK", regular(T_META), INK3);
+            p.hline(foot.x_range(), foot.top() + 0.5, Stroke::new(1.0, pal().line));
+            p.text(pos2(foot.left() + 16.0, foot.center().y), Align2::LEFT_CENTER, "oneMK", regular(T_META), pal().ink3);
             let mut x = foot.right() - 16.0;
             for (word, key) in [("Close", "esc"), ("Move", "↑↓"), ("Open", "↵")] {
                 let kw = text_width(ui, key, regular(T_META - 1.0)) + 12.0;
                 let kr = Rect::from_min_size(pos2(x - kw, foot.center().y - 10.0), vec2(kw, 20.0));
-                p.rect(kr, CornerRadius::same(5), Color32::from_white_alpha(14), Stroke::new(0.5, Color32::from_white_alpha(40)), StrokeKind::Inside);
-                p.text(kr.center(), Align2::CENTER_CENTER, key, regular(T_META - 1.0), INK2);
+                p.rect(kr, CornerRadius::same(5), pal().hover, Stroke::new(0.5, pal().line2), StrokeKind::Inside);
+                p.text(kr.center(), Align2::CENTER_CENTER, key, regular(T_META - 1.0), pal().ink2);
                 let ww = text_width(ui, word, regular(T_META));
-                p.text(pos2(kr.left() - 6.0, foot.center().y), Align2::RIGHT_CENTER, word, regular(T_META), INK3);
+                p.text(pos2(kr.left() - 6.0, foot.center().y), Align2::RIGHT_CENTER, word, regular(T_META), pal().ink3);
                 x = kr.left() - 6.0 - ww - 14.0;
             }
         });

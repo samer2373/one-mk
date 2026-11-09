@@ -54,7 +54,7 @@ impl App {
             reconnect = format!("Open oneMK on {} to reconnect, then choose files or drop them here.", recipients[0].name);
             reconnect.as_str()
         } else if self.files_ui.spatial { "Drop files on a computer, or choose a recipient above." } else { "Choose a recipient to pick files, or drop files on its chip." };
-        let hint_h = ui.painter().layout(hint.to_owned(), regular(T_META), INK2, width - 32.0).size().y;
+        let hint_h = ui.painter().layout(hint.to_owned(), regular(T_META), pal().ink2, width - 32.0).size().y;
         let head_h = 32.0 + rows as f32 * 44.0 + hint_h + 40.0 + if self.files_ui.spatial { 148.0 } else { 0.0 } + if transfers > 0 { 28.0 + transfer_height } else { 0.0 };
         // One inset (16) for every group on the page; each as tall as its rows.
         let settings_h = 2.0 * 16.0 + 28.0 + 5.0 * 36.0 + 6.0;
@@ -62,7 +62,7 @@ impl App {
         let items = self.clipboard_history.as_ref().and_then(|h| h.as_ref().ok()).map_or(0, Vec::len);
         let listed = self.prefs.history_enabled && items > 0;
         let history_h = 2.0 * PAD + 104.0 + 44.0 + if listed { 50.0 * items as f32 } else { 30.0 };
-        let privacy_h = ui.painter().layout("History off · Nothing you copy is kept. If enabled, unmarked secrets may be retained.".to_owned(), regular(T_META), INK2, width - 32.0).size().y;
+        let privacy_h = ui.painter().layout("History off · Nothing you copy is kept. If enabled, unmarked secrets may be retained.".to_owned(), regular(T_META), pal().ink2, width - 32.0).size().y;
         let history_h = if listed { history_h } else { 136.0 + privacy_h };
         let clipboard_h = if self.files_ui.options { settings_h } else { 80.0 };
         let total = head_h + M + clipboard_h + M + history_h + M + files_h;
@@ -105,14 +105,14 @@ impl App {
                     });
                 }
                 if peer.online && pointer.is_some_and(|pointer| chip.contains(pointer)) {
-                    if ui.input(|input| !input.raw.hovered_files.is_empty()) { ui.painter().rect_stroke(chip.expand(2.0), R_INNER, Stroke::new(2.0, SIGNAL), StrokeKind::Outside); }
+                    if ui.input(|input| !input.raw.hovered_files.is_empty()) { ui.painter().rect_stroke(chip.expand(2.0), R_INNER, Stroke::new(2.0, pal().accent), StrokeKind::Outside); }
                     if !dropped.is_empty() { drop_id = Some(peer.id.clone()); }
                 }
                 x += chip_width + 8.0;
             }
             y += 44.0;
-            if recipients.is_empty() { para(ui, pos2(inner.left(), y - 38.0), inner.width(), "Pair a computer to send files to it.", regular(T_BODY), INK2); }
-            y += para(ui, pos2(inner.left(), y), inner.width(), hint, regular(T_META), INK2) + 8.0;
+            if recipients.is_empty() { para(ui, pos2(inner.left(), y - 38.0), inner.width(), "Pair a computer to send files to it.", regular(T_BODY), pal().ink2); }
+            y += para(ui, pos2(inner.left(), y), inner.width(), hint, regular(T_META), pal().ink2) + 8.0;
             if self.files_ui.spatial {
                 self.desk(ui, Rect::from_min_size(pos2(inner.left(), y), vec2(inner.width(), 140.0)), rect, self.now);
                 y += 148.0;
@@ -127,7 +127,7 @@ impl App {
                 let inner = clipboard.shrink(16.0);
                 title_row(ui, inner, "Clipboard", 140.0);
                 let summary = format!("Text {} · Images {} · Others can fetch {}", if self.prefs.clip_text { "on" } else { "off" }, if self.prefs.clip_image { "on" } else { "off" }, if self.prefs.clip_allow_fetch { "on" } else { "off" });
-                para(ui, inner.min + vec2(0.0, 28.0), inner.width(), &summary, regular(T_META), INK2);
+                para(ui, inner.min + vec2(0.0, 28.0), inner.width(), &summary, regular(T_META), pal().ink2);
             }
             let options = Rect::from_min_size(pos2(clipboard.right() - PAD - 124.0, clipboard.top() + PAD - 4.0), vec2(124.0, 28.0));
             if button(ui, options, Id::unique("files-clipboard-options"), if self.files_ui.options { "Hide options" } else { "Sharing options" }, Look::Quiet, true, None).clicked() { self.files_ui.options = !self.files_ui.options; }
@@ -202,12 +202,12 @@ impl App {
         // Beside this computer's own card (chosen, or nothing paired yet),
         // the name is already there: say what these are instead.
         let beside_me = self.running().is_some_and(|s| s.peers.is_empty()) || self.selected_id().as_deref() == Some("me");
-        p.text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, if beside_me { "Startup & files" } else { "This computer" }, semibold(T_TITLE), INK);
+        p.text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, if beside_me { "Startup & files" } else { "This computer" }, semibold(T_TITLE), pal().ink);
         if !beside_me {
             // Off, the name isn't known yet: what it runs, at least, so the
             // card keeps its shape.
             let sub = self.running().map_or_else(|| os_name(me_os()).to_owned(), |s| format!("{} · {}", s.name, os_name(me_os())));
-            p.text(pos2(c.left(), c.top() + 32.0), Align2::LEFT_CENTER, fit(&p, &sub, &regular(T_BODY), c.width()), regular(T_BODY), INK3);
+            p.text(pos2(c.left(), c.top() + 32.0), Align2::LEFT_CENTER, fit(&p, &sub, &regular(T_BODY), c.width()), regular(T_BODY), pal().ink3);
         }
         let row_h = 40.0;
         let top = c.top() + if beside_me { 30.0 } else { 50.0 };
@@ -237,7 +237,7 @@ impl App {
         }
         if self.running().is_some() {
             let r1 = row(next);
-            p.text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), INK);
+            p.text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), pal().ink);
             let label = "Open";
             let bw = button_width(ui, label) - 4.0;
             let b = Rect::from_min_size(pos2(r1.right() - bw, r1.center().y - 14.0), vec2(bw, 28.0));
@@ -249,7 +249,7 @@ impl App {
             next += 1;
         }
         for k in 1..next {
-            p.hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
+            p.hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, pal().line));
         }
     }
 
@@ -279,6 +279,37 @@ impl App {
         let tip = Rect::from_min_size(g.min, vec2(lw, g.height()));
         ui.interact(tip, Id::unique("gaming-tip"), Sense::hover())
             .on_hover_text("On another computer, send raw mouse movement (for games). Auto: while it shows a fullscreen window.");
+    }
+
+    /// Settings → Appearance: System, Light or Dark. The window changes at
+    /// once (a 200 ms cross-fade); `settings.toml` keeps the choice.
+    pub(super) fn appearance_row(&mut self, ui: &mut Ui, g: Rect) {
+        use crate::style::Appearance;
+        let word = "Appearance";
+        let lw = text_width(ui, word, regular(T_BODY)) + 12.0;
+        let seg_w = 200.0f32.min(g.width() - lw);
+        label_help(ui, g, Id::unique("appearance-label"), word, "appearance", true, seg_w + 12.0);
+        let track = Rect::from_min_size(pos2(g.right() - seg_w, g.center().y - 13.0), vec2(seg_w, 26.0));
+        let labels: Vec<&str> = Appearance::ALL.iter().map(|a| a.label()).collect();
+        let pills = Pills {
+            id: Id::unique("appearance"),
+            track,
+            cells: Pills::even(track, 3, 2.0),
+            labels: &labels,
+            names: Appearance::ALL.iter().map(|a| format!("Appearance: {}", a.label())).collect(),
+            chosen: Appearance::ALL.iter().position(|a| *a == self.prefs.appearance),
+            enabled: vec![true; 3],
+            role: Role::RadioButton,
+            font: T_META,
+        };
+        if let Some(k) = pills.show(ui, self.arrowed) {
+            self.set_appearance(Appearance::ALL[k]);
+        }
+    }
+
+    /// Light, Dark, or the system's: shown at once, kept in `settings.toml`.
+    pub(super) fn set_appearance(&mut self, appearance: crate::style::Appearance) {
+        self.set_pref("appearance", &["appearance", appearance.key()], |p| p.appearance = appearance);
     }
 
     /// Under the inspector: move the mouse and keyboard there (or back),
@@ -319,7 +350,7 @@ impl App {
         let label = "Clipboard";
         let lw = text_width(ui, label, regular(T_META));
         if x + 28.0 - 8.0 - lw > c.left() + 110.0 {
-            ui.painter().text(pos2(x + 28.0 - 6.0, y + 14.0), Align2::RIGHT_CENTER, label, regular(T_META), INK2);
+            ui.painter().text(pos2(x + 28.0 - 6.0, y + 14.0), Align2::RIGHT_CENTER, label, regular(T_META), pal().ink2);
         }
     }
 
@@ -327,13 +358,13 @@ impl App {
     pub(super) fn files_head(&mut self, ui: &mut Ui, r: Rect, title: &str, sub: &str) {
         let transfers = self.running().map(|s| s.transfers.clone()).unwrap_or_default();
         if transfers.is_empty() {
-            let th = para(ui, r.left_top(), r.width(), title, semibold(T_TITLE), INK);
-            let sh = para(ui, r.left_top() + vec2(0.0, th + 6.0), r.width(), sub, regular(T_BODY), INK2);
+            let th = para(ui, r.left_top(), r.width(), title, semibold(T_TITLE), pal().ink);
+            let sh = para(ui, r.left_top() + vec2(0.0, th + 6.0), r.width(), sub, regular(T_BODY), pal().ink2);
             a11y_text(ui, Id::unique("headline"), Rect::from_min_size(r.min, vec2(r.width(), th + sh + 6.0)), Role::Status, &format!("{title}. {sub}"), Some(Live::Polite));
             return;
         }
         let head = if transfers.len() == 1 { "1 transfer".to_owned() } else { format!("{} transfers", transfers.len()) };
-        para(ui, r.left_top(), r.width(), &head, semibold(T_TITLE), INK);
+        para(ui, r.left_top(), r.width(), &head, semibold(T_TITLE), pal().ink);
         let mut y = r.top() + 28.0;
         let shown = if self.files_ui.all_transfers { transfers.len() } else { transfers.len().min(if r.width() < 658.0 { 1 } else { 4 }) };
         if transfers.len() > shown || self.files_ui.all_transfers {
@@ -353,11 +384,11 @@ impl App {
     pub(super) fn transfer_row(&self, ui: &Ui, r: Rect, t: &one_mk_ctl::status::TransferStatus) {
         let (title, detail, frac) = view::transfer_lines(t);
         let p = ui.painter();
-        p.text(r.left_top(), Align2::LEFT_TOP, fit(p, &title, &regular(T_BODY), r.width()), regular(T_BODY), INK);
+        p.text(r.left_top(), Align2::LEFT_TOP, fit(p, &title, &regular(T_BODY), r.width()), regular(T_BODY), pal().ink);
         let bar = Rect::from_min_size(pos2(r.left(), r.bottom() - 4.0), vec2(r.width(), 4.0));
         if t.rate == 0 {
-            p.rect_filled(bar, 1.0, WARN.gamma_multiply(0.22));
-            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac.unwrap_or(0.0), bar.height())), 1.0, WARN);
+            p.rect_filled(bar, 1.0, pal().warn.gamma_multiply(0.22));
+            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac.unwrap_or(0.0), bar.height())), 1.0, pal().warn);
         } else {
             widgets::progress_bar(ui, bar, Id::unique(("transfer", t.id, &t.peer, t.sending)), frac);
         }
@@ -367,11 +398,11 @@ impl App {
         } else {
             detail
         };
-        p.text(pos2(r.left(), r.top() + 17.0), Align2::LEFT_TOP, fit(p, &detail, &mono(T_META), r.width()), mono(T_META), if t.rate == 0 { WARN } else { INK2 });
+        p.text(pos2(r.left(), r.top() + 17.0), Align2::LEFT_TOP, fit(p, &detail, &mono(T_META), r.width()), mono(T_META), if t.rate == 0 { pal().warn } else { pal().ink2 });
         let offline = self.running().is_some_and(|status| status.peers.iter().any(|peer| peer.name == t.peer && !peer.online));
         let recovery = if t.rate == 0 && offline { format!("Open oneMK on {} to reconnect.", t.peer) } else if t.rate == 0 { "Connected · waiting for transfer progress.".into() } else { String::new() };
         if !recovery.is_empty() {
-            p.text(pos2(r.left(), r.top() + 34.0), Align2::LEFT_TOP, fit(p, &recovery, &regular(T_META), r.width()), regular(T_META), INK2);
+            p.text(pos2(r.left(), r.top() + 34.0), Align2::LEFT_TOP, fit(p, &recovery, &regular(T_META), r.width()), regular(T_META), pal().ink2);
         }
         let label = format!("{title}: {detail}. {recovery}");
         ui.ctx().accesskit_node_builder(Id::unique(("transfer-node", t.id, &t.peer)), |n| {
@@ -394,7 +425,7 @@ impl App {
         let top = c.top() + 28.0;
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
         for k in 1..5 {
-            ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
+            ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, pal().line));
         }
         let p = self.prefs.clone();
         for (k, (key, label, on)) in [("text", "Text", p.clip_text), ("html", "Rich text (HTML)", p.clip_html), ("image", "Images", p.clip_image)].into_iter().enumerate() {
@@ -431,7 +462,7 @@ impl App {
         // The last row (file edge drops) only exists where the desktop can offer it.
         let drop_zones = view::drop_zones_available();
         for k in 1..if drop_zones { 4 } else { 3 } {
-            ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
+            ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, pal().line));
         }
         let p = self.prefs.clone();
         if switch_help(ui, row(0), Id::unique("notify"), "Notify when files arrive", "notify", p.notify_files, true).clicked() {
@@ -439,7 +470,7 @@ impl App {
             self.set_pref("notifications", &["notify", v], |p| p.notify_files = !p.notify_files);
         }
         let r1 = row(1);
-        ui.painter().text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), INK);
+        ui.painter().text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), pal().ink);
         let label = "Open";
         let bw = button_width(ui, label) - 4.0;
         let b = Rect::from_min_size(pos2(r1.right() - bw, r1.center().y - 14.0), vec2(bw, 28.0));
@@ -450,11 +481,11 @@ impl App {
         }
         // The size limit: a number to type, in MB.
         let r = row(2);
-        ui.painter().text(r.left_center(), Align2::LEFT_CENTER, "Largest clipboard", regular(T_BODY), INK);
+        ui.painter().text(r.left_center(), Align2::LEFT_CENTER, "Largest clipboard", regular(T_BODY), pal().ink);
         let unit = "MB";
         let uw = text_width(ui, unit, regular(T_META)) + 8.0;
         let fr = Rect::from_min_size(pos2(r.right() - 64.0 - uw, r.center().y - 13.0), vec2(64.0, 26.0));
-        ui.painter().text(pos2(r.right(), r.center().y), Align2::RIGHT_CENTER, unit, regular(T_META), INK2);
+        ui.painter().text(pos2(r.right(), r.center().y), Align2::RIGHT_CENTER, unit, regular(T_META), pal().ink2);
         let cur = p.clip_max_mb.to_string();
         if let Some(text) = self.edit_field(ui, fr, "clip-max", &cur, "25", "Largest clipboard to send or accept, in MB", true, true) {
             match text.parse::<u32>() {
