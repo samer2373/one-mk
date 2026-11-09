@@ -260,3 +260,21 @@ fn cli_pair_reloads_two_running_daemons_and_keeps_real_ports() {
     }
     wait_until(|| [home_a.path(), home_b.path()].iter().all(|home| daemon_status(home).is_some_and(|status| status.peers.len() == 1 && status.peers[0].online)));
 }
+
+/// A command stopped while holding a lock (Ctrl+Z) never hangs the next
+/// one: it gives up after a bounded wait and says what is going on.
+#[test]
+fn a_held_lock_is_reported_not_waited_for_forever() {
+    let home = private_home();
+    for (lock, args) in [("settings.toml.lock", vec!["edge", "--dwell", "5"]), ("devices.toml.lock", vec!["forget", "nobody"]), ("profiles.toml.lock", vec!["profile", "delete", "work"])] {
+        let held = std::fs::File::create(home.path().join(lock)).unwrap();
+        held.try_lock().unwrap();
+        let start = std::time::Instant::now();
+        let output = run(home.path(), &args);
+        assert!(!output.status.success(), "{args:?} succeeded with {lock} held");
+        assert!(start.elapsed() < std::time::Duration::from_secs(30), "{args:?}: {:?}", start.elapsed());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("another one-mk command is holding the lock"), "{args:?}: {stderr}");
+        drop(held);
+    }
+}

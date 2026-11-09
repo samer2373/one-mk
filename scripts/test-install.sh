@@ -77,7 +77,7 @@ if run_install "$scratch/r1" && [ "$(installed_version)" = 0.1.30 ] && [ -x "$bi
     grep -q "signed by the oneMK publisher" "$scratch/out" && ok "fresh install verifies the signature and installs" || bad "fresh install did not report the signature: $(cat "$scratch/out")"
 else bad "fresh install: $(cat "$scratch/out")"; fi
 [ ! -e "$bin/LICENSE-MIT" ] && ok "only the one-mk* programs go into ~/.local/bin" || bad "non-program files installed into ~/.local/bin"
-[ -z "$(find "$bin" -name '.*.new.*')" ] && ok "no temporary files left" || bad "temporary files left in $bin"
+[ -z "$(find "$bin" -name '.*.new.*' -o -name '.*.old.*')" ] && ok "no temporary files left" || bad "temporary files left in $bin"
 
 # Upgrade while every program runs: copying over a running program fails
 # with "Text file busy"; install.sh renames instead.
@@ -94,7 +94,7 @@ refused() {   # refused DESCRIPTION EXPECTED_MESSAGE RELEASE_DIR [PATH]
     if run_install "$3" ${4:+"$4"}; then bad "$1: installed anyway"
     elif [ "$(installed_version)" != 0.1.31 ]; then bad "$1: the installation changed"
     elif ! grep -q "$2" "$scratch/out"; then bad "$1: unclear message: $(cat "$scratch/out")"
-    elif [ -n "$(find "$bin" -name '.*.new.*')" ]; then bad "$1: temporary files left"
+    elif [ -n "$(find "$bin" -name '.*.new.*' -o -name '.*.old.*')" ]; then bad "$1: temporary files left"
     else ok "$1 is refused: $(tail -1 "$scratch/out")"; fi
 }
 make_release "$scratch/damaged" 0.1.32
@@ -130,6 +130,60 @@ touch "$scratch/escape-src/evil"
 tar czf "$scratch/escape/$file" -C "$scratch/escape-src" "one-mk-$target" evil
 sign "$scratch/escape" 0.1.32
 refused "an archive with files outside its folder" "holds files outside" "$scratch/escape"
+
+# Links that lead out of the folder: absolute, through "..", or a hard link
+# to a member outside it.
+link_release() {   # link_release DIR KIND TARGET
+    make_release "$1" 0.1.32
+    python3 -I - "$1/$file" "one-mk-$target" "$2" "$3" "$shell" <<'PY'
+import io, sys, tarfile
+out, folder, kind, target, shell = sys.argv[1:]
+with tarfile.open(out, "w:gz") as tar:
+    tar.add(shell, arcname=f"{folder}/one-mk")
+    link = tarfile.TarInfo(f"{folder}/one-mk-link")
+    link.type = tarfile.SYMTYPE if kind == "sym" else tarfile.LNKTYPE
+    link.linkname = target
+    tar.addfile(link)
+PY
+    sign "$1" 0.1.32
+}
+link_release "$scratch/abslink" sym /etc/passwd
+refused "an archive with an absolute symbolic link" "points outside" "$scratch/abslink"
+link_release "$scratch/uplink" sym ../../../.bashrc
+refused "an archive with a symbolic link through .." "points outside" "$scratch/uplink"
+link_release "$scratch/hardlink" hard elsewhere/passwd
+refused "an archive with a hard link outside its folder" "points outside" "$scratch/hardlink"
+
+# A folder where a program goes: refused before anything changes (mv would
+# move the new copy into it and report success).
+make_release "$scratch/r-dir" 0.1.32
+rm "$bin/one-mk-tray" && mkdir "$bin/one-mk-tray"
+refused "a folder in a program's place" "is a folder" "$scratch/r-dir"
+[ -z "$(ls -A "$bin/one-mk-tray")" ] && ok "nothing was moved into that folder" || bad "files were moved into $bin/one-mk-tray"
+rmdir "$bin/one-mk-tray" && cp "$shell" "$bin/one-mk-tray"
+
+# A failure after some programs were replaced puts every one of them back.
+mkdir -p "$scratch/failmv"
+cat > "$scratch/failmv/mv" <<'SH'
+#!/bin/sh
+for last; do :; done
+case "$last" in */one-mk-wallpaper) case "$*" in *.new.*) echo "mv: simulated failure" >&2; exit 1 ;; esac ;; esac
+exec /bin/mv "$@"
+SH
+chmod 755 "$scratch/failmv/mv"
+make_release "$scratch/r-late" 0.1.32
+before=$(cd "$bin" && ls -A | sort | tr '\n' ' ')
+refused "a failure while replacing the last program" "previous installation was put back" "$scratch/r-late" "$scratch/failmv:/usr/bin:/bin"
+! grep -q "could not put back" "$scratch/out" && [ "$(cd "$bin" && ls -A | sort | tr '\n' ' ')" = "$before" ] && ok "the same programs are installed after the rollback" || bad "the rollback left: $(ls -A "$bin")"
+
+# An mv without -T (BSD, older busybox): installing still works.
+mkdir -p "$scratch/nomvt"
+printf '#!/bin/sh\nfor a; do [ "$a" = -T ] && { echo "mv: illegal option -- T" >&2; exit 64; }; done\nexec /bin/mv "$@"\n' > "$scratch/nomvt/mv"
+chmod 755 "$scratch/nomvt/mv"
+make_release "$scratch/r-nomvt" 0.1.31
+if run_install "$scratch/r-nomvt" "$scratch/nomvt:/usr/bin:/bin" && [ "$(installed_version)" = 0.1.31 ] && [ -z "$(find "$bin" -name '.*.new.*' -o -name '.*.old.*')" ]; then
+    ok "an mv without -T still installs"
+else bad "mv without -T: $(cat "$scratch/out")"; fi
 
 # Without OpenSSL 3 (macOS's LibreSSL, say): SHA256SUMS only, and it says so.
 mkdir -p "$scratch/libressl"

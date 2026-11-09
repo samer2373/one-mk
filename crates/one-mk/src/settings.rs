@@ -13,7 +13,6 @@ use one_mk_proto::{EdgeGuard, Modifier, Side};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -809,7 +808,8 @@ impl Settings {
                 }
             }
             std::fs::rename(&tmp, path(dir)).with_context(|| format!("saving {}", path(dir).display()))?;
-            Ok(())
+            // And the folder, so the new name survives a crash too.
+            one_mk_net::sync_dir(dir)
         };
         write().inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
@@ -820,18 +820,20 @@ impl Settings {
     /// file next to `settings.toml`, so `one-mk edge` and `one-mk gaming`
     /// run at the same moment both land), loads what is there (a file that
     /// can't be read is an error, as with [`Settings::load`]), applies
-    /// `change` and saves. If `change` fails nothing is written.
+    /// `change` and saves. If `change` fails nothing is written. Waits at
+    /// most [`one_mk_net::COMMAND_LOCK_WAIT`] (a command stopped while
+    /// holding the lock must not hang every other one).
     pub fn update<R>(dir: &Path, change: impl FnOnce(&mut Settings) -> Result<R>) -> Result<R> {
+        Self::update_within(dir, one_mk_net::COMMAND_LOCK_WAIT, change)
+    }
+
+    /// [`Settings::update`], waiting at most `wait` for the lock: the
+    /// daemon passes [`one_mk_net::DAEMON_LOCK_WAIT`], as its event loop
+    /// must never hang on a stopped command.
+    pub fn update_within<R>(dir: &Path, wait: std::time::Duration, change: impl FnOnce(&mut Settings) -> Result<R>) -> Result<R> {
         create_settings_dir(dir)?;
-        let lock_path = dir.join(LOCK_FILE);
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .with_context(|| format!("opening {}", lock_path.display()))?;
-        lock.lock().with_context(|| format!("locking {}", lock_path.display()))?;
-        // Unlocked when `lock` is dropped (also if this fails or panics).
+        let _lock = one_mk_net::lock_file(&dir.join(LOCK_FILE), wait)?;
+        // Unlocked when `_lock` is dropped (also if this fails or panics).
         let mut settings = Settings::load(dir)?;
         let out = change(&mut settings)?;
         settings.save(dir)?;
@@ -1742,6 +1744,18 @@ draw_when_no_mouse = "auto"
         assert!(toml::from_str::<toml::Value>(&written).unwrap()["drag"].get("enabled").is_none(), "no drag choice is written for one nobody made: {written}");
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(other);
+    }
+
+    /// Saving flushes the folder after the rename, so the new
+    /// `settings.toml` survives a power cut.
+    #[cfg(all(unix, debug_assertions))]
+    #[test]
+    fn saving_flushes_the_folder() {
+        let dir = std::env::temp_dir().join(format!("one-mk-durable-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        Settings::update(&dir, |s| { s.lock_sync = true; Ok(()) }).unwrap();
+        assert!(one_mk_net::was_synced(&dir));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(unix)]

@@ -1389,7 +1389,7 @@ impl App {
             Event::Error(msg) => tracing::error!("{msg}"),
             Event::LocalRulesOff => {
                 self.settings.input.local_rules = false;
-                if let Err(error) = crate::settings::Settings::update(&self.dir, |settings| {
+                if let Err(error) = crate::settings::Settings::update_within(&self.dir, one_mk_net::DAEMON_LOCK_WAIT, |settings| {
                     settings.input.local_rules = false;
                     Ok(())
                 }) { tracing::error!(%error, "could not save emergency local-rules disable"); }
@@ -1893,6 +1893,12 @@ impl App {
     /// Peer `fp` (link `id`) moves its pointer onto this machine.
     fn on_enter(&mut self, fp: Fingerprint, id: usize, epoch: u16, pos: Pos) {
         let peer = &self.peers[&fp];
+        // Only a paired computer takes control, whatever let its link in.
+        if !self.trust.is_trusted(&fp) {
+            tracing::warn!(peer = %peer.name, "refused control: this computer is no longer paired");
+            peer.conn.close(3u32.into(), b"forgotten");
+            return;
+        }
         if self.owner.is_some() && !self.is_owner(fp, id) {
             tracing::info!(peer = %peer.name, "refused control: another computer controls this one");
             peer.ctl.send(Control::Busy { epoch });
@@ -2111,10 +2117,11 @@ impl App {
                 self.end_owner(false);
             }
         }
-        let (side, offset) = self.trust.get(&fp).map_or((Side::Right, None), |d| (d.side(), d.offset));
         let addr = canonical(link.conn.remote_address());
         let a = addr.to_string();
         if self.trust.get(&fp).is_some_and(|dev| dev.os != link.os || dev.addrs.first() != Some(&a)) {
+            #[cfg(test)]
+            tests::before_device_details(&self.dir);
             let os = link.os;
             self.change_trust("device details", |trust| {
                 if let Some(dev) = trust.get_mut(&fp) {
@@ -2127,7 +2134,16 @@ impl App {
                 }
                 Ok(())
             });
+            // That read `devices.toml` again (under its lock): a `forget`
+            // that landed in between leaves it out. It is not a peer yet,
+            // so `set_trust` could not close it: refuse it here.
+            if !self.trust.is_trusted(&fp) {
+                tracing::info!(peer = %fp.short(), "rejecting a device forgotten during its handshake");
+                link.conn.close(1u32.into(), b"not paired");
+                return;
+            }
         }
+        let (side, offset) = self.trust.get(&fp).map_or((Side::Right, None), |d| (d.side(), d.offset));
         // A better duplicate connection replaces the first one quietly.
         if !self.peers.contains_key(&fp) {
             println!("Connected to {} ({}).", link.name, on_your(side));
@@ -2592,7 +2608,7 @@ impl App {
         {
             return;
         }
-        match crate::profiles::use_profile(&self.dir, &p.name) {
+        match crate::profiles::use_profile_within(&self.dir, &p.name, one_mk_net::DAEMON_LOCK_WAIT) {
             Ok((name, moved)) => {
                 println!("This network matches layout profile {name:?}; using it.");
                 if !moved.is_empty() {
@@ -2602,7 +2618,11 @@ impl App {
                     fps.into_iter().for_each(|fp| self.send_layout(fp));
                 }
             }
-            Err(e) => tracing::warn!("could not switch layout profiles: {e:#}"),
+            Err(e) => {
+                // Not in use: the next report for this network tries again.
+                self.auto_profile = None;
+                tracing::warn!("could not switch layout profiles: {e:#}");
+            }
         }
     }
 
@@ -2654,7 +2674,7 @@ impl App {
         let text = match req {
             Request::LocalRulesOff => {
                 self.settings.input.local_rules = false;
-                let result = crate::settings::Settings::update(&self.dir, |settings| { settings.input.local_rules = false; Ok(()) });
+                let result = crate::settings::Settings::update_within(&self.dir, one_mk_net::DAEMON_LOCK_WAIT, |settings| { settings.input.local_rules = false; Ok(()) });
                 #[cfg(any(windows, target_os = "macos"))]
                 self.reload_local_rules();
                 let text = match result { Ok(_) => "ok\n".to_owned(), Err(error) => format!("error {error:#}\n") };
@@ -4556,6 +4576,140 @@ mod tests {
         duo.stop().await;
     }
 
+    /// A `forget` that lands between the last trust check and recording the
+    /// computer's details (which reads `devices.toml` again, under its lock)
+    /// keeps it out too: it is closed as not paired, never becomes a peer,
+    /// and the Enter and key it sends at once go nowhere.
+    #[tokio::test]
+    async fn a_computer_forgotten_while_its_details_are_saved_is_not_let_in() {
+        let mut duo = Duo::start("forget-details", None).await;
+        let dir = temp_dir("forget-details-c");
+        let id = Identity::load_or_create(&dir).unwrap();
+        let fp = id.fingerprint;
+        trust(&duo.db, &id, Side::Top);
+        let db = duo.db.clone();
+        on_device_details(&duo.db, move || {
+            // As `one-mk forget` does from another process.
+            TrustStore::update(&db, |t| { assert!(t.remove(&fp.to_string()).is_some()); Ok(()) }).unwrap();
+        });
+        let node = Node::bind(Arc::new(id), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let peer = node.connect(SocketAddr::from(([127, 0, 0, 1], duo.pb))).await.unwrap();
+        let (mut send, mut recv) = peer.open_stream(StreamKind::Control).await.unwrap();
+        let mut frames = Vec::new();
+        for msg in [
+            Control::Hello { version: PROTOCOL_VERSION, name: "raw".into(), screens: vec![], nonce: 0, os: 0 },
+            Control::Enter { epoch: 1, pos: Pos::new(5.0, 5.0) },
+            Control::Key { code: 30, down: true },
+        ] {
+            msg.encode_frame(&mut frames);
+        }
+        let _ = send.write_all(&frames).await;
+        let closed = tokio::time::timeout(Duration::from_secs(5), peer.conn.closed()).await.expect("B never closed it");
+        match closed {
+            quinn::ConnectionError::ApplicationClosed(c) => assert_eq!(&c.reason[..], b"not paired"),
+            other => panic!("{other:?}"),
+        }
+        let mut buf = Vec::new();
+        while let Ok(Some(msg)) = read_frame(&mut recv, &mut buf).await {
+            assert!(matches!(msg, Control::Hello { .. }), "{msg:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(injected(&mut duo.hb), vec![]);
+        let peers = status(&duo.db).await.peers;
+        assert!(peers.len() == 1 && peers[0].online, "only A, still connected: {peers:?}");
+        drop(node);
+        let _ = std::fs::remove_dir_all(dir);
+        duo.stop().await;
+    }
+
+    /// Holds the lock file `path` from another process (this test binary,
+    /// run again as `lock_holder`), as a `one-mk` command stopped with
+    /// Ctrl+Z while changing a file would. Let go when dropped.
+    struct LockHolder(std::process::Child);
+
+    impl LockHolder {
+        fn hold(path: &std::path::Path) -> LockHolder {
+            use std::io::BufRead;
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "app::tests::lock_holder", "--nocapture", "--test-threads=1"])
+                .env("ONE_MK_TEST_HOLD_LOCK", path)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let mut out = std::io::BufReader::new(child.stdout.take().unwrap());
+            let mut line = String::new();
+            loop {
+                line.clear();
+                assert!(out.read_line(&mut line).unwrap() > 0, "the lock holder ended before taking the lock");
+                if line.contains("LOCK HELD") {
+                    break;
+                }
+            }
+            LockHolder(child)
+        }
+    }
+
+    impl Drop for LockHolder {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// The other half of [`LockHolder`]; does nothing in a normal run.
+    #[test]
+    fn lock_holder() {
+        let Some(path) = std::env::var_os("ONE_MK_TEST_HOLD_LOCK") else { return };
+        let _lock = one_mk_net::lock_file(std::path::Path::new(&path), Duration::ZERO).unwrap();
+        println!("LOCK HELD");
+        std::thread::sleep(Duration::from_secs(60));
+    }
+
+    /// A command stopped while holding the settings lock never freezes the
+    /// daemon: turning the local rules off (the emergency path) gives up on
+    /// saving after a bounded wait and says why, and the daemon keeps
+    /// answering.
+    #[tokio::test]
+    async fn the_daemon_never_hangs_on_a_held_settings_lock() {
+        let duo = Duo::start("held-settings-lock", None).await;
+        let holder = LockHolder::hold(&duo.db.join("settings.toml.lock"));
+        let start = Instant::now();
+        let reply = tokio::time::timeout(Duration::from_secs(8), control::request(&duo.db, Request::LocalRulesOff))
+            .await
+            .expect("the daemon hung on the settings lock")
+            .unwrap()
+            .unwrap();
+        assert!(start.elapsed() < one_mk_net::DAEMON_LOCK_WAIT + Duration::from_secs(2), "{:?}", start.elapsed());
+        assert!(reply.starts_with("error") && reply.contains("another one-mk command is holding the lock"), "{reply}");
+        assert!(Duo::peer_status(&duo.db).await.online, "the daemon keeps working");
+        drop(holder);
+        assert_eq!(control::request(&duo.db, Request::LocalRulesOff).await.unwrap().unwrap(), "ok\n");
+        duo.stop().await;
+    }
+
+    /// Switching layout profiles (as the daemon does when the network
+    /// changes) gives up after a bounded wait on either lock it takes.
+    #[test]
+    fn switching_profiles_never_hangs_on_a_held_lock() {
+        let dir = temp_dir("held-profile-lock");
+        crate::profiles::Profiles::update(&dir, |all| {
+            all.list.push(crate::profiles::Profile { name: "home".into(), ..Default::default() });
+            Ok(())
+        })
+        .unwrap();
+        for lock in ["profiles.toml.lock", "devices.toml.lock"] {
+            let holder = LockHolder::hold(&dir.join(lock));
+            let start = std::time::Instant::now();
+            let err = crate::profiles::use_profile_within(&dir, "home", Duration::from_millis(200)).unwrap_err();
+            assert!(start.elapsed() < Duration::from_secs(2), "{lock}: {:?}", start.elapsed());
+            assert!(format!("{err:#}").contains("another one-mk command is holding the lock"), "{lock}: {err:#}");
+            drop(holder);
+        }
+        crate::profiles::use_profile_within(&dir, "home", Duration::from_millis(200)).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// Changing the layout on one computer applies at once, with no
     /// restart, and the other computer records the mirror image.
     #[tokio::test]
@@ -5758,6 +5912,25 @@ mod tests {
         }
         all.push((dir.to_owned(), Arc::default()));
         all.last().unwrap().1.clone()
+    }
+
+    type Hook = Box<dyn FnOnce() + Send>;
+    static DEVICE_DETAILS_HOOKS: std::sync::Mutex<Vec<(PathBuf, Hook)>> = std::sync::Mutex::new(Vec::new());
+
+    /// Runs `hook` once, the next time the daemon using `dir` is about to
+    /// record a connecting computer's details (after its trust check).
+    fn on_device_details(dir: &std::path::Path, hook: impl FnOnce() + Send + 'static) {
+        DEVICE_DETAILS_HOOKS.lock().unwrap().push((dir.to_owned(), Box::new(hook)));
+    }
+
+    pub(super) fn before_device_details(dir: &std::path::Path) {
+        let hook = {
+            let mut all = DEVICE_DETAILS_HOOKS.lock().unwrap();
+            all.iter().position(|(d, _)| d == dir).map(|i| all.remove(i).1)
+        };
+        if let Some(hook) = hook {
+            hook();
+        }
     }
 
     pub(super) fn layouts_sent_by(dir: &std::path::Path) -> Arc<std::sync::atomic::AtomicUsize> {

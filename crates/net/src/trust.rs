@@ -7,7 +7,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{Duration, Instant};
+use crate::files::COMMAND_LOCK_WAIT;
+use std::time::Duration;
 
 /// Whether Ctrl and Cmd (Meta) trade places for keys sent to a device, so
 /// copy and paste shortcuts work between a Mac and a PC.
@@ -162,11 +163,6 @@ struct File {
 /// while the paired computers are changed; see [`TrustStore::update`].
 const LOCK_FILE: &str = "devices.toml.lock";
 
-/// How long the daemon waits for its turn to change `devices.toml` before
-/// it gives up on that one change (a command holding the lock does so only
-/// for the moment it takes to read and write the file).
-pub const DAEMON_LOCK_WAIT: Duration = Duration::from_secs(2);
-
 /// Devices this machine has paired with, in `devices.toml`.
 ///
 /// The daemon and every `one-mk` command read and write this file. A change
@@ -206,9 +202,9 @@ impl TrustStore {
     }
 
     /// Changes the paired computers: waits for an exclusive lock on a file
-    /// next to `devices.toml`, loads what is there now, applies `change`
-    /// and saves if anything changed. If `change` fails nothing is
-    /// written. Returns `change`'s result.
+    /// next to `devices.toml` (at most [`COMMAND_LOCK_WAIT`]), loads what is
+    /// there now, applies `change` and saves if anything changed. If
+    /// `change` fails nothing is written. Returns `change`'s result.
     pub fn update<R>(dir: &Path, change: impl FnOnce(&mut TrustStore) -> Result<R>) -> Result<R> {
         Self::update_locked(dir, None, change)
     }
@@ -255,11 +251,7 @@ impl TrustStore {
             file.sync_all().with_context(|| format!("flushing paired computers {}", tmp.display()))?;
             drop(file);
             std::fs::rename(&tmp, &self.path).with_context(|| format!("saving paired computers {}", self.path.display()))?;
-            #[cfg(unix)]
-            if let Ok(dir) = std::fs::File::open(self.dir()) {
-                let _ = dir.sync_all();
-            }
-            Ok(())
+            crate::files::sync_dir(&self.dir())
         };
         write().inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
@@ -334,28 +326,11 @@ impl TrustStore {
     }
 }
 
-/// Takes the exclusive lock next to `devices.toml` in `dir`: waits for it,
-/// or for at most `wait`. Released when the file is dropped.
+/// Takes the exclusive lock next to `devices.toml` in `dir`: waits for it
+/// for at most `wait`, or [`COMMAND_LOCK_WAIT`]. Released when the file is
+/// dropped.
 fn lock(dir: &Path, wait: Option<Duration>) -> Result<std::fs::File> {
-    let path = dir.join(LOCK_FILE);
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).truncate(false).write(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let file = options.open(&path).with_context(|| format!("opening {}", path.display()))?;
-    let Some(wait) = wait else {
-        file.lock().with_context(|| format!("locking {}", path.display()))?;
-        return Ok(file);
-    };
-    let deadline = Instant::now() + wait;
-    loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(file),
-            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-            Err(std::fs::TryLockError::WouldBlock) => anyhow::bail!("{} is held by another one-mk command; try again", path.display()),
-            Err(std::fs::TryLockError::Error(e)) => return Err(e).with_context(|| format!("locking {}", path.display())),
-        }
-    }
+    crate::files::lock_file(&dir.join(LOCK_FILE), wait.unwrap_or(COMMAND_LOCK_WAIT))
 }
 
 #[cfg(test)]
@@ -463,6 +438,9 @@ mod tests {
             Ok(())
         })
         .unwrap();
+        // The folder is flushed after the rename too.
+        #[cfg(all(unix, debug_assertions))]
+        assert!(crate::files::was_synced(&dir));
         std::thread::scope(|scope| {
             for fp in &fps {
                 let dir = &dir;
@@ -493,7 +471,7 @@ mod tests {
             Ok(())
         })
         .unwrap_err();
-        assert!(format!("{err:#}").contains("held by another"), "{err:#}");
+        assert!(format!("{err:#}").contains("another one-mk command is holding the lock"), "{err:#}");
         drop(held);
         assert_eq!(TrustStore::load(&dir).unwrap().devices().len(), 8);
         let _ = std::fs::remove_dir_all(dir);
