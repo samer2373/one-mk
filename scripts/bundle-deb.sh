@@ -40,7 +40,7 @@ if command -v appstreamcli >/dev/null; then
     appstreamcli validate --no-net "$root/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml" >/dev/null \
         || { echo "bundle-deb.sh: the AppStream metainfo does not validate" >&2; exit 1; }
 fi
-# Licences: oneMK's, every statically linked crate's, the Geist fonts'.
+# Licences: oneMK's, every statically linked crate's, the fonts'.
 sh scripts/copy-notices.sh "$root/usr/share/doc/one-mk"
 install -m 644 packaging/linux/copyright "$root/usr/share/doc/one-mk/copyright"
 
@@ -100,7 +100,7 @@ for f in usr/bin/one-mk usr/share/applications/one-mk.desktop "$app_entry" usr/b
     usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml \
     usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy usr/share/doc/one-mk/copyright \
     usr/share/doc/one-mk/LICENSE-MIT usr/share/doc/one-mk/LICENSE-APACHE usr/share/doc/one-mk/THIRD-PARTY-NOTICES \
-    usr/share/doc/one-mk/OFL-Geist.txt \
+    usr/share/doc/one-mk/OFL-Inter.txt usr/share/doc/one-mk/OFL-JetBrainsMono.txt usr/share/doc/one-mk/OFL-Unbounded.txt \
     "usr/share/one-mk/gnome-extension/$extension/extension.js" "usr/share/one-mk/gnome-extension/$extension/bridge.xml" \
     "usr/share/one-mk/gnome-extension/$extension/metadata.json"; do
     echo "$listing" | grep -q " \./$f\$" || { echo "bundle-deb.sh: $out is missing /$f" >&2; exit 1; }

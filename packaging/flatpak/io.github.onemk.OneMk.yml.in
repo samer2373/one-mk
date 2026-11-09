@@ -47,7 +47,7 @@ modules:
       - install -Dm644 icon.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
       - install -Dm644 icon-256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
       # Licences, from the release tarball (scripts/copy-notices.sh put them there).
-      - install -Dm644 LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES OFL-Geist.txt -t ${FLATPAK_DEST}/share/doc/one-mk
+      - install -Dm644 LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES OFL-Inter.txt OFL-JetBrainsMono.txt OFL-Unbounded.txt -t ${FLATPAK_DEST}/share/doc/one-mk
     sources:
       # The release build (built on the oldest supported distribution, so
       # it runs on the runtime's newer glibc): the release URL, or, in a

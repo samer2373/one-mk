@@ -23,8 +23,8 @@ START, END = "<!-- tokens:start (scripts/brand-tokens.py writes this table) -->"
 # Fonts are not constants in style.rs; these are the files it loads.
 FONT = {
     "family": {
-        "sans": {"value": "Geist, ui-sans-serif, system-ui, sans-serif"},
-        "mono": {"value": "\"Geist Mono\", ui-monospace, SFMono-Regular, Menlo, monospace"},
+        "sans": {"value": "Inter, ui-sans-serif, system-ui, sans-serif"},
+        "mono": {"value": "\"JetBrains Mono\", ui-monospace, SFMono-Regular, Menlo, monospace"},
     },
     "weight": {"regular": {"value": 400}, "semibold": {"value": 600}},
 }
@@ -152,9 +152,9 @@ def build():
     tokens_json = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
     lines = ["/* oneMK design tokens, written by scripts/brand-tokens.py from crates/app/src/style.rs. Do not edit. */",
-             '@font-face { font-family: "Geist"; src: url("../../crates/app/fonts/Geist-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }',
-             '@font-face { font-family: "Geist"; src: url("../../crates/app/fonts/Geist-SemiBold.ttf") format("truetype"); font-weight: 600; font-display: swap; }',
-             '@font-face { font-family: "Geist Mono"; src: url("../../crates/app/fonts/GeistMono-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }',
+             '@font-face { font-family: "Inter"; src: url("../../crates/app/fonts/Inter-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }',
+             '@font-face { font-family: "Inter"; src: url("../../crates/app/fonts/Inter-SemiBold.ttf") format("truetype"); font-weight: 600; font-display: swap; }',
+             '@font-face { font-family: "JetBrains Mono"; src: url("../../crates/app/fonts/JetBrainsMono-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }',
              "", ":root {", "  /* colour */"]
     lines += ["  --omk-%s: %s;" % (k, css(c)) for k, (c, _) in colours.items()]
     lines += ["", "  /* corners and spacing */"]

@@ -1,4 +1,5 @@
-//! Fonts, colours and the type scale. Two complete themes, Light and Dark,
+//! Fonts, colours and the type scale: Inter for words, JetBrains Mono for
+//! numbers, Unbounded only for the wordmark. Two complete themes, Light and Dark,
 //! each a [`Palette`] ported from the design tokens; every colour the window
 //! paints comes from the active palette ([`pal`]), or, for what looks the
 //! same in both themes (the 3D devices, the screens' wallpapers, a mock of
@@ -537,27 +538,59 @@ pub const R_GROUP: u8 = 16;
 /// The gap round and between panels.
 pub const M: f32 = 12.0;
 
-/// Panel titles and the sheet title.
-pub const T_TITLE: f32 = 15.0;
-/// Body, row labels, tabs, buttons.
+// ---- Type: Inter for words, JetBrains Mono for every number, unit,
+// shortcut, key name and command, Unbounded only in the wordmark. The scale
+// is the handoff's (tokens.json `type.scale`).
+
+/// A page's title (22/600).
+#[allow(dead_code)] // The new layout (top bar, panels) uses it.
+pub const T_PAGE: f32 = 22.0;
+/// A section's title, as Keys & mouse's (20/600).
+#[allow(dead_code)] // The new layout (top bar, panels) uses it.
+pub const T_SECTION: f32 = 20.0;
+/// Panel titles and the sheet title (16/600).
+pub const T_TITLE: f32 = 16.0;
+/// Body, row labels, tabs, buttons (13; buttons 500, the primary 600).
 pub const T_BODY: f32 = 13.0;
-/// Chips, keys, system names, values.
+/// Captions, chips, keys, system names, values (12).
 pub const T_META: f32 = 12.0;
+/// Mono chips (11).
+#[allow(dead_code)] // The new layout (top bar, panels) uses it.
+pub const T_CHIP: f32 = 11.0;
+/// A big number, as the latency (36/500 mono).
+#[allow(dead_code)] // The new layout (top bar, panels) uses it.
+pub const T_BIG: f32 = 36.0;
+/// The wordmark beside the 24-point symbol (Unbounded Bold 15).
+#[allow(dead_code)] // The new layout (top bar, panels) uses it.
+pub const T_WORDMARK: f32 = 15.0;
 /// Paragraph line height, as a multiple of the size.
 pub const LEADING: f32 = 1.45;
 
+/// Inter 600: titles, labels that lead, the primary button.
 pub fn semibold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("semibold".into()))
 }
+/// Inter 500: buttons, tabs.
+#[allow(dead_code)] // The new layout (top bar, panels) uses it.
+pub fn medium(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("medium".into()))
+}
+/// Inter 400: everything else that is words.
 pub fn regular(size: f32) -> FontId {
     FontId::new(size, FontFamily::Proportional)
 }
+/// JetBrains Mono 400: numbers, units, shortcuts, key names, commands.
 pub fn mono(size: f32) -> FontId {
     FontId::new(size, FontFamily::Monospace)
 }
-/// Heavier mono, for the pairing code.
+/// JetBrains Mono 500: the big numbers and the pairing code.
 pub fn mono_medium(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("mono-medium".into()))
+}
+/// Unbounded Bold: the wordmark, and nothing else.
+#[allow(dead_code)] // The new layout (top bar, panels) uses it.
+pub fn wordmark(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("wordmark".into()))
 }
 
 /// `text`, shortened with an ellipsis to fit `max_w` points.
@@ -639,22 +672,24 @@ pub fn apply_visuals(ctx: &egui::Context) {
 fn fonts(extra: &[(String, Vec<u8>)]) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     for (name, bytes) in [
-        ("geist", &include_bytes!("../fonts/Geist-Regular.ttf")[..]),
-        ("geist-semibold", &include_bytes!("../fonts/Geist-SemiBold.ttf")[..]),
-        ("geist-mono", &include_bytes!("../fonts/GeistMono-Regular.ttf")[..]),
-        ("geist-mono-medium", &include_bytes!("../fonts/GeistMono-Medium.ttf")[..]),
+        ("inter", &include_bytes!("../fonts/Inter-Regular.ttf")[..]),
+        ("inter-medium", &include_bytes!("../fonts/Inter-Medium.ttf")[..]),
+        ("inter-semibold", &include_bytes!("../fonts/Inter-SemiBold.ttf")[..]),
+        ("jetbrains-mono", &include_bytes!("../fonts/JetBrainsMono-Regular.ttf")[..]),
+        ("jetbrains-mono-medium", &include_bytes!("../fonts/JetBrainsMono-Medium.ttf")[..]),
+        ("unbounded-bold", &include_bytes!("../fonts/Unbounded-Bold.ttf")[..]),
     ] {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
     }
-    // Geist first; egui's own fonts stay behind it for symbols, then the
-    // system's fonts for scripts Geist doesn't cover.
-    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "geist".into());
-    fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "geist-mono".into());
-    // The ⌘ in shortcut hints: neither Geist nor egui's fonts have it.
+    // Inter first; egui's own fonts stay behind it for symbols, then the
+    // system's fonts for scripts Inter doesn't cover.
+    fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "inter".into());
+    fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "jetbrains-mono".into());
+    // The ⌘ in shortcut hints: macOS's symbol font draws it best.
     if let Some(bytes) = mac_symbols() {
-        // Apple Symbols draws ⌘ smaller and higher than Geist's figures
-        // beside it (measured on a Mac: 12 px next to 16 px, its foot 2.5 pt
-        // up; 0.2 put it 1.5 pt below the baseline).
+        // Apple Symbols draws ⌘ smaller and higher than the figures beside
+        // it (measured on a Mac with the earlier type: 12 px next to 16 px,
+        // its foot 2.5 pt up; 0.2 put it 1.5 pt below the baseline).
         let tweak = egui::FontTweak { scale: 1.25, y_offset_factor: 0.125, ..Default::default() };
         fonts.font_data.insert("mac-symbols".into(), Arc::new(FontData::from_static(bytes).tweak(tweak)));
         fonts.families.entry(FontFamily::Proportional).or_default().push("mac-symbols".into());
@@ -665,8 +700,11 @@ fn fonts(extra: &[(String, Vec<u8>)]) -> FontDefinitions {
         fonts.families.entry(FontFamily::Proportional).or_default().push(name.clone());
     }
     let fallback = fonts.families[&FontFamily::Proportional].clone();
-    fonts.families.insert(FontFamily::Name("semibold".into()), [vec!["geist-semibold".into()], fallback.clone()].concat());
-    fonts.families.insert(FontFamily::Name("mono-medium".into()), [vec!["geist-mono-medium".into()], fallback].concat());
+    let mono_fallback = fonts.families[&FontFamily::Monospace].clone();
+    fonts.families.insert(FontFamily::Name("semibold".into()), [vec!["inter-semibold".into()], fallback.clone()].concat());
+    fonts.families.insert(FontFamily::Name("medium".into()), [vec!["inter-medium".into()], fallback.clone()].concat());
+    fonts.families.insert(FontFamily::Name("mono-medium".into()), [vec!["jetbrains-mono-medium".into()], mono_fallback].concat());
+    fonts.families.insert(FontFamily::Name("wordmark".into()), [vec!["unbounded-bold".into()], fallback].concat());
     fonts
 }
 
@@ -681,7 +719,7 @@ fn mac_symbols() -> Option<&'static [u8]> {
 }
 
 /// Names can be in any script. When one has letters no loaded font
-/// covers, find a system font that does and add it behind Geist. Fonts
+/// covers, find a system font that does and add it behind Inter. Fonts
 /// are only read when such a name shows up, so most people never pay.
 #[derive(Default)]
 pub struct Fallbacks {
@@ -876,6 +914,33 @@ mod tests {
             }
         }
         assert!(found.is_empty(), "colour literals outside style.rs:\n{}", found.join("\n"));
+    }
+
+    /// Every face is built in and is its own: Inter's three weights,
+    /// JetBrains Mono's two (every figure as wide as the next), Unbounded.
+    #[test]
+    fn the_type_faces_are_built_in() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut out = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let p = ctx.layer_painter(egui::LayerId::background());
+            let w = |text: &str, font: FontId| p.layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER).size().x;
+            // (JetBrains Mono's two weights share their advance widths.)
+            assert!(w("oneMK", mono_medium(T_BODY)) > 20.0);
+            let fonts = [regular(T_BODY), medium(T_BODY), semibold(T_BODY), mono(T_BODY), wordmark(T_BODY)];
+            let widths: Vec<f32> = fonts.iter().map(|f| w("oneMK Desk", f.clone())).collect();
+            for (i, a) in widths.iter().enumerate() {
+                assert!(*a > 20.0, "{:?}", fonts[i]);
+                for b in &widths[i + 1..] {
+                    assert!((a - b).abs() > 0.05, "two faces measure the same: {widths:?}");
+                }
+            }
+            assert!((w("1111", mono(T_BODY)) - w("8888", mono(T_BODY))).abs() < 0.01, "mono figures are even");
+            for c in ['⌘', '·', '…', '→', '✓'] {
+                assert!(ctx.fonts_mut(|f| f.has_glyph(&regular(T_BODY), c) || f.has_glyph(&mono(T_BODY), c)), "{c}");
+            }
+        });
+        out.textures_delta.clear();
     }
 
     #[test]

@@ -146,7 +146,7 @@ the user through pairing, so there is no terminal step.
 | file | what it is |
 |---|---|
 | `scripts/dmg/settings.py` | the dmgbuild settings: window size and place, icon size, the two icon positions, the hidden toolbar and sidebar, the `Applications` link, the volume icon (`docs/brand/app-icon/macos/onemk.icns`) |
-| `scripts/dmg/make_background.py` | draws the artwork with Pillow from the brand files (`docs/brand/tokens.json`, the Geist fonts in `crates/app/fonts`, the logo) and the numbers in `settings.py`; `--check` validates everything and writes the preview |
+| `scripts/dmg/make_background.py` | draws the artwork with Pillow from the brand files (`docs/brand/tokens.json`, the Inter fonts in `crates/app/fonts`, the logo) and the numbers in `settings.py`; `--check` validates everything and writes the preview |
 | `scripts/dmg/background.png`, `background@2x.png` | the drawn art, **checked in**: the release then needs no fonts, no Pillow and no particular Pillow version, and a change to the art shows in review. `check.sh` fails if they no longer match the script. Tagged 72 and 144 dpi; dmgbuild finds the `@2x` file next to the first and joins them with `tiffutil -cathidpicheck` into the multi-resolution TIFF Finder wants |
 | `scripts/dmg/check.sh` | the check, runs anywhere with Python 3 and Pillow; also part of `check-packaging.sh` and CI |
 
@@ -240,8 +240,8 @@ package contains it, hidden. It also ships the polkit action of the
 update's root step (`/usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy`,
 docs/UPDATES.md), recommends `pkexec`, and carries the licence files
 (`/usr/share/doc/one-mk/`: `copyright`, `LICENSE-MIT`, `LICENSE-APACHE`,
-`THIRD-PARTY-NOTICES`, `OFL-Geist.txt`; every other package carries the same
-four files through `scripts/copy-notices.sh`). Its only maintainer script is
+`THIRD-PARTY-NOTICES`, `OFL-Inter.txt`, `OFL-JetBrainsMono.txt`, `OFL-Unbounded.txt`;
+every other package carries the same files through `scripts/copy-notices.sh`). Its only maintainer script is
 a `postrm` that, on purge, removes `/var/lib/one-mk` (the update's root-only
 replay record). It starts and enables nothing, and ships no systemd unit or autostart entry: `one-mk
 install`, run as yourself, writes the user service and the tray's autostart

@@ -646,7 +646,7 @@ pub fn draw_dots(p: &Painter, rect: Rect, col: Color32) {
     }
 }
 
-/// Geist Mono kerns `--` so that egui draws the second dash on top of
+/// A mono font may kern `--` so that egui draws the second dash on top of
 /// the next letter (`run --port` reads `run--port`). Kerning stops at a
 /// section's end, so mono text is cut between neighbouring dashes.
 fn mono_pieces(text: &str) -> Vec<&str> {

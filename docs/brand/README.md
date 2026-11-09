@@ -162,7 +162,7 @@ The table below is written from the window's current style by `scripts/brand-tok
 | off | `#707A86` | 4.5:1 on ground |
 <!-- tokens:end -->
 
-Type in the window: **Geist** 400/600 and **Geist Mono**, as before (see `crates/app/src/style.rs`).
+Type in the window: **Inter** 400/500/600 and **JetBrains Mono** 400/500, with **Unbounded** Bold only in the wordmark (see `crates/app/src/style.rs`).
 
 Tokens: [`tokens.json`](tokens.json) and [`tokens.css`](tokens.css), written from the window's own style
 (`crates/app/src/style.rs`) by `python3 scripts/brand-tokens.py`; never edit them by hand.

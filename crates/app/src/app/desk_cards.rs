@@ -267,7 +267,7 @@ impl App {
             let n = rtt::ms_number(s.now_us);
             let nw = text_width(ui, &n, big.clone());
             p.text(pos2(body.left(), body.top() + 18.0), Align2::LEFT_CENTER, &n, big, pal().ink);
-            p.text(pos2(body.left() + nw + 4.0, body.top() + 23.0), Align2::LEFT_CENTER, "ms", regular(T_BODY), pal().ink2);
+            p.text(pos2(body.left() + nw + 4.0, body.top() + 23.0), Align2::LEFT_CENTER, "ms", mono(T_BODY), pal().ink2);
             // A number is already shown: say how much it rests on, not "Measuring…".
             let word = q.map_or("Few readings so far", Quality::word);
             let ww = text_width(ui, word, regular(T_BODY));
@@ -292,7 +292,7 @@ impl App {
         if peer.online && (self.latency.contains(&peer.id) || self.failed_measure.contains(&peer.id)) {
             let busy = self.measuring.is_some();
             // Beside the number it measures.
-            let num_w = summary.map_or(text_width(ui, "…", mono_medium(30.0)), |s| text_width(ui, &rtt::ms_number(s.now_us), mono_medium(30.0)) + 4.0 + text_width(ui, "ms", regular(T_BODY)));
+            let num_w = summary.map_or(text_width(ui, "…", mono_medium(30.0)), |s| text_width(ui, &rtt::ms_number(s.now_us), mono_medium(30.0)) + 4.0 + text_width(ui, "ms", mono(T_BODY)));
             let r = Rect::from_min_size(pos2(body.left() + num_w + 10.0, body.top() + 6.0), vec2(28.0, 28.0));
             let spin = if self.measuring.as_ref() == Some(&peer.id) && !motion::reduced() {
                 ui.ctx().request_repaint();

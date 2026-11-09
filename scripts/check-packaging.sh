@@ -53,7 +53,8 @@ if command -v dpkg-deb >/dev/null; then
              usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy usr/share/doc/one-mk/copyright \
              usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml \
              usr/share/doc/one-mk/LICENSE-MIT usr/share/doc/one-mk/LICENSE-APACHE \
-             usr/share/doc/one-mk/THIRD-PARTY-NOTICES usr/share/doc/one-mk/OFL-Geist.txt; do
+             usr/share/doc/one-mk/THIRD-PARTY-NOTICES usr/share/doc/one-mk/OFL-Inter.txt \
+             usr/share/doc/one-mk/OFL-JetBrainsMono.txt usr/share/doc/one-mk/OFL-Unbounded.txt; do
         [ -e "$root/$f" ] && ok ".deb contains /$f" || bad ".deb is missing /$f"
     done
     cmp -s "$root/usr/share/doc/one-mk/THIRD-PARTY-NOTICES" "$ROOT/THIRD-PARTY-NOTICES" && ok ".deb ships the current THIRD-PARTY-NOTICES" || bad ".deb THIRD-PARTY-NOTICES differs from the checkout"
@@ -110,7 +111,7 @@ got=$("$appdir/AppRun" --version) && [ "$got" = "one-mk $VERSION" ] && ok "AppDi
 [ -z "$(find "$appdir" ! -type l \( -type d -a ! -perm 755 -o -type f -a ! -perm 644 -a ! -perm 755 \))" ] && ok "AppDir files are 0644 or 0755 and folders 0755" || bad "AppDir has files or folders with other modes"
 grep -q "<release version=\"$VERSION\"" "$appdir/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml" && ! grep -q '@[A-Z_]*@' "$appdir/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml" \
     && ok "AppDir metainfo names release $VERSION and holds no placeholder" || bad "AppDir metainfo"
-for f in copyright LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES OFL-Geist.txt; do
+for f in copyright LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES OFL-Inter.txt OFL-JetBrainsMono.txt OFL-Unbounded.txt; do
     [ -s "$appdir/usr/share/doc/one-mk/$f" ] && ok "AppDir ships /usr/share/doc/one-mk/$f" || bad "AppDir is missing /usr/share/doc/one-mk/$f"
 done
 if command -v desktop-file-validate >/dev/null; then

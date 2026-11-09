@@ -34,7 +34,9 @@ Source: "{#ReleaseDir}\one-mk-wallpaper.exe"; DestDir: "{app}"
 Source: "..\LICENSE-MIT"; DestDir: "{app}\licenses"
 Source: "..\LICENSE-APACHE"; DestDir: "{app}\licenses"
 Source: "..\THIRD-PARTY-NOTICES"; DestDir: "{app}\licenses"; DestName: "THIRD-PARTY-NOTICES.txt"
-Source: "..\crates\app\fonts\OFL.txt"; DestDir: "{app}\licenses"; DestName: "OFL-Geist.txt"
+Source: "..\crates\app\fonts\OFL-Inter.txt"; DestDir: "{app}\licenses"
+Source: "..\crates\app\fonts\OFL-JetBrainsMono.txt"; DestDir: "{app}\licenses"
+Source: "..\crates\app\fonts\OFL-Unbounded.txt"; DestDir: "{app}\licenses"
 
 [Icons]
 Name: "{group}\oneMK"; Filename: "{app}\one-mk-app.exe"

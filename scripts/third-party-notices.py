@@ -3,8 +3,8 @@
 (one-mk, one-mk-app, one-mk-tray, one-mk-wallpaper and the GNOME wallpaper
 renderer, for every platform the release builds), with its version, licence
 and source, followed by the licence texts the crates ship (grouped when
-identical), and the notices of the non-crate material built in (the Geist
-fonts and the 3D mouse model).
+identical), and the notices of the non-crate material built in (the Inter,
+JetBrains Mono and Unbounded fonts and the 3D mouse model).
 
     python3 scripts/third-party-notices.py           # rewrite THIRD-PARTY-NOTICES
     python3 scripts/third-party-notices.py --check   # fail if it is out of date (CI)
@@ -135,8 +135,16 @@ def render(packages):
     out.append("NON-CRATE MATERIAL BUILT INTO ONEMK")
     out.append(rule)
     out.append("")
-    out.append("Geist and Geist Mono fonts (embedded in one-mk-app)")
-    out.append("  Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font)")
+    out.append("Inter fonts (embedded in one-mk-app)")
+    out.append("  Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)")
+    out.append("  Licence: SIL Open Font License 1.1 (full text at the end of this file)")
+    out.append("")
+    out.append("JetBrains Mono fonts (embedded in one-mk-app)")
+    out.append("  Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)")
+    out.append("  Licence: SIL Open Font License 1.1 (full text at the end of this file)")
+    out.append("")
+    out.append("Unbounded font (embedded in one-mk-app)")
+    out.append("  Copyright 2022 The Unbounded Project Authors (https://github.com/googlefonts/unbounded)")
     out.append("  Licence: SIL Open Font License 1.1 (full text at the end of this file)")
     out.append("")
     out.append("3D mouse model shown in the window")
@@ -212,11 +220,14 @@ def render(packages):
     out.append(BOOST)
     out.append("")
     out.append("-" * 78)
-    out.append("SIL Open Font License 1.1 (Geist fonts)")
-    out.append("-" * 78)
-    out.append("")
-    out.append(read("crates/app/fonts/OFL.txt"))
-    out.append("")
+    for name, file in (("Inter fonts", "OFL-Inter.txt"), ("JetBrains Mono fonts", "OFL-JetBrainsMono.txt"), ("Unbounded font", "OFL-Unbounded.txt")):
+        out.append("SIL Open Font License 1.1 (%s)" % name)
+        out.append("-" * 78)
+        out.append("")
+        out.append(read("crates/app/fonts/" + file))
+        out.append("")
+        if file != "OFL-Unbounded.txt":
+            out.append("-" * 78)
     return "\n".join(out)
 
 

@@ -5,7 +5,7 @@
   python3 scripts/dmg/make_background.py --check    # validate everything, write a preview (see check.sh)
 
 Needs Python 3 and Pillow only. The picture is drawn from the brand files in
-docs/brand (colours from tokens.json, Geist from crates/app/fonts, the
+docs/brand (colours from tokens.json, Inter from crates/app/fonts, the
 horizontal logo) and from the window numbers in settings.py, so the icons Finder
 draws land exactly on the glows, the arrow and the name plates painted here.
 
@@ -135,7 +135,7 @@ def message_segments(scale, ink, ink2, signal, pt=15):
     pt is the type size in points (the brand's 15 px body size); sizes in the
     result are in drawn pixels, so draw it with draw_segments(..., scale=1)."""
     px = pt * scale
-    semi, reg = "Geist-SemiBold.ttf", "Geist-Regular.ttf"
+    semi, reg = "Inter-SemiBold.ttf", "Inter-Regular.ttf"
     return [
         ("t", "Drag ", reg, (px, ink2)),
         ("t", "oneMK", semi, (px, ink)),
@@ -221,7 +221,7 @@ def sans(px, bold=False):
               "/System/Library/Fonts/Helvetica.ttc", "C:/Windows/Fonts/arial.ttf"):
         if os.path.exists(p):
             return ImageFont.truetype(p, px)
-    return font("Geist-SemiBold.ttf" if bold else "Geist-Regular.ttf", px)
+    return font("Inter-SemiBold.ttf" if bold else "Inter-Regular.ttf", px)
 
 
 def stand_in_folder(px):

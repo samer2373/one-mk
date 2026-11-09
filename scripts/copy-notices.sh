@@ -3,7 +3,8 @@
 #   sh scripts/copy-notices.sh <folder>
 # LICENSE-MIT and LICENSE-APACHE (oneMK's own), THIRD-PARTY-NOTICES (every
 # crate built in, with its licence texts: scripts/third-party-notices.py) and
-# OFL-Geist.txt (the licence of the fonts built into the window). Used by the
+# OFL-Inter.txt, OFL-JetBrainsMono.txt and OFL-Unbounded.txt (the licences of
+# the fonts built into the window). Used by the
 # .deb, AppImage, macOS app, Windows installer and the release archives, so
 # they all carry the same set. Fails if one is missing.
 set -eu
@@ -15,5 +16,7 @@ for file in LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES; do
     cp "$root/$file" "$1/$file"
     chmod 644 "$1/$file"
 done
-cp "$root/crates/app/fonts/OFL.txt" "$1/OFL-Geist.txt"
-chmod 644 "$1/OFL-Geist.txt"
+for font in Inter JetBrainsMono Unbounded; do
+    cp "$root/crates/app/fonts/OFL-$font.txt" "$1/OFL-$font.txt"
+    chmod 644 "$1/OFL-$font.txt"
+done
