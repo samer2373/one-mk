@@ -2659,7 +2659,7 @@ impl App {
                     Err(e) => format!("ok\n{n}\n{}\n", format!("{e:#}").replace('\n', " ")),
                 }
             }
-            req @ (Request::ClipSend(_) | Request::ClipGet(_) | Request::ClipHistory { .. } | Request::FetchClipboard | Request::Transfer { .. }) => {
+            req @ (Request::Partials { .. } | Request::ClipSend(_) | Request::ClipSendSensitive(_) | Request::ClipGet(_) | Request::ClipHistory { .. } | Request::FetchClipboard | Request::Transfer { .. }) => {
                 let online = self.peers.iter().map(|(fp, p)| crate::clipctl::Online { fp: *fp, name: p.name.clone(), addr: canonical(p.conn.remote_address()) });
                 crate::clipctl::handle(&self.dir, &self.services, online.collect(), &self.trust, req, reply);
                 return false;

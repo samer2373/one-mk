@@ -34,6 +34,8 @@ use tokio::sync::oneshot;
 
 const FETCH_DISABLED: u32 = 0x434c4950;
 pub const FETCH_DISABLED_MESSAGE: &str = "does not allow fetching its clipboard";
+/// What `clip-send` says about a copy a password manager marked as sensitive.
+pub const SENSITIVE_REFUSED: &str = "your clipboard is marked sensitive (a password manager copied it), so it was not sent; to send it anyway run: one-mk clip-send --allow-sensitive";
 
 /// The longest a peer may take to deliver one clipboard snapshot.
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -210,7 +212,7 @@ impl ClipSync {
         let skip: Vec<Digest> = self.state().known.get(&fp).copied().into_iter().chain(also_skip).collect();
         match self.cb.read(skip).await {
             Ok(Read::Changed { digest, data }) => {
-                match self.send(fp, addr, &data, true).await {
+                match self.send(fp, addr, &data, true, false).await {
                     Ok(None | Some(ClipAck::Stored)) => {
                         self.state().known.insert(fp, digest);
                         tracing::debug!(peer = %name, bytes = data.len(), "sent clipboard");
@@ -230,7 +232,7 @@ impl ClipSync {
                     (raise the limit with `one-mk clipboard --max-mb`)", mb(size), mb(self.cb.filter().max_bytes()));
                 self.state().known.insert(fp, digest);
             }
-            Ok(Read::Concealed(digest)) => {
+            Ok(Read::Concealed(digest) | Read::Sensitive { digest, .. }) => {
                 tracing::debug!(peer = %name, "clipboard is marked sensitive; not shared");
                 self.state().known.insert(fp, digest);
             }
@@ -256,10 +258,12 @@ impl ClipSync {
 
     /// Sends `data` on a new clipboard stream. With `want_ack`, waits for
     /// the receiver's answer (`None`: it gave none, as older versions don't).
-    async fn send(&self, fp: Fingerprint, addr: SocketAddr, data: &ClipData, want_ack: bool) -> anyhow::Result<Option<ClipAck>> {
+    /// `concealed`: the content is sensitive; the receiver is told so and then
+    /// keeps it out of its history.
+    async fn send(&self, fp: Fingerprint, addr: SocketAddr, data: &ClipData, want_ack: bool, concealed: bool) -> anyhow::Result<Option<ClipAck>> {
         let conn = self.bulk(fp, addr).await?;
         let (mut send, mut recv) = open_stream(&conn, StreamKind::Clipboard).await?;
-        let wrote = write_snapshot(&mut send, data).await;
+        let wrote = write_snapshot(&mut send, data, concealed).await;
         if !want_ack {
             return wrote.map(|()| None);
         }
@@ -274,17 +278,15 @@ impl ClipSync {
 
     /// Pushes our clipboard to `fp` now, whether or not it changed since
     /// we last did and without the pointer crossing. The user asked for
-    /// this copy to be sent, so it goes even if it is marked sensitive;
-    /// the formats and size limit still apply.
-    pub async fn send_now(self: &Arc<Self>, fp: Fingerprint, addr: SocketAddr) -> anyhow::Result<Moved> {
-        match self.cb.read_explicit(Vec::new()).await.context("reading the clipboard")? {
-            Read::Changed { digest, data } => {
-                let ack = self.send(fp, addr, &data, true).await?;
-                if matches!(ack, None | Some(ClipAck::Stored)) {
-                    self.state().known.insert(fp, digest);
-                }
-                Ok(Moved { bytes: data.len(), what: describe(&data), ack })
-            }
+    /// this copy to be sent; the formats and size limit still apply.
+    ///
+    /// A copy a password manager marked as sensitive is refused unless
+    /// `allow_sensitive` (`one-mk clip-send --allow-sensitive`); when it is
+    /// sent, the receiver is told, so it keeps it out of its history.
+    pub async fn send_now(self: &Arc<Self>, fp: Fingerprint, addr: SocketAddr, allow_sensitive: bool) -> anyhow::Result<Moved> {
+        let (digest, data, concealed) = match self.cb.read_explicit(Vec::new()).await.context("reading the clipboard")? {
+            Read::Changed { digest, data } => (digest, data, false),
+            Read::Sensitive { digest, data } => (digest, data, true),
             Read::TooLarge { size, .. } => bail!(
                 "your clipboard is {}, over the limit of {}; raise it with `one-mk clipboard --max-mb N`",
                 mb(size),
@@ -293,7 +295,18 @@ impl ClipSync {
             Read::Empty | Read::Unchanged(_) | Read::Concealed(_) => bail!(
                 "your clipboard is empty, or holds only formats that are switched off (see `one-mk clipboard`)"
             ),
+        };
+        if data.has_no_content() {
+            bail!("your clipboard is empty (it holds an empty piece of text)");
         }
+        if concealed && !allow_sensitive {
+            bail!("{SENSITIVE_REFUSED}");
+        }
+        let ack = self.send(fp, addr, &data, true, concealed).await?;
+        if matches!(ack, None | Some(ClipAck::Stored)) && !concealed {
+            self.state().known.insert(fp, digest);
+        }
+        Ok(Moved { bytes: data.len(), what: describe(&data), ack })
     }
 
     /// Fetches the clipboard of `fp` into ours.
@@ -398,7 +411,7 @@ impl ClipSync {
             Some(d) => println!("{name} fetched this computer's clipboard ({}).", describe(d)),
             None => tracing::debug!(peer = %name, "pull answered with nothing"),
         }
-        write_snapshot(send, data.as_deref().unwrap_or(&ClipData::default())).await
+        write_snapshot(send, data.as_deref().unwrap_or(&ClipData::default()), false).await
     }
 
     /// Reads the payloads `header` announces and puts what the settings
@@ -414,7 +427,8 @@ impl ClipSync {
             return Ok(Received::Nothing);
         }
         let allowed: u64 = header.items.iter().filter(|(f, _)| wanted(*f)).map(|(_, n)| u64::from(*n)).sum();
-        if allowed == 0 {
+        // Only formats that are switched off: not an empty piece of text.
+        if !header.items.iter().any(|(f, _)| wanted(*f)) {
             let _ = recv.stop(0u32.into());
             return Ok(Received::FormatsOff);
         }
@@ -440,11 +454,12 @@ impl ClipSync {
         }
         // Whatever is left is formats we don't take: not worth reading.
         let _ = recv.stop(0u32.into());
-        if data.is_empty() {
+        if data.has_no_content() {
             return Ok(Received::Nothing);
         }
         let (bytes, what) = (data.len(), describe(&data));
-        let digest = self.cb.write_from(data, name.into(), true).await?;
+        // Sensitive content the sender chose to send: on the clipboard, but never in the history.
+        let digest = if header.concealed { self.cb.write_concealed(data).await? } else { self.cb.write_from(data, name.into(), true).await? };
         self.state().known.insert(fp, digest);
         Ok(Received::Stored { bytes, what })
     }
@@ -468,7 +483,7 @@ enum Received {
 }
 
 /// A snapshot as one header and the payloads, then the end of the stream.
-async fn write_snapshot(send: &mut quinn::SendStream, data: &ClipData) -> anyhow::Result<()> {
+async fn write_snapshot(send: &mut quinn::SendStream, data: &ClipData, concealed: bool) -> anyhow::Result<()> {
     let parts: Vec<(ClipFormat, &[u8])> = [
         (ClipFormat::Text, data.text.as_deref().map(str::as_bytes)),
         (ClipFormat::Html, data.html.as_deref().map(str::as_bytes)),
@@ -477,7 +492,7 @@ async fn write_snapshot(send: &mut quinn::SendStream, data: &ClipData) -> anyhow
     .into_iter()
     .filter_map(|(f, b)| Some((f, b?)))
     .collect();
-    let header = ClipHeader { items: parts.iter().map(|(f, b)| (*f, b.len() as u32)).collect(), pull: false };
+    let header = ClipHeader { items: parts.iter().map(|(f, b)| (*f, b.len() as u32)).collect(), pull: false, concealed };
     let mut buf = Vec::new();
     header.encode_frame(&mut buf);
     send.write_all(&buf).await?;
@@ -646,14 +661,14 @@ mod tests {
         b.serve();
         c.serve();
         text(&a.mem, "for b only");
-        let moved = a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        let moved = a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         assert_eq!(moved, Moved { bytes: 10, what: "text".into(), ack: Some(ClipAck::Stored) });
         assert_eq!(b.mem.text().as_deref(), Some("for b only"));
         assert_eq!(c.mem.writes(), 0, "the other computer is left alone");
 
         // Even if it is the same content as last time: asking again sends again.
         b.mem.set(Raw::default());
-        a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         assert_eq!(b.mem.text().as_deref(), Some("for b only"));
         assert_eq!(b.mem.writes(), 2);
         // ... and it is remembered as B's, so the pointer crossing doesn't send it a third time.
@@ -668,19 +683,19 @@ mod tests {
         b.serve();
         let err = |e: anyhow::Error| format!("{e:#}");
 
-        assert!(err(a.clip.send_now(b.fp(), b.addr()).await.unwrap_err()).contains("empty"));
+        assert!(err(a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err()).contains("empty"));
 
         // Over our own limit: not even sent.
         text(&a.mem, &"x".repeat(2 << 20));
         a.settings(ClipSettings { max_mb: 1, ..Default::default() });
-        let e = err(a.clip.send_now(b.fp(), b.addr()).await.unwrap_err());
+        let e = err(a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err());
         assert!(e.contains("2.0 MB") && e.contains("1.0 MB") && e.contains("--max-mb"), "{e}");
         assert_eq!(b.mem.writes(), 0);
 
         // Over the receiver's limit: sent, refused, and we are told.
         a.settings(ClipSettings::default());
         b.settings(ClipSettings { max_mb: 1, ..Default::default() });
-        let m = a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        let m = a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         assert_eq!(m.ack, Some(ClipAck::TooLarge));
         assert_eq!(b.mem.writes(), 0);
 
@@ -690,13 +705,48 @@ mod tests {
             image: Some(one_mk_clipboard::Image { width: 1, height: 1, rgba: vec![1, 2, 3, 255] }),
             ..Raw::default()
         });
-        let m = a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        let m = a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         assert_eq!(m.ack, Some(ClipAck::FormatsOff));
         assert_eq!(b.mem.writes(), 0);
 
         // We have it switched off: nothing to send.
         a.settings(ClipSettings { image: false, ..Default::default() });
-        assert!(err(a.clip.send_now(b.fp(), b.addr()).await.unwrap_err()).contains("switched off"));
+        assert!(err(a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err()).contains("switched off"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_piece_of_text_is_called_empty_not_switched_off() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve();
+        text(&a.mem, "");
+        let e = format!("{:#}", a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err());
+        assert!(e.contains("is empty") && !e.contains("switched off"), "{e}");
+        assert_eq!(b.mem.writes(), 0);
+    }
+
+    /// A password-manager copy is refused by an explicit send unless allowed,
+    /// and when allowed the receiver records it nowhere: not in its history,
+    /// not for its own automatic push.
+    #[tokio::test]
+    async fn a_sensitive_copy_is_refused_unless_allowed_and_then_never_recorded() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve();
+        b.settings(ClipSettings { history_max: 20, ..Default::default() });
+        a.mem.set(Raw { text: Some("TOPSECRET".into()), concealed: true, ..Raw::default() });
+        let e = format!("{:#}", a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err());
+        assert!(e.contains("marked sensitive") && e.contains("--allow-sensitive"), "{e}");
+        assert_eq!(b.mem.writes(), 0, "refused: nothing crossed");
+
+        let moved = a.clip.send_now(b.fp(), b.addr(), true).await.unwrap();
+        assert_eq!(moved.ack, Some(ClipAck::Stored));
+        assert_eq!(b.mem.text().as_deref(), Some("TOPSECRET"));
+        assert!(b.clip.clipboard().history().lock().unwrap().is_empty(), "the receiver must not record a marked copy");
+        assert!(matches!(b.clip.clipboard().read(vec![]).await.unwrap(), Read::Concealed(_)), "nor hand it on automatically");
+
+        // An ordinary copy sent the same way is recorded as before.
+        text(&a.mem, "ordinary");
+        a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
+        assert_eq!(b.clip.clipboard().history().lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -705,7 +755,7 @@ mod tests {
         b.serve();
         a.mem.set(Raw { text: Some("plain".into()), html: Some("<b>rich</b>".into()), ..Raw::default() });
         b.settings(ClipSettings { html: false, ..Default::default() });
-        let m = a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        let m = a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         assert_eq!(m.ack, Some(ClipAck::Stored));
         let got = b.mem.get();
         assert_eq!((got.text.as_deref(), got.html.as_deref()), (Some("plain"), None));
@@ -713,7 +763,7 @@ mod tests {
         // And a sender doesn't offer what it has switched off.
         a.settings(ClipSettings { text: false, ..Default::default() });
         b.settings(ClipSettings::default());
-        a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         let got = b.mem.get();
         assert_eq!((got.text.as_deref(), got.html.as_deref()), (None, Some("<b>rich</b>")));
     }
@@ -778,7 +828,7 @@ mod tests {
         let (a, old) = (Pc::new(), Pc::new());
         old.serve_old();
         text(&a.mem, "hi");
-        let m = a.clip.send_now(old.fp(), old.addr()).await.unwrap();
+        let m = a.clip.send_now(old.fp(), old.addr(), false).await.unwrap();
         assert_eq!(m.ack, None, "sent, but it can't say what it did");
 
         let e = format!("{:#}", a.clip.pull(old.fp(), old.addr()).await.unwrap_err());
@@ -808,12 +858,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn explicit_send_overrides_the_sensitive_skip() {
+    async fn explicit_send_with_allow_sensitive_overrides_the_sensitive_skip() {
         let (a, b) = (Pc::new(), Pc::new());
         b.serve();
         text(&a.mem, "my wifi password");
         a.mem.set_concealed(true);
-        a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        a.clip.send_now(b.fp(), b.addr(), true).await.unwrap();
         assert_eq!(b.mem.text().as_deref(), Some("my wifi password"));
     }
 

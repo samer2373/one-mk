@@ -107,7 +107,7 @@ fn same(a: &str, b: &str) -> bool {
 /// Asks the running daemon. `None` means none is running.
 pub async fn request(dir: &Path, req: Request) -> Result<Option<String>> {
     match &req {
-        Request::Switch(one_mk_ctl::client::SwitchTo::Device(name)) | Request::ClipSend(Some(name)) | Request::ClipGet(Some(name)) => validate_target(name)?,
+        Request::Switch(one_mk_ctl::client::SwitchTo::Device(name)) | Request::ClipSend(Some(name)) | Request::ClipSendSensitive(Some(name)) | Request::ClipGet(Some(name)) => validate_target(name)?,
         _ => {}
     }
     let patience = req.reply_timeout();

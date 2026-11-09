@@ -63,6 +63,14 @@ impl ClipData {
     pub fn is_empty(&self) -> bool {
         self.text.is_none() && self.html.is_none() && self.png.is_none()
     }
+
+    /// Nothing to carry: no format at all, or only empty ones (an empty
+    /// piece of text is what some apps leave after "copying" nothing).
+    pub fn has_no_content(&self) -> bool {
+        self.text.as_ref().is_none_or(String::is_empty)
+            && self.html.as_ref().is_none_or(String::is_empty)
+            && self.png.as_ref().is_none_or(Vec::is_empty)
+    }
 }
 
 /// What the user lets us share, applied when reading the clipboard (and
@@ -120,6 +128,10 @@ pub enum Read {
     TooLarge { digest: Digest, size: usize },
     /// The source marked the content as sensitive and the filter skips it.
     Concealed(Digest),
+    /// The source marked the content as sensitive, and the caller asked for
+    /// it explicitly ([`Clipboard::read_explicit`]): it is returned, but as
+    /// this, so the caller can refuse it or send it marked.
+    Sensitive { digest: Digest, data: Arc<ClipData> },
     Changed { digest: Digest, data: Arc<ClipData> },
 }
 
@@ -140,7 +152,7 @@ enum Cmd {
     Digest { reply: oneshot::Sender<Result<Option<Digest>>> },
     #[cfg(target_os = "linux")]
     Capture { skip_history: bool, owner: u32, timestamp: u32 },
-    Write { data: ClipData, origin: String, record: bool, reply: oneshot::Sender<Result<Digest>> },
+    Write { data: ClipData, origin: String, record: bool, concealed: bool, reply: oneshot::Sender<Result<Digest>> },
 }
 
 impl Clipboard {
@@ -231,7 +243,15 @@ impl Clipboard {
     }
 
     pub async fn write_from(&self, data: ClipData, origin: String, record: bool) -> Result<Digest> {
-        self.call(|reply| Cmd::Write { data, origin, record, reply }).await
+        self.call(|reply| Cmd::Write { data, origin, record, concealed: false, reply }).await
+    }
+
+    /// Puts content that another computer marked as sensitive on the
+    /// clipboard. It is never recorded in the history (so never saved to
+    /// disk), and, like a local password copy, never pushed or handed on
+    /// automatically.
+    pub async fn write_concealed(&self, data: ClipData) -> Result<Digest> {
+        self.call(|reply| Cmd::Write { data, origin: String::new(), record: false, concealed: true, reply }).await
     }
 
     async fn call<T>(&self, cmd: impl FnOnce(oneshot::Sender<Result<T>>) -> Cmd) -> Result<T> {
@@ -516,9 +536,10 @@ impl Worker {
                         let r = self.backend_read().map(|raw| (!raw.is_empty()).then(|| raw.digest()));
                         let _ = reply.send(r);
                     }
-                    Cmd::Write { data, origin, record, reply } => {
-                        let saved = record.then(|| Arc::new(data.clone()));
+                    Cmd::Write { data, origin, record, concealed, reply } => {
+                        let saved = (record && !concealed).then(|| Arc::new(data.clone()));
                         let r = self.write(data);
+                        if concealed && let Ok(digest) = &r { self.exclude(*digest); }
                         if r.is_ok() && let Some(saved) = saved {
                             let digest = history::digest(&saved);
                             self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(saved, digest, false, &origin);
@@ -600,7 +621,7 @@ impl Worker {
         if let Some((d, data)) = &self.cache
             && *d == digest
         {
-            return Ok(sized(digest, data.clone(), max));
+            return Ok(marked(sized(digest, data.clone(), max), concealed && explicit));
         }
         let text_len = raw.text.as_ref().map_or(0, String::len) + raw.html.as_ref().map_or(0, String::len);
         if text_len > max || raw.image.as_ref().is_some_and(|i| i.rgba.len() > MAX_RGBA) {
@@ -614,7 +635,7 @@ impl Worker {
             self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(data.clone(), history_digest, concealed, "this computer");
         }
         self.cache = Some((digest, data.clone()));
-        Ok(sized(digest, data, max))
+        Ok(marked(sized(digest, data, max), concealed && explicit))
     }
 
     fn write(&mut self, data: ClipData) -> Result<Digest> {
@@ -634,6 +655,15 @@ impl Worker {
         #[cfg(target_os = "linux")]
         if matches!(self.backend, Backend::System(_)) { self.restored_owner = sensitivity::owner().ok(); }
         Ok(digest)
+    }
+}
+
+/// A readable copy that the source marked as sensitive is returned as such
+/// (only explicit reads get this far: the others stop at `Concealed`).
+fn marked(read: Read, concealed: bool) -> Read {
+    match read {
+        Read::Changed { digest, data } if concealed => Read::Sensitive { digest, data },
+        other => other,
     }
 }
 
@@ -760,6 +790,23 @@ mod tests {
         let history = clipboard.history().lock().unwrap();
         assert_eq!(history.len(), 2, "own XFixes selection events must not re-record restores");
         assert_eq!(history.get(1).unwrap().origin, "peer");
+    }
+
+    /// A secret another computer sent on purpose (marked) lands on the
+    /// clipboard but is not kept in the history, and is not handed on by the
+    /// automatic push or a fetch either.
+    #[tokio::test]
+    async fn a_marked_arrival_is_not_recorded_or_passed_on() {
+        let (cb, mem) = Clipboard::memory();
+        cb.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        cb.write_concealed(ClipData { text: Some("TOPSECRET".into()), ..Default::default() }).await.unwrap();
+        assert_eq!(mem.text().as_deref(), Some("TOPSECRET"));
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)));
+        assert!(cb.history().lock().unwrap().is_empty(), "a marked arrival is never recorded");
+        // Another computer's ordinary copy still is recorded.
+        cb.write_from(ClipData { text: Some("plain".into()), ..Default::default() }, "peer".into(), true).await.unwrap();
+        assert_eq!(cb.history().lock().unwrap().len(), 1);
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }));
     }
 
     #[tokio::test]
@@ -903,7 +950,7 @@ mod tests {
         assert_eq!(cb.digest().await.unwrap(), Some(d));
 
         // The user asking to send it explicitly overrides.
-        let Read::Changed { data, .. } = cb.read_explicit(vec![]).await.unwrap() else { panic!() };
+        let Read::Sensitive { data, .. } = cb.read_explicit(vec![]).await.unwrap() else { panic!() };
         assert_eq!(data.text.as_deref(), Some("hunter2"));
 
         // And the skip can be turned off.
