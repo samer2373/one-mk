@@ -52,12 +52,9 @@ const RESEND_AFTER: [Duration; 2] = [Duration::from_millis(4), Duration::from_mi
 /// this machine, and anything it held is released. Its keepalives arrive
 /// every 20 ms, so this only fires when something is really wrong.
 const LEASE: Duration = Duration::from_millis(750);
-/// A controller whose only traffic for this long is keepalives (no key,
-/// button, scroll or pointer movement) is let go: a forgotten session must
-/// not hold this machine forever, least of all on Linux, where using this
-/// machine's own mouse and keyboard can't be detected. The controller's
-/// pointer goes home, and its next movement enters again.
-const IDLE: Duration = Duration::from_secs(60);
+// A controller whose only traffic for a while is keepalives (no key,
+// button, scroll or pointer movement) is let go: see
+// `settings::IdleReturn` (`[edge] idle_return`, 10 minutes by default).
 /// If a peer doesn't answer `Enter` within this, the pointer comes home.
 const ENTER_TIMEOUT: Duration = Duration::from_millis(750);
 /// An answer to `Enter` later than this is worth a warning: the pointer
@@ -1789,7 +1786,7 @@ impl App {
         let tap = self.remote.as_ref().and_then(|r| r.tune.deadline()).map(Instant::from_std);
         let waits = waits.into_iter().chain(tap).min();
         let lease = self.owner.as_ref().map(|o| {
-            let lease = (o.last_rx + LEASE).min(o.last_input + self.owner_idle());
+            let lease = self.owner_idle().map_or(o.last_rx + LEASE, |idle| (o.last_rx + LEASE).min(o.last_input + idle));
             o.focus_check.map_or(lease, |c| c.min(lease))
         });
         let lease = lease.into_iter().chain(waits).min();
@@ -1816,8 +1813,10 @@ impl App {
         if self.owner.as_ref().is_some_and(|o| now >= o.last_rx + LEASE) {
             tracing::warn!("the controlling computer went silent; releasing held keys");
             self.end_owner(true);
-        } else if self.owner.as_ref().is_some_and(|o| now >= o.last_input + self.owner_idle()) {
-            tracing::info!("no input from the controlling computer for {} s; it lets go", self.owner_idle().as_secs());
+        } else if let Some(idle) = self.owner_idle()
+            && self.owner.as_ref().is_some_and(|o| now >= o.last_input + idle)
+        {
+            tracing::info!("no input from the controlling computer for {} s; it lets go (`one-mk edge --idle-return`)", idle.as_secs());
             self.end_owner_as(true, true);
         }
         self.tune_timer(now.into_std());
@@ -2200,7 +2199,7 @@ impl App {
             }
             Control::Busy { epoch } => self.go_home_from(fp, epoch, "it is controlled by another computer"),
             Control::Revoked { epoch } => self.go_home_from(fp, epoch, "it took back control"),
-            Control::IdleRevoked { epoch } => self.go_home_from(fp, epoch, "it let go after a minute without input"),
+            Control::IdleRevoked { epoch } => self.go_home_from(fp, epoch, "it let go after a while without input (its `one-mk edge --idle-return`)"),
             Control::Caps(bits) => {
                 if let Some(p) = self.peers.get_mut(&fp) {
                     p.caps = bits;
@@ -4025,7 +4024,7 @@ mod tests {
         assert_eq!(o.pos, z);
     }
 
-    /// Only real input keeps a controller from being let go after `IDLE`;
+    /// Only real input keeps a controller from being let go after `[edge] idle_return`;
     /// keepalives (the same position again) only keep the lease.
     #[test]
     fn only_real_input_counts_against_idle() {
@@ -4660,6 +4659,42 @@ mod tests {
 
     fn sleeps(p: &one_mk_input::PowerHandles) -> usize {
         p.sleeps.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// `[edge] idle_return`, on the computer being controlled: `off` keeps
+    /// a controller that sends no input for good; back to the default
+    /// (shortened here), the idle controller is let go and its pointer
+    /// comes home, with nothing left held on B.
+    #[tokio::test]
+    async fn idle_return_off_keeps_an_idle_controller() {
+        use crate::settings::IdleReturn;
+        let mut duo = Duo::start("idle-return", None).await;
+        crate::app::broadcast::testing::set(&duo.db, None, Some(Duration::from_millis(300)));
+        set(&duo.db, |s| s.edge.idle_return = IdleReturn::Off).await;
+        duo.enter_b().await;
+        duo.ha.events.send(Event::Key { code: 42, down: true, device: None }).unwrap();
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert!(status(&duo.da).await.controlling.is_some(), "off: an idle controller keeps control");
+        set(&duo.db, |s| s.edge.idle_return = IdleReturn::Default).await;
+        let da = duo.da.clone();
+        eventually_async("the idle controller to be let go", || { let da = da.clone(); async move { status(&da).await.controlling.is_none() } }).await;
+        let held_on_b = injected_keys_held(&mut duo.hb);
+        assert!(held_on_b.is_empty(), "left held on B: {held_on_b:?}");
+        assert!(Settings::load(&duo.db).unwrap().edge.idle_return == IdleReturn::Default);
+        duo.stop().await;
+    }
+
+    /// The keys B was told to press and not to release since the start.
+    fn injected_keys_held(h: &mut NullHandles) -> Vec<u32> {
+        let mut down = Vec::new();
+        while let Ok(i) = h.inject.try_recv() {
+            match i {
+                Inject::Key { code, down: true } => down.push(code),
+                Inject::Key { code, down: false } => down.retain(|&c| c != code),
+                _ => {}
+            }
+        }
+        down
     }
 
     /// `block_screensaver_on_peers`: B keeps its screen awake exactly while
@@ -5323,7 +5358,7 @@ mod tests {
         duo.enter_b().await;
         eventually_async("relative motion", || async { status(&duo.da).await.relative }).await;
         let probes = duo.hb.focus_probes.load(SeqCst);
-        // Keep the visit alive (B lets go after a minute without input,
+        // Keep the visit alive (B lets go after a while without input,
         // not before), but send nothing that moves the focus.
         *duo.hb.focus.lock().unwrap() = Some(Focus { fullscreen: false, apps: vec![] });
         tokio::time::sleep(FOCUS_REPEAT + Duration::from_millis(500)).await;

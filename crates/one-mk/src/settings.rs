@@ -12,6 +12,7 @@ use one_mk_clipboard::{CEILING_BYTES, DEFAULT_MAX_BYTES, Filter};
 use one_mk_proto::{EdgeGuard, Modifier, Side};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -294,6 +295,119 @@ pub struct EdgeSettings {
     /// suggests (or sets) where a computer is.
     #[serde(skip_serializing_if = "is_default")]
     pub learn: Learn,
+    /// How long a computer controlling this one may send no input before
+    /// this one lets go of it.
+    #[serde(skip_serializing_if = "is_default")]
+    pub idle_return: IdleReturn,
+}
+
+/// When a computer controlling this one, but sending no key, click, scroll
+/// or movement, is let go (`[edge] idle_return`, `one-mk edge
+/// --idle-return`). It exists so a session left running can't hold this
+/// computer forever (on Linux, this computer's own mouse and keyboard
+/// can't be told apart from injected input, so using them doesn't end
+/// it). Its pointer then goes home and its next movement enters again.
+/// Set on the computer being controlled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IdleReturn {
+    /// [`DEFAULT_IDLE_RETURN_S`].
+    #[default]
+    Default,
+    /// Never: control ends only when the other computer leaves, takes
+    /// back, goes silent, or the emergency chord is pressed.
+    Off,
+    /// After this many seconds.
+    After(u32),
+}
+
+/// Ten minutes: reading a page or pausing a video on the other computer
+/// does not end the visit, a session left behind still does.
+pub const DEFAULT_IDLE_RETURN_S: u32 = 600;
+pub const MIN_IDLE_RETURN_S: u32 = 10;
+pub const MAX_IDLE_RETURN_S: u32 = 86_400;
+
+impl IdleReturn {
+    /// How long, or `None` for never.
+    pub fn duration(self) -> Option<std::time::Duration> {
+        match self {
+            IdleReturn::Default => Some(std::time::Duration::from_secs(DEFAULT_IDLE_RETURN_S.into())),
+            IdleReturn::Off => None,
+            IdleReturn::After(s) => Some(std::time::Duration::from_secs(s.clamp(MIN_IDLE_RETURN_S, MAX_IDLE_RETURN_S).into())),
+        }
+    }
+
+    /// In words, for `one-mk edge`.
+    pub fn describe(self) -> String {
+        match self.duration() {
+            None => "A computer controlling this one keeps control however long it sends no input (`--idle-return`).".into(),
+            Some(d) => format!("A computer controlling this one lets go after {} without input (`--idle-return`).", words(d.as_secs())),
+        }
+    }
+}
+
+/// `600` as "10 minutes", `90` as "90 seconds".
+fn words(secs: u64) -> String {
+    let plural = |n: u64, unit: &str| format!("{n} {unit}{}", if n == 1 { "" } else { "s" });
+    match secs {
+        s if s % 3600 == 0 => plural(s / 3600, "hour"),
+        s if s % 60 == 0 => plural(s / 60, "minute"),
+        s => plural(s, "second"),
+    }
+}
+
+impl FromStr for IdleReturn {
+    type Err = String;
+    /// `off`, `default`, or a time: seconds, or with s, m or h.
+    fn from_str(s: &str) -> Result<Self, String> {
+        let t = s.trim().to_ascii_lowercase();
+        match t.as_str() {
+            "off" | "never" => return Ok(IdleReturn::Off),
+            "default" => return Ok(IdleReturn::Default),
+            _ => {}
+        }
+        let (number, unit) = match t.char_indices().find(|(_, c)| !c.is_ascii_digit()) {
+            Some((i, _)) => t.split_at(i),
+            None => (t.as_str(), "s"),
+        };
+        let scale = match unit.trim() {
+            "s" | "sec" | "secs" | "seconds" => 1,
+            "m" | "min" | "mins" | "minutes" => 60,
+            "h" | "hour" | "hours" => 3600,
+            _ => return Err(format!("expected a time such as 600, 10m or 1h, or off, not {s:?}")),
+        };
+        let secs = number.parse::<u32>().ok().and_then(|n| n.checked_mul(scale))
+            .ok_or_else(|| format!("expected a time such as 600, 10m or 1h, or off, not {s:?}"))?;
+        if !(MIN_IDLE_RETURN_S..=MAX_IDLE_RETURN_S).contains(&secs) {
+            return Err(format!("{s:?} is out of range: from {MIN_IDLE_RETURN_S} seconds to 24 hours, or off"));
+        }
+        Ok(IdleReturn::After(secs))
+    }
+}
+
+impl Serialize for IdleReturn {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            IdleReturn::Default => s.serialize_str("default"),
+            IdleReturn::Off => s.serialize_str("off"),
+            IdleReturn::After(n) => s.serialize_u32(*n),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for IdleReturn {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Secs(i64),
+            Text(String),
+        }
+        match Raw::deserialize(d)? {
+            // A hand edit out of range is brought within it.
+            Raw::Secs(n) => Ok(IdleReturn::After(n.clamp(MIN_IDLE_RETURN_S.into(), MAX_IDLE_RETURN_S.into()) as u32)),
+            Raw::Text(t) => t.parse().map_err(serde::de::Error::custom),
+        }
+    }
 }
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
@@ -536,7 +650,7 @@ impl Settings {
                 let fields: toml::Value = toml::from_str(&s)?;
                 for (section, allowed) in [
                     ("wallpaper", &["version", "enabled", "grants"][..]),
-                    ("edge", &["corner", "dwell_ms", "modifier", "fullscreen_guard", "fullscreen_allow", "fullscreen_block", "left", "right", "top", "bottom", "wrap", "learn"][..]),
+                    ("edge", &["corner", "dwell_ms", "modifier", "fullscreen_guard", "fullscreen_allow", "fullscreen_block", "left", "right", "top", "bottom", "wrap", "learn", "idle_return"][..]),
                     ("input.autoscroll", &["enabled", "button", "speed", "dead_zone", "vertical_only", "scope", "app", "rule"][..]),
                 ] {
                     let mut value = Some(&fields);
@@ -694,8 +808,9 @@ pub struct EdgeArgs {
     /// Remove a program from both lists (repeatable).
     #[arg(long, value_name = "APP")]
     pub fullscreen_forget: Vec<String>,
-    /// Turn every rule off (for one edge with --side); for every edge,
-    /// also --wrap and --learn go back to off and suggest.
+    /// With --side: drop that edge's own rules, so it follows the rules
+    /// for every edge again. Without: turn every rule off, and --wrap,
+    /// --learn and --idle-return go back to off, suggest and default.
     #[arg(long)]
     pub reset: bool,
     /// Where no computer sits, bring the pointer in at the opposite edge:
@@ -710,6 +825,12 @@ pub struct EdgeArgs {
     /// Hide the layout suggestion shown now (in `one-mk status` and the window).
     #[arg(long)]
     pub dismiss: bool,
+    /// While another computer controls this one but sends no input, let
+    /// it go after this long: seconds, or with s, m or h (10s to 24h);
+    /// off to never; default for 10 minutes. Its pointer then goes home
+    /// and its next movement comes back.
+    #[arg(long, value_name = "TIME|off|default")]
+    pub idle_return: Option<IdleReturn>,
 }
 
 pub fn parse_on_off(s: &str) -> Result<bool, String> {
@@ -732,6 +853,7 @@ impl EdgeArgs {
             || !self.fullscreen_forget.is_empty()
             || self.wrap.is_some()
             || self.learn.is_some()
+            || self.idle_return.is_some()
     }
 
     /// Applies these options to `s`.
@@ -751,8 +873,8 @@ impl EdgeArgs {
         if self.side.is_some() && lists {
             bail!("the fullscreen program lists are for every edge; leave out --side");
         }
-        if self.side.is_some() && (self.wrap.is_some() || self.learn.is_some()) {
-            bail!("--wrap and --learn are for every edge; leave out --side");
+        if self.side.is_some() && (self.wrap.is_some() || self.learn.is_some() || self.idle_return.is_some()) {
+            bail!("--wrap, --learn and --idle-return are for every edge; leave out --side");
         }
         let rules = match self.side {
             Some(side) => s.side_mut(side).get_or_insert_with(Rules::default),
@@ -800,6 +922,9 @@ impl EdgeArgs {
         if let Some(learn) = self.learn {
             s.learn = learn;
         }
+        if let Some(idle) = self.idle_return {
+            s.idle_return = idle;
+        }
         Ok(())
     }
 }
@@ -824,6 +949,7 @@ pub async fn edge(dir: &Path, args: EdgeArgs) -> Result<()> {
             println!("Edges: {d}.");
         }
         println!("{}", e.no_computer());
+        println!("{}", e.idle_return.describe());
     };
     if args.dismiss && !args.changes_anything() {
         return dismiss(dir).await;
@@ -1178,6 +1304,52 @@ draw_when_no_mouse = "auto"
         let d = std::env::temp_dir().join(format!("one-mk-settings-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    /// `[edge] idle_return`: ten minutes unless said, off, or a time from
+    /// 10 s to 24 h; the default isn't written, and a hand edit out of
+    /// range is brought within it.
+    #[test]
+    fn idle_return_parses_saves_and_bounds() {
+        use std::time::Duration;
+        assert_eq!(IdleReturn::default().duration(), Some(Duration::from_secs(600)));
+        assert_eq!("off".parse(), Ok(IdleReturn::Off));
+        assert_eq!(IdleReturn::Off.duration(), None);
+        assert_eq!("90".parse(), Ok(IdleReturn::After(90)));
+        assert_eq!("30m".parse(), Ok(IdleReturn::After(1800)));
+        assert_eq!("1h".parse(), Ok(IdleReturn::After(3600)));
+        assert_eq!("60s".parse(), Ok(IdleReturn::After(60)), "the old minute is still there");
+        assert_eq!("Default".parse(), Ok(IdleReturn::Default));
+        for bad in ["5", "25h", "soon", "-3", "", "99999999999"] {
+            assert!(bad.parse::<IdleReturn>().is_err(), "{bad:?}");
+        }
+        assert_eq!(IdleReturn::After(1800).describe(), "A computer controlling this one lets go after 30 minutes without input (`--idle-return`).");
+        assert!(IdleReturn::Off.describe().contains("keeps control"));
+
+        let mut s = EdgeSettings::default();
+        assert!(!toml::to_string(&s).unwrap().contains("idle_return"));
+        EdgeArgs { idle_return: Some(IdleReturn::Off), ..EdgeArgs::default() }.apply(&mut s).unwrap();
+        let saved = toml::to_string(&s).unwrap();
+        assert!(saved.contains("idle_return = \"off\""), "{saved}");
+        assert_eq!(toml::from_str::<EdgeSettings>(&saved).unwrap().idle_return, IdleReturn::Off);
+        EdgeArgs { idle_return: Some(IdleReturn::After(120)), ..EdgeArgs::default() }.apply(&mut s).unwrap();
+        assert_eq!(toml::from_str::<EdgeSettings>(&toml::to_string(&s).unwrap()).unwrap().idle_return, IdleReturn::After(120));
+        assert_eq!(toml::from_str::<EdgeSettings>("idle_return = 1").unwrap().idle_return.duration(), Some(Duration::from_secs(10)));
+        assert!(toml::from_str::<EdgeSettings>("idle_return = \"later\"").is_err());
+        assert!(EdgeArgs { side: Some(Side::Left), idle_return: Some(IdleReturn::Off), ..EdgeArgs::default() }.apply(&mut s).is_err());
+        EdgeArgs { reset: true, ..EdgeArgs::default() }.apply(&mut s).unwrap();
+        assert_eq!(s.idle_return, IdleReturn::Default);
+        let cli = <crate::Cli as clap::Parser>::try_parse_from(["one-mk", "edge", "--idle-return", "off"]);
+        assert!(cli.is_ok());
+        assert!(<crate::Cli as clap::Parser>::try_parse_from(["one-mk", "edge", "--idle-return", "2s"]).is_err());
+        // A settings file with it set loads without "unknown setting".
+        let dir = std::env::temp_dir().join(format!("one-mk-idle-return-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[edge]\nidle_return = 900\n").unwrap();
+        let loaded = Settings::load(&dir).unwrap();
+        assert_eq!(loaded.edge.idle_return, IdleReturn::After(900));
+        assert!(loaded.unknown.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

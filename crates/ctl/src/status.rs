@@ -69,7 +69,7 @@ impl Suggestion {
 /// input, so only the command (or the idle rule) works there.
 pub fn takeback_hint() -> &'static str {
     if cfg!(target_os = "linux") {
-        "To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer)."
+        "To take it back, run `one-mk takeback` here (it also comes back by itself when the other computer sends no input for a while; see `one-mk edge --idle-return`)."
     } else {
         "To take it back, use this computer's mouse or keyboard, or run `one-mk takeback`."
     }

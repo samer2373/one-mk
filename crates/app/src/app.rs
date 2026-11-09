@@ -1616,7 +1616,7 @@ impl App {
         }
         if let Some(p) = &s.controlled_by {
             let sub = if cfg!(target_os = "linux") {
-                format!("Choose Take back, or stop sending input from {p}. Control comes back by itself after a minute without input from it.")
+                format!("Choose Take back, or stop sending input from {p}. Control comes back by itself after a while without input from it.")
             } else {
                 "Move this computer's mouse or press a key, or choose Take back.".into()
             };
