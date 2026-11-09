@@ -1,6 +1,6 @@
 //! Out-of-band, single-use invitations. See docs/PAIRING-INVITE.md.
 use crate::{Fingerprint, Peer};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use one_mk_proto::{StreamKind, sanitize_name};
 use ring::hmac;
@@ -51,7 +51,14 @@ impl Invitation {
         ensure!(self.service_port != 0, "invalid service port");
         ensure!(self.mdns == format!("one-mk-{}.local.", self.fingerprint.short()), "invalid mDNS name");
         let port = self.addrs[0].port();
-        ensure!(port != 0 && self.addrs.iter().all(|a| a.port() == port && usable_address(a.ip())), "invalid invitation address");
+        ensure!(port != 0, "invalid invitation address {}: the port must not be 0", self.addrs[0]);
+        ensure!(self.addrs.iter().all(|a| a.port() == port), "invalid invitation addresses: they must all use the same port");
+        if let Some(bad) = self.addrs.iter().find(|a| !usable_address(a.ip())) {
+            bail!(
+                "invalid invitation address {bad}: the other computer cannot reach a loopback (127.x), unspecified (0.0.0.0), multicast, broadcast or link-local address. \
+                 Use this computer's address on your network, for example 192.168.1.20:{port}"
+            );
+        }
         Ok(())
     }
 
@@ -347,6 +354,21 @@ mod tests {
     }
     use super::*;
     use sha2::{Digest, Sha256};
+    /// An address the other computer cannot reach is named, with why and what to use.
+    #[test]
+    fn an_unusable_invitation_address_is_explained() {
+        let why = |addrs: &[&str]| {
+            let addrs = addrs.iter().map(|a| a.parse().unwrap()).collect();
+            Invitation::new(Fingerprint([7; 32]), addrs, 24900, Duration::from_secs(60)).err().unwrap().to_string()
+        };
+        let loopback = why(&["127.0.0.1:5555"]);
+        assert!(loopback.contains("127.0.0.1:5555") && loopback.contains("loopback") && loopback.contains("192.168"), "{loopback}");
+        assert!(why(&["0.0.0.0:5555"]).contains("0.0.0.0:5555"));
+        assert!(why(&["192.168.1.20:0"]).contains("port must not be 0"));
+        assert!(why(&["192.168.1.20:5555", "192.168.1.21:5556"]).contains("same port"));
+        assert!(Invitation::new(Fingerprint([7; 32]), vec!["192.168.1.20:5555".parse().unwrap()], 24900, Duration::from_secs(60)).is_ok());
+    }
+
     #[test]
     fn invitation_id_requires_the_secret() {
         let first = invitation();

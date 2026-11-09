@@ -719,7 +719,11 @@ impl Settings {
                     }
                 }
                 settings.unknown = unknown_settings(fields.as_table().expect("settings table"), known.as_table().expect("settings table"));
-                settings.shortcut_upgrade = fields.get("hotkeys").is_none_or(|keys| keys.get("broadcast").is_none() || keys.get("fetch_clipboard").is_none())
+                // An upgrade is a file an older one-mk saved (it carries
+                // `settings_version`, or a [hotkeys] table without the newer
+                // shortcuts); a hand-written file with neither is a new user's.
+                let saved_by_one_mk = fields.get("settings_version").is_some() || fields.get("hotkeys").is_some();
+                settings.shortcut_upgrade = (saved_by_one_mk && fields.get("hotkeys").is_none_or(|keys| keys.get("broadcast").is_none() || keys.get("fetch_clipboard").is_none()))
                     || dir.join(".wave5-shortcuts-pending").exists();
                 if fields.get("clipboard").and_then(|clipboard| clipboard.get("history_max")).is_none() {
                     settings.clipboard.history_notice = Some(dir.join(".clipboard-history-update-noticed"));
@@ -841,6 +845,16 @@ impl Settings {
     }
 }
 
+/// A count from the command line (`--corner`, `--dwell`): a negative one
+/// is named as such, instead of being taken for a flag.
+fn whole_number(s: &str) -> Result<u32, String> {
+    match s.trim().parse::<i64>() {
+        Ok(n) if n < 0 => Err(format!("{n} is negative; say 0 or more (0 turns it off)")),
+        Ok(n) => u32::try_from(n).map_err(|_| format!("{n} is far too large")),
+        Err(_) => Err(format!("{s:?} is not a whole number")),
+    }
+}
+
 /// `one-mk edge` options.
 #[derive(clap::Args, Debug, Default)]
 pub struct EdgeArgs {
@@ -849,10 +863,10 @@ pub struct EdgeArgs {
     #[arg(long)]
     pub side: Option<Side>,
     /// Ignore crossings within this many pixels of a screen corner (0: off).
-    #[arg(long, value_name = "PX")]
+    #[arg(long, value_name = "PX", allow_hyphen_values = true, value_parser = whole_number)]
     pub corner: Option<u32>,
     /// The pointer must stay at the edge this long before it crosses (0: off).
-    #[arg(long, value_name = "MS")]
+    #[arg(long, value_name = "MS", allow_hyphen_values = true, value_parser = whole_number)]
     pub dwell: Option<u32>,
     /// Only cross while holding this key: none, shift, ctrl or alt.
     #[arg(long, value_name = "KEY")]
@@ -1016,7 +1030,7 @@ pub async fn edge(dir: &Path, args: EdgeArgs) -> Result<()> {
         return dismiss(dir).await;
     }
     if !args.changes_anything() {
-        let settings = Settings::load(dir)?;
+        let settings = Settings::view(dir)?;
         describe(&settings.edge);
         if settings.edge.guard(Side::Left).fullscreen && cfg!(target_os = "linux") {
             println!("{}", FULLSCREEN_LINUX);
@@ -1255,6 +1269,24 @@ draw_when_no_mouse = "auto"
         assert_eq!(explicit.clipboard.history_max, 12);
         assert!(explicit.clipboard.history_notice.is_none());
     }
+    /// "New default shortcuts" is for an upgrade (a file an older one-mk
+    /// saved), not for a new user who wrote a few lines by hand.
+    #[test]
+    fn the_shortcut_notice_is_for_upgrades_only() {
+        let dir = temp_dir("shortcut-upgrade");
+        std::fs::create_dir_all(&dir).unwrap();
+        let upgrade = |text: &str| {
+            std::fs::write(dir.join(FILE), text).unwrap();
+            Settings::load(&dir).unwrap().shortcut_upgrade
+        };
+        assert!(!upgrade("[edge]\ncorner = 5\n"), "hand-written, never saved by one-mk");
+        assert!(!upgrade("lock_sync = true\n"));
+        assert!(upgrade("settings_version = 2\n"), "saved by an older one-mk");
+        assert!(upgrade("lock_sync = true\n[hotkeys]\nhome = \"ctrl+alt+end\"\n"), "a hotkeys table from before the newer shortcuts");
+        assert!(!upgrade("[hotkeys]\nbroadcast = \"ctrl+alt+b\"\nfetch_clipboard = \"ctrl+alt+v\"\n"), "already has them");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `[broadcast]`: a file from before it gets 15 minutes; 0 means never;
     /// absurd values are capped at a day; a negative number makes the file
     /// unreadable like any other type error (the daemon then keeps its

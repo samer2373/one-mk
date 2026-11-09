@@ -186,7 +186,7 @@ pub async fn command(action: &Action) -> Result<()> {
                     Ok(Some(1)) => println!("GNOME: active. The pointer is hidden while the mouse is on another computer."),
                     Ok(Some(state)) => println!("GNOME: not active (state {state}). Run `one-mk pointer-extension enable`."),
                     Ok(None) => println!("GNOME doesn't know it yet. Log out and back in, then run `one-mk pointer-extension enable`."),
-                    Err(e) => println!("GNOME: could not ask ({e:#})."),
+                    Err(e) => println!("GNOME: could not ask ({}).", crate::doctor::plain_bus_error(&format!("{e:#}"))),
                 }
             }
         }
@@ -202,19 +202,24 @@ mod linux {
     use std::time::Duration;
 
     async fn extensions() -> Result<zbus::Proxy<'static>> {
-        let connection = zbus::connection::Builder::session()?.method_timeout(Duration::from_secs(2)).build().await?;
-        Ok(zbus::Proxy::new(&connection, "org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions", "org.gnome.Shell.Extensions").await?)
+        let connection = zbus::connection::Builder::session().map_err(bus)?.method_timeout(Duration::from_secs(2)).build().await.map_err(bus)?;
+        zbus::Proxy::new(&connection, "org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions", "org.gnome.Shell.Extensions").await.map_err(bus)
+    }
+
+    /// A bus error in plain words, once.
+    fn bus(e: impl std::fmt::Display) -> anyhow::Error {
+        anyhow::anyhow!(crate::doctor::plain_bus_error(&format!("{e:#}")))
     }
 
     /// GNOME's state number for the extension (1 is active), if it knows it.
     pub async fn state() -> Result<Option<u32>> {
-        let info: HashMap<String, zbus::zvariant::OwnedValue> = extensions().await?.call("GetExtensionInfo", &(UUID,)).await?;
+        let info: HashMap<String, zbus::zvariant::OwnedValue> = extensions().await?.call("GetExtensionInfo", &(UUID,)).await.map_err(bus)?;
         Ok(info.get("state").and_then(|s| f64::try_from(s).ok()).filter(|s| s.is_finite() && (0.0..=99.0).contains(s)).map(|s| s as u32))
     }
 
     pub async fn enable() -> Result<()> {
         ensure!(state().await?.is_some(), "GNOME doesn't know the extension yet. Log out and back in once, then try again.");
-        let enabled: bool = extensions().await?.call("EnableExtension", &(UUID,)).await?;
+        let enabled: bool = extensions().await?.call("EnableExtension", &(UUID,)).await.map_err(bus)?;
         ensure!(enabled, "GNOME could not enable the extension. Log out and back in once, then try again.");
         Ok(())
     }
