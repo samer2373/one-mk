@@ -31,10 +31,11 @@ impl App {
             self.wallpaper_ui.picker = None;
             if let Some(path) = result { self.wallpaper_command(Command::Set { path }); }
         }
-        let dropped = ui.input(|input| input.raw.dropped_files.first().map(|file| file.path().to_path_buf()));
-        if let Some(path) = dropped { self.wallpaper_command(Command::Set { path }); }
         let status = self.running().cloned();
         let wallpaper = status.as_ref().and_then(|status| status.wallpaper.clone()).unwrap_or_default();
+        // A drop is a choice like Choose…: only while choosing is possible.
+        let dropped = ui.input(|input| input.raw.dropped_files.first().map(|file| file.path().to_path_buf()));
+        if let Some(path) = dropped && accepts_drop(status.is_some(), wallpaper.available) { self.wallpaper_command(Command::Set { path }); }
         let plan = wallpaper.plan.as_ref();
         let canvas = plan.map(|plan| plan.canvas.clone()).unwrap_or_else(|| status.as_ref().map(one_mk_ctl::wallpaper::canvas).unwrap_or_default());
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
@@ -49,7 +50,7 @@ impl App {
             });
             self.wallpaper_ui.poster_path = poster_path;
         }
-        let enabled = status.is_some() && wallpaper.available;
+        let enabled = accepts_drop(status.is_some(), wallpaper.available);
         let selected = plan.is_some();
         let fit_now = plan.map_or(Fit::Fill, |plan| plan.fit);
         let hovering = ui.input(|input| !input.raw.hovered_files.is_empty());
@@ -195,6 +196,11 @@ impl App {
                 bottom += 14.0;
                 bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &message, regular(T_BODY), INK2);
             }
+            // What isn't proven on this computer yet is said, never hidden.
+            if let Some(note) = wallpaper.experimental.as_ref().filter(|_| status.is_some()) {
+                bottom += 14.0;
+                bottom += para(ui, pos2(origin.x + 14.0, bottom), width - 28.0, &format!("Experimental: {note}"), regular(T_META), INK2);
+            }
             ui.allocate_space(vec2(width, bottom - origin.y + 8.0));
         });
     }
@@ -278,7 +284,21 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
 
 fn fit_text(ui: &Ui, text: &str, width: f32) -> String { fit(ui.painter(), text, &regular(T_META), width) }
 
+/// Whether a video or picture can be chosen now (Choose…, or dropped on the
+/// page): oneMK runs and wallpaper is available on this computer.
+fn accepts_drop(running: bool, available: bool) -> bool { running && available }
+
 /// These rows carry subtitles of their own, so they take the "i" without a caption.
 fn short(row: Rect) -> Rect {
     Rect::from_center_size(row.center(), vec2(row.width(), 40.0))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_drop_is_ignored_while_choosing_is_disabled() {
+        assert!(super::accepts_drop(true, true));
+        assert!(!super::accepts_drop(false, true));
+        assert!(!super::accepts_drop(true, false));
+    }
 }

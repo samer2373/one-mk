@@ -84,7 +84,8 @@ fn helper_refuses_oversized_and_crafted_images_without_replacing_outputs() {
     let prepared = root.path().join("bundle.video");
     std::fs::write(&poster, b"previous poster").unwrap();
     std::fs::write(&prepared, b"previous bundle").unwrap();
-    assert!(picture::inspect(helper(), &source, &poster).unwrap_err().to_string().contains("picture helper failed"));
+    let refused = picture::inspect(helper(), &source, &poster).unwrap_err().to_string();
+    assert!(!refused.is_empty() && !refused.contains("Caused by") && !refused.starts_with("Error:"), "{refused}");
     assert!(picture::prepare(helper(), &source, &plan(), "host", &prepared).is_err());
     let oversized_jpeg = root.path().join("oversized.jpg");
     let mut bytes = JPEG.to_vec();

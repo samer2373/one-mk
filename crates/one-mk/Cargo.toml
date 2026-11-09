@@ -52,6 +52,7 @@ serde_ignored = "0.1"
 tempfile = "3.27.0"
 one-mk-input = { path = "../input", features = ["null-typing-tests"] }
 tokio = { version = "1.54.1", features = ["test-util"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2.191"

@@ -3323,6 +3323,7 @@ dependencies = [
  "fs4",
  "futures-util",
  "if-addrs",
+ "image",
  "libc",
  "one-mk-clipboard",
  "one-mk-ctl",
