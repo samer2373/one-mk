@@ -640,6 +640,18 @@ fn path(dir: &Path) -> PathBuf {
     dir.join(FILE)
 }
 
+/// Creates the settings folder (and any missing parents) for this account
+/// alone. With the process umask a folder made here could end up
+/// group-writable (Ubuntu's default umask is 002), and a group-writable
+/// settings folder makes hooks and `run:` rules refuse to run.
+fn create_settings_dir(dir: &Path) -> Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir).with_context(|| format!("creating settings folder {}", dir.display()))
+}
+
 impl Settings {
     /// Reads `settings.toml`; a missing file means the defaults. A file that
     /// can't be read is an error, so the command line never overwrites a
@@ -763,7 +775,7 @@ impl Settings {
     /// this alone would lose a change made by someone else in between.
     pub fn save(&self, dir: &Path) -> Result<()> {
         static N: AtomicU32 = AtomicU32::new(0);
-        std::fs::create_dir_all(dir).with_context(|| format!("creating settings folder {}", dir.display()))?;
+        create_settings_dir(dir)?;
         let tmp = dir.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let write = || -> Result<()> {
             use std::io::Write;
@@ -810,7 +822,7 @@ impl Settings {
     /// can't be read is an error, as with [`Settings::load`]), applies
     /// `change` and saves. If `change` fails nothing is written.
     pub fn update<R>(dir: &Path, change: impl FnOnce(&mut Settings) -> Result<R>) -> Result<R> {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating settings folder {}", dir.display()))?;
+        create_settings_dir(dir)?;
         let lock_path = dir.join(LOCK_FILE);
         let lock = File::options()
             .create(true)
@@ -1730,5 +1742,17 @@ draw_when_no_mouse = "auto"
         assert!(toml::from_str::<toml::Value>(&written).unwrap()["drag"].get("enabled").is_none(), "no drag choice is written for one nobody made: {written}");
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(other);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_settings_folder_is_private_to_the_account() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("one-mk-private-dir-{}", std::process::id())).join("nested");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+        Settings::update(&dir, |_| Ok(())).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "settings folder must not be group/world accessible: {mode:o}");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 }
