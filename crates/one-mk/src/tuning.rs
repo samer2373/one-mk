@@ -13,7 +13,7 @@ use anyhow::{Result, bail};
 use one_mk_net::TrustStore;
 use one_mk_proto::keynames::{self, Trigger};
 use one_mk_proto::pointer::{self, Accel, PointerTune};
-use one_mk_proto::remap::{self, Keymap, KeymapSet, Output, RuleSpec, What};
+use one_mk_proto::remap::{self, Action, Keymap, KeymapSet, Output, RuleSpec, What};
 use one_mk_proto::scroll::{self, ModScroll, Natural, ScrollConfig};
 use one_mk_proto::appmatch::AppPattern;
 use one_mk_proto::device::{DeviceRef, Fingerprint, InputDevice};
@@ -490,7 +490,8 @@ impl KeyRule {
         // A key rule can name a mouse button too (`from = "button1"`): the
         // same guard as `[[input.button]]`, in every layer.
         keep_clicking(&from, &what, || match &self.to { Some(to) => to.describe(), None => "a tap/hold key".into() })?;
-        Ok(RuleSpec { from, layer: self.layer.as_ref().map(|l| l.to_ascii_lowercase()), what })
+        refuse_emergency_chord(&what)?;
+        Ok(RuleSpec { from, layer: self.layer.clone(), what })
     }
 
     fn describe(&self) -> String {
@@ -682,7 +683,55 @@ impl ButtonRule {
         let from = self.from.trigger()?;
         let what = What::To(self.to.parse().map_err(|e| format!("to: {e}"))?);
         keep_clicking(&from, &what, || self.to.describe())?;
+        refuse_emergency_chord(&what)?;
         Ok(RuleSpec { from, layer: None, what })
+    }
+}
+
+/// A key that types ctrl+alt+shift+esc would press the emergency chord (it
+/// lets go of every key) on the computer it is typed on, again and again;
+/// refused, as remapping that chord is (see [`KeyRule::spec`]).
+fn refuse_emergency_chord(what: &What) -> Result<(), String> {
+    let outputs: Vec<&Output> = match what {
+        What::To(output) => vec![output],
+        What::TapHold { tap, hold, .. } => vec![tap, hold],
+    };
+    for output in outputs {
+        let chords: &[keynames::Chord] = match output {
+            Output::Chord(chord) => std::slice::from_ref(chord),
+            Output::Sequence(chords) => chords,
+            _ => &[],
+        };
+        if chords.iter().any(|chord| chord.key == 1 && (chord.mods | chord.mods >> 4) & 0b111 == 0b111) {
+            return Err("to: ctrl+alt+shift+esc is one-mk's emergency chord (it lets go of every key); no key can be made to type it".into());
+        }
+    }
+    Ok(())
+}
+
+/// The computers named by `switch NAME` in `outputs` that no paired
+/// computer answers to (`paired`: name, id and OS of each): pressing that
+/// key can only fail.
+fn unknown_switch_targets(outputs: &[&str], paired: &[(String, String, u8)]) -> Vec<String> {
+    outputs
+        .iter()
+        .filter_map(|text| match text.parse::<Output>() {
+            Ok(Output::Action(Action::Switch(to))) if !matches!(to.as_str(), "next" | "here") && !paired.iter().any(|(name, id, _)| peer_matches(&to, name, id)) => Some(to),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every output a key rule has, as written (a sequence has no actions).
+fn key_rule_outputs(rule: &KeyRule) -> Vec<&str> {
+    let one = match &rule.to { Some(To::One(s)) => Some(s.as_str()), _ => None };
+    one.into_iter().chain(rule.tap.as_deref()).chain(rule.hold.as_deref()).collect()
+}
+
+/// After saving a rule that switches to a computer: says so if none is paired under that name.
+fn switch_note(dir: &Path, outputs: &[&str]) {
+    for to in unknown_switch_targets(outputs, &paired(dir)) {
+        println!("Note: no paired computer is called {to:?}, so this key will only report that. Check `one-mk devices` (a name or an id works).");
     }
 }
 
@@ -920,11 +969,11 @@ impl TuningSettings {
         let mut seen: HashMap<(Option<String>, Trigger), u8> = HashMap::new();
         let mut out = Vec::new();
         for (rank, _, spec, at) in found {
-            match seen.get(&(spec.layer.clone(), spec.from)) {
+            match seen.get(&(spec.layer.as_ref().map(|l| l.to_ascii_lowercase()), spec.from)) {
                 Some(&r) if r == rank => warnings.push(format!("{at}: another rule for {} in the same scope comes first", spec.from)),
                 Some(_) => {} // overridden by a more specific scope
                 None => {
-                    seen.insert((spec.layer.clone(), spec.from), rank);
+                    seen.insert((spec.layer.as_ref().map(|l| l.to_ascii_lowercase()), spec.from), rank);
                     out.push(spec);
                 }
             }
@@ -1206,13 +1255,20 @@ impl TuningSettings {
             }
         }
         for (i, r) in self.keymap.rule.iter().enumerate() {
-            if let Err(e) = r.spec() {
-                out.push(format!("{}: {e}", place("input.keymap.rule", i)));
+            match r.spec() {
+                Err(e) => out.push(format!("{}: {e}", place("input.keymap.rule", i))),
+                Ok(_) => out.extend(unknown_switch_targets(&key_rule_outputs(r), paired).into_iter().map(|to| format!(
+                    "{}: `switch {to}` names no paired computer, so pressing the key only reports that (see `one-mk devices`)", place("input.keymap.rule", i)))),
             }
         }
         for (i, r) in self.button.iter().enumerate() {
-            if let Err(e) = r.spec() {
-                out.push(format!("{}: {e}", place("input.button", i)));
+            match r.spec() {
+                Err(e) => out.push(format!("{}: {e}", place("input.button", i))),
+                Ok(_) => {
+                    let to = match &r.to { To::One(s) => Some(s.as_str()), To::Many(_) => None };
+                    out.extend(unknown_switch_targets(&to.into_iter().collect::<Vec<_>>(), paired).into_iter().map(|to| format!(
+                        "{}: `switch {to}` names no paired computer, so pressing the button only reports that (see `one-mk devices`)", place("input.button", i))));
+                }
             }
         }
         for s in &scopes {
@@ -1423,7 +1479,10 @@ fn device_mark(scope: &Scope, unavailable: bool) -> &'static str {
 
 /// A number from the command line, short enough to put in a message.
 fn shown(v: f64) -> String {
-    if v.is_finite() && v.abs() < 1e6 { v.to_string() } else { "that".into() }
+    if v.is_nan() { "NaN".into() }
+    else if v.is_infinite() { if v < 0.0 { "-infinity".into() } else { "infinity".into() } }
+    else if v.abs() < 1e6 { v.to_string() }
+    else { format!("{v:e}") }
 }
 
 fn paired(dir: &Path) -> Vec<(String, String, u8)> {
@@ -1726,6 +1785,7 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
             }
             let shown = rule.describe();
             let used_layer = rule.layer.clone();
+            let added = rule.clone();
             Settings::update(dir, |s| {
                 let rules = &mut s.input.keymap.rule;
                 match find_key_rule(rules, &spec.from, &rule.layer, &scope, &app) {
@@ -1750,6 +1810,7 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
             println!("{shown}{}.", where_suffix(&scope, &app));
             device_note(dir, &scope);
             run_note(dir);
+            switch_note(dir, &key_rule_outputs(&added));
             if let Some(name) = used_layer {
                 layer_note(dir, &name);
             }
@@ -2106,6 +2167,7 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             let rule = ButtonRule { from, to, scope, app };
             rule.spec().map_err(anyhow::Error::msg)?;
             let line = format!("{} -> {}{}", rule.from.describe(), rule.to.describe(), where_suffix(&rule.scope, &rule.app));
+            let mapped = match &rule.to { To::One(s) => Some(s.clone()), To::Many(_) => None };
             let scope = rule.scope.clone();
             Settings::update(dir, |s| {
                 set_button(&mut s.input.button, rule, &t);
@@ -2114,6 +2176,7 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             println!("{line}.");
             device_note(dir, &scope);
             run_note(dir);
+            if let Some(to) = &mapped { switch_note(dir, &[to.as_str()]); }
         }
         ButtonsCmd::Unmap { button, scope } => {
             let app = scope.app()?;
@@ -2738,6 +2801,62 @@ scope = { peer = "Laptop" }
         };
         assert_eq!(by_id.specs(&PeerFacts { name: "renamed", id: ID, os: os::LINUX, apps: &[], device: None }).0.len(), 1);
         assert!(t.specs(&facts(os::MACOS)).1.is_empty(), "overrides are not conflicts");
+    }
+
+    /// A key that types the emergency chord is refused; a `switch` to a
+    /// computer nobody paired is flagged (the key can only fail); the
+    /// spelling of a layer is kept in what is said about it.
+    #[test]
+    fn keys_that_can_only_fail_are_refused_or_flagged() {
+        let t = load(
+            r#"
+[[input.keymap.rule]]
+from = "esc"
+to = "ctrl+alt+shift+esc"
+
+[[input.keymap.rule]]
+from = "f13"
+to = ["ctrl+a", "lctrl+ralt+shift+esc"]
+
+[[input.keymap.rule]]
+from = "f14"
+tap = "a"
+hold = "ctrl+alt+shift+esc"
+
+[[input.button]]
+from = "button5"
+to = "ctrl+alt+shift+esc"
+
+[[input.keymap.rule]]
+from = "f15"
+to = "switch nobody"
+
+[[input.keymap.rule]]
+from = "f16"
+to = "switch Desk"
+
+[[input.keymap.rule]]
+from = "f17"
+to = "switch next"
+
+[[input.keymap.rule]]
+from = "j"
+to = "down"
+layer = "Nav"
+"#,
+        );
+        let paired = vec![("Desk".to_owned(), "abcdef0123456789".to_owned(), os::LINUX)];
+        let problems = t.check(&paired);
+        for place in ["input.keymap.rule #1", "input.keymap.rule #2", "input.keymap.rule #3", "input.button #1"] {
+            assert!(problems.iter().any(|p| p.starts_with(place) && p.contains("emergency chord")), "{place}: {problems:?}");
+        }
+        assert!(problems.iter().any(|p| p.starts_with("input.keymap.rule #4") && p.contains("`switch nobody` names no paired computer")), "{problems:?}");
+        assert!(!problems.iter().any(|p| p.contains("switch Desk") || p.contains("switch next")), "known and built-in targets are fine: {problems:?}");
+        assert!(problems.iter().any(|p| p.contains("layer \"Nav\"")), "the layer is named as written: {problems:?}");
+        // The chord is fine on its own keys, and other chords with esc are fine.
+        assert!(KeyRule { from: "f13".into(), to: Some(To::One("ctrl+shift+esc".into())), ..Default::default() }.spec().is_ok());
+        assert!(KeyRule { from: "f13".into(), to: Some(To::One("ctrl+alt+shift+esc".into())), ..Default::default() }.spec().is_err());
+        assert_eq!(unknown_switch_targets(&["switch abcd-ef01", "switch here"], &paired), Vec::<String>::new(), "an id works too");
     }
 
     #[test]

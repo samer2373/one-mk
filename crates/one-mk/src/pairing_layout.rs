@@ -24,8 +24,15 @@ pub fn choose(trust: &TrustStore, fingerprint: Fingerprint, initiator: bool) -> 
     }
 }
 
-pub fn warning(name: &str) -> String {
-    format!("{}: placement needed; automatic edge placement is unavailable. Use `one-mk layout \"{}\" <left|right|top|bottom> --offset DX,DY`.", sanitize_name(name), sanitize_name(name))
+/// `shown`: the computer's name as people see it; `arg`: what to type to
+/// name it in a command (`TrustStore::arg`), so the advice always works.
+pub fn warning(shown: &str, arg: &str) -> String {
+    format!("{}: placement needed; automatic edge placement is unavailable. Use `one-mk layout {arg} <left|right|top|bottom> --offset DX,DY`.", sanitize_name(shown))
+}
+
+/// [`warning`] for a paired computer.
+pub fn warning_for(trust: &TrustStore, device: &Device) -> String {
+    warning(&trust.display(device), &trust.arg(device))
 }
 
 pub fn remember(trust: &mut TrustStore, fingerprint: Fingerprint, name: &str, address: SocketAddr, initiator: bool) -> Device {

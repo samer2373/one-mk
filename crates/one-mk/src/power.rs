@@ -106,7 +106,7 @@ pub async fn run_command(dir: &Path, args: PowerArgs) -> Result<()> {
             Ok(s.power.clone())
         })?
     } else {
-        Settings::load(dir)?.power
+        Settings::view(dir)?.power
     };
     println!("{}", power.describe());
     if changes {

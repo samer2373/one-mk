@@ -12,7 +12,7 @@ fn setup(dir: &Path, custom_home: bool) -> Result<Setup> {
     Ok(Setup {
         exe: one_mk_ctl::install::program_path()?,
         home: custom_home.then(|| one_mk_ctl::install::absolute(dir)),
-        computers: trust.devices().iter().filter_map(|d| Computer::new(&d.fingerprint, &d.name)).collect(),
+        computers: trust.devices().iter().filter_map(|d| Computer::new(&d.fingerprint, &trust.display(d))).collect(),
     })
 }
 

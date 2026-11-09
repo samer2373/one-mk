@@ -92,7 +92,7 @@ fn valid_layer(name: &str) -> Result<String, NameError> {
     let ok = !name.is_empty()
         && name.len() <= 32
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if ok { Ok(name.to_ascii_lowercase()) } else { err(format!("layer name {name:?}: use 1 to 32 letters, digits, - or _")) }
+    if ok { Ok(name.to_owned()) } else { err(format!("layer name {name:?}: use 1 to 32 letters, digits, - or _")) }
 }
 
 impl FromStr for Output {
@@ -321,7 +321,7 @@ impl Keymap {
         let mut warnings = Vec::new();
         let mut activated = Vec::new();
         let layer = |map: &mut Keymap, name: &str| -> Result<u8, NameError> {
-            if let Some(i) = map.layer_names.iter().position(|n| n == name) {
+            if let Some(i) = map.layer_names.iter().position(|n| n.eq_ignore_ascii_case(name)) {
                 return Ok(i as u8 + 1);
             }
             if map.layer_names.len() == MAX_LAYERS {

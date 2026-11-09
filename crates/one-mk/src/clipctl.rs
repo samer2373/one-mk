@@ -166,20 +166,20 @@ fn clip_request(
 fn pick<'a>(online: &'a [Online], trust: &TrustStore, who: Option<&str>) -> Result<&'a Online, String> {
     if let Some(q) = who {
         let Some(device) = trust.find(q) else {
-            return Err(format!("no paired computer called {q:?} (see `one-mk devices`)"));
+            return Err(trust.explain_miss(q).unwrap_or_else(|| format!("no paired computer called {q:?} (see `one-mk devices`)")));
         };
         let fp = device.fingerprint();
         return online
             .iter()
             .find(|o| Some(o.fp) == fp)
-            .ok_or_else(|| format!("{} is not connected right now", one_mk_proto::sanitize_name(&device.name)));
+            .ok_or_else(|| format!("{} is not connected right now", trust.display(device)));
     }
     match online {
         [] => Err("no computer is connected right now".to_owned()),
         [only] => Ok(only),
         many => {
             let names: Vec<&str> = many.iter().map(|o| o.name.as_str()).collect();
-            Err(format!("several computers are connected ({}); choose one by name", names.join(", ")))
+            Err(format!("several computers are connected ({}); choose one by its name or id (--to for clip-send, --from for clip-get)", names.join(", ")))
         }
     }
 }
@@ -227,7 +227,7 @@ impl ClipChange {
 /// the change to the running daemon.
 pub async fn clipboard(dir: &Path, change: ClipChange) -> Result<()> {
     if change.is_empty() {
-        let s = Settings::load(dir)?;
+        let s = Settings::view(dir)?;
         println!("Clipboard sharing: {}.", s.clipboard.summary());
         println!("Change it with `one-mk clipboard --text|--html|--image on|off`, `--max-mb N` (1 to {}), `--skip-sensitive on|off`, `--allow-fetch on|off`;", ClipSettings::MAX_MB_LIMIT);
         println!("clipboard history: `one-mk clipboard history --help`.");
@@ -244,7 +244,7 @@ pub async fn clipboard(dir: &Path, change: ClipChange) -> Result<()> {
 /// `one-mk notify [on|off]`: whether a received transfer raises a desktop notification.
 pub async fn notify(dir: &Path, state: Option<OnOff>) -> Result<()> {
     let Some(OnOff(on)) = state else {
-        let s = Settings::load(dir)?;
+        let s = Settings::view(dir)?;
         println!("A notification when files arrive: {}.", if s.notify_files { "on" } else { "off" });
         return Ok(());
     };
@@ -379,6 +379,23 @@ mod tests {
         assert!(ClipChange { max_mb: Some(ClipSettings::MAX_MB_LIMIT + 1), ..Default::default() }.apply(&mut c).is_err());
         assert_eq!(c.max_mb, 25, "a refused change changes nothing");
         assert!(ClipChange { max_mb: Some(ClipSettings::MAX_MB_LIMIT), ..Default::default() }.apply(&mut c).is_ok());
+    }
+
+    /// Two computers with one name: the advice offers what works (their ids),
+    /// and an id picks one.
+    #[test]
+    fn computers_with_the_same_name_are_chosen_by_id() {
+        let dir = temp("pick-twins");
+        let t = trust(&dir, &[(1, "Mac"), (2, "Mac")]);
+        let (a, b) = (fp(1).short(), fp(2).short());
+        // What the daemon lists: name with id when they would read the same.
+        let on = vec![online(1, &format!("Mac ({a})")), online(2, &format!("Mac ({b})"))];
+        let e = pick(&on, &t, None).err().unwrap();
+        assert!(e.contains(&format!("Mac ({a})")) && e.contains(&format!("Mac ({b})")) && e.contains("name or id"), "{e}");
+        let e = pick(&on, &t, Some("Mac")).err().unwrap();
+        assert!(e.contains("2 paired computers are called") && e.contains(&a) && e.contains(&b), "{e}");
+        assert_eq!(pick(&on, &t, Some(&b)).unwrap().fp, fp(2));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -47,7 +47,13 @@ impl FromStr for Swap {
 /// A paired device.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Device {
+    /// The name the computer gave itself.
     pub name: String,
+    /// A name chosen on THIS computer (`one-mk rename`), shown instead of
+    /// `name` here and nowhere else; it tells apart two computers that call
+    /// themselves the same. Older files have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     pub fingerprint: String,
     /// Which side of this machine the device sits on.
     #[serde(default = "default_side")]
@@ -123,6 +129,11 @@ fn default_side() -> String {
 }
 
 impl Device {
+    /// The name to show for it on this computer: the one chosen here, else
+    /// the one it gave itself.
+    pub fn label(&self) -> &str {
+        self.alias.as_deref().filter(|a| !a.trim().is_empty()).unwrap_or(&self.name)
+    }
     pub fn side(&self) -> Side {
         self.side.parse().unwrap_or(Side::Right)
     }
@@ -284,6 +295,7 @@ impl TrustStore {
             device.swap_ctrl_cmd = existing.swap_ctrl_cmd;
             device.offset = existing.offset;
             device.placed_by = existing.placed_by;
+            device.alias = existing.alias.take();
             *existing = device;
         } else {
             self.file.devices.push(device);
@@ -303,7 +315,58 @@ impl TrustStore {
     /// when two computers share a name.
     pub fn matching(&self, query: &str) -> impl Iterator<Item = &Device> + use<'_> {
         let (name, q) = (query.to_owned(), query.replace('-', "").to_ascii_lowercase());
-        self.file.devices.iter().filter(move |d| d.name.eq_ignore_ascii_case(&name) || (q.len() >= 4 && d.fingerprint.starts_with(&q)))
+        self.file.devices.iter().filter(move |d| {
+            // By the name shown here (the one chosen here, else its own), or its id.
+            d.label().eq_ignore_ascii_case(&name) || (q.len() >= 4 && d.fingerprint.starts_with(&q))
+        })
+    }
+
+    /// Whether another paired computer is shown under the same name as `d`.
+    pub fn label_is_shared(&self, d: &Device) -> bool {
+        self.file.devices.iter().any(|o| o.fingerprint != d.fingerprint && o.label().trim().eq_ignore_ascii_case(d.label().trim()))
+    }
+
+    /// `d`'s name as people should see it: its name, with its short id
+    /// after it when another paired computer is shown under the same name
+    /// (`MacBook-Pro (ab12-cd34)`), so two of them can be told apart.
+    pub fn display(&self, d: &Device) -> String {
+        let label = one_mk_proto::sanitize_name(d.label());
+        if self.label_is_shared(d) { format!("{label} ({})", d.short_id()) } else { label }
+    }
+
+    /// [`TrustStore::display`] for the computer with fingerprint `fp`
+    /// (empty if it is not paired).
+    pub fn display_fp(&self, fp: &Fingerprint) -> String {
+        self.get(fp).map(|d| self.display(d)).unwrap_or_default()
+    }
+
+    /// What to type on the command line to name `d`: its name when that
+    /// finds it and nothing else and is safe to type, else its short id.
+    pub fn arg(&self, d: &Device) -> String {
+        let plain = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_');
+        let label = d.label();
+        let unique = self.find(label).is_some_and(|f| f.fingerprint == d.fingerprint);
+        if unique && !label.is_empty() && label.chars().all(plain) {
+            label.to_owned()
+        } else if unique && !label.trim().is_empty() && label.trim() == label && label.chars().all(|c| plain(c) || c == ' ') {
+            format!("\"{label}\"")
+        } else {
+            d.short_id()
+        }
+    }
+
+    /// Why `query` names no single computer (or `None` when it names one):
+    /// no one, or several (which it lists by id).
+    pub fn explain_miss(&self, query: &str) -> Option<String> {
+        let hits: Vec<&Device> = self.matching(query).collect();
+        match hits.len() {
+            1 => None,
+            0 => Some(format!("no paired computer called {query:?}; see `one-mk devices` for names and ids")),
+            n => Some(format!(
+                "{n} paired computers are called {query:?}; use its id instead: {} (see `one-mk devices`)",
+                hits.iter().map(|d| d.short_id()).collect::<Vec<_>>().join(" or ")
+            )),
+        }
     }
 
     /// By fingerprint (or its leading part, as the window shows it) only:
@@ -349,6 +412,53 @@ mod tests {
         assert_eq!(store.find_fingerprint("abcd-1234").map(|d| d.name.as_str()), Some("Studio"));
         assert!(store.find_fingerprint("Studio").is_none());
         assert!(store.find_fingerprint("ab").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two computers that call themselves the same are shown with their
+    /// ids, named on the command line by id, and a name of your own (kept
+    /// beside the one it gave itself) tells them apart.
+    #[test]
+    fn computers_with_the_same_name_are_told_apart() {
+        let dir = std::env::temp_dir().join(format!("one-mk-trust-twins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut store = TrustStore::load(&dir).unwrap();
+        let (a, b, c) = ("aa11".repeat(16), "bb22".repeat(16), "cc33".repeat(16));
+        let mk = |fp: &str, name: &str| Device { fingerprint: fp.into(), name: name.into(), ..Default::default() };
+        store.file.devices = vec![mk(&a, "MacBook-Pro"), mk(&b, "macbook-pro"), mk(&c, "Studio")];
+        let (da, dc) = (store.devices()[0].clone(), store.devices()[2].clone());
+        assert_eq!(store.display(&da), format!("MacBook-Pro ({})", da.short_id()), "{:?}", store.display(&da));
+        assert_eq!(store.display(&dc), "Studio", "a name that is unique stays plain");
+        assert_eq!(store.arg(&da), da.short_id(), "a name that fits two is no way to name one");
+        assert_eq!(store.arg(&dc), "Studio");
+        let miss = store.explain_miss("macbook-pro").unwrap();
+        assert!(miss.contains("2 paired computers are called") && miss.contains(&da.short_id()) && miss.contains(&store.devices()[1].short_id()), "{miss}");
+        assert!(store.explain_miss("Studio").is_none());
+        assert!(store.explain_miss("Nobody").unwrap().starts_with("no paired computer called"));
+        assert_eq!(store.find(&da.short_id()).map(|d| d.fingerprint.clone()), Some(a.clone()), "an id always names one");
+
+        // A name chosen here: shown instead, matched too, the real one kept, and it survives a save.
+        store.get_mut(&a.parse().unwrap()).unwrap().alias = Some("Office PC".into());
+        let da = store.devices()[0].clone();
+        assert_eq!((da.label(), da.name.as_str()), ("Office PC", "MacBook-Pro"));
+        assert_eq!(store.display(&da), "Office PC", "no longer reads like another computer");
+        assert_eq!(store.display(&store.devices()[1]), "macbook-pro");
+        assert_eq!(store.find("office pc").map(|d| d.fingerprint.clone()), Some(a.clone()));
+        assert_eq!(store.arg(&da), "\"Office PC\"");
+        store.save().unwrap();
+        let saved = std::fs::read_to_string(dir.join("devices.toml")).unwrap();
+        assert!(saved.contains("alias = \"Office PC\"") && saved.matches("alias").count() == 1, "{saved}");
+        let mut again = TrustStore::load(&dir).unwrap();
+        assert_eq!(again.devices()[0].alias.as_deref(), Some("Office PC"));
+        // The computer's own name arriving again (pairing, reconnecting) leaves it alone.
+        again.upsert(Device { name: "MacBook-Pro (renamed)".into(), fingerprint: a.clone(), ..Default::default() });
+        assert_eq!(again.devices()[0].label(), "Office PC");
+        assert_eq!(again.devices()[0].name, "MacBook-Pro (renamed)");
+        // A file from before aliases has none.
+        std::fs::write(dir.join("devices.toml"), format!("[[device]]\nname = 'old'\nfingerprint = '{a}'\n")).unwrap();
+        let old = TrustStore::load(&dir).unwrap();
+        assert_eq!((old.devices()[0].alias.clone(), old.devices()[0].label()), (None, "old"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -219,7 +219,7 @@ impl App {
     /// it was paired under.
     pub(super) fn name_for(&self, fp: Fingerprint) -> String {
         match (self.trust.get(&fp), self.peers.get(&fp)) {
-            (Some(d), _) => one_mk_proto::sanitize_name(&d.name),
+            (Some(d), _) => self.trust.display(d),
             (None, Some(p)) => p.name.clone(),
             (None, None) => fp.short(),
         }

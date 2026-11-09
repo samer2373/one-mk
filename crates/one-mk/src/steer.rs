@@ -45,6 +45,17 @@ pub async fn lock_pointer(dir: &Path, t: Toggle) -> Result<()> {
     Ok(())
 }
 
+/// `one-mk lock-pointer` alone: whether the pointer is locked.
+pub async fn show_pointer_lock(dir: &Path) -> Result<()> {
+    let status = control::request(dir, Request::Status).await?.and_then(|r| one_mk_ctl::status::Status::decode(&r));
+    match status {
+        None => println!("one-mk is not running, so the pointer is not locked (`one-mk run --start-locked` starts it locked)."),
+        Some(s) if s.pointer_locked => println!("The pointer is locked to this computer: edges lead nowhere. `one-mk lock-pointer off` unlocks it."),
+        Some(_) => println!("The pointer is not locked: it crosses edges. `one-mk lock-pointer on` keeps it on this computer."),
+    }
+    Ok(())
+}
+
 /// `one-mk broadcast [on|off|toggle] [--idle-off MINUTES]`: starts or stops
 /// broadcast, or with neither says what it is doing; `--idle-off` changes
 /// when it stops by itself.
@@ -63,7 +74,7 @@ pub async fn broadcast(dir: &Path, state: Option<Toggle>, idle_off: Option<u32>)
     }
     let Some(t) = state else {
         if idle_off.is_none() {
-            show_broadcast(dir, &Settings::load(dir)?.broadcast).await?;
+            show_broadcast(dir, &Settings::view(dir)?.broadcast).await?;
         }
         return Ok(());
     };

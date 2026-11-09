@@ -143,7 +143,7 @@ one-mk autoscroll --off --app "code*"
 one-mk autoscroll --reset --app "code*"    # forget that override
 one-mk gestures preset side-swipe          # hold the back button, swipe: change desktop
 one-mk gestures add button4 left back --threshold 60
-one-mk gestures add middle up "ctrl+super+left" --os windows
+one-mk gestures add button5 up "ctrl+super+left" --os windows   # not middle: autoscroll uses it while on
 one-mk gestures list
 one-mk gestures remove button4 left
 ```

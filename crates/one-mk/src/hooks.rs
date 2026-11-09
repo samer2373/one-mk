@@ -282,7 +282,12 @@ impl Hooks {
     }
 
     pub fn any(&self) -> bool {
-        self.blocked.is_none() && Event::ALL.iter().any(|&e| self.get(e).is_some())
+        self.blocked.is_none() && self.any_set()
+    }
+
+    /// Whether any hook is set, running or not.
+    pub fn any_set(&self) -> bool {
+        Event::ALL.iter().any(|&e| self.get(e).is_some())
     }
 
     pub fn timeout(&self) -> Duration {
@@ -301,9 +306,6 @@ impl Hooks {
     }
 
     pub fn describe(&self) -> String {
-        if let Some(reason) = &self.blocked {
-            return format!("Hooks REFUSED: {reason}. Fix permissions or explicitly use `one-mk hooks --trust-permissions`.");
-        }
         let mut out = String::new();
         for e in Event::ALL {
             if let Some(c) = self.get(e) {
@@ -330,6 +332,11 @@ impl Hooks {
                 }
                 out += "\n";
             }
+        }
+        // Refused for its permissions: still say which hooks are set (they do not run).
+        if let Some(reason) = &self.blocked {
+            let refused = format!("Hooks REFUSED: {reason}. Fix permissions or explicitly use `one-mk hooks --trust-permissions`.");
+            return if out.is_empty() { refused } else { format!("{refused}\nSet, but not running:\n{}", out.trim_end()) };
         }
         if out.is_empty() {
             return "No hooks are set.".into();
@@ -1053,7 +1060,10 @@ pub async fn run_command(dir: &Path, mut args: HooksArgs) -> Result<()> {
         // typed at the command line is looked up as before.
         let looks_like_id = computer.len() >= 4 && computer.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-');
         let found = if looks_like_id { trust.find_fingerprint(computer).or_else(|| trust.find(computer)) } else { trust.find(computer) };
-        *computer = found.ok_or_else(|| anyhow::anyhow!("Choose one paired computer from the list."))?.fingerprint.clone();
+        *computer = found.ok_or_else(|| match trust.explain_miss(computer) {
+            Some(why) => anyhow::anyhow!(why),
+            None => anyhow::anyhow!("Choose one paired computer from the list."),
+        })?.fingerprint.clone();
     }
     if args.trust_permissions {
         trust_permissions(dir)?;
@@ -1071,7 +1081,7 @@ pub async fn run_command(dir: &Path, mut args: HooksArgs) -> Result<()> {
             Ok(s.hooks.clone())
         })?
     } else {
-        Settings::load(dir)?.hooks
+        Settings::view(dir)?.hooks
     };
     let hooks = Settings::load(dir).map(|settings| settings.hooks).unwrap_or(hooks);
     println!("{}", hooks.describe());
@@ -1082,7 +1092,11 @@ pub async fn run_command(dir: &Path, mut args: HooksArgs) -> Result<()> {
         }
     }
     if args.changes_anything() {
-        if crate::control::request(dir, crate::control::Request::Reload).await?.is_some() {
+        if hooks.blocked.is_some() && hooks.any_set() {
+            // Saved, but nothing runs: "Applied right away" would say it works.
+            let running = crate::control::request(dir, crate::control::Request::Reload).await?.is_some();
+            println!("Saved, but these hooks do not run until the permissions problem above is fixed{}.", if running { "" } else { " (one-mk is not running)" });
+        } else if crate::control::request(dir, crate::control::Request::Reload).await?.is_some() {
             println!("Applied right away.");
         } else {
             println!("one-mk is not running; this takes effect the next time it starts.");
@@ -1115,6 +1129,23 @@ mod tests {
             let line = help.lines().skip_while(|l| !l.trim_start().starts_with(option)).nth(1).unwrap_or_default();
             assert!(!line.trim().is_empty() && !line.trim_start().starts_with("--"), "{option} has no help:\n{help}");
         }
+    }
+
+    /// Hooks refused for their file's permissions are still listed (they do
+    /// not run), so a person can see what is set and what to fix.
+    #[test]
+    fn refused_hooks_are_still_listed() {
+        use super::*;
+        let mut hooks = Hooks::default();
+        assert_eq!(hooks.describe(), "No hooks are set.");
+        hooks.blocked = Some("settings.toml is writable by its group".into());
+        assert!(hooks.describe().starts_with("Hooks REFUSED") && !hooks.describe().contains("Set, but not running"), "nothing set: {}", hooks.describe());
+        HooksArgs { on_enter: Some("echo one".into()), ..Default::default() }.apply(&mut hooks).unwrap();
+        // (Reading the file decides this again, as it does when the command runs.)
+        hooks.blocked = Some("settings.toml is writable by its group".into());
+        let shown = hooks.describe();
+        assert!(shown.contains("Hooks REFUSED") && shown.contains("Set, but not running:") && shown.contains("on_enter: echo one"), "{shown}");
+        assert!(hooks.any_set() && !hooks.any(), "set, but nothing runs");
     }
 
     #[test]

@@ -278,7 +278,11 @@ pub async fn join(dir: &Path, args: JoinArgs) -> Result<()> {
     ensure!(args.machine || args.yes || std::io::stdin().is_terminal(), "non-interactive stdin requires --yes; this skips host trust approval");
     let text = match args.link {
         Some(s) => { eprintln!("WARNING: positional invitation links are visible in process arguments and may remain in shell history; prefer `one-mk join`."); Zeroizing::new(s) }
-        None => { eprintln!("Paste the invitation link, then Enter:"); read_stdin(MAX_LINK + 1).await? }
+        None => {
+            // A pipe or file feeds the link without a prompt to answer.
+            if std::io::stdin().is_terminal() { eprintln!("Paste the invitation link, then Enter:"); }
+            read_stdin(MAX_LINK + 1).await?
+        }
     };
     let invitation = Invitation::parse(text.trim())?;
     drop(text);
@@ -363,7 +367,7 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
     ensure!(agreed, "{} did not accept this computer; nothing saved here", sanitize_name(&name));
     let placed = save(dir, &peer, &name, port, false).await?;
     acknowledge(session).await?;
-    println!("Trusted {name} ({}). Start `one-mk run` only on computers not already running.", peer.fingerprint);
+    println!("Trusted {name} ({}). Next: run `one-mk run` on this computer if it is not already running.", peer.fingerprint);
     if machine { println!("paired\t{}\t{}\t{}", peer.fingerprint, sanitize_name(&name), placed_word(&placed)); }
     Ok(())
 }
@@ -501,11 +505,15 @@ async fn save_marked(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: 
     // Reload immediately before writing, as ordinary pairing does not own
     // the daemon's in-memory trust store.
     let addr = SocketAddr::new(peer.conn.remote_address().ip().to_canonical(), port);
-    let placement = TrustStore::update(dir, |trust| Ok(crate::pairing_layout::remember(trust, peer.fingerprint, name, addr, initiator)))?;
+    let (placement, warning) = TrustStore::update(dir, |trust| {
+        let placement = crate::pairing_layout::remember(trust, peer.fingerprint, name, addr, initiator);
+        let warning = trust.get(&peer.fingerprint).map(|d| crate::pairing_layout::warning_for(trust, d));
+        Ok((placement, warning))
+    })?;
     saved.store(true, Ordering::SeqCst);
     let _ = crate::control::request(dir, Request::Reload).await;
-    if placement.placed_by == one_mk_net::PlacedBy::Pending {
-        println!("{}", crate::pairing_layout::warning(name));
+    if placement.placed_by == one_mk_net::PlacedBy::Pending && let Some(warning) = warning {
+        println!("{warning}");
     }
     Ok(placement)
 }

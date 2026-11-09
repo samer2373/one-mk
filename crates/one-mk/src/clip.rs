@@ -498,7 +498,7 @@ impl ClipSync {
     fn peer_name(&self, fp: Fingerprint) -> String {
         self.history_dir.lock().unwrap_or_else(|error| error.into_inner()).as_ref()
             .and_then(|dir| one_mk_net::TrustStore::load(dir).ok())
-            .and_then(|trust| trust.devices().iter().find(|device| device.fingerprint() == Some(fp)).map(|device| device.name.clone()))
+            .and_then(|trust| trust.devices().iter().find(|device| device.fingerprint() == Some(fp)).map(|device| trust.display(device)))
             .unwrap_or_else(|| fp.short())
     }
 }
