@@ -141,8 +141,11 @@ pub struct Config {
     pub has_identity: bool,
     /// The paired computers, or why `devices.toml` could not be read.
     pub paired: Result<Vec<Paired>, String>,
-    /// Whether `settings.toml` (if there is one) can be read.
+    /// Whether `settings.toml` (if there is one) can be read in full.
     pub settings: Result<(), String>,
+    /// What one-mk leaves out of a `settings.toml` that has mistakes but is
+    /// still TOML (each with its line); the rest of the file is used.
+    pub ignored: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -255,7 +258,17 @@ pub fn daemon_check(d: &Daemon) -> Check {
 }
 
 pub fn config_checks(c: &Config, dir: &Path) -> Vec<Check> {
-    let folder = if let (true, Err(e)) = (c.dir_exists, &c.settings) {
+    let folder = if let (true, Err(_)) = (c.dir_exists, &c.settings) && !c.ignored.is_empty() {
+        Outcome::warn(
+            format!(
+                "Found at {}, but settings.toml has {}: {}. one-mk leaves out what it can't read and uses the rest.",
+                dir.display(),
+                if c.ignored.len() == 1 { "a mistake" } else { "mistakes" },
+                c.ignored.join("; ")
+            ),
+            "Fix the line named (settings.toml in the settings folder), or delete that part; the other settings are unaffected. Commands that change settings refuse until it is fixed.",
+        )
+    } else if let (true, Err(e)) = (c.dir_exists, &c.settings) {
         Outcome::warn(
             format!(
                 "Found at {}, but settings.toml cannot be read ({e}). one-mk ignores it: a running one-mk keeps the \
@@ -761,7 +774,7 @@ pub fn device_rules_check(d: &DeviceRules) -> Check {
 fn probe_device_rules(dir: &Path, running: bool) -> DeviceRules {
     let r = crate::inputdevices::Remembered::load(dir).unwrap_or_default();
     let support = crate::inputdevices::support(&r, running);
-    let rules = Settings::load(dir).map(|s| s.input.uses_devices()).unwrap_or(false);
+    let rules = Settings::load_lenient(dir).map(|s| s.input.uses_devices()).unwrap_or(false);
     let connected = if running { r.devices.iter().filter(|x| x.connected).count() } else { 0 };
     DeviceRules { support, seen: r.devices.len(), connected, rules }
 }
@@ -840,7 +853,7 @@ pub fn edge_push_tested(backend: &str) -> Option<bool> {
 }
 
 fn probe_tuning(dir: &Path) -> Option<Tuning> {
-    let input = Settings::load(dir).ok()?.input;
+    let input = Settings::load_lenient(dir).ok()?.input;
     let paired = TrustStore::load(dir)
         .map(|t| t.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone(), d.os)).collect::<Vec<_>>())
         .unwrap_or_default();
@@ -1033,7 +1046,7 @@ fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
                 if good { None } else { Some("Start sharing again.") })
         }
         "config" => ("Settings", if good { "Your settings are ready. New settings are saved automatically." }
-            else { "Some saved settings could not be read. Default settings will be used next time sharing starts." },
+            else { "Some saved settings could not be read and are left out; everything else is used." },
             if good { None } else { Some("Review your preferences in Settings.") }),
         "identity" => {
             shown.outcome.status = Status::Pass;
@@ -1176,7 +1189,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
                 let dir = dir.to_owned();
                 move || probe_config(&dir)
             },
-            Config { dir_exists: false, has_identity: false, paired: Err("probe failed".into()), settings: Ok(()) },
+            Config { dir_exists: false, has_identity: false, paired: Err("probe failed".into()), settings: Ok(()), ignored: Vec::new() },
         )
     );
     let paired = config.paired.clone().unwrap_or_default();
@@ -1230,9 +1243,10 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         Some(status) => check("portals", "Permissions", Outcome::skip(format!("this daemon uses the {} backend", status.backend.as_str()))),
         None => portal_check(os, portals.as_ref(), daemon.status().map_or(&[], |s| &s.input)),
     }});
-    if let Ok(settings) = crate::settings::Settings::load(dir) {
+    if let Ok(settings) = crate::settings::Settings::load_lenient(dir) {
         if let Some(reason) = &settings.hooks.blocked {
-            checks.push(check("hooks", "Hooks", Outcome::fail(format!("Hooks REFUSED: {reason}"), "Fix settings.toml ownership and permissions and remove group/world write access from its folder; alternatively explicitly use `one-mk hooks --trust-permissions`.")));
+            let what = if settings.input.runs_commands() { "Hooks and `run:` key, button and gesture actions" } else { "Hooks" };
+            checks.push(check("hooks", "Hooks", Outcome::fail(format!("{what} REFUSED: {reason}"), "Fix settings.toml ownership and permissions and remove group/world write access from its folder; alternatively explicitly use `one-mk hooks --trust-permissions`.")));
         }
         checks.push(check("clipboard", "Clipboard", Outcome::pass(settings.clipboard.summary())));
         let retention = if settings.clipboard.history_max == 0 || settings.clipboard.history_max_mb == 0 { "Disabled; no copies retained" } else if settings.clipboard.history_persist { "Plain text on disk (unencrypted), in clipboard-history.bin" } else { "Memory only; forgotten on shutdown" };
@@ -1256,15 +1270,15 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         }));
     }
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
-    checks.push(broadcast_check(&daemon, crate::settings::Settings::load(dir).ok().map(|s| s.broadcast).as_ref(), os));
+    checks.push(broadcast_check(&daemon, crate::settings::Settings::load_lenient(dir).ok().map(|s| s.broadcast).as_ref(), os));
     checks.push(tuning_check(probe_tuning(dir).as_ref()));
     checks.push(local_rules_check(daemon.status()));
     checks.push(device_rules_check(&probe_device_rules(dir, daemon.status().is_some())));
     checks.push(pointer_overlay_check(
         crate::pointeroverlay::support_here(daemon.status().map(|s| s.backend.as_str())),
-        crate::settings::Settings::load(dir).map(|s| s.pointer.draw_when_no_mouse).unwrap_or_default(),
+        crate::settings::Settings::load_lenient(dir).map(|s| s.pointer.draw_when_no_mouse).unwrap_or_default(),
     ));
-    if let Ok(settings) = crate::settings::Settings::load(dir) {
+    if let Ok(settings) = crate::settings::Settings::load_lenient(dir) {
         let status = daemon.status();
         let question = status.and_then(|s| s.suggestion.as_ref()).map(|g| one_mk_ctl::status::is_it_there(&g.name, g.side));
         checks.push(edge_push_check(&settings.edge, status.map_or("", |s| s.backend.as_str()), question));
@@ -1300,11 +1314,14 @@ fn probe_config(dir: &Path) -> Config {
     let paired = TrustStore::load(dir).map_err(|e| format!("{e:#}")).map(|t| {
         t.devices().iter().map(|d| Paired { id: d.short_id(), name: d.name.clone(), addrs: d.addrs.clone() }).collect()
     });
+    let settings = Settings::load(dir);
+    let ignored = if settings.is_err() { Settings::load_lenient(dir).map(|s| s.problems).unwrap_or_default() } else { Vec::new() };
     Config {
         dir_exists: dir.is_dir(),
         has_identity: dir.join("identity.key.der").is_file() && dir.join("identity.cert.der").is_file(),
         paired,
-        settings: Settings::load(dir).map(|_| ()).map_err(|e| one_line(&format!("{e:#}"))),
+        settings: settings.map(|_| ()).map_err(|e| one_line(&format!("{e:#}"))),
+        ignored,
     }
 }
 
@@ -1779,7 +1796,7 @@ mod tests {
     }
 
     fn cfg(dir: bool, id: bool, paired: Result<Vec<Paired>, String>) -> Vec<Check> {
-        config_checks(&Config { dir_exists: dir, has_identity: id, paired, settings: Ok(()) }, Path::new("/x/one-mk"))
+        config_checks(&Config { dir_exists: dir, has_identity: id, paired, settings: Ok(()), ignored: Vec::new() }, Path::new("/x/one-mk"))
     }
 
     fn paired(id: &str) -> Paired {
@@ -1804,7 +1821,7 @@ mod tests {
     #[test]
     fn a_settings_file_that_does_not_parse_is_reported() {
         let c = |settings| {
-            let cfg = Config { dir_exists: true, has_identity: true, paired: Ok(vec![]), settings };
+            let cfg = Config { dir_exists: true, has_identity: true, paired: Ok(vec![]), settings, ignored: Vec::new() };
             config_checks(&cfg, Path::new("/x/one-mk")).remove(0)
         };
         assert_eq!(st(&c(Ok(()))), Status::Pass);

@@ -72,6 +72,10 @@ pub struct Settings {
     pub unknown: toml::Table,
     #[serde(skip)]
     pub shortcut_upgrade: bool,
+    /// What a lenient read left out of the file, and why (see
+    /// `settings_tolerant.rs`); empty when it was read in full.
+    #[serde(skip)]
+    pub problems: Vec<String>,
     #[serde(deserialize_with = "crate::wallpaper::lenient")]
     pub wallpaper: crate::wallpaper::WallpaperSettings,
     pub update: crate::update::Settings,
@@ -106,6 +110,7 @@ impl Default for Settings {
         Self {
             unknown: toml::Table::new(),
             shortcut_upgrade: false,
+            problems: Vec::new(),
             wallpaper: Default::default(),
             update: Default::default(),
             drag: Default::default(),
@@ -526,13 +531,39 @@ impl Settings {
     /// can't be read is an error, so the command line never overwrites a
     /// hand edit it didn't understand.
     pub fn load(dir: &Path) -> Result<Settings> {
+        Self::read(dir, false)
+    }
+
+    /// Like [`Settings::load`], but a section (or one input rule) that
+    /// can't be read is left out and listed in `problems`, with its line,
+    /// instead of failing the whole file. For readers only (the daemon,
+    /// `status`, `doctor`, listings): never save what this returns.
+    pub fn load_lenient(dir: &Path) -> Result<Settings> {
+        Self::read(dir, true)
+    }
+
+    /// [`Settings::load_lenient`] for a command that only shows settings:
+    /// what was left out goes to stderr.
+    pub fn view(dir: &Path) -> Result<Settings> {
+        let settings = Self::load_lenient(dir)?;
+        for problem in &settings.problems {
+            eprintln!("one-mk: {problem}");
+        }
+        Ok(settings)
+    }
+
+    fn read(dir: &Path, lenient: bool) -> Result<Settings> {
         let path = path(dir);
         match crate::hooks::read_settings(&path) {
             Ok((s, unsafe_reason)) => {
+                let (s, problems) = match lenient.then(|| crate::settings_tolerant::repair(&s)).flatten() {
+                    Some((repaired, problems)) => (repaired, problems),
+                    None => (s, Vec::new()),
+                };
                 let mut ignored = Vec::new();
                 let deserializer = toml::de::Deserializer::parse(&s).with_context(|| format!("reading {}", path.display()))?;
                 let mut settings: Settings = serde_ignored::deserialize(deserializer, |key| ignored.push((key.to_string(), ignored_components(&key))))
-                    .with_context(|| format!("reading {}", path.display()))?;
+                    .with_context(|| format!("reading {} (fix the line it names; nothing was changed)", path.display()))?;
                 let fields: toml::Value = toml::from_str(&s)?;
                 for (section, allowed) in [
                     ("wallpaper", &["version", "enabled", "grants"][..]),
@@ -574,6 +605,7 @@ impl Settings {
                     settings.clipboard.fetch_notice = Some(dir.join(".clipboard-fetch-update-noticed"));
                 }
                 settings.settings_version = 2;
+                settings.problems = problems;
                 settings.hooks.trust_permissions = crate::hooks::permissions_trusted(dir);
                 // Hooks and key actions (`run: ...`) both start programs.
                 if (settings.hooks.any() || settings.input.runs_commands()) && !settings.hooks.trust_permissions {
@@ -590,10 +622,18 @@ impl Settings {
     /// can't be read is reported and ignored, so a bad hand edit never
     /// stops one-mk.
     pub fn load_or_default(dir: &Path) -> Settings {
-        Self::load(dir).unwrap_or_else(|e| {
-            tracing::warn!("ignoring {}: {e:#}", path(dir).display());
-            Settings::default()
-        })
+        match Self::load_lenient(dir) {
+            Ok(settings) => {
+                for problem in &settings.problems {
+                    tracing::warn!("{problem}");
+                }
+                settings
+            }
+            Err(e) => {
+                tracing::warn!("ignoring {}: {e:#}", path(dir).display());
+                Settings::default()
+            }
+        }
     }
 
     /// Writes the settings to `settings.toml` through a file of its own that
