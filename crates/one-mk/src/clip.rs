@@ -38,7 +38,7 @@ pub const FETCH_DISABLED_MESSAGE: &str = "does not allow fetching its clipboard"
 pub const SENSITIVE_REFUSED: &str = "your clipboard is marked sensitive (a password manager copied it), so it was not sent; to send it anyway run: one-mk clip-send --allow-sensitive";
 /// What `clip-send --allow-sensitive` says when the receiver could not
 /// promise to keep a sensitive copy private (`clipctl` puts its name first).
-pub const SENSITIVE_UNSUPPORTED: &str = "runs an older oneMK that would not keep this private; update it first";
+pub const SENSITIVE_UNSUPPORTED: &str = "runs an older oneMK that would not keep this private (or does not share its clipboard); update it first, nothing was sent";
 
 /// The longest a peer may take to deliver one clipboard snapshot.
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(30);
