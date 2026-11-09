@@ -45,6 +45,10 @@ impl Desktop {
         std::fs::write(&fake, FAKE).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // `extension install` asks the shell's version (it refuses other GNOME series and no GNOME at all).
+        let shell = root.path().join("bin/gnome-shell");
+        std::fs::write(&shell, "#!/bin/sh\necho 'GNOME Shell 50.1'\n").unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::write(root.path().join("home/settings.toml"), "[update]\ncheck = false\n").unwrap();
         Self { root, name }
     }
@@ -149,8 +153,11 @@ fn an_original_left_behind_by_a_crash_is_put_back_when_onemk_starts() {
 #[test]
 fn uninstall_removes_the_gnome_extension_onemk_installed() {
     let desktop = Desktop::new("GNOME");
+    // This stand-in GNOME has no `org.gnome.shell` settings, so the extension cannot be
+    // switched on for the next login: the files are put in place and the command says so.
     let installed = desktop.command().args(["wallpaper", "extension", "install"]).output().unwrap();
-    assert!(installed.status.success(), "{}", String::from_utf8_lossy(&installed.stderr));
+    assert!(!installed.status.success() && String::from_utf8_lossy(&installed.stderr).contains("Installed in") && String::from_utf8_lossy(&installed.stderr).contains("No such schema"),
+        "{}", String::from_utf8_lossy(&installed.stderr));
     let extension = desktop.root.path().join("data/gnome-shell/extensions/one-mk-wallpaper@one-mk.org");
     assert!(extension.join("extension.js").is_file());
     let output = desktop.command().arg("uninstall").output().unwrap();

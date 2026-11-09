@@ -113,7 +113,12 @@ async fn gsettings(arguments: &[&str]) -> Result<String> {
     let output = tokio::time::timeout(std::time::Duration::from_secs(3),
         tokio::process::Command::new("gsettings").args(arguments).kill_on_drop(true).output()).await
         .context("GNOME settings took too long")?.context("GNOME settings could not start")?;
-    ensure!(output.status.success(), "{}", gsettings_failure(&output.status.to_string(), &String::from_utf8_lossy(&output.stderr)));
+    if !output.status.success() {
+        let said = String::from_utf8_lossy(&output.stderr);
+        let text = gsettings_failure(&output.status.to_string(), &said);
+        // No GNOME Shell schema: there is no GNOME Shell to tell about anything.
+        return Err(if said.contains("No such schema") { anyhow::Error::new(NothingToTidy(text)) } else { anyhow::anyhow!(text) });
+    }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
@@ -126,11 +131,23 @@ fn gsettings_failure(status: &str, stderr: &str) -> String {
     else { format!("GNOME settings (gsettings) said: {said}") }
 }
 
-/// Whether `error` is `gsettings` itself not being installed: then there
-/// is no GNOME settings database to keep tidy.
+/// `gsettings` knows no `org.gnome.shell`: GNOME Shell is not installed.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[derive(Debug)]
+struct NothingToTidy(String);
+#[cfg(all(unix, not(target_os = "macos")))]
+impl std::fmt::Display for NothingToTidy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { formatter.write_str(&self.0) }
+}
+#[cfg(all(unix, not(target_os = "macos")))]
+impl std::error::Error for NothingToTidy {}
+
+/// Whether `error` means there is no GNOME settings database to keep tidy:
+/// `gsettings` itself is not installed, or it has no GNOME Shell schema.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn gsettings_missing(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<std::io::Error>().is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    error.downcast_ref::<NothingToTidy>().is_some()
+        || error.downcast_ref::<std::io::Error>().is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// Switches the extension on for the next login. GNOME refuses a live
@@ -666,6 +683,7 @@ mod tests {
         #[cfg(all(unix, not(target_os = "macos")))]
         {
             assert!(gsettings_missing(&anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::NotFound)).context("GNOME settings could not start")));
+            assert!(gsettings_missing(&anyhow::Error::new(NothingToTidy("No such schema".into())).context("x")));
             assert!(!gsettings_missing(&anyhow::anyhow!("failed")));
         }
     }
