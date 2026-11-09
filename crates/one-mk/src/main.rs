@@ -401,6 +401,12 @@ enum Cmd {
     Hotkeys(hotkeys::HotkeyArgs),
     /// Lock this computer's screen and every connected computer's.
     LockAll,
+    /// Show or set the window's look: system (follow the computer), light or dark.
+    Appearance {
+        /// system, light or dark; leave out to see the current setting.
+        #[arg(value_enum)]
+        to: Option<settings::Appearance>,
+    },
     /// Whether locking this computer locks the connected ones too: on or off.
     LockSync {
         /// Enable or disable shared screen locking.
@@ -710,6 +716,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Gaming { mode: None } => { println!("Gaming mode: {}", settings::Settings::view(&dir)?.gaming); Ok(()) },
             Cmd::Hotkeys(args) => hotkeys::hotkeys(&dir, args).await,
             Cmd::LockAll => steer::lock_all(&dir).await,
+            Cmd::Appearance { to } => settings::appearance(&dir, to),
             Cmd::LockSync { state: Some(state) } => settings::lock_sync(&dir, state).await,
             Cmd::LockSync { state: None } => { println!("Lock sync: {}", if settings::Settings::view(&dir)?.lock_sync { "on" } else { "off" }); Ok(()) },
             Cmd::Hooks(args) => hooks::run_command(&dir, args).await,

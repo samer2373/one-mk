@@ -103,6 +103,66 @@ pub struct Settings {
     /// Broadcast to every connected computer (see `docs/BROADCAST.md`).
     pub broadcast: BroadcastSettings,
     pub typing: crate::typing::TypingSettings,
+    /// The window's own look (see `WindowSettings`); the service ignores it.
+    #[serde(skip_serializing_if = "WindowSettings::is_default")]
+    pub window: WindowSettings,
+}
+
+/// `[window]` in `settings.toml`: what only the window reads.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowSettings {
+    /// `system` (follow the computer's light or dark look), `light` or
+    /// `dark`. Kept as written: the window reads anything else as system.
+    pub appearance: String,
+}
+
+impl Default for WindowSettings {
+    fn default() -> Self {
+        WindowSettings { appearance: "system".into() }
+    }
+}
+
+impl WindowSettings {
+    pub fn is_default(&self) -> bool {
+        *self == WindowSettings::default()
+    }
+}
+
+/// The window's look: `one-mk appearance`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Appearance {
+    /// Follow the computer's own light or dark look (the default).
+    System,
+    /// Light, whatever the computer's look.
+    Light,
+    /// Dark, whatever the computer's look.
+    Dark,
+}
+
+impl fmt::Display for Appearance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Appearance::System => "system",
+            Appearance::Light => "light",
+            Appearance::Dark => "dark",
+        })
+    }
+}
+
+/// `one-mk appearance [system|light|dark]`: shows or sets the window's look.
+/// Only the window reads it, so the service needn't hear of it.
+pub fn appearance(dir: &Path, to: Option<Appearance>) -> Result<()> {
+    let Some(to) = to else {
+        println!("Appearance: {}", Settings::view(dir)?.window.appearance);
+        return Ok(());
+    };
+    Settings::update(dir, |s| {
+        s.window.appearance = to.to_string();
+        Ok(())
+    })?;
+    println!("Appearance: {to}. The window changes at once.");
+    Ok(())
 }
 
 impl Default for Settings {
@@ -127,6 +187,7 @@ impl Default for Settings {
             pointer: Default::default(),
             broadcast: Default::default(),
             typing: Default::default(),
+            window: Default::default(),
         }
     }
 }
@@ -1579,6 +1640,25 @@ draw_when_no_mouse = "auto"
         std::fs::write(dir.join(FILE), "[edge]\nmodifier = \"hyper\"\ncorner = 99999\n").unwrap();
         let s = Settings::load_or_default(&dir);
         assert_eq!(s.edge.guard(Side::Left), EdgeGuard { corner: MAX_CORNER, ..EdgeGuard::default() });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The window's appearance is added to `settings.toml` only once chosen:
+    /// a file without it reads as System, and a default save doesn't write it.
+    #[test]
+    fn appearance_is_additive() {
+        let dir = temp_dir("appearance");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "settings_version = 3\nlock_sync = true\n").unwrap();
+        let s = Settings::load(&dir).unwrap();
+        assert_eq!(s.window.appearance, "system");
+        assert!(s.lock_sync);
+        Settings::default().save(&dir).unwrap();
+        assert!(!std::fs::read_to_string(dir.join(FILE)).unwrap().contains("[window]"));
+        appearance(&dir, Some(Appearance::Dark)).unwrap();
+        let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        assert!(text.contains("[window]\nappearance = \"dark\""), "{text}");
+        assert_eq!(Settings::load(&dir).unwrap().window.appearance, "dark");
         let _ = std::fs::remove_dir_all(dir);
     }
 

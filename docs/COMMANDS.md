@@ -48,6 +48,7 @@ Guides: [README](../README.md), [ARRANGING.md](ARRANGING.md), [INPUT.md](INPUT.m
 | [`gaming`](#one-mk-gaming) | Gaming mode: on another computer, send raw mouse movement (for games) instead of positions |
 | [`hotkeys`](#one-mk-hotkeys) | Show or change the keyboard shortcuts: jump to computer N, the next one, lock the pointer, come back here, broadcast or fetch a clipboard |
 | [`lock-all`](#one-mk-lock-all) | Lock this computer's screen and every connected computer's |
+| [`appearance`](#one-mk-appearance) | Show or set the window's look: system (follow the computer), light or dark |
 | [`lock-sync`](#one-mk-lock-sync) | Whether locking this computer locks the connected ones too: on or off |
 | [`hooks`](#one-mk-hooks) | Show or set commands to run when the pointer arrives on or leaves this computer, or a computer connects or disconnects |
 | [`power`](#one-mk-power) | Keep the screensaver and sleep off on computers this one controls, and put displays to sleep together |
@@ -926,6 +927,25 @@ Options:
 Lock this computer's screen and every connected computer's
 
 Usage: one-mk lock-all [OPTIONS]
+
+Options:
+```
+
+## one-mk appearance
+
+```text
+Show or set the window's look: system (follow the computer), light or dark
+
+Usage: one-mk appearance [OPTIONS] [TO]
+
+Arguments:
+  [TO]
+          system, light or dark; leave out to see the current setting
+
+          Possible values:
+          - system: Follow the computer's own light or dark look (the default)
+          - light:  Light, whatever the computer's look
+          - dark:   Dark, whatever the computer's look
 
 Options:
 ```
