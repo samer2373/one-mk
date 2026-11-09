@@ -213,6 +213,19 @@ pub fn ms_number(us: u32) -> String {
     if us < 1000 { "<1".to_owned() } else { (us.saturating_add(500) / 1000).to_string() }
 }
 
+/// Whether a frame drawn with the readings `old` would look different
+/// with `new`: a computer came or went, packets were lost, the reading
+/// reads as another number of milliseconds, or the link crossed into
+/// "some stalls" or "slow". A steady line scrolls a pixel or two a second,
+/// which is not worth a frame.
+pub fn changed_enough(old: &[(String, LinkStats)], new: &[(String, LinkStats)]) -> bool {
+    let class = |us: u32| (us >= STALL_US, us >= SLOW_US);
+    old.len() != new.len()
+        || old.iter().zip(new).any(|((a_id, a), (b_id, b))| {
+            a_id != b_id || a.lost != b.lost || ms_number(a.rtt_us) != ms_number(b.rtt_us) || class(a.rtt_us) != class(b.rtt_us)
+        })
+}
+
 /// The history of every connected computer, by id.
 #[derive(Clone, Debug, Default)]
 pub struct Rtts {
@@ -264,6 +277,30 @@ mod tests {
 
     fn link(ms: f32, lost: u64) -> LinkStats {
         LinkStats { rtt_us: (ms * 1000.0) as u32, lost, sent: 0 }
+    }
+
+    fn named(readings: &[(&str, f32, u64)]) -> Vec<(String, LinkStats)> {
+        readings.iter().map(|(id, ms, lost)| ((*id).to_owned(), link(*ms, *lost))).collect()
+    }
+
+    #[test]
+    fn a_steady_link_does_not_ask_for_a_new_frame() {
+        let old = named(&[("a", 4.2, 3)]);
+        assert!(!changed_enough(&old, &named(&[("a", 4.4, 3)])));
+        assert!(!changed_enough(&old, &named(&[("a", 3.6, 3)])));
+        assert!(!changed_enough(&[], &[]));
+    }
+
+    #[test]
+    fn what_would_look_different_asks_for_a_new_frame() {
+        let old = named(&[("a", 4.2, 3)]);
+        assert!(changed_enough(&old, &named(&[("a", 6.0, 3)])), "another number of ms");
+        assert!(changed_enough(&old, &named(&[("a", 4.2, 4)])), "a packet lost");
+        assert!(changed_enough(&old, &named(&[("a", 45.0, 3)])), "some stalls");
+        assert!(changed_enough(&named(&[("a", 60.0, 0)]), &named(&[("a", 120.0, 0)])), "slow");
+        assert!(changed_enough(&old, &named(&[("a", 4.2, 3), ("b", 4.0, 0)])), "a computer joined");
+        assert!(changed_enough(&old, &named(&[("b", 4.2, 3)])), "another computer");
+        assert!(changed_enough(&[], &old), "the first reading");
     }
 
     fn ring(times: &[f32]) -> (Ring, f64) {

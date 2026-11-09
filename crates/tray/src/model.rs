@@ -85,6 +85,20 @@ impl Snapshot {
     }
 }
 
+/// "Remove desk…": a menu inside the menu that asks first, because removing
+/// a computer unpairs it (it has to be paired again to come back) and a
+/// menu has no dialog to ask in. Choosing the first line does it; closing
+/// the menu, or choosing the line above it, doesn't.
+fn remove_entry(name: &str, id: &str) -> Entry {
+    Entry::Sub {
+        label: format!("Remove {name}…"),
+        items: vec![
+            Entry::Label(format!("Unpairs {name}. Pairing it again brings it back.")),
+            Entry::Item { label: format!("Yes, remove {name}"), action: Action::Forget { peer: id.to_owned() }, checked: None },
+        ],
+    }
+}
+
 pub fn side_label(side: Side) -> &'static str {
     match side {
         Side::Left => "Left",
@@ -165,10 +179,7 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
                             action: Action::SetSide { peer: p.id.clone(), side },
                             checked: Some(p.side == side),
                         })
-                        .chain([
-                            Entry::Separator,
-                            Entry::Item { label: format!("Remove {}", p.name), action: Action::Forget { peer: p.id.clone() }, checked: None },
-                        ])
+                        .chain([Entry::Separator, remove_entry(&p.name, &p.id)])
                         .collect(),
                 });
             }
@@ -313,6 +324,28 @@ mod tests {
     }
 
     #[test]
+    fn nothing_in_the_menu_unpairs_in_one_click() {
+        fn walk(entries: &[Entry], depth: usize, found: &mut Vec<usize>) {
+            for e in entries {
+                match e {
+                    Entry::Item { action: Action::Forget { .. }, .. } => found.push(depth),
+                    Entry::Sub { items, .. } => walk(items, depth + 1, found),
+                    _ => {}
+                }
+            }
+        }
+        let mut found = vec![];
+        walk(&menu(&snap(vec![peer("desk", Side::Right, true), peer("old", Side::Left, false)])), 0, &mut found);
+        assert_eq!(found, vec![2, 2], "each Remove sits two menus down (computer, then the question)");
+    }
+
+    #[test]
+    fn the_menu_uses_the_product_name() {
+        let every = labels(&menu(&snap(vec![peer("desk", Side::Right, true)]))).join("\n") + &labels(&menu(&Snapshot::default())).join("\n");
+        assert!(!every.contains("one-mk"), "{every}");
+    }
+
+    #[test]
     fn not_running_offers_to_start() {
         let m = menu(&Snapshot::default());
         assert!(m.iter().any(|e| matches!(e, Entry::Item { action: Action::StartDaemon, .. })));
@@ -326,7 +359,11 @@ mod tests {
         let Some(Entry::Sub { label, items }) = m.iter().find(|e| matches!(e, Entry::Sub { .. })) else { panic!("{m:?}") };
         assert_eq!(label, "desk: on your right");
         assert_eq!(items.len(), 6, "four sides, a line, and Remove");
-        assert!(matches!(items.last(), Some(Entry::Item { action: Action::Forget { peer }, .. }) if peer == "desk-id"));
+        // Removing unpairs: it asks first, one level down, never in one click.
+        assert!(!items.iter().any(|e| matches!(e, Entry::Item { action: Action::Forget { .. }, .. })), "{items:?}");
+        let Some(Entry::Sub { label, items: ask }) = items.last() else { panic!("{items:?}") };
+        assert_eq!(label, "Remove desk…");
+        assert!(matches!(ask.as_slice(), [Entry::Label(_), Entry::Item { label, action: Action::Forget { peer }, .. }] if peer == "desk-id" && label == "Yes, remove desk"), "{ask:?}");
         let checked: Vec<_> = items
             .iter()
             .filter_map(|e| match e {

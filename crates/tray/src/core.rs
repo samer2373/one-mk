@@ -43,7 +43,12 @@ impl Ctx {
             .ok()
             .flatten()
             .and_then(|t| Status::decode(&t));
-        Snapshot { status, autostart: install::is_installed() }
+        Snapshot { status, autostart: install::is_installed_for(self.login_home().as_deref()) }
+    }
+
+    /// The settings folder the login entry starts oneMK with (`None`: the usual one).
+    fn login_home(&self) -> Option<PathBuf> {
+        self.custom_home.then(|| install::absolute(&self.dir))
     }
 
     pub fn start_daemon(&self) -> std::io::Result<()> {
@@ -134,7 +139,7 @@ impl Ctx {
     }
 
     fn toggle_autostart(&self) -> anyhow::Result<()> {
-        if install::is_installed() {
+        if install::is_installed_for(self.login_home().as_deref()) {
             install::uninstall()?;
         } else {
             if !self.daemon.is_absolute() {
@@ -144,7 +149,7 @@ impl Ctx {
             install::install(&Launch {
                 exe: self.daemon.clone(),
                 tray: Some(self.tray.clone()),
-                home: self.custom_home.then(|| install::absolute(&self.dir)),
+                home: self.login_home(),
                 // Do not start a second copy of a daemon that is already up.
                 start_now: !running,
             })?;

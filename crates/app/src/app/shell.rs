@@ -438,6 +438,7 @@ impl App {
         };
         let first_pair = self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty());
         let banner_take_back = self.tab == Tab::Desk && matches!(job, Some(Job::TakeBack));
+        let first_pair = first_pair || self.start_in_card();
         if self.broadcasting() {
             self.broadcast_status(ui, a);
         } else if !first_pair && !banner_take_back && button(ui, a, Id::unique("action"), &label, look, enabled && shown, a11y_label).clicked() {
@@ -586,6 +587,7 @@ impl App {
         let a = Rect::from_center_size(pos2(cx, side.bottom() - 12.0 - 20.0), vec2(side.width() - 12.0, 40.0));
         if self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty()) { return; }
         if self.tab == Tab::Desk && matches!(job, Some(Job::TakeBack)) { return; }
+        if self.start_in_card() { return; }
         let shown = !self.sheet_open() && self.status.is_some();
         if self.broadcasting() { self.broadcast_status(ui, a); return; }
         let r = button(ui, a, Id::unique("action"), "", look, enabled && shown, Some(&label));

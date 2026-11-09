@@ -494,7 +494,7 @@ impl App {
         let peers = s.map_or(0, |status| status.peers.len());
         let heights = [
             // The fifth row (Use shared rules) only for one edge's rules.
-            48.0 + 34.0 + 4.0 * EDGE_ROW + if ui.ctx().data(|d| d.get_temp::<String>(Id::unique("edge-scope"))).unwrap_or_default().is_empty() { 0.0 } else { 36.0 } + 2.0,
+            48.0 + 34.0 + 4.0 * EDGE_ROW + self.fullscreen_note_h(ui, col_w - 36.0) + if ui.ctx().data(|d| d.get_temp::<String>(Id::unique("edge-scope"))).unwrap_or_default().is_empty() { 0.0 } else { 36.0 } + 2.0,
             48.0 + 3.0 * HELP_ROW - 6.0 + 14.0,
             48.0 + HELP_ROW - 6.0 + 14.0,
             48.0 + 62.0 + super::settings_controls::SHORTCUT_ROW * self.prefs.hotkeys.len() as f32 + 10.0 + if s.is_some_and(|status| status.hotkeys != "on" && crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail).is_some()) { 130.0 } else { 76.0 },
@@ -556,6 +556,11 @@ impl App {
                 ui.ctx().open_url(egui::OpenUrl::new_tab("https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40"));
             }
         });
+    }
+
+    /// Room under "Stay in fullscreen windows" for what this desktop can't do.
+    fn fullscreen_note_h(&self, ui: &Ui, width: f32) -> f32 {
+        crate::desktop::Session::current().fullscreen_note().map_or(0.0, |note| ui.painter().layout(note.to_owned(), regular(T_META), INK3, width.max(1.0)).size().y + 4.0)
     }
 
     fn edges_card(&mut self, ui: &mut Ui, r: Rect) {
@@ -625,7 +630,11 @@ impl App {
             let v = if p.edge_fullscreen { "off" } else { "on" };
             self.edge_setting(&side, "--fullscreen-guard", v);
         }
-        let reset = Rect::from_min_size(pos2(c.left(), row(4).top()), vec2(c.width(), 28.0));
+        // Where this desktop can't see every fullscreen window, say so under the switch.
+        if let Some(note) = crate::desktop::Session::current().fullscreen_note() {
+            para(ui, pos2(c.left(), row(4).top() - 8.0), c.width(), note, regular(T_META), INK3);
+        }
+        let reset = Rect::from_min_size(pos2(c.left(), row(4).top() + self.fullscreen_note_h(ui, c.width())), vec2(c.width(), 28.0));
         if !side.is_empty() && button(ui, reset, Id::unique("edge-reset-side"), "Use shared rules", Look::Quiet, true, None).clicked() {
             self.settings_command("the edge rules", vec!["edge".into(), "--side".into(), side.clone(), "--reset".into()]);
         }

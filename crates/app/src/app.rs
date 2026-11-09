@@ -17,7 +17,7 @@ mod settings_controls;
 mod palette;
 mod wallpaper;
 
-use crate::daemon::{Event, Job, Link};
+use crate::daemon::{self, Event, Job, Link};
 use crate::motion::{self, tween};
 use crate::pairing::{Pairing, Step};
 use crate::scene::{self, Cargo, Device, Kind, SPACING, Scene, v};
@@ -649,8 +649,9 @@ impl App {
                     self.failed_measure.retain(|id| online.contains(id));
                     self.sync_scene();
                 }
-                Event::Links(links) if self.rtt_frozen.is_none() => self.rtts.record(now, &links),
-                Event::Links(_) => {}
+                // At the moment it was taken, not the frame that got to it.
+                Event::Links(links, taken) if self.rtt_frozen.is_none() => self.rtts.record(now - taken.elapsed().as_secs_f64(), &links),
+                Event::Links(..) => {}
                 Event::Autostart(on) => self.autostart = Some(on),
                 Event::Setup(report) => match report.problems().first() {
                     Some(problem) => self.toast_error(format!("Setup didn't finish. {problem}"), None, now),
@@ -1560,6 +1561,12 @@ impl App {
             self.now.to_bits().hash(&mut h);
         }
         h.finish()
+    }
+
+    /// The Desk's own card has the Start button (off, on the Desk page):
+    /// the sidebar does not offer a second one.
+    fn start_in_card(&self) -> bool {
+        self.tab == Tab::Desk && self.off() && self.status.is_some()
     }
 
     /// The top bar's button: what it says and does.
@@ -2507,8 +2514,10 @@ impl eframe::App for App {
         self.update_notice(ui.ctx());
         // Tell the link whether a graph was drawn: it asks the daemon for
         // round trips only then (a minimised window draws nothing).
-        let hidden = ui.input(|i| i.viewport().minimized == Some(true));
-        self.link.showing.frame(self.graph_wanted() && !hidden);
+        let (minimized, focused) = ui.input(|i| (i.viewport().minimized, i.viewport().focused));
+        let attention = daemon::Attention::of(minimized, focused);
+        self.link.showing.frame(self.graph_wanted() && attention != daemon::Attention::Hidden);
+        self.link.showing.attend(attention);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if std::env::var_os("ONE_MK_APP_BENCH").is_some() {
             // The UI thread's own work this frame (laying out and painting
