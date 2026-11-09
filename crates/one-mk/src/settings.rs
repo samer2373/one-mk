@@ -114,7 +114,7 @@ impl Default for Settings {
             wallpaper: Default::default(),
             update: Default::default(),
             drag: Default::default(),
-            settings_version: 2,
+            settings_version: 3,
             clipboard: ClipSettings::default(),
             notify_files: true,
             edge: EdgeSettings::default(),
@@ -604,8 +604,14 @@ impl Settings {
                     settings.clipboard.fetch_migrated = true;
                     settings.clipboard.fetch_notice = Some(dir.join(".clipboard-fetch-update-noticed"));
                 }
-                settings.settings_version = 2;
                 settings.problems = problems;
+                // Until version 3 a `true` here was usually the default written
+                // out by whichever session saved first, not a choice. File edge
+                // drops are opt-in now: it is off until switched on again.
+                if settings.settings_version < 3 {
+                    settings.drag.enabled = false;
+                }
+                settings.settings_version = 3;
                 settings.hooks.trust_permissions = crate::hooks::permissions_trusted(dir);
                 // Hooks and key actions (`run: ...`) both start programs.
                 if (settings.hooks.any() || settings.input.runs_commands()) && !settings.hooks.trust_permissions {
@@ -1516,5 +1522,31 @@ draw_when_no_mouse = "auto"
         assert!(bad.is_err());
         assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), "clipboard = [");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// File edge drops are never on by default, and the default does not
+    /// depend on which session wrote the file. A file written by a version
+    /// that stored the old environment-derived default as a choice is reset
+    /// once; after that an explicit choice is kept.
+    #[test]
+    fn file_edge_drops_are_off_until_chosen() {
+        assert!(!Settings::default().drag.enabled);
+        assert_eq!(ClipSettings::MAX_MB_LIMIT, 256, "the window's limit (one_mk_app view::CLIP_MAX_MB) must match");
+        let dir = temp_dir("drag-default");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "settings_version = 2\n[drag]\nenabled = true\nzone_px = 20\n").unwrap();
+        let loaded = Settings::load(&dir).unwrap();
+        assert!(!loaded.drag.enabled, "a frozen default is not an opt-in");
+        assert_eq!(loaded.drag.zone_px, 20, "other choices are kept");
+        Settings::update(&dir, |s| { s.drag.enabled = true; Ok(()) }).unwrap();
+        assert!(Settings::load(&dir).unwrap().drag.enabled, "a later explicit choice is kept");
+        assert!(std::fs::read_to_string(dir.join(FILE)).unwrap().contains("settings_version = 3"));
+        // Saving something unrelated never writes a different value from the environment.
+        let other = temp_dir("drag-default-other");
+        Settings::update(&other, |s| { s.lock_sync = true; Ok(()) }).unwrap();
+        let written = std::fs::read_to_string(other.join(FILE)).unwrap();
+        assert!(toml::from_str::<toml::Value>(&written).unwrap()["drag"].get("enabled").is_none(), "no drag choice is written for one nobody made: {written}");
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(other);
     }
 }

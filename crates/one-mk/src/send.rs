@@ -43,14 +43,18 @@ pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: V
 
 pub async fn dropped(dir: &Path, paths: Vec<PathBuf>, peer: String) -> Result<()> {
     let (count, name) = send(dir, paths, Some(peer), vec![]).await?;
-    crate::notify::sent(count, &name).await;
+    // "notify off" silences this toast like the one for received files.
+    crate::notify::sent(count, &name, crate::settings::Settings::load_or_default(dir).notify_files).await;
     Ok(())
 }
 
 async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>) -> Result<(usize, String)> {
-    let files = transfer::collect(&paths)?;
+    let (files, skipped) = transfer::collect_noted(&paths)?;
+    if let Some(line) = skipped_line(&skipped) {
+        eprintln!("{line}");
+    }
     if files.is_empty() {
-        bail!("nothing to send (the folders are empty)");
+        bail!("{}", if skipped.iter().all(|note| note.ends_with("(an empty folder)")) { "nothing to send (the folders are empty)" } else { "nothing to send (everything was skipped, see above)" });
     }
     let total = files.iter().fold(0u64, |total, file| total.saturating_add(file.size));
     if files.len() > 10_000 || total > 1 << 40 {
@@ -111,6 +115,19 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
         bail!("{failed} file(s) were not sent ({first_reason})");
     }
     Ok((saved, device.name.clone()))
+}
+
+/// One line telling the person what was left out of a send, or `None`.
+/// Symbolic links, pipes and empty folders are not sent; saying so beats a
+/// summary that looks complete.
+fn skipped_line(skipped: &[String]) -> Option<String> {
+    if skipped.is_empty() {
+        return None;
+    }
+    let plain = |note: &String| note.chars().flat_map(|c| if c.is_control() { c.escape_default().collect::<Vec<_>>() } else { vec![c] }).collect::<String>();
+    let shown: Vec<String> = skipped.iter().take(3).map(plain).collect();
+    let more = if skipped.len() > 3 { format!(", and {} more", skipped.len() - 3) } else { String::new() };
+    Some(format!("Skipped {} that cannot be sent: {}{more}", if skipped.len() == 1 { "1 item".to_owned() } else { format!("{} items", skipped.len()) }, shown.join(", ")))
 }
 
 /// What one try at sending needs.
@@ -428,5 +445,58 @@ mod tests {
         let sent = send(&home, vec![file], None, vec![]).await;
         let why = format!("{:#}", sent.unwrap_err());
         assert!(why.contains("1 file(s) were not sent"), "{why}");
+    }
+
+    /// The same path twice used to make two concurrent streams for one
+    /// partial file, which cancelled each other ("stopped by peer").
+    #[tokio::test]
+    async fn the_same_file_named_twice_is_sent_once() {
+        let rx = receiver("dup");
+        let (home, _) = sender_home("dup", &rx);
+        let file = temp("dup-src").join("hello.txt");
+        std::fs::write(&file, "hello\n").unwrap();
+        let (count, _) = send(&home, vec![file.clone(), file.clone(), file.parent().unwrap().join("./hello.txt")], None, vec![]).await.unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(std::fs::read_dir(&rx.root).unwrap().flatten().filter(|e| e.path().is_file()).count(), 1);
+    }
+
+    /// A symbolic link named on the command line to a file is sent (as that
+    /// file, under the link's name): "Send to" on a linked item works.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_named_symlink_to_a_file_is_sent() {
+        let rx = receiver("link");
+        let (home, _) = sender_home("link", &rx);
+        let src = temp("link-src");
+        std::fs::write(src.join("real.txt"), "real contents").unwrap();
+        std::os::unix::fs::symlink(src.join("real.txt"), src.join("shortcut.txt")).unwrap();
+        let (count, _) = send(&home, vec![src.join("shortcut.txt")], None, vec![]).await.unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(std::fs::read_to_string(rx.root.join("shortcut.txt")).unwrap(), "real contents");
+    }
+
+    #[test]
+    fn skipped_items_are_summarised_in_one_line() {
+        assert_eq!(skipped_line(&[]), None);
+        assert_eq!(skipped_line(&["a (a symbolic link)".into()]).unwrap(), "Skipped 1 item that cannot be sent: a (a symbolic link)");
+        let many: Vec<String> = (1..=5).map(|n| format!("f{n} (an empty folder)")).collect();
+        assert_eq!(skipped_line(&many).unwrap(), "Skipped 5 items that cannot be sent: f1 (an empty folder), f2 (an empty folder), f3 (an empty folder), and 2 more");
+        assert!(!skipped_line(&["bad\nname (x)".into()]).unwrap().contains('\n'), "a raw newline is never printed");
+    }
+
+    /// Nothing but skipped items: the failure says so instead of "folders are empty".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_send_of_only_skipped_things_fails_with_a_clear_message() {
+        let rx = receiver("onlyskip");
+        let (home, _) = sender_home("onlyskip", &rx);
+        let src = temp("onlyskip-src");
+        std::fs::create_dir_all(src.join("folder")).unwrap();
+        std::os::unix::fs::symlink(&src, src.join("folder/loop")).unwrap();
+        let why = format!("{:#}", send(&home, vec![src.join("folder")], None, vec![]).await.unwrap_err());
+        assert!(why.contains("everything was skipped"), "{why}");
+        let empty = temp("onlyskip-empty");
+        let why = format!("{:#}", send(&home, vec![empty], None, vec![]).await.unwrap_err());
+        assert!(why.contains("the folders are empty"), "{why}");
     }
 }

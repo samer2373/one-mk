@@ -428,7 +428,9 @@ impl App {
         let row_h = 36.0;
         let top = c.top() + 28.0;
         let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
-        for k in 1..4 {
+        // The last row (file edge drops) only exists where the desktop can offer it.
+        let drop_zones = view::drop_zones_available();
+        for k in 1..if drop_zones { 4 } else { 3 } {
             ui.painter().hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, LINE));
         }
         let p = self.prefs.clone();
@@ -456,14 +458,14 @@ impl App {
         let cur = p.clip_max_mb.to_string();
         if let Some(text) = self.edit_field(ui, fr, "clip-max", &cur, "25", "Largest clipboard to send or accept, in MB", true, true) {
             match text.parse::<u32>() {
-                Ok(n) if (1..=4096).contains(&n) => {
+                Ok(n) if (1..=view::CLIP_MAX_MB).contains(&n) => {
                     let v = n.to_string();
                     self.set_pref("the clipboard size limit", &["clipboard", "--max-mb", &v], |p| p.clip_max_mb = n);
                 }
-                _ => self.toast_error(format!("“{text}” isn't a size oneMK can use. Type a whole number of MB, like 25."), None, self.now),
+                _ => self.toast_error(format!("“{text}” isn't a size oneMK can use. Type a whole number of MB from 1 to {}, like 25.", view::CLIP_MAX_MB), None, self.now),
             }
         }
-        if switch_help(ui, row(3), Id::unique("file-drop-zones"), "Drop files at screen edges", "file-drop-zones", p.drop_zones, true).clicked() {
+        if drop_zones && switch_help(ui, row(3), Id::unique("file-drop-zones"), "Drop on screen edges (experimental)", "file-drop-zones", p.drop_zones, true).clicked() {
             self.set_pref("file drop zones", &["drag", if p.drop_zones { "--off" } else { "--on" }], |prefs| prefs.drop_zones = !p.drop_zones);
         }
     }

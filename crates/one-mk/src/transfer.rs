@@ -77,7 +77,7 @@ impl Notifier for Quiet {
 pub struct Inbox {
     root: PathBuf,
     /// Partial files being written, by id.
-    active: Mutex<HashMap<String, Slot>>,
+    active: Arc<Mutex<HashMap<String, Slot>>>,
     limits: Arc<Mutex<Limits>>,
     partial_cap: u64,
     /// Progress of what is arriving, and the "files received" notification.
@@ -256,7 +256,7 @@ impl Inbox {
 
     fn build(root: PathBuf, partial_cap: u64, notifier: Arc<dyn Notifier>) -> Arc<Self> {
         let transfers = Transfers::new(root.clone(), notifier);
-        let inbox = Arc::new(Self { root, active: Mutex::default(), limits: Arc::default(), partial_cap, transfers,
+        let inbox = Arc::new(Self { root, active: Arc::default(), limits: Arc::default(), partial_cap, transfers,
             wallpaper: Mutex::default(), wallpaper_transfer: tokio::sync::Mutex::new(()), wallpaper_changed: Notify::new() });
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let weak: Weak<Inbox> = Arc::downgrade(&inbox);
@@ -279,22 +279,30 @@ impl Inbox {
     /// Deletes partial files not modified for `max_age`, except any that is
     /// being written right now. Returns how many were removed.
     pub fn sweep_partials(&self, max_age: Duration) -> usize {
-        let Ok(dir) = fs::read_dir(long(&self.root.join(PARTIAL_DIR))) else { return 0 };
+        sweep_dir(&self.root, Some(max_age), &self.active)
+    }
+
+    /// What unfinished partial files are kept for resuming.
+    pub fn partials(&self) -> Partials {
+        let Ok(dir) = fs::read_dir(long(&self.root.join(PARTIAL_DIR))) else { return Partials::default() };
         let now = SystemTime::now();
-        let mut removed = 0;
+        let mut found = Partials::default();
         for e in dir.flatten() {
             let Ok(meta) = e.metadata() else { continue };
-            let old = meta.is_file()
-                && meta.modified().ok().and_then(|m| now.duration_since(m).ok()).is_some_and(|age| age >= max_age);
-            if !old {
-                continue;
-            }
-            // Holding the lock keeps `claim` from taking this file meanwhile.
-            let active = self.active.lock().expect("poisoned");
-            if !active.contains_key(e.file_name().to_string_lossy().as_ref()) && fs::remove_file(e.path()).is_ok() {
-                removed += 1;
-            }
+            if !meta.is_file() { continue; }
+            found.count += 1;
+            found.bytes = found.bytes.saturating_add(meta.len());
+            let age = meta.modified().ok().and_then(|m| now.duration_since(m).ok()).unwrap_or_default();
+            found.oldest = found.oldest.max(age);
         }
+        found
+    }
+
+    /// Deletes every unfinished partial file that is not being written right
+    /// now, whatever its age. Returns how many were removed.
+    pub fn clear_partials(&self) -> usize {
+        let removed = sweep_dir(&self.root, None, &self.active);
+        let _ = fs::remove_dir(long(&self.root.join(PARTIAL_DIR)));
         removed
     }
 
@@ -579,10 +587,21 @@ impl Inbox {
         }
         let root = self.root.clone();
         let limits = self.limits.clone();
+        let active = self.active.clone();
         let placed = tokio::task::spawn_blocking(move || {
             let _guard = limits.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let result = place(&root, &parts, &part).with_context(|| format!("placing received file in {root:?}"));
-            if result.is_ok() { let _ = fs::remove_dir(long(&root.join(PARTIAL_DIR))); }
+            // A verified file that cannot be put in place (a name or folder the
+            // disk refuses) would be left forever in the staging folder: sending
+            // it again fails the same way. It is cheaper to send again after the
+            // cause is fixed than to keep it hidden.
+            if result.is_err() { let _ = fs::remove_file(long(&part)); }
+            // A file that arrived whole is a good moment to drop partials that
+            // were never finished (see [`PARTIAL_MAX_AGE`]).
+            if result.is_ok() {
+                sweep_dir(&root, Some(PARTIAL_MAX_AGE), &active);
+                let _ = fs::remove_dir(long(&root.join(PARTIAL_DIR)));
+            }
             result
         }).await?;
         match placed {
@@ -593,10 +612,42 @@ impl Inbox {
             }
             Err(e) => {
                 tracing::warn!(%peer, ?path, "cannot save: {e:#}");
-                write_file_msg(send, &FileMsg::Failed { reason: format!("cannot save: {e}") }).await
+                write_file_msg(send, &FileMsg::Failed { reason: format!("cannot save: {e:#}") }).await
             }
         }
     }
+}
+
+/// What the staging folder holds: unfinished files kept so a send can resume.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Partials {
+    pub count: usize,
+    pub bytes: u64,
+    /// How long ago the least recently written one was touched.
+    pub oldest: Duration,
+}
+
+/// Removes partial files from the staging folder of `root`: those not
+/// modified for `max_age`, or all with `None`. A file being written right
+/// now is left alone. Returns how many were removed.
+fn sweep_dir(root: &Path, max_age: Option<Duration>, active: &Mutex<HashMap<String, Slot>>) -> usize {
+    let Ok(dir) = fs::read_dir(long(&root.join(PARTIAL_DIR))) else { return 0 };
+    let now = SystemTime::now();
+    let mut removed = 0;
+    for e in dir.flatten() {
+        let Ok(meta) = e.metadata() else { continue };
+        let old = meta.is_file()
+            && max_age.is_none_or(|max_age| meta.modified().ok().and_then(|m| now.duration_since(m).ok()).is_some_and(|age| age >= max_age));
+        if !old {
+            continue;
+        }
+        // Holding the lock keeps `claim` from taking this file meanwhile.
+        let active = active.lock().expect("poisoned");
+        if !active.contains_key(e.file_name().to_string_lossy().as_ref()) && fs::remove_file(e.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Waits for `fut` unless the transfer is replaced by a newer one or the
@@ -620,8 +671,9 @@ async fn guarded<T>(cancel: &Notify, path: &str, fut: impl Future<Output = T>) -
 /// Names are normalized to Unicode NFC, so a Mac's NFD names don't make
 /// look-alike duplicates. Names that are fine here but not on Windows
 /// (reserved device names with or without an extension, trailing dots or
-/// spaces) are renamed by appending `_` rather than refused, so the
-/// result is the same on every platform.
+/// spaces) are renamed by appending `_` rather than refused. The
+/// characters Windows forbids (`<>:"|?*`) are replaced only when this
+/// computer is Windows.
 pub fn sanitize(path: &str) -> Result<Vec<String>, &'static str> {
     if path.is_empty() || path.len() > FileMsg::MAX_PATH {
         return Err("invalid path length");
@@ -935,12 +987,22 @@ fn place(root: &Path, parts: &[String], part: &Path) -> Result<String> {
     bail!("no free name for {name}")
 }
 
-/// "photo.jpg" → "photo (n).jpg"; ".bashrc" → ".bashrc (n)".
+/// "photo.jpg" → "photo (n).jpg"; ".bashrc" → ".bashrc (n)". The result
+/// is never longer than 255 bytes (what file systems allow in one name): a
+/// name that already uses all of them gives up the end of its stem for
+/// the number, so a second copy of it can still be saved.
 fn numbered(name: &str, n: u32) -> String {
-    match name.rfind('.') {
-        Some(i) if i > 0 => format!("{} ({n}){}", &name[..i], &name[i..]),
-        _ => format!("{name} ({n})"),
+    const MAX: usize = 255;
+    let suffix = format!(" ({n})");
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 && suffix.len() + name.len() - i < MAX => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    let mut end = stem.len().min(MAX.saturating_sub(suffix.len() + ext.len()));
+    while !stem.is_char_boundary(end) {
+        end -= 1;
     }
+    format!("{}{suffix}{ext}", &stem[..end])
 }
 
 // ------------------------------------------------------------------ sending
@@ -958,7 +1020,22 @@ pub struct Outgoing {
 /// Lists the files to send: plain files as themselves, folders
 /// recursively under their own name. Symlinks inside folders are skipped.
 pub fn collect(paths: &[PathBuf]) -> Result<Vec<Outgoing>> {
+    collect_noted(paths).map(|(files, _)| files)
+}
+
+/// What [`collect_noted`] left out, one line each, for the person sending.
+pub type Skipped = Vec<String>;
+
+/// [`collect`], also saying what it left out and why: a symbolic link, pipe or
+/// socket inside a folder; a folder with nothing in it; a name the receiver
+/// would refuse. A symbolic link that was named on the command line is
+/// followed when it points at a file (the person chose it), and left out
+/// with a note when it points at a folder. The same file named twice is
+/// listed once. Nothing inside a folder is ever followed.
+pub fn collect_noted(paths: &[PathBuf]) -> Result<(Vec<Outgoing>, Skipped)> {
     let mut out = Vec::new();
+    let mut skipped = Skipped::new();
+    let mut seen = std::collections::HashSet::new();
     for p in paths {
         let meta = fs::symlink_metadata(p).with_context(|| format!("reading file to send {p:?}"))?;
         let name = match p.file_name() {
@@ -966,18 +1043,45 @@ pub fn collect(paths: &[PathBuf]) -> Result<Vec<Outgoing>> {
             None => fs::canonicalize(p).with_context(|| format!("resolving file to send {p:?}"))?.file_name().context("cannot send the root folder")?.to_owned(),
         };
         let name = name.to_string_lossy().into_owned();
-        if meta.is_dir() {
-            walk(p, &name, &mut out)?;
-        } else if meta.is_file() {
-            out.push(outgoing(p.clone(), name, &meta));
+        let (path, meta) = if meta.file_type().is_symlink() {
+            // `link/` (with the slash) already follows; `link` is followed here, if it is a file.
+            let target = fs::metadata(p).with_context(|| format!("{p:?} is a symbolic link that points at nothing"))?;
+            if target.is_dir() {
+                skipped.push(format!("{name} (a symbolic link to a folder; send the folder itself)"));
+                continue;
+            }
+            // The canonical path has no links left, so reading it later can refuse links safely.
+            (fs::canonicalize(p).with_context(|| format!("resolving file to send {p:?}"))?, target)
         } else {
-            bail!("{p:?} is not a file or folder");
+            (p.clone(), meta)
+        };
+        if !seen.insert(fs::canonicalize(&path).unwrap_or_else(|_| path.clone())) {
+            continue;
+        }
+        if meta.is_dir() {
+            let (files, notes) = (out.len(), skipped.len());
+            walk(&path, &name, &mut out, &mut skipped)?;
+            if out.len() == files && skipped.len() == notes {
+                skipped.push(format!("{name} (an empty folder)"));
+            }
+        } else if meta.is_file() {
+            out.push(outgoing(path, name, &meta));
+        } else {
+            bail!("{p:?} is a pipe, socket or device, which cannot be sent");
         }
     }
-    Ok(out)
+    // Names the receiver would refuse after the transfer has started.
+    out.retain(|file| match sanitize(&file.rel) {
+        Ok(_) => true,
+        Err(why) => {
+            skipped.push(format!("{:?} ({why})", file.rel));
+            false
+        }
+    });
+    Ok((out, skipped))
 }
 
-fn walk(dir: &Path, rel: &str, out: &mut Vec<Outgoing>) -> Result<()> {
+fn walk(dir: &Path, rel: &str, out: &mut Vec<Outgoing>, skipped: &mut Skipped) -> Result<()> {
     let mut entries: Vec<_> = fs::read_dir(dir)
         .with_context(|| format!("reading folder to send {dir:?}"))?
         .collect::<Result<_, _>>().with_context(|| format!("listing folder to send {dir:?}"))?;
@@ -986,11 +1090,18 @@ fn walk(dir: &Path, rel: &str, out: &mut Vec<Outgoing>) -> Result<()> {
         let ft = e.file_type().with_context(|| format!("inspecting file to send {:?}", e.path()))?;
         let rel = format!("{rel}/{}", e.file_name().to_string_lossy());
         if ft.is_dir() {
-            walk(&e.path(), &rel, out)?;
+            let before = out.len();
+            let notes = skipped.len();
+            walk(&e.path(), &rel, out, skipped)?;
+            if out.len() == before && skipped.len() == notes {
+                skipped.push(format!("{rel} (an empty folder)"));
+            }
         } else if ft.is_file() {
             out.push(outgoing(e.path(), rel, &e.metadata().with_context(|| format!("reading file metadata {:?}", e.path()))?));
         } else {
-            tracing::warn!("skipping {} (not a regular file)", e.path().display());
+            let kind = if ft.is_symlink() { "a symbolic link" } else { "not a regular file" };
+            tracing::debug!("skipping {rel} ({kind})");
+            skipped.push(format!("{rel} ({kind})"));
         }
     }
     Ok(())
@@ -1086,7 +1197,7 @@ pub async fn send_files_kind(
                 let Some((i, file)) = queue.lock().expect("poisoned").pop_front() else { break };
                 let res = send_one(&mut send, &mut recv, &file, batch, &progress).await;
                 let broken = res.is_err();
-                let outcome = res.unwrap_or_else(|e| Outcome::Failed(format!("{e:#}")));
+                let outcome = res.unwrap_or_else(|e| Outcome::Failed(interrupted(&e)));
                 results.lock().expect("poisoned").push((i, file, outcome));
                 if broken {
                     return;
@@ -1104,6 +1215,17 @@ pub async fn send_files_kind(
     }
     results.sort_by_key(|(i, ..)| *i);
     results.into_iter().map(|(_, f, o)| (f, o)).collect()
+}
+
+/// Why a send broke off, and that the receiver keeps what arrived so
+/// sending the same file again carries on from there.
+fn interrupted(e: &anyhow::Error) -> String {
+    let why = format!("{e:#}");
+    if why.starts_with("receiver:") || why.contains("send again") {
+        why
+    } else {
+        format!("{why}; what arrived is kept, send again to resume")
+    }
 }
 
 async fn send_one(
@@ -1762,5 +1884,197 @@ mod tests {
         assert!(fs::read_dir(&outside).unwrap().next().is_none());
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn numbered_names_never_pass_255_bytes() {
+        let long = format!("{}.txt", "a".repeat(251));
+        assert_eq!(long.len(), 255);
+        let second = numbered(&long, 1);
+        assert!(second.len() <= 255 && second.ends_with(" (1).txt"), "{second}");
+        let three_byte = format!("{}.log", "日".repeat(84));
+        let numbered_two = numbered(&three_byte, 12);
+        assert!(numbered_two.len() <= 255 && numbered_two.ends_with(" (12).log") && numbered_two.is_char_boundary(numbered_two.len() - 9), "{numbered_two}");
+        let no_ext = "b".repeat(255);
+        assert_eq!(numbered(&no_ext, 3).len(), 255);
+        // A name that is mostly extension still gets a number and stays valid.
+        let odd = format!("x.{}", "e".repeat(253));
+        assert!(numbered(&odd, 1).len() <= 255);
+        assert_eq!(numbered("photo.jpg", 1), "photo (1).jpg");
+    }
+
+    /// Serves file streams on `conn` like the daemon does.
+    fn serve(inbox: &Arc<Inbox>, peer: &one_mk_net::Peer) -> tokio::task::JoinHandle<()> {
+        let (inbox, fp, conn) = (inbox.clone(), peer.fingerprint, peer.conn.clone());
+        tokio::spawn(async move {
+            let permit = Arc::new(inbox.admit(fp).unwrap());
+            while let Ok((send, mut recv)) = conn.accept_bi().await {
+                let (inbox, permit) = (inbox.clone(), permit.clone());
+                tokio::spawn(async move {
+                    let _ = one_mk_net::read_stream_kind(&mut recv).await;
+                    inbox.receive_on(&permit, "laptop", send, recv).await;
+                });
+            }
+        })
+    }
+
+    /// The same 255-byte name sent twice: the second copy needs "name (1)",
+    /// which must not run past the 255 bytes a file system allows. It used
+    /// to fail with a bare "cannot save" and leave the finished file in the
+    /// staging folder for good.
+    #[tokio::test]
+    async fn a_255_byte_name_can_be_received_twice() {
+        let (pa, pb, _a, _b) = linked().await;
+        let src = temp("long-src");
+        let root = temp("long-dst");
+        let name = format!("{}.txt", "n".repeat(251));
+        fs::write(src.join(&name), b"same contents").unwrap();
+        let inbox = Inbox::new(root.clone());
+        let server = serve(&inbox, &pb);
+        for round in 0..3 {
+            let files = collect(&[src.join(&name)]).unwrap();
+            let results = send_files(&pa.conn, files, Arc::new(Progress::default())).await;
+            assert!(matches!(&results[0].1, Outcome::Saved { .. }), "round {round}: {results:?}");
+        }
+        let names: Vec<String> = fs::read_dir(&root).unwrap().flatten().filter(|e| e.path().is_file()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names.len(), 3, "{names:?}");
+        assert!(names.iter().all(|n| n.len() <= 255));
+        assert!(!root.join(PARTIAL_DIR).exists(), "nothing is left in the staging folder");
+        server.abort();
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// When a verified file cannot be put in place the sender is told why
+    /// (the whole chain, not just "placing received file"), and the finished
+    /// file is not left hidden in the staging folder.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cannot_save_names_the_cause_and_leaves_no_partial() {
+        let (pa, pb, _a, _b) = linked().await;
+        let src = temp("nosave-src");
+        let root = temp("nosave-dst");
+        let outside = temp("nosave-outside");
+        std::os::unix::fs::symlink(&outside, root.join("linked")).unwrap();
+        fs::create_dir_all(src.join("linked")).unwrap();
+        fs::write(src.join("linked/f.txt"), b"data").unwrap();
+        let inbox = Inbox::new(root.clone());
+        let server = serve(&inbox, &pb);
+        let files = collect(&[src.join("linked")]).unwrap();
+        let results = send_files(&pa.conn, files, Arc::new(Progress::default())).await;
+        let Outcome::Failed(why) = &results[0].1 else { panic!("{results:?}") };
+        assert!(why.starts_with("cannot save: "), "{why}");
+        assert!(why.contains("is not a folder"), "the cause must be shown: {why}");
+        assert!(fs::read_dir(root.join(PARTIAL_DIR)).map_or(true, |mut d| d.next().is_none()), "no orphan partial");
+        assert!(fs::read_dir(&outside).unwrap().next().is_none(), "nothing written through the link");
+        server.abort();
+        for d in [src, root, outside] { let _ = fs::remove_dir_all(d); }
+    }
+
+    #[test]
+    fn partials_are_counted_and_cleared_but_not_the_active_one() {
+        let root = temp("partials");
+        let staging = root.join(PARTIAL_DIR);
+        fs::create_dir_all(&staging).unwrap();
+        let inbox = Inbox::new(root.clone());
+        assert_eq!(inbox.partials(), Partials::default());
+        fs::write(staging.join("one"), vec![0u8; 10]).unwrap();
+        fs::write(staging.join("two"), vec![0u8; 20]).unwrap();
+        fs::write(staging.join("busy"), vec![0u8; 5]).unwrap();
+        File::options().write(true).open(staging.join("one")).unwrap().set_modified(SystemTime::now() - Duration::from_secs(3 * 24 * 3600)).unwrap();
+        let found = inbox.partials();
+        assert_eq!((found.count, found.bytes), (3, 35));
+        assert!(found.oldest >= Duration::from_secs(3 * 24 * 3600 - 5));
+        inbox.active.lock().unwrap().insert("busy".into(), Slot::default());
+        assert_eq!(inbox.clear_partials(), 2);
+        assert!(staging.join("busy").exists() && !staging.join("one").exists() && !staging.join("two").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Finishing a transfer is a good moment to forget partials nobody
+    /// resumed for a week; a fresh one (a resume in waiting) stays.
+    #[tokio::test]
+    async fn a_finished_transfer_sweeps_stale_partials() {
+        let (pa, pb, _a, _b) = linked().await;
+        let src = temp("sweepdone-src");
+        let root = temp("sweepdone-dst");
+        let staging = root.join(PARTIAL_DIR);
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("stale.part"), "x").unwrap();
+        fs::write(staging.join("fresh.part"), "x").unwrap();
+        File::options().write(true).open(staging.join("stale.part")).unwrap().set_modified(SystemTime::now() - PARTIAL_MAX_AGE - Duration::from_secs(60)).unwrap();
+        fs::write(src.join("f.txt"), b"hello").unwrap();
+        let inbox = Inbox::new(root.clone());
+        let server = serve(&inbox, &pb);
+        let results = send_files(&pa.conn, collect(&[src.join("f.txt")]).unwrap(), Arc::new(Progress::default())).await;
+        assert!(matches!(&results[0].1, Outcome::Saved { .. }), "{results:?}");
+        assert!(!staging.join("stale.part").exists(), "the stale partial is gone");
+        assert!(staging.join("fresh.part").exists(), "a recent one is kept for resuming");
+        server.abort();
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn interrupted_sends_say_the_receiver_keeps_what_arrived() {
+        let lost = anyhow::anyhow!("connection lost: timed out");
+        assert_eq!(interrupted(&lost), "connection lost: timed out; what arrived is kept, send again to resume");
+        let said = anyhow::anyhow!("receiver: disk full on the receiving device; the partial file is kept, send again to resume");
+        assert_eq!(interrupted(&said), format!("{said}"));
+        assert_eq!(interrupted(&anyhow::anyhow!("receiver: too many file streams on this connection")), "receiver: too many file streams on this connection");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_follows_a_named_link_to_a_file_and_says_what_it_skips() {
+        use std::os::unix::fs::symlink;
+        let root = temp("collect-notes");
+        fs::write(root.join("real.txt"), b"real").unwrap();
+        symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
+        fs::create_dir_all(root.join("folder")).unwrap();
+        symlink(&root.join("folder"), root.join("dirlink")).unwrap();
+        symlink(root.join("missing"), root.join("dangling")).unwrap();
+
+        // A link named on the command line to a file is followed, under the link's name.
+        let (files, skipped) = collect_noted(&[root.join("link.txt")]).unwrap();
+        assert_eq!((files.len(), files[0].rel.as_str(), files[0].size), (1, "link.txt", 4));
+        assert!(skipped.is_empty());
+        let (sender, _receiver) = mpsc::channel(1);
+        assert!(read_file(&files[0].path, files[0].size, 0, sender).is_ok(), "reading still refuses links, so the path is the target");
+        // To a folder: left out, and said so. Dangling: an error that names the link.
+        let (files, skipped) = collect_noted(&[root.join("dirlink"), root.join("real.txt")]).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(skipped[0].starts_with("dirlink (a symbolic link to a folder"), "{skipped:?}");
+        let error = format!("{:#}", collect_noted(&[root.join("dangling")]).unwrap_err());
+        assert!(error.contains("points at nothing"), "{error}");
+
+        // Inside a folder: links and pipes are skipped, an empty folder is named, the rest is sent.
+        let tree = root.join("tree");
+        fs::create_dir_all(tree.join("empty")).unwrap();
+        fs::create_dir_all(tree.join("sub")).unwrap();
+        fs::write(tree.join("sub/kept.txt"), b"k").unwrap();
+        symlink(root.join("real.txt"), tree.join("inner-link")).unwrap();
+        let fifo = std::ffi::CString::new(tree.join("pipe").as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let (files, skipped) = collect_noted(&[tree.clone()]).unwrap();
+        assert_eq!(files.iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["tree/sub/kept.txt"]);
+        assert_eq!(skipped, ["tree/empty (an empty folder)", "tree/inner-link (a symbolic link)", "tree/pipe (not a regular file)"]);
+        // An empty folder alone: nothing to send, but a note to show.
+        let (files, skipped) = collect_noted(&[tree.join("empty")]).unwrap();
+        assert!(files.is_empty() && skipped == ["empty (an empty folder)"], "{skipped:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_same_file_named_twice_is_listed_once_and_bad_names_are_left_out() {
+        let root = temp("collect-dup");
+        fs::write(root.join("a.txt"), b"a").unwrap();
+        fs::create_dir_all(root.join("d")).unwrap();
+        fs::write(root.join("d/ok.txt"), b"o").unwrap();
+        fs::write(root.join("d/bad\\name.txt"), b"b").unwrap();
+        let (files, skipped) = collect_noted(&[root.join("a.txt"), root.join("./a.txt"), root.join("a.txt"), root.join("d")]).unwrap();
+        assert_eq!(files.iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["a.txt", "d/ok.txt"]);
+        assert_eq!(skipped, ["\"d/bad\\\\name.txt\" (invalid character in name)"]);
+        let _ = fs::remove_dir_all(&root);
     }
 }

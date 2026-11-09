@@ -12,7 +12,7 @@
 //! image. Profiles (`profiles.rs`) go through it too.
 
 use crate::control::{self, Request};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use one_mk_net::{Device, Fingerprint, PlacedBy, Swap, TrustStore};
 use one_mk_proto::Side;
 pub use one_mk_ctl::status::{LayoutStatus, LinkStats, PeerStatus, Status, on_your, placement, takeback_hint};
@@ -31,6 +31,11 @@ pub async fn status(dir: &Path) -> Result<()> {
     match reply.as_deref().and_then(Status::decode) {
         Some(s) => {
             print!("{}", s.render());
+            if let Ok(Some((count, bytes, age, _))) = partials_of(dir, false).await
+                && let Some(text) = partials_text(count, bytes, age)
+            {
+                println!("{text}");
+            }
             if let Some(line) = crate::settings::Settings::load_lenient(dir).ok().and_then(|s| s.input.summary()) {
                 println!("{line}");
             }
@@ -51,6 +56,48 @@ pub async fn status(dir: &Path) -> Result<()> {
     println!("Clipboard: {}.", settings.clipboard.summary());
     if settings.wallpaper.enabled || !settings.wallpaper.grants.is_empty() {
         println!("{}", crate::wallpaper::summary(&settings.wallpaper));
+    }
+    Ok(())
+}
+
+/// The unfinished received files a running daemon keeps for resuming:
+/// (how many, bytes, seconds since the oldest was written, how many a clear just removed).
+pub async fn partials_of(dir: &Path, clear: bool) -> Result<Option<(usize, u64, u64, usize)>> {
+    let Some(reply) = control::request(dir, Request::Partials { clear }).await? else { return Ok(None) };
+    let mut lines = reply.lines();
+    if lines.next() != Some("ok") {
+        bail!("{}", reply.trim().trim_start_matches("error "));
+    }
+    let mut number = || lines.next().and_then(|line| line.parse::<u64>().ok()).context("unexpected answer from one-mk");
+    let (count, bytes, age, removed) = (number()?, number()?, number()?, number()?);
+    Ok(Some((count as usize, bytes, age, removed as usize)))
+}
+
+/// What to tell people about leftover partial files, or `None` when there are none.
+pub fn partials_text(count: usize, bytes: u64, age: u64) -> Option<String> {
+    (count > 0).then(|| format!(
+        "{count} unfinished received file{} ({}) kept so a send can resume; the oldest was last written {} and files older than {} days are deleted by themselves. Delete them now with `one-mk partials --clear`.",
+        if count == 1 { "" } else { "s" },
+        crate::clip::mb(usize::try_from(bytes).unwrap_or(usize::MAX)),
+        if age >= 86_400 { format!("{} days ago", age / 86_400) } else if age >= 3600 { format!("{} hours ago", age / 3600) } else if age >= 60 { format!("{} minutes ago", age / 60) } else { "less than a minute ago".to_owned() },
+        crate::transfer::PARTIAL_MAX_AGE.as_secs() / 86_400,
+    ))
+}
+
+/// `one-mk partials [--clear]`: the unfinished received files kept so an
+/// interrupted send can resume, and a way to delete them.
+pub async fn partials(dir: &Path, clear: bool) -> Result<()> {
+    let Some((count, bytes, age, removed)) = partials_of(dir, clear).await? else {
+        bail!("{}", control::NOT_RUNNING);
+    };
+    if clear {
+        println!("Deleted {removed} unfinished received file{}.", if removed == 1 { "" } else { "s" });
+        if count > 0 { println!("{count} left alone because {} still being received (try again in 30 seconds if that sender stopped).", if count == 1 { "it is" } else { "they are" }); }
+        return Ok(());
+    }
+    match partials_text(count, bytes, age) {
+        Some(text) => println!("{text}"),
+        None => println!("No unfinished received files are kept."),
     }
     Ok(())
 }

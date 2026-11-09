@@ -40,12 +40,20 @@ impl ClipboardCommand {
     pub async fn run(self, dir: &Path) -> Result<()> {
         let Self::History { operation, json } = self;
         if let Some(Operation::Persist { enabled }) = operation {
-            crate::settings::Settings::update(dir, |settings| {
+            let history_on = crate::settings::Settings::update(dir, |settings| {
                 settings.clipboard.history_persist = enabled;
-                Ok(())
+                Ok(settings.clipboard.history_max > 0)
             })?;
-            crate::settings::apply(dir).await?;
-            println!("History after restart: {}", if enabled { "on" } else { "off" });
+            if enabled {
+                crate::settings::apply(dir).await?;
+                println!("History after restart: on.");
+                println!("Warning: the saved history is plain text, not encrypted: {} (readable only by you, but by every program you run).", saved_file(dir).display());
+                println!("Copies a password manager marked as sensitive are never saved. Turn this off again with `one-mk clipboard history persist off`.");
+                if !history_on { println!("History itself is off, so nothing is kept yet; turn it on with `one-mk clipboard history on`."); }
+            } else {
+                apply_and_wait_for_delete(dir).await?;
+                println!("History after restart: off. No saved history is left on disk.");
+            }
             return Ok(());
         }
         if matches!(operation, Some(Operation::On | Operation::Off)) {
@@ -54,7 +62,7 @@ impl ClipboardCommand {
                 settings.clipboard.history_max = if enabled { 20 } else { 0 };
                 Ok(())
             })?;
-            crate::settings::apply(dir).await?;
+            if enabled { crate::settings::apply(dir).await?; } else { apply_and_wait_for_delete(dir).await?; }
             if json { println!("{{\"enabled\":{enabled}}}"); }
             else { println!("Clipboard history is {}.", if enabled { "on; retained in memory unless persistence is explicitly enabled" } else { "off" }); }
             return Ok(());
@@ -74,6 +82,41 @@ impl ClipboardCommand {
         print!("{body}");
         Ok(())
     }
+}
+
+/// Where saved history lives (see `ClipSync::apply`).
+fn saved_file(dir: &Path) -> std::path::PathBuf {
+    dir.join("clipboard-history.bin")
+}
+
+/// Asks a running daemon to apply settings that stop saving history, and does
+/// not return until the saved file is gone: the daemon deletes it a moment
+/// later on another thread, and "Applied" before that would be a promise
+/// about a secret still sitting on disk. With no daemon running the file is
+/// deleted here.
+async fn apply_and_wait_for_delete(dir: &Path) -> Result<()> {
+    let file = saved_file(dir);
+    let running = control::request(dir, Request::Reload).await?.is_some();
+    if !running {
+        match std::fs::remove_file(&file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => bail!("Could not delete the saved clipboard history {}: {error}", file.display()),
+        }
+        println!("one-mk is not running; the change takes effect the next time it starts.");
+        return Ok(());
+    }
+    if crate::settings::Settings::load_or_default(dir).clipboard.history_persist {
+        // History was switched off but the file stays (now empty): clearing makes the daemon write it out before answering.
+        let cleared = control::request(dir, Request::ClipHistory { action: HistoryAction::Clear, json: false }).await?;
+        if cleared.as_deref().is_some_and(|reply| reply.starts_with("error ")) { bail!("Could not clear the saved clipboard history; run `one-mk clipboard history clear`"); }
+        return Ok(());
+    }
+    for _ in 0..100 {
+        if !file.exists() { return Ok(()); }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    bail!("The saved clipboard history is still on disk at {}; delete it by hand, or run `one-mk clipboard history clear`", file.display())
 }
 
 pub async fn handle(cb: &Clipboard, action: HistoryAction, json: bool) -> Result<String> {
@@ -191,5 +234,20 @@ mod tests {
         assert!(handle(&clipboard, HistoryAction::Show(99), false).await.unwrap_err().to_string().contains("run one-mk clipboard history list"));
         assert_eq!(handle(&clipboard, HistoryAction::Clear, true).await.unwrap(), "{\"cleared\":true}\n");
         assert_eq!(handle(&clipboard, HistoryAction::List, true).await.unwrap(), "[]\n");
+    }
+
+    /// "Persist off" must not report success while a plain-text copy of the
+    /// history still sits on disk: with no daemon to delete it, the command does.
+    #[tokio::test]
+    async fn persist_off_deletes_the_saved_file_before_it_returns() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = saved_file(dir.path());
+        std::fs::write(&file, b"secret history").unwrap();
+        ClipboardCommand::History { operation: Some(Operation::Persist { enabled: false }), json: false }.run(dir.path()).await.unwrap();
+        assert!(!file.exists());
+        assert!(!crate::settings::Settings::load_or_default(dir.path()).clipboard.history_persist);
+        // Turning it on is saved; the plain-text warning is printed by the command itself.
+        ClipboardCommand::History { operation: Some(Operation::Persist { enabled: true }), json: false }.run(dir.path()).await.unwrap();
+        assert!(crate::settings::Settings::load_or_default(dir.path()).clipboard.history_persist);
     }
 }

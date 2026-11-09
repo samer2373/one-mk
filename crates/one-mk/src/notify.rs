@@ -166,10 +166,18 @@ pub fn info(title: String, body: String) {
     tokio::spawn(async move { sys::note(&title, &body).await });
 }
 
-pub async fn sent(count: usize, peer: &str) {
-    let body = format!("Sent {count} files to {}", display(peer));
+/// What to say after files were sent from a drop at the screen edge.
+pub fn sent_text(count: usize, peer: &str) -> String {
+    format!("Sent {count} file{} to {}", if count == 1 { "" } else { "s" }, display(peer))
+}
+
+/// Says that a drop at the screen edge was sent: always in the log, and as a
+/// desktop notification only if `toast` (the person's "notify" setting, and
+/// not `--no-notify`) allows it.
+pub async fn sent(count: usize, peer: &str, toast: bool) {
+    let body = sent_text(count, peer);
     println!("{body}");
-    if !disabled() { sys::failure("one-mk files sent", &body).await; }
+    if toast && !disabled() { sys::success("one-mk files sent", &body).await; }
 }
 
 /// The real notifier for this platform.
@@ -206,12 +214,17 @@ mod sys {
     /// A plain error notification: D-Bus, else `notify-send`, else stderr.
     pub async fn failure(title: &str, body: &str) {
         let clipboard = title == "one-mk clipboard" && body.starts_with("Got ");
-        let success = title == "one-mk files sent" || clipboard;
-        let icon = if clipboard { "edit-paste" } else if success { "document-send" } else { "dialog-error" };
-        let category = if success { "transfer.complete" } else { "transfer.error" };
+        let icon = if clipboard { "edit-paste" } else { "dialog-error" };
+        let category = if clipboard { "transfer.complete" } else { "transfer.error" };
         if !message(title, body, icon, category).await {
             eprintln!("one-mk: {title}: {body}");
         }
+    }
+
+    /// A good-news notification (not an error: its own icon and category);
+    /// nothing if none can be shown, the caller printed it.
+    pub async fn success(title: &str, body: &str) {
+        message(title, body, "document-send", "transfer.complete").await;
     }
 
     /// A note: D-Bus, else `notify-send`, else nothing (the daemon printed it).
@@ -399,6 +412,10 @@ mod sys {
         notify(body, title).await;
     }
 
+    pub async fn success(title: &str, body: &str) {
+        notify(body, title).await;
+    }
+
     /// Title and body go in as arguments, never into the script text.
     pub async fn show(n: FilesReceived) {
         notify(&n.body(), &n.title()).await;
@@ -444,6 +461,11 @@ mod sys {
     }
 
     /// Printed by the caller already (see the TODO above about toasts).
+    pub async fn success(title: &str, _body: &str) {
+        tracing::debug!("not notifying {title:?} (notifications are not implemented on Windows yet)");
+    }
+
+    /// Printed by the caller already (see the TODO above about toasts).
     pub async fn note(title: &str, _body: &str) {
         tracing::debug!("not notifying {title:?} (notifications are not implemented on Windows yet)");
     }
@@ -457,6 +479,7 @@ mod sys {
         eprintln!("one-mk: {title}: {body}");
     }
     pub async fn note(_: &str, _: &str) {}
+    pub async fn success(_: &str, _: &str) {}
 }
 
 #[cfg(test)]
@@ -605,5 +628,11 @@ mod tests {
     #[test]
     fn file_uris_are_percent_encoded() {
         assert_eq!(sys::file_uri(std::path::Path::new("/home/u/a b/ü#1.txt")), "file:///home/u/a%20b/%C3%BC%231.txt");
+    }
+
+    #[test]
+    fn a_sent_drop_says_one_file_not_one_files() {
+        assert_eq!(sent_text(1, "desk"), "Sent 1 file to desk");
+        assert_eq!(sent_text(3, "desk"), "Sent 3 files to desk");
     }
 }

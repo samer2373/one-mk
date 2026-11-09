@@ -27,7 +27,21 @@ fn desktop_controls_round_trip_through_real_settings_commands() {
     assert_eq!(edge["edge"]["wrap"].as_str(), Some("all"));
     assert_eq!(edge["edge"]["learn"].as_str(), Some("auto"));
     assert_eq!(change(home, &["pointer-overlay", "always"])["pointer"]["draw_when_no_mouse"].as_str(), Some("always"));
+    // File edge drops: refused where the desktop cannot have them (Wayland), saved nothing; opt-in where it can.
+    #[cfg(target_os = "linux")]
+    {
+        let refused = Command::new(env!("CARGO_BIN_EXE_one-mk")).args(["drag", "--on"]).arg("--home").arg(home).env("WAYLAND_DISPLAY", "wayland-test").env("DISPLAY", ":99").output().unwrap();
+        assert!(!refused.status.success());
+        assert!(String::from_utf8_lossy(&refused.stderr).contains("not available on this desktop"), "{}", String::from_utf8_lossy(&refused.stderr));
+        let saved = std::fs::read_to_string(home.join("settings.toml")).unwrap();
+        assert_ne!(toml::from_str::<toml::Value>(&saved).unwrap()["drag"].get("enabled").and_then(toml::Value::as_bool), Some(true), "a refused switch must not be saved: {saved}");
+        let on = Command::new(env!("CARGO_BIN_EXE_one-mk")).args(["drag", "--on"]).arg("--home").arg(home).env_remove("WAYLAND_DISPLAY").env("DISPLAY", ":99").output().unwrap();
+        assert!(on.status.success(), "{}", String::from_utf8_lossy(&on.stderr));
+        assert!(String::from_utf8_lossy(&on.stdout).contains("Experimental"), "{}", String::from_utf8_lossy(&on.stdout));
+    }
+    #[cfg(not(target_os = "linux"))]
     assert_eq!(change(home, &["drag", "--on"])["drag"]["enabled"].as_bool(), Some(true));
+    assert_eq!(toml::from_str::<toml::Value>(&std::fs::read_to_string(home.join("settings.toml")).unwrap()).unwrap()["drag"]["enabled"].as_bool(), Some(true));
     assert_eq!(change(home, &["hotkeys", "--fetch-clipboard", "ctrl+alt+k"])["hotkeys"]["fetch_clipboard"].as_str(), Some("ctrl+alt+k"));
     let before = std::fs::read_to_string(home.join("settings.toml")).unwrap();
     let conflict = command(home, &["hotkeys", "--home-key", "ctrl+alt+k"]);

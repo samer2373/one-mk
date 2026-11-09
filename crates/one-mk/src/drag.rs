@@ -64,6 +64,31 @@ mod tests {
     }
 
     #[test]
+    fn drops_are_off_by_default_and_refused_where_they_cannot_work() {
+        use one_mk_ctl::status::InputBackend as B;
+        assert!(!Settings::default().enabled);
+        // A daemon on a Wayland input backend, or one that captures nothing, has no edge target.
+        for backend in [B::Portal, B::Wlroots, B::Null] {
+            assert!(!supported_with(Some(backend)), "{backend:?}");
+        }
+        assert_eq!(supported_with(Some(B::X11)), cfg!(target_os = "linux"));
+        assert_eq!(supported_with(Some(B::Native)), cfg!(any(windows, target_os = "macos")));
+    }
+
+    #[tokio::test]
+    async fn turning_drops_on_is_refused_with_a_clear_message_when_there_is_no_target() {
+        // No daemon: this session decides. A session without X11 refuses and saves nothing.
+        if one_mk_input::dropzone::supported() { return; }
+        let dir = std::env::temp_dir().join(format!("one-mk-drag-refuse-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let error = configure(&dir, true, false, None).await.unwrap_err().to_string();
+        assert!(error.contains("not available on this desktop") && error.contains("one-mk send"), "{error}");
+        assert!(!crate::settings::Settings::load_or_default(&dir).drag.enabled);
+        configure(&dir, false, true, Some(30)).await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn safety_rejects_missing_special_and_symlink_paths() {
         let root = std::env::temp_dir().canonicalize().unwrap().join(format!("one-mk-drop-safety-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -114,19 +139,42 @@ const MAX_BYTES: u64 = 1 << 40;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Off unless switched on; not written to `settings.toml` while off, so a file never holds a choice nobody made.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub enabled: bool,
     pub zone_px: u16,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { enabled: one_mk_input::dropzone::available_by_default(), zone_px: 12 }
+        // Always off until the user asks: a drop target sends any dropped file
+        // to another computer, so it is opt-in, and the default must not depend
+        // on the session of whichever process happened to write `settings.toml`.
+        Self { enabled: false, zone_px: 12 }
+    }
+}
+
+/// Whether a daemon using input backend `backend` (or, with no daemon
+/// running, this session) can offer file edge drops.
+pub fn supported_with(backend: Option<one_mk_ctl::status::InputBackend>) -> bool {
+    use one_mk_ctl::status::InputBackend as B;
+    match backend {
+        Some(B::X11) => cfg!(target_os = "linux"),
+        Some(B::Native) => cfg!(any(windows, target_os = "macos")),
+        Some(B::Unknown) | None => one_mk_input::dropzone::supported(),
+        Some(_) => false,
     }
 }
 
 pub async fn configure(dir: &Path, on: bool, off: bool, zone: Option<u16>) -> Result<()> {
     if zone.is_some_and(|width| !(1..=128).contains(&width)) {
         bail!("drop-zone width must be between 1 and 128 pixels");
+    }
+    let status = crate::control::request(dir, crate::control::Request::Status).await?
+        .and_then(|reply| one_mk_ctl::status::Status::decode(&reply));
+    let supported = supported_with(status.as_ref().map(|status| status.backend));
+    if on && !supported {
+        bail!("{}", one_mk_input::dropzone::UNAVAILABLE);
     }
     if on || off || zone.is_some() {
         crate::settings::Settings::update(dir, |settings| {
@@ -137,12 +185,10 @@ pub async fn configure(dir: &Path, on: bool, off: bool, zone: Option<u16>) -> Re
         let _ = crate::control::request(dir, crate::control::Request::Settings).await?;
     }
     let settings = crate::settings::Settings::load_or_default(dir).drag;
-    let status = crate::control::request(dir, crate::control::Request::Status).await?
-        .and_then(|reply| one_mk_ctl::status::Status::decode(&reply));
-    let availability = if status.is_some_and(|status| status.backend.as_str() == "x11") {
-        "The daemon is using X11; file edge drops use its desktop, not this terminal session."
-    } else { one_mk_input::dropzone::availability() };
-    println!("File edge drops: {}; zone {} px. {}", if settings.enabled { "on" } else { "off" }, settings.zone_px, availability);
+    let availability = if !supported { one_mk_input::dropzone::UNAVAILABLE }
+        else if status.is_some_and(|status| status.backend == one_mk_ctl::status::InputBackend::X11) { one_mk_input::dropzone::X11_NOTE }
+        else { one_mk_input::dropzone::availability() };
+    println!("File edge drops: {}; zone {} px. {}", if settings.enabled && supported { "on" } else { "off" }, settings.zone_px, availability);
     Ok(())
 }
 
