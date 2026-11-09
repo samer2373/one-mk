@@ -2299,10 +2299,15 @@ mod tests {
         fs::write(root.join("a.txt"), b"a").unwrap();
         fs::create_dir_all(root.join("d")).unwrap();
         fs::write(root.join("d/ok.txt"), b"o").unwrap();
+        // A backslash is a path separator on Windows: only elsewhere is it a name.
+        #[cfg(unix)]
         fs::write(root.join("d/bad\\name.txt"), b"b").unwrap();
         let (files, skipped) = collect_noted(&[root.join("a.txt"), root.join("./a.txt"), root.join("a.txt"), root.join("d")]).unwrap();
         assert_eq!(files.iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["a.txt", "d/ok.txt"]);
+        #[cfg(unix)]
         assert_eq!(skipped, ["\"d/bad\\\\name.txt\" (invalid character in name)"]);
+        #[cfg(not(unix))]
+        assert!(skipped.is_empty(), "{skipped:?}");
         let _ = fs::remove_dir_all(&root);
     }
 }

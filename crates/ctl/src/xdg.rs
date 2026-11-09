@@ -34,10 +34,11 @@ fn chosen(value: Option<OsString>) -> Option<PathBuf> {
     value.map(PathBuf::from).filter(|path| path.is_absolute())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
+    // The values are Unix paths: `/data/x` is not absolute on Windows.
     #[test]
     fn only_an_absolute_value_is_used() {
         assert_eq!(chosen(Some("/data/x".into())), Some(PathBuf::from("/data/x")));

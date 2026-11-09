@@ -195,9 +195,12 @@ impl NotAnswering {
     }
 }
 
-/// The longest control socket path Unix allows (`sun_path`, less its NUL).
-#[cfg(unix)]
+/// The longest control socket path this system allows (`sun_path`, less its
+/// NUL): 108 bytes on Linux, 104 on macOS and the BSDs.
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly"))))]
 const MAX_SOCKET_PATH: usize = 107;
+#[cfg(all(unix, any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly")))]
+const MAX_SOCKET_PATH: usize = 103;
 
 /// Refuses a settings folder whose control socket path is too long for
 /// Unix: clearly, rather than as a connection error that looks like
@@ -209,7 +212,7 @@ fn check_endpoint(dir: &Path) -> Result<()> {
         let len = path.as_os_str().len();
         if len > MAX_SOCKET_PATH {
             bail!(
-                "the path of the settings folder {} is too long: one-mk's control socket there would be {len} characters long, and Unix allows {MAX_SOCKET_PATH}; use a shorter --home (or ONE_MK_HOME)",
+                "the path of the settings folder {} is too long: one-mk's control socket there would be {len} characters long, and this system allows {MAX_SOCKET_PATH}; use a shorter --home (or ONE_MK_HOME)",
                 dir.display()
             );
         }

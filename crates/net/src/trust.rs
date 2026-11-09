@@ -541,6 +541,9 @@ mod tests {
     fn concurrent_updates_all_land() {
         let dir = std::env::temp_dir().join(format!("one-mk-trust-race-{}-{}", std::process::id(), rand::random::<u64>()));
         let fps: Vec<String> = (0..8u8).map(|i| format!("{i:02x}").repeat(32)).collect();
+        // Each update waits for the others and flushes to disk, which is slow on
+        // a Windows runner: fewer rounds there, the same race.
+        const ROUNDS: u64 = if cfg!(windows) { 5 } else { 25 };
         TrustStore::update(&dir, |t| {
             for (i, fp) in fps.iter().enumerate() {
                 t.upsert(Device { name: format!("pc{i}"), fingerprint: fp.clone(), ..Default::default() });
@@ -555,7 +558,7 @@ mod tests {
             for fp in &fps {
                 let dir = &dir;
                 scope.spawn(move || {
-                    for round in 1..=25u64 {
+                    for round in 1..=ROUNDS {
                         TrustStore::update(dir, |t| {
                             t.get_mut(&fp.parse().unwrap()).unwrap().layout_version = round;
                             Ok(())
@@ -566,7 +569,7 @@ mod tests {
             }
         });
         let t = TrustStore::load(&dir).unwrap();
-        assert!(t.devices().iter().all(|d| d.layout_version == 25), "a change was lost");
+        assert!(t.devices().iter().all(|d| d.layout_version == ROUNDS), "a change was lost");
         let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
         // Nothing changed: nothing is written.

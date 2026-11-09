@@ -10,7 +10,7 @@
 //! the same idea for a test that can keep a guard in scope; it does not fit
 //! where the path itself is passed around.)
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, Once};
 
 static ROOT: Mutex<Option<PathBuf>> = Mutex::new(None);
@@ -20,7 +20,13 @@ static REGISTER: Once = Once::new();
 fn root() -> PathBuf {
     let mut root = ROOT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     root.get_or_insert_with(|| {
-        let made = tempfile::Builder::new().prefix(&format!("one-mk-tests-{}-", std::process::id())).tempdir().expect("a scratch folder").keep();
+        let prefix = format!("one-mk-tests-{}-", std::process::id());
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(&prefix);
+        // macOS's temporary folder is long (`/var/folders/xx/.../T/`), and a
+        // control socket's path may be at most 103 characters there: keep the
+        // tests' folders short.
+        let made = if cfg!(target_os = "macos") && Path::new("/tmp").is_dir() { builder.tempdir_in("/tmp") } else { builder.tempdir() }.expect("a scratch folder").keep();
         // Private whatever the umask: the tests of code that refuses a path
         // others could change look at every folder above theirs.
         #[cfg(unix)]
