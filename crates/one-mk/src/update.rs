@@ -734,6 +734,10 @@ fn read_staged(folder: &File, name: &str, owner: u32, limit: u64) -> Result<Vec<
     Ok(bytes)
 }
 
+/// Checks a signature (message, signature) against the trusted key(s).
+#[cfg(unix)]
+type Verify = dyn Fn(&[u8], &[u8]) -> Result<()>;
+
 /// What the root step relies on, apart from the staging folder. Tests pass
 /// their own key, folders and a fake installer; the real step passes the
 /// compiled-in key, this program's version and `dpkg`.
@@ -747,7 +751,7 @@ struct RootStep<'a> {
     floor: u64,
     /// A folder only root can use: the replay record and the private copy.
     state: &'a Path,
-    verify: &'a dyn Fn(&[u8], &[u8]) -> Result<()>,
+    verify: &'a Verify,
     fields: &'a dyn Fn(&Path) -> Result<String>,
     install: &'a dyn Fn(&Path) -> Result<()>,
 }
