@@ -43,6 +43,10 @@ fn atomic_file(path: &Path, write: impl FnOnce(&mut std::fs::File) -> Result<()>
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
         write(&mut file)?; file.sync_all()?; drop(file);
         std::fs::rename(&temporary, path)?;
+        // The rename itself survives a crash or power cut only once the
+        // folder is written too (the saved original wallpaper depends on it).
+        #[cfg(unix)]
+        if let Some(parent) = path.parent() { std::fs::File::open(parent)?.sync_all()?; }
         Ok(())
     })();
     if result.is_err() { let _ = std::fs::remove_file(temporary); }
@@ -120,7 +124,14 @@ mod native;
 #[path = "picture_windows.rs"]
 mod native;
 
+/// A picture's pixels. A decoder's own complaint ("Not enough bytes…") is
+/// said as what it means to a person; a size refusal is already worded.
 fn open(path: &Path) -> Result<RgbaImage> {
+    decode(path).map_err(|error| if error.to_string().contains("too large") { error }
+        else { error.context("This picture cannot be opened: it may be damaged or in a format oneMK can't read. Try a PNG, JPEG or WebP picture.") })
+}
+
+fn decode(path: &Path) -> Result<RgbaImage> {
     let mut reader = ImageReader::open(path)?.with_guessed_format()?;
     match reader.format() {
         Some(image::ImageFormat::Jpeg) => return jpeg(path),
@@ -130,7 +141,7 @@ fn open(path: &Path) -> Result<RgbaImage> {
     #[cfg(any(target_os = "macos", windows))]
     if reader.format().is_none() { return native::decode(path); }
     reader.limits(limits());
-    let mut decoder = reader.into_decoder().context("This picture cannot be opened. Try a PNG, JPEG or WebP picture.")?;
+    let mut decoder = reader.into_decoder()?;
     let (width, height) = decoder.dimensions();
     ensure!(u64::from(width) * u64::from(height) <= 64 * 1024 * 1024, "This picture is too large");
     let orientation = decoder.orientation()?;
@@ -326,6 +337,13 @@ pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<on
     }
     #[cfg(target_os = "linux")]
     {
+        // Other Linux desktops (KDE, Xfce, Cinnamon…) keep their wallpaper
+        // elsewhere: writing GNOME's keys there would report a change nobody
+        // sees. Checked after the picture itself, so a bad picture still says so.
+        if !one_mk_wallpaper::picture::gnome_desktop() {
+            prune_pictures(root, &[])?;
+            anyhow::bail!("{}", one_mk_wallpaper::picture::UNSUPPORTED_DESKTOP);
+        }
         let bounds = files.iter().map(|(monitor, _)| monitor.local.unwrap_or(monitor.rect)).reduce(Rect::union).context("No picture screens")?;
         ensure!(bounds.width * bounds.height <= 64.0 * 1024.0 * 1024.0, "This desktop is too large for a picture wallpaper");
         let mut desktop = RgbaImage::new(bounds.width as u32, bounds.height as u32);
@@ -339,10 +357,7 @@ pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<on
         desktop.write_to(&mut png, image::ImageFormat::Png)?;
         write_picture(root, &path, &png.into_inner())?;
         let snapshot = root.join("previous.json");
-        if !snapshot.exists() {
-            let previous: Vec<_> = ["picture-uri", "picture-uri-dark", "picture-options"].into_iter().map(|key| settings("get", key, None).map(|value| (key.to_owned(), value))).collect::<Result<_>>()?;
-            atomic_write(&snapshot, &serde_json::to_vec(&previous)?)?;
-        }
+        if !snapshot.exists() { atomic_write(&snapshot, &serde_json::to_vec(&gnome_snapshot(root)?)?)?; }
         let uri = file_uri(&path)?;
         for key in ["picture-uri", "picture-uri-dark"] { settings("set", key, Some(&uri))?; }
         settings("set", "picture-options", Some("spanned"))?;
@@ -358,8 +373,13 @@ pub fn restore(root: &Path) -> Result<()> {
     ensure!(native::restore(root)?, "Some original wallpapers could not be restored yet. Reconnect those screens and return to the original desktop, then turn wallpaper off again. The snapshot and pictures were retained.");
     #[cfg(target_os = "linux")]
     {
-        let previous: Vec<(String, String)> = serde_json::from_slice(&std::fs::read(root.join("previous.json"))?)?;
-        for (key, value) in previous { settings("set", &key, Some(value.trim()))?; }
+        // Older snapshots hold a value for every key; newer ones hold none
+        // for a key that was at the desktop's default, which is reset.
+        let previous: Vec<(String, Option<String>)> = serde_json::from_slice(&std::fs::read(root.join("previous.json"))?)?;
+        ensure!(previous.iter().all(|(key, _)| GNOME_KEYS.contains(&key.as_str())), "The saved wallpaper settings are not recognised");
+        for (key, value) in previous {
+            match value { Some(value) => settings("set", &key, Some(value.trim()))?, None => settings("reset", &key, None)? };
+        }
     }
     std::fs::remove_file(root.join("previous.json"))?;
     let _ = std::fs::remove_file(root.join("current.json"));
@@ -368,6 +388,35 @@ pub fn restore(root: &Path) -> Result<()> {
         if path.extension().is_some_and(|extension| extension == "png") { let _ = std::fs::remove_file(path); }
     }
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+const GNOME_KEYS: [&str; 3] = ["picture-uri", "picture-uri-dark", "picture-options"];
+
+/// The person's own wallpaper, read once before oneMK first changes it. A
+/// key still at the desktop's default is saved as `None` and restored with
+/// a reset, so a later desktop or theme default keeps applying. A key that
+/// already points at oneMK's own pictures (an earlier snapshot was lost) is
+/// never saved as the original: it is reset too.
+#[cfg(target_os = "linux")]
+fn gnome_snapshot(root: &Path) -> Result<Vec<(String, Option<String>)>> {
+    let ours = file_uri(root)?;
+    GNOME_KEYS.into_iter().map(|key| {
+        let value = settings("get", key, None)?.trim().to_owned();
+        let own = value.trim_matches('\'').starts_with(&ours);
+        let default = default_setting(key);
+        Ok((key.to_owned(), (!own && default.as_deref() != Some(value.as_str())).then_some(value)))
+    }).collect()
+}
+
+/// The desktop's default for `key`: GSettings' memory backend reads only the
+/// schema and its vendor overrides, never the person's settings. `None` if
+/// it can't be read (the value is then always saved as it is).
+#[cfg(target_os = "linux")]
+fn default_setting(key: &str) -> Option<String> {
+    let output = std::process::Command::new("gsettings").env("GSETTINGS_BACKEND", "memory")
+        .args(["get", "org.gnome.desktop.background", key]).output().ok()?;
+    (output.status.success() && output.stderr.is_empty()).then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 #[cfg(target_os = "linux")]
