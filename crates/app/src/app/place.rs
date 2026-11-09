@@ -1,4 +1,4 @@
-//! The Layout tab's panel. The desk above it is the layout editor (drag a
+//! The Arrange view's panel (the Desk's second view). The desk above it is the layout editor (drag a
 //! computer beside one of this computer's monitors: it then crosses only
 //! where their screens touch, see `App::placing`); here are the chosen
 //! computer's side, its exact place, and the saved layout profiles.
@@ -33,7 +33,7 @@ impl App {
             self.answered = None; // asked again later, it shows again
             return None;
         };
-        if self.tab != Tab::Layout || self.answered.as_ref() == Some(&(g.id.clone(), g.side)) {
+        if self.tab != Tab::Arrange || self.answered.as_ref() == Some(&(g.id.clone(), g.side)) {
             return None;
         }
         let question = one_mk_ctl::status::is_it_there(&g.name, g.side);

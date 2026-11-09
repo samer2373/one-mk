@@ -388,7 +388,7 @@ impl App {
     /// The page's actions for every computer at once, at the right of its
     /// title: typing on all of them, and locking every screen.
     pub(super) fn desk_actions(&mut self, ui: &mut Ui, head: Rect) {
-        // The Desk's two views: the computers, and arranging them (Layout).
+        // The Desk's two views: the computers, and arranging them (Arrange).
         if self.desk_views_shown() {
             let labels = ["Computers", "Arrange"];
             let track = desk_view_rect(head);
@@ -398,13 +398,13 @@ impl App {
                 cells: Pills::even(track, 2, 2.0),
                 labels: &labels,
                 names: vec!["Desk: your computers".into(), "Desk: arrange where each computer sits".into()],
-                chosen: Some(usize::from(self.tab == Tab::Layout)),
+                chosen: Some(usize::from(self.tab == Tab::Arrange)),
                 enabled: vec![true, true],
                 role: Role::Tab,
                 font: T_BODY,
             };
             if let Some(k) = pills.show(ui, self.arrowed) {
-                self.set_tab(if k == 1 { Tab::Layout } else { Tab::Desk });
+                self.set_tab(if k == 1 { Tab::Arrange } else { Tab::Desk });
             }
         }
         if self.tab != Tab::Desk || self.running().is_none_or(|s| s.peers.is_empty()) {
@@ -515,7 +515,7 @@ impl App {
     /// Over the desk: the transfer that is running, and the hint that
     /// computers can be dragged (until one has been).
     pub(super) fn desk_overlay(&mut self, ui: &mut Ui, desk: Rect, hovering_files: bool) {
-        if self.tab != Tab::Desk && self.tab != Tab::Layout {
+        if self.tab != Tab::Desk && self.tab != Tab::Arrange {
             return;
         }
         let p = ui.painter().clone();
@@ -629,7 +629,7 @@ impl App {
     /// with its gaps: the desk is framed below it, never under it.
     pub(super) fn band_h(&self, ui: &Ui, desk_w: f32) -> f32 {
         // Only the Desk and Arrange views draw the band.
-        if !matches!(self.tab, Tab::Desk | Tab::Layout) {
+        if !matches!(self.tab, Tab::Desk | Tab::Arrange) {
             return 0.0;
         }
         let mut h = 0.0;
@@ -741,7 +741,7 @@ impl App {
     }
 
     /// Whether the Computers / Arrange switch is on the desk's top row.
-    pub(super) fn desk_views_shown(&self) -> bool { matches!(self.tab, Tab::Desk | Tab::Layout) && !self.off() }
+    pub(super) fn desk_views_shown(&self) -> bool { matches!(self.tab, Tab::Desk | Tab::Arrange) && !self.off() }
 
     /// Decides the banner for this frame (see [`NoticeHold`]).
     pub(super) fn refresh_notice(&mut self, ui: &Ui, now: f64) {

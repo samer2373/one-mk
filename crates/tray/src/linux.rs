@@ -51,8 +51,10 @@ impl Tray for OneMk {
         "one-mk".into()
     }
 
+    /// What a panel shows beside the icon (the id above stays as it is, so
+    /// a desktop keeps what it remembers about the icon).
     fn title(&self) -> String {
-        "one-mk".into()
+        "oneMK".into()
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
@@ -66,7 +68,7 @@ impl Tray for OneMk {
     }
 
     fn tool_tip(&self) -> ToolTip {
-        ToolTip { title: "one-mk".into(), description: self.snap.headline(), ..Default::default() }
+        ToolTip { title: "oneMK".into(), description: self.snap.headline(), ..Default::default() }
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {

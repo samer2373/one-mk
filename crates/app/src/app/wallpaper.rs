@@ -56,14 +56,15 @@ impl App {
         let hovering = ui.input(|input| !input.raw.hovered_files.is_empty());
         let computers: Vec<_> = status.as_ref().map(|status| std::iter::once((status.id.clone(), status.name.clone(), true))
             .chain(status.peers.iter().map(|peer| (peer.id.clone(), peer.name.clone(), peer.online))).collect()).unwrap_or_default();
-        egui::ScrollArea::vertical().id_salt("wallpaper-scroll").show_viewport(ui, |ui, _| {
+        let out = egui::ScrollArea::vertical().id_salt("wallpaper-scroll").show_viewport(ui, |ui, _| {
             let width = area.width();
             let origin = ui.cursor().min;
             // The stage: every screen, as it stands, each showing its part
             // of the one picture; what plays and how to change it under it.
             // As tall as the screens need at this width, within reason.
             let need = canvas.bounds().map_or(180.0, |b| ((width - 48.0) as f64 * b.height / b.width) as f32);
-            let stage = Rect::from_min_size(origin, vec2(width, need.clamp(150.0, 330.0) + 20.0 + 26.0 + 64.0));
+            let screens_h = stage_screens_h(need, area.height(), wallpaper.gnome.is_some());
+            let stage = Rect::from_min_size(origin, vec2(width, screens_h + 20.0 + 26.0 + 64.0));
             widgets::group(ui, stage, R_GROUP);
             if hovering && enabled {
                 ui.painter().rect_stroke(stage, CornerRadius::same(R_GROUP), Stroke::new(1.5, ACCENT), StrokeKind::Inside);
@@ -114,8 +115,11 @@ impl App {
             let fills = Rect::from_min_size(pos2(origin.x, stage.bottom() + 22.0), vec2(col_w, fills_h));
             let rows = list(ui, fills, "How it fills the screens", 2);
             let fit_row = rows[0];
-            label_help(ui, short(fit_row), Id::unique("wallpaper-fit-label"), "Picture sizing", "wallpaper-fit", enabled && selected, 204.0 + 12.0);
-            let track = Rect::from_min_size(pos2(fit_row.right() - 204.0, fit_row.center().y - 14.0), vec2(204.0, 28.0));
+            // The choices give way before the label does: in a narrow column
+            // the label keeps the room it needs (its name, the "i" and a margin).
+            let fit_w = fit_track_w(fit_row.width(), text_width(ui, "Picture sizing", regular(T_BODY)) + 26.0 + 8.0);
+            label_help(ui, short(fit_row), Id::unique("wallpaper-fit-label"), "Picture sizing", "wallpaper-fit", enabled && selected, fit_w + 12.0);
+            let track = Rect::from_min_size(pos2(fit_row.right() - fit_w, fit_row.center().y - 14.0), vec2(fit_w, 28.0));
             if let Some(chosen) = (Pills { id: Id::unique("wallpaper-fit"), track, cells: Pills::even(track, 3, 2.0), labels: &["Fill", "Fit", "Stretch"], names: vec!["Fill the screens".into(), "Fit inside the screens".into(), "Stretch across the screens".into()], chosen: Some(match fit_now { Fit::Fill => 0, Fit::Fit => 1, Fit::Stretch => 2 }), enabled: vec![enabled && selected; 3], role: Role::RadioGroup, font: T_META }).show(ui, true) {
                 self.wallpaper_command(Command::Fit { fit: [Fit::Fill, Fit::Fit, Fit::Stretch][chosen] });
             }
@@ -203,6 +207,70 @@ impl App {
             }
             ui.allocate_space(vec2(width, bottom - origin.y + 8.0));
         });
+        // More below the fold: a fade says so.
+        let hidden = out.content_size.y - out.state.clamped_offset().y - out.inner_rect.height();
+        if hidden > 4.0 {
+            more_below(ui, out.inner_rect);
+        }
+    }
+}
+
+/// The height the screens' preview gets: as tall as the screens need at this
+/// width, within reason; in a short window with the GNOME setup block under
+/// it, no taller than lets the setup show without scrolling far.
+fn stage_screens_h(need: f32, page_h: f32, gnome: bool) -> f32 {
+    let wanted = need.clamp(150.0, 330.0);
+    if !gnome {
+        return wanted;
+    }
+    // The stage's own chrome (110), the two lists (22 + 130), the setup (about 150), a margin.
+    let room = page_h - (110.0 + 22.0 + 130.0 + 150.0 + 8.0);
+    wanted.min(room.max(110.0))
+}
+
+/// How wide the Fill, Fit, Stretch choices are in a row `row_w` wide whose
+/// label needs `label_w`: all of 204 where it fits, narrower down to 150.
+fn fit_track_w(row_w: f32, label_w: f32) -> f32 {
+    (row_w - label_w - 12.0).clamp(150.0, 204.0)
+}
+
+/// A soft fade over the foot of a scrolling page that goes on below, with a
+/// chevron, so what is cut off reads as "scroll" and not as "missing".
+fn more_below(ui: &Ui, inner: Rect) {
+    use egui::epaint::{Mesh, Vertex, WHITE_UV};
+    let fade = Rect::from_min_max(pos2(inner.left(), inner.bottom() - 40.0), inner.right_bottom());
+    let mut mesh = Mesh::default();
+    for (pos, color) in [(fade.left_top(), Color32::TRANSPARENT), (fade.right_top(), Color32::TRANSPARENT), (fade.right_bottom(), ROOM), (fade.left_bottom(), ROOM)] {
+        mesh.vertices.push(Vertex { pos, uv: WHITE_UV, color });
+    }
+    mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+    let painter = ui.painter().with_clip_rect(inner);
+    painter.add(egui::Shape::mesh(mesh));
+    let c = pos2(inner.center().x, inner.bottom() - 12.0);
+    painter.add(egui::Shape::line(vec![c + vec2(-5.0, -2.5), c + vec2(0.0, 2.5), c + vec2(5.0, -2.5)], Stroke::new(1.5, INK3)));
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn the_picture_sizing_label_keeps_its_room() {
+        // The 820 pt window's column: the label (about 90 + 26) is not squeezed to "Picture s…".
+        let label = 116.0;
+        let narrow = 278.0;
+        let w = fit_track_w(narrow, label);
+        assert!(narrow - w - 12.0 >= label, "label got {} of {label}", narrow - w - 12.0);
+        assert!(w >= 150.0);
+        assert_eq!(fit_track_w(520.0, label), 204.0, "a wide column keeps the full choices");
+    }
+
+    #[test]
+    fn a_short_window_trims_the_preview_only_when_the_setup_block_is_there() {
+        assert_eq!(stage_screens_h(183.0, 480.0, false), 183.0);
+        assert!(stage_screens_h(183.0, 480.0, true) < 183.0);
+        assert_eq!(stage_screens_h(183.0, 480.0, true), 110.0, "never below 110");
+        assert_eq!(stage_screens_h(183.0, 900.0, true), 183.0, "a tall window keeps it");
     }
 }
 

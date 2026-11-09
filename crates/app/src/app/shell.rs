@@ -91,14 +91,14 @@ pub(super) fn frame(full: Rect) -> Frame {
 }
 
 /// The pages in the sidebar, each with its shortcut key (with ⌘ or Ctrl).
-/// Layout lives in Desk (its Arrange view), Health behind the status line
-/// at the bottom, Advanced is Settings.
-const NAV: [(Tab, Icon, &str); 6] = [(Tab::Desk, Icon::Desk, "1"), (Tab::Wallpaper, Icon::Wallpaper, "2"), (Tab::Files, Icon::Clipboard, "3"), (Tab::Keys, Icon::Keys, "4"), (Tab::Health, Icon::Health, "5"), (Tab::Advanced, Icon::Advanced, ",")];
+/// Arrange lives in Desk (its second view), Health behind the status line
+/// at the bottom.
+const NAV: [(Tab, Icon, &str); 6] = [(Tab::Desk, Icon::Desk, "1"), (Tab::Wallpaper, Icon::Wallpaper, "2"), (Tab::Files, Icon::Clipboard, "3"), (Tab::Keys, Icon::Keys, "4"), (Tab::Health, Icon::Health, "5"), (Tab::Settings, Icon::Settings, ",")];
 
 /// The sidebar's page that `tab` belongs to.
 fn nav_of(tab: Tab) -> Tab {
     match tab {
-        Tab::Layout => Tab::Desk,
+        Tab::Arrange => Tab::Desk,
         t => t,
     }
 }
@@ -438,6 +438,7 @@ impl App {
         };
         let first_pair = self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty());
         let banner_take_back = self.tab == Tab::Desk && matches!(job, Some(Job::TakeBack));
+        let first_pair = first_pair || self.start_in_card();
         if self.broadcasting() {
             self.broadcast_status(ui, a);
         } else if !first_pair && !banner_take_back && button(ui, a, Id::unique("action"), &label, look, enabled && shown, a11y_label).clicked() {
@@ -586,6 +587,7 @@ impl App {
         let a = Rect::from_center_size(pos2(cx, side.bottom() - 12.0 - 20.0), vec2(side.width() - 12.0, 40.0));
         if self.tab == Tab::Desk && self.running().is_some_and(|status| status.peers.is_empty()) { return; }
         if self.tab == Tab::Desk && matches!(job, Some(Job::TakeBack)) { return; }
+        if self.start_in_card() { return; }
         let shown = !self.sheet_open() && self.status.is_some();
         if self.broadcasting() { self.broadcast_status(ui, a); return; }
         let r = button(ui, a, Id::unique("action"), "", look, enabled && shown, Some(&label));

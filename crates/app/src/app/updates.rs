@@ -38,7 +38,7 @@ impl App {
         }
         let _ = ctx;
         // What to show lives in the sidebar's foot (shell.rs, update_box),
-        // and the choices in Advanced.
+        // and the choices in Settings.
     }
 }
 
@@ -80,7 +80,7 @@ impl App {
         48.0 + 2.0 * 36.0 + 44.0 + if rollback { 44.0 } else { 0.0 } + note_h.max(26.0) + 14.0
     }
 
-    /// Advanced > Updates: whether to look for new versions (at most once
+    /// Settings > Updates: whether to look for new versions (at most once
     /// a day) and whether to install them without asking; going back to
     /// the previous version when one is kept.
     pub(super) fn updates_card(&mut self, ui: &mut Ui, r: Rect) {
@@ -123,7 +123,8 @@ impl App {
         let said = if checking { "Looking for a new version…".to_owned() }
             else if installing { self.update_output.clone().unwrap_or_default() }
             else if let Some(v) = &version { format!("oneMK {v} is available. You have {}.", env!("CARGO_PKG_VERSION")) }
-            else if status.error.is_some() { "The last check didn't work.".to_owned() }
+            // The note below says it when the check is on; once.
+            else if status.error.is_some() && !failure_note_shown(&status) { "The last check didn't work.".to_owned() }
             else if self.update_ui.checked { format!("You're up to date. oneMK {}.", env!("CARGO_PKG_VERSION")) }
             else { format!("oneMK {}", env!("CARGO_PKG_VERSION")) };
         let tx = b.right() + 12.0;
@@ -144,8 +145,35 @@ impl App {
     }
 }
 
+/// Whether the note under the button is the one about a failed check.
+fn failure_note_shown(status: &UpdateStatus) -> bool {
+    status.check && status.error.is_some() && status.available.is_none()
+}
+
 fn update_note(status: &UpdateStatus) -> &str {
-    if status.check && status.error.is_some() && status.available.is_none() { "The last check for updates didn't work. oneMK tries again tomorrow." }
+    if failure_note_shown(status) { "The last check for updates didn't work. oneMK tries again tomorrow." }
     else if status.can_update && status.needs_password { "Installing asks for your password, then restarts oneMK for a few seconds." }
     else if status.can_update { "At most once a day. Installing restarts oneMK for a few seconds." } else { status.advice.as_str() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failed(check: bool) -> UpdateStatus {
+        UpdateStatus { check, error: Some("offline".into()), ..Default::default() }
+    }
+
+    #[test]
+    fn a_failed_check_is_said_once_not_twice() {
+        // Checking on: the note under the button says it, the line beside
+        // the button does not repeat it.
+        let status = failed(true);
+        assert!(failure_note_shown(&status));
+        assert!(update_note(&status).contains("didn't work"));
+        // Checking off: the note is about something else, so the line says it.
+        let status = failed(false);
+        assert!(!failure_note_shown(&status));
+        assert!(!update_note(&status).contains("didn't work"));
+    }
 }

@@ -7,12 +7,12 @@ use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, pos2};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Icon {
     Desk,
-    Layout,
+    Arrange,
     Clipboard,
     Wallpaper,
     Keys,
     Health,
-    Advanced,
+    Settings,
     Chevron,
     Lock,
     Broadcast,
@@ -54,7 +54,7 @@ pub fn draw(p: &Painter, icon: Icon, rect: Rect, col: Color32) {
             line(&[(8.0, 11.0), (8.0, 13.5)]);
             line(&[(5.0, 13.5), (11.0, 13.5)]);
         }
-        Icon::Layout => {
+        Icon::Arrange => {
             rrect(1.75, 3.0, 5.5, 5.0, 1.0);
             rrect(8.75, 5.0, 5.5, 6.0, 1.0);
             line(&[(4.5, 10.5), (4.5, 12.5)]);
@@ -74,7 +74,7 @@ pub fn draw(p: &Painter, icon: Icon, rect: Rect, col: Color32) {
             line(&[(5.0, 9.5), (11.0, 9.5)]);
         }
         Icon::Health => line(&[(1.5, 8.5), (4.5, 8.5), (6.25, 4.5), (9.75, 12.5), (11.5, 8.5), (14.5, 8.5)]),
-        Icon::Advanced => {
+        Icon::Settings => {
             line(&[(2.0, 4.5), (9.0, 4.5)]);
             line(&[(12.0, 4.5), (14.0, 4.5)]);
             line(&[(2.0, 11.5), (5.0, 11.5)]);

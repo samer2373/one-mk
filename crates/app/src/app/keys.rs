@@ -63,6 +63,18 @@ mod gesture_tests {
     }
 
     #[test]
+    fn a_rule_covers_the_computers_its_scope_names() {
+        let peer = |name: &str, os| tune::Peer { name: name.into(), id: format!("{name}-id"), os };
+        let (mac, linux) = (peer("Mac", one_mk_proto::os::MACOS), peer("Studio", one_mk_proto::os::LINUX));
+        assert!(scope_covers(&Scope::All, &mac) && scope_covers(&Scope::All, &linux));
+        assert!(scope_covers(&Scope::Os(one_mk_proto::os::LINUX), &linux) && !scope_covers(&Scope::Os(one_mk_proto::os::LINUX), &mac));
+        assert!(scope_covers(&Scope::Peer("Studio".into()), &linux) && !scope_covers(&Scope::Peer("Studio".into()), &mac));
+        // A keyboard narrows the rule to what is typed on it, not to a computer.
+        let device = Scope::Device("aaaa-bbbb".into(), Box::new(Scope::Os(one_mk_proto::os::LINUX)));
+        assert!(scope_covers(&device, &linux) && !scope_covers(&device, &mac));
+    }
+
+    #[test]
     fn narrow_keyboard_retains_board_space_and_stacks_cards() {
         for width in [600.0, 660.0] {
             assert_eq!(keyboard_columns(width), 1);
@@ -1573,7 +1585,7 @@ impl App {
     /// has the focus on the computer typed on. Changing it moves the rule
     /// there; with no rule yet, the next change is made for that app.
     fn app_field(&mut self, ui: &mut Ui, at: Pos2, w: f32, name: &str) -> f32 {
-        let (left, y) = (at.x, at.y);
+        let (left, mut y) = (at.x, at.y);
         let own = self.keys.selected.and_then(|code| self.own_rule(code)).map(|(_, r)| r);
         let own = own.as_ref();
         let busy = self.tuning_busy();
@@ -1600,7 +1612,14 @@ impl App {
             }
             self.keys.app = new;
         }
-        y + ROW + 4.0
+        y += ROW + 4.0;
+        // Say so where the control is when the computers it is for may not
+        // be able to tell which app has the focus.
+        let covered: Vec<u8> = self.scope_peers().iter().filter(|p| scope_covers(&self.keys.scope, p)).map(|p| p.os).collect();
+        if let Some(note) = crate::desktop::app_rule_note(self.running().map_or(&[][..], |s| &s.tuning[..]), &covered) {
+            y += para(ui, pos2(left, y), w, &note, regular(T_META), INK3) + 6.0;
+        }
+        y
     }
 
     /// "Press the key you want…", while the window waits for it.
@@ -2336,5 +2355,14 @@ impl App {
             y += 6.0 + error_line(ui, c.left(), y + 6.0, c.width(), &e);
         }
         card.end(ui, y - 4.0)
+    }
+}
+
+/// Whether a rule with this scope can apply to this computer.
+fn scope_covers(scope: &Scope, peer: &tune::Peer) -> bool {
+    match scope {
+        // The keyboard it is typed on says nothing about the computer.
+        Scope::Device(_, on) => scope_covers(on, peer),
+        scope => scope.rank(&Facts { name: peer.name.clone(), id: peer.id.clone(), os: peer.os, device: None }).is_some(),
     }
 }

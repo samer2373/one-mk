@@ -13,6 +13,7 @@
 mod app;
 mod chrome;
 mod daemon;
+mod desktop;
 mod gear;
 mod glass;
 mod help;

@@ -1,5 +1,5 @@
 //! Panel cells for the newer controls: this computer's switches (pointer
-//! lock, lock all; gaming mode is drawn here for Advanced), a computer's quick actions (switch to it,
+//! lock, lock all; gaming mode is drawn here for Settings), a computer's quick actions (switch to it,
 //! its clipboard), the clipboard and file settings, and transfers as they
 //! run.
 
@@ -253,7 +253,7 @@ impl App {
         }
     }
 
-    /// Gaming mode: a label and three choices (in Advanced).
+    /// Gaming mode: a label and three choices (in Settings).
     pub(super) fn gaming_row(&mut self, ui: &mut Ui, g: Rect) {
         let word = "Gaming mode";
         let lw = text_width(ui, word, regular(T_BODY)) + 12.0 + 26.0;

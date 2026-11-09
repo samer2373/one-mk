@@ -17,7 +17,7 @@ mod settings_controls;
 mod palette;
 mod wallpaper;
 
-use crate::daemon::{Event, Job, Link};
+use crate::daemon::{self, Event, Job, Link};
 use crate::motion::{self, tween};
 use crate::pairing::{Pairing, Step};
 use crate::scene::{self, Cargo, Device, Kind, SPACING, Scene, v};
@@ -57,34 +57,36 @@ const ME_WALL: [u32; 2] = [0x3D7FE6, 0x0A1838];
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tab {
     Desk,
-    Layout,
+    Arrange,
     Files,
     Wallpaper,
     Keys,
     Health,
-    Advanced,
+    Settings,
 }
 /// Each tab, and a shorter name for narrow windows. Settings most people
-/// never change (Ctrl and Cmd, gaming mode, edge rules) live in Advanced.
+/// never change (Ctrl and Cmd, gaming mode, edge rules) live in Settings.
+/// Arrange is not a sidebar page: it is the Desk's second view (Computers
+/// and Arrange), so it carries its own name here, never "Desk".
 const TABS: [(Tab, &str, &str); 7] = [
     (Tab::Desk, "Desk", "Desk"),
-    (Tab::Layout, "Desk", "Desk"),
+    (Tab::Arrange, "Arrange", "Arrange"),
     (Tab::Files, "Clipboard & files", "Files"),
     (Tab::Wallpaper, "Wallpaper", "Wallpaper"),
     (Tab::Keys, "Keys & mouse", "Keys"),
     (Tab::Health, "Health", "Health"),
-    (Tab::Advanced, "Settings", "Settings"),
+    (Tab::Settings, "Settings", "Settings"),
 ];
 
 impl Tab {
     /// Tabs that show the desk of computers (where they can be dragged
     /// into place).
     fn desk(self) -> bool {
-        matches!(self, Tab::Desk | Tab::Files | Tab::Layout)
+        matches!(self, Tab::Desk | Tab::Files | Tab::Arrange)
     }
     /// Tabs that mean something while oneMK is off.
     fn when_off(self) -> bool {
-        matches!(self, Tab::Desk | Tab::Files | Tab::Wallpaper | Tab::Keys | Tab::Health | Tab::Advanced)
+        matches!(self, Tab::Desk | Tab::Files | Tab::Wallpaper | Tab::Keys | Tab::Health | Tab::Settings)
     }
 }
 const PLACES: [(Side, &str); 4] = [(Side::Left, "Left"), (Side::Right, "Right"), (Side::Top, "Above"), (Side::Bottom, "Below")];
@@ -460,10 +462,10 @@ impl App {
         match std::env::var("ONE_MK_APP_TAB").as_deref() {
             Ok("files") => tab = Tab::Files,
             Ok("wallpaper") => tab = Tab::Wallpaper,
-            Ok("keyboard") => tab = Tab::Advanced,
-            Ok("layout") => tab = Tab::Layout,
+            Ok("keyboard") => tab = Tab::Settings,
+            Ok("arrange" | "layout") => tab = Tab::Arrange,
             Ok("health") => tab = Tab::Health,
-            Ok("advanced") => tab = Tab::Advanced,
+            Ok("settings" | "advanced") => tab = Tab::Settings,
             Ok("keys") => tab = Tab::Keys,
             _ => {}
         }
@@ -647,8 +649,9 @@ impl App {
                     self.failed_measure.retain(|id| online.contains(id));
                     self.sync_scene();
                 }
-                Event::Links(links) if self.rtt_frozen.is_none() => self.rtts.record(now, &links),
-                Event::Links(_) => {}
+                // At the moment it was taken, not the frame that got to it.
+                Event::Links(links, taken) if self.rtt_frozen.is_none() => self.rtts.record(now - taken.elapsed().as_secs_f64(), &links),
+                Event::Links(..) => {}
                 Event::Autostart(on) => self.autostart = Some(on),
                 Event::Setup(report) => match report.problems().first() {
                     Some(problem) => self.toast_error(format!("Setup didn't finish. {problem}"), None, now),
@@ -1526,11 +1529,11 @@ impl App {
 
     /// The page's title and the quieter words after it.
     fn page_title(&self) -> (String, String) {
-        let name = if self.tab == Tab::Layout { "Arrange" } else { TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1) }.to_owned();
+        let name = TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1).to_owned();
         let sub = match (self.tab, self.status.as_ref()) {
             (_, None) => String::new(),
             (_, Some(None)) => "oneMK is off".to_owned(),
-            (Tab::Desk | Tab::Layout, Some(Some(s))) => match s.peers.len() {
+            (Tab::Desk | Tab::Arrange, Some(Some(s))) => match s.peers.len() {
                 0 => "nothing paired yet".to_owned(),
                 n => format!("{} of {n} connected", s.peers.iter().filter(|p| p.online).count()),
             },
@@ -1558,6 +1561,12 @@ impl App {
             self.now.to_bits().hash(&mut h);
         }
         h.finish()
+    }
+
+    /// The Desk's own card has the Start button (off, on the Desk page):
+    /// the sidebar does not offer a second one.
+    fn start_in_card(&self) -> bool {
+        self.tab == Tab::Desk && self.off() && self.status.is_some()
     }
 
     /// The top bar's button: what it says and does.
@@ -1657,7 +1666,7 @@ impl App {
     fn cells(&self, rect: Rect) -> Vec<(Cell, Rect)> {
         let w = rect.width();
         let x = match self.tab {
-            Tab::Layout => [0.0, w * 0.3, w * 0.6, w],
+            Tab::Arrange => [0.0, w * 0.3, w * 0.6, w],
             _ => [0.0, w * 0.34, w * 0.66, w],
         };
         let cell = |a: usize, b: usize| Rect::from_min_max(pos2(rect.left() + x[a] + PAD, rect.top() + PAD), pos2(rect.left() + x[b] - PAD, rect.bottom() - PAD));
@@ -1673,11 +1682,11 @@ impl App {
                 _ => vec![(Cell::Inspector(None), cell(0, 1)), (Cell::Controls, cell(1, 3))],
             },
             Tab::Desk => vec![(Cell::Inspector(self.selected_id()), cell(0, 2)), (Cell::Controls, cell(2, 3))],
-            Tab::Layout => {
+            Tab::Arrange => {
                 let sel = self.selected_id().filter(|id| id != "me");
                 vec![(Cell::Arrange(sel.clone()), cell(0, 1)), (Cell::LineUp(sel), cell(1, 2)), (Cell::Profiles, cell(2, 3))]
             }
-            Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper | Tab::Files => vec![],
+            Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files => vec![],
         }
     }
 
@@ -1686,7 +1695,7 @@ impl App {
             self.files_panel(ui, rect);
             return;
         }
-        if self.tab == Tab::Layout && rect.width() < 760.0 {
+        if self.tab == Tab::Arrange && rect.width() < 760.0 {
             self.layout_stacked(ui, rect, now);
             return;
         }
@@ -1695,7 +1704,7 @@ impl App {
         for (cell, c) in &cells {
             let mut card = Rect::from_min_max(c.min - vec2(PAD - M / 2.0, PAD), c.max + vec2(PAD - M / 2.0, PAD));
             // A short cell's card ends a padding under what it holds.
-            if let Some(h) = cell_key(cell).and_then(|k| self.cell_h.get(k)).filter(|_| self.tab != Tab::Layout) {
+            if let Some(h) = cell_key(cell).and_then(|k| self.cell_h.get(k)).filter(|_| self.tab != Tab::Arrange) {
                 card.max.y = card.max.y.min(c.top() + h + PAD + 2.0);
             }
             if card.left() < rect.left() + M {
@@ -1766,12 +1775,12 @@ impl App {
         }
     }
 
-    /// Layout in a narrow window: its three cards behind one tab row
+    /// Arrange in a narrow window: its three cards behind one tab row
     /// (Position, Exact place, Profiles), each shown full width and full
     /// height, so every one is a click away and nothing is shortened or cut.
     fn layout_stacked(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
         let sel = self.selected_id().filter(|id| id != "me");
-        let key = Id::unique("layout-tab");
+        let key = Id::unique("arrange-tab");
         #[allow(unused_mut)]
         let mut chosen = ui.ctx().data(|d| d.get_temp::<usize>(key)).unwrap_or(0);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
@@ -1790,11 +1799,11 @@ impl App {
         let labels = ["Position", "Exact place", "Profiles"];
         let track = Rect::from_min_size(inner.min, vec2(inner.width().min(420.0), 30.0));
         let pills = Pills {
-            id: Id::unique("layout-tabs"),
+            id: Id::unique("arrange-tabs"),
             track,
             cells: Pills::even(track, 3, 2.0),
             labels: &labels,
-            names: labels.iter().map(|l| format!("Layout: {l}")).collect(),
+            names: labels.iter().map(|l| format!("Arrange: {l}")).collect(),
             chosen: Some(chosen),
             enabled: vec![true; 3],
             role: Role::Tab,
@@ -1810,7 +1819,7 @@ impl App {
             1 => Cell::LineUp(sel),
             _ => Cell::Profiles,
         };
-        let mut child = ui.new_child(UiBuilder::new().max_rect(body).id_salt(("layout-tab-body", chosen)));
+        let mut child = ui.new_child(UiBuilder::new().max_rect(body).id_salt(("arrange-tab-body", chosen)));
         child.set_clip_rect(body.expand(4.0).intersect(ui.clip_rect()));
         let layer = child.layer_id();
         let start = ui.ctx().graphics(|graphics| graphics.get(layer).map_or(0, |list| list.all_entries().len()));
@@ -1853,7 +1862,7 @@ impl App {
     }
 
     /// Ctrl and Cmd for every paired computer, a row each, from the top of
-    /// `c` (the Advanced card sizes itself to fit them).
+    /// `c` (the Settings card sizes itself to fit them).
     pub(super) fn swaps(&mut self, ui: &mut Ui, c: Rect) {
         let peers: Vec<_> = self.running().map(|s| s.peers.clone()).unwrap_or_default();
         if peers.is_empty() {
@@ -2321,7 +2330,7 @@ impl App {
         }
         // One key per page, as the sidebar shows them: ⌘1 Desk, ⌘2
         // Wallpaper, ⌘3 Clipboard & files, ⌘4 Keys & mouse, ⌘, Settings.
-        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num2, Tab::Wallpaper), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Num5, Tab::Health), (Key::Comma, Tab::Advanced)] {
+        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num2, Tab::Wallpaper), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Num5, Tab::Health), (Key::Comma, Tab::Settings)] {
             if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || tab.when_off()) {
                 self.set_tab(tab);
             }
@@ -2335,7 +2344,7 @@ fn cell_key(c: &Cell) -> Option<&'static str> {
     match c {
         Cell::Controls => Some("controls"),
         Cell::Head(..) => Some("head"),
-        // Layout's three cards share one height (a row of equals).
+        // Arrange's three cards share one height (a row of equals).
         Cell::Inspector(None) => Some("me"),
         Cell::Inspector(Some(_)) => Some("peer"),
         Cell::LineUp(_) => Some("lineup"),
@@ -2388,7 +2397,7 @@ impl eframe::App for App {
         let f = shell::frame(full);
         let content = f.content;
         let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
-        let with_cards = !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper | Tab::Files);
+        let with_cards = !matches!(self.tab, Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files);
         let cards = Rect::from_min_max(pos2(content.left(), content.bottom() - if with_cards { self.panel_h() } else { 0.0 }), content.max);
         let desk = Rect::from_min_max(pos2(content.left(), head.bottom()), pos2(content.right(), if with_cards { cards.top() - M } else { content.bottom() }));
         // Files let go over a page without the desk: ask where they go.
@@ -2433,7 +2442,7 @@ impl eframe::App for App {
             // On Clipboard & files the desk is only where files go: in a
             // narrow window, chips (drop targets with names) always.
             let files_narrow = self.tab == Tab::Files && scene.width() < 780.0;
-            compact = (frame.height() < COMPACT_BELOW || files_narrow) && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Layout | Tab::Files);
+            compact = (frame.height() < COMPACT_BELOW || files_narrow) && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Arrange | Tab::Files);
         }
         // The sidebar and the toolbar are made before the desk, so Tab meets
         // them first (search, pages, the toolbar left to right, then the
@@ -2475,9 +2484,9 @@ impl eframe::App for App {
                 let mut child = page(ui, body, "health");
                 self.health(&mut child, body, now);
             }
-            Tab::Advanced => {
-                let mut child = page(ui, body, "advanced");
-                self.advanced(&mut child, body);
+            Tab::Settings => {
+                let mut child = page(ui, body, "settings");
+                self.settings(&mut child, body);
             }
             Tab::Keys => {
                 let mut child = page(ui, body, "keys");
@@ -2505,8 +2514,10 @@ impl eframe::App for App {
         self.update_notice(ui.ctx());
         // Tell the link whether a graph was drawn: it asks the daemon for
         // round trips only then (a minimised window draws nothing).
-        let hidden = ui.input(|i| i.viewport().minimized == Some(true));
-        self.link.showing.frame(self.graph_wanted() && !hidden);
+        let (minimized, focused) = ui.input(|i| (i.viewport().minimized, i.viewport().focused));
+        let attention = daemon::Attention::of(minimized, focused);
+        self.link.showing.frame(self.graph_wanted() && attention != daemon::Attention::Hidden);
+        self.link.showing.attend(attention);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if std::env::var_os("ONE_MK_APP_BENCH").is_some() {
             // The UI thread's own work this frame (laying out and painting
@@ -2548,7 +2559,7 @@ impl eframe::App for App {
 ///   shows start at login as on;
 /// - `ONE_MK_APP_CONFIRM=1` says the codes match a second after they
 ///   show, and keeps the "paired" sheet up.
-/// - `ONE_MK_APP_TAB=layout|health|advanced|wallpaper` (and files, keyboard);
+/// - `ONE_MK_APP_TAB=arrange|health|settings|wallpaper` (and files, keyboard);
 ///   `ONE_MK_APP_WALLPAPER=poster.png` supplies a fake playing video when
 ///   combined with `ONE_MK_APP_STATUS` for wallpaper screenshots.
 ///   `ONE_MK_APP_PROFILE=name` opens a profile's options;

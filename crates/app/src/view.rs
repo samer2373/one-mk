@@ -463,7 +463,7 @@ pub struct Check {
 }
 
 pub fn window_issue(text: &str) -> String {
-    if text.contains("settings.toml") { "Check the options in Advanced, then try again.".into() }
+    if text.contains("settings.toml") { "Check the options in Settings, then try again.".into() }
     else if text.contains('`') || ["one-mk run", "one-mk install", "one-mk pair", "one-mk hooks", "one-mk edge", "one-mk send", "one-mk keymap", "one-mk clipboard", "one-mk hotkeys", "one-mk takeback", "one-mk gestures", "one-mk invite", "one-mk join", "one-mk doctor", "sudo ", "chmod "].iter().any(|command| text.contains(command)) {
         "Review the options in this window, or restart oneMK and try again.".into()
     } else { text.replace("one-mk", "oneMK") }

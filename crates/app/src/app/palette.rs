@@ -49,23 +49,23 @@ const SETTINGS: &[(&str, Tab)] = &[
     ("Wallpaper · Fill, fit or stretch", Tab::Wallpaper),
     ("Wallpaper · Pause on battery", Tab::Wallpaper),
     ("Wallpaper · Play on a computer", Tab::Wallpaper),
-    ("Crossing edges · Don't cross near corners", Tab::Advanced),
-    ("Crossing edges · Wait at the edge", Tab::Advanced),
-    ("Crossing edges · Hold a key to cross", Tab::Advanced),
-    ("Crossing edges · Stay in fullscreen windows", Tab::Advanced),
-    ("Power · Keep computers I control awake", Tab::Advanced),
-    ("Power · Sleep displays together", Tab::Advanced),
-    ("Power · Lock every screen with this one", Tab::Advanced),
-    ("Games · Gaming mode", Tab::Advanced),
-    ("Keyboard shortcuts", Tab::Advanced),
-    ("Ctrl and Cmd · Swap them between a Mac and a PC", Tab::Advanced),
-    ("Run commands when the pointer arrives or leaves", Tab::Advanced),
-    ("Typing on the other computer · Letters across layouts", Tab::Advanced),
-    ("Pointer wrap", Tab::Advanced),
-    ("Learn computer positions", Tab::Advanced),
-    ("Draw a pointer on computers with no mouse", Tab::Advanced),
-    ("Updates · Look for updates", Tab::Advanced),
-    ("Updates · Install them without asking", Tab::Advanced),
+    ("Crossing edges · Don't cross near corners", Tab::Settings),
+    ("Crossing edges · Wait at the edge", Tab::Settings),
+    ("Crossing edges · Hold a key to cross", Tab::Settings),
+    ("Crossing edges · Stay in fullscreen windows", Tab::Settings),
+    ("Power · Keep computers I control awake", Tab::Settings),
+    ("Power · Sleep displays together", Tab::Settings),
+    ("Power · Lock every screen with this one", Tab::Settings),
+    ("Games · Gaming mode", Tab::Settings),
+    ("Keyboard shortcuts", Tab::Settings),
+    ("Ctrl and Cmd · Swap them between a Mac and a PC", Tab::Settings),
+    ("Run commands when the pointer arrives or leaves", Tab::Settings),
+    ("Typing on the other computer · Letters across layouts", Tab::Settings),
+    ("Pointer wrap", Tab::Settings),
+    ("Learn computer positions", Tab::Settings),
+    ("Draw a pointer on computers with no mouse", Tab::Settings),
+    ("Updates · Look for updates", Tab::Settings),
+    ("Updates · Install them without asking", Tab::Settings),
     ("Clipboard · Text, rich text and images", Tab::Files),
     ("Clipboard · Others can get this clipboard", Tab::Files),
     ("Clipboard · Skip sensitive copies", Tab::Files),
@@ -80,8 +80,8 @@ const SETTINGS: &[(&str, Tab)] = &[
     ("Mouse · Scrolling", Tab::Keys),
     ("Mouse · Gestures", Tab::Keys),
     ("Mouse · Autoscroll", Tab::Keys),
-    ("Layout · Where each computer sits", Tab::Layout),
-    ("Layout · Profiles and Wi-Fi", Tab::Layout),
+    ("Arrange · Where each computer sits", Tab::Arrange),
+    ("Arrange · Profiles and Wi-Fi", Tab::Arrange),
     ("Start at login", Tab::Desk),
 ];
 
@@ -122,12 +122,12 @@ impl App {
         let k = shell::cmd();
         let tab = |t: Tab, title: &str, hint: String| Entry { group: "Go to", title: title.into(), hint, act: Act::Tab(t) };
         out.push(tab(Tab::Desk, "Desk", format!("{k}1")));
-        out.push(tab(Tab::Layout, "Arrange computers", "Desk".into()));
+        out.push(tab(Tab::Arrange, "Arrange computers", "Desk".into()));
         out.push(tab(Tab::Wallpaper, "Wallpaper", format!("{k}2")));
         out.push(tab(Tab::Files, "Clipboard & files", format!("{k}3")));
         out.push(tab(Tab::Keys, "Keys & mouse", format!("{k}4")));
-        out.push(tab(Tab::Advanced, "Settings", format!("{k},")));
-        out.push(tab(Tab::Health, "Health", String::new()));
+        out.push(tab(Tab::Settings, "Settings", format!("{k},")));
+        out.push(tab(Tab::Health, "Health", format!("{k}5")));
         let act = |title: String, hint: &str, act: Act| Entry { group: "Actions", title, hint: hint.into(), act };
         match self.status.as_ref() {
             Some(None) => out.push(act("Start oneMK".into(), "", Act::Start)),
@@ -164,7 +164,7 @@ impl App {
             out.push(act(format!("Update oneMK to {v}"), "", Act::Update));
         }
         for (title, t) in SETTINGS {
-            let page = TABS.iter().find(|x| x.0 == *t).map_or("", |x| x.1);
+            let page = if *t == Tab::Arrange { "Desk" } else { TABS.iter().find(|x| x.0 == *t).map_or("", |x| x.1) };
             out.push(Entry { group: "Settings", title: (*title).into(), hint: page.into(), act: Act::Tab(*t) });
         }
         out
@@ -352,9 +352,9 @@ impl App {
                     let icon = match e.act {
                         Act::Tab(Tab::Files) => Icon::Clipboard,
                         Act::Tab(Tab::Keys) => Icon::Keys,
-                        Act::Tab(Tab::Advanced) => Icon::Advanced,
+                        Act::Tab(Tab::Settings) => Icon::Settings,
                         Act::Tab(Tab::Health) | Act::Recheck => Icon::Health,
-                        Act::Tab(Tab::Layout) => Icon::Layout,
+                        Act::Tab(Tab::Arrange) => Icon::Arrange,
                         Act::Tab(Tab::Wallpaper) | Act::WallChoose | Act::WallPause(_) | Act::WallOff => Icon::Wallpaper,
                         Act::Tab(_) => Icon::Desk,
                         Act::LockAll | Act::KeepHere(_) => Icon::Lock,
