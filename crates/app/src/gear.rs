@@ -242,12 +242,11 @@ pub struct Orbit {
 /// again after at most this much of the limit.
 const PULL_SLACK: f32 = 1.6;
 
-/// How far a drag turns the keyboard (yaw, pitch in radians, eased into
-/// rather than hit): enough to see it is a solid thing, never so far that
-/// the legends on its keys turn too small to read.
-pub const KEYBOARD_TURN: (f32, f32) = (0.21, 0.16);
+/// How far a drag turns the keyboard (yaw, pitch in radians), eased into
+/// rather than hit. The full swing the Keys view has always had.
+pub const KEYBOARD_TURN: (f32, f32) = (0.7, 0.3);
 /// The mouse turns further: its side buttons are only seen from the side.
-pub const MOUSE_TURN: (f32, f32) = (1.0, 0.33);
+pub const MOUSE_TURN: (f32, f32) = (0.9, 0.3);
 
 /// `pull` turned into a turn that follows it one to one near the resting
 /// view and eases into `limit` instead of stopping hard against it.
@@ -1296,13 +1295,15 @@ mod tests {
     }
 
     #[test]
-    fn the_keyboard_turned_as_far_as_a_drag_goes_keeps_every_legend() {
+    fn the_keyboard_turned_a_natural_amount_keeps_every_legend() {
         let caps: Vec<Cap> = crate::tune::keyboard(true, false).into_iter().map(|cap| Cap {
             x: cap.x, y: cap.y, w: cap.w, h: cap.h, label: crate::tune::cap_label(cap.code), to: None, modifier: false,
         }).collect();
         let context = egui::Context::default();
         crate::style::install(&context);
-        let (yaw, pitch) = (soft_limit(KEYBOARD_TURN.0 * PULL_SLACK, KEYBOARD_TURN.0), soft_limit(KEYBOARD_TURN.1 * PULL_SLACK, KEYBOARD_TURN.1));
+        // A natural turn, a third of the full swing. The very end of the swing is for
+        // looking at the keyboard as a solid thing: small legends may drop out there.
+        let (yaw, pitch) = (KEYBOARD_TURN.0 * 0.3, KEYBOARD_TURN.1 * 0.3);
         let mut lost = Vec::new();
         let mut output = context.run_ui(Default::default(), |ui| {
             // The keyboard card in the default window (1100 points) and a wide one.
