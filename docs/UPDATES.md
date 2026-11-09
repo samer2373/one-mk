@@ -17,7 +17,11 @@ commit it, or paste it into chat. Keep an offline backup on the owner's side.
 Tag pushes run `.github/workflows/release.yml`. After staging all release
 assets, the publish job signs the manifest's exact bytes, verifies against the
 compiled public key, uploads a draft, verifies the asset list, then publishes.
-Missing production signing credentials fail publication. Never rebuild or
+Missing production signing credentials fail publication, and so do missing
+macOS signing/notarization secrets (`MACOS_CERT_P12`, `MACOS_CERT_PASSWORD`,
+`NOTARY_APPLE_ID`, `NOTARY_PASSWORD`, `NOTARY_TEAM_ID`): the Mac updater
+refuses an ad-hoc signed app. Publishing also waits for the workspace tests
+and clippy on all three systems and the release checks. Never rebuild or
 overwrite a published release. The sequence is `GITHUB_RUN_NUMBER`, also
 compiled into release clients as a sequence floor; keep numbering monotonic.
 

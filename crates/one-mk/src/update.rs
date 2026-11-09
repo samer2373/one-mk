@@ -369,6 +369,8 @@ fn asset_url(release: &Release, name: &str, origin: &Url) -> Result<Url> {
 
 /// The exact signed bytes behind a checked manifest, kept so a later step
 /// (the root step of a package install) can verify them again by itself.
+/// Only Linux packages read them.
+#[cfg_attr(not(unix), allow(dead_code))]
 struct Signed { manifest: Vec<u8>, signature: Vec<u8> }
 
 type Checked = (Manifest, Release, Url, Signed);
