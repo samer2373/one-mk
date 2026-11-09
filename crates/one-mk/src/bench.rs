@@ -41,7 +41,7 @@ pub async fn run(dir: &Path, opts: Options) -> Result<()> {
             .clone();
         let fp = device.fingerprint().context("corrupt fingerprint in devices.toml")?;
         let node = Node::bind_any(identity.clone(), 0)?;
-        let peer = crate::send::find(&node, &identity, &device, fp, Vec::new()).await?;
+        let peer = crate::send::find(&node, &identity, &device, fp, Vec::new(), "or measure a computer by address with `one-mk bench --connect <ip:port>`, where `one-mk bench --serve <port>` runs").await?;
         // Tells the daemon this connection only echoes probes.
         peer.open_stream(StreamKind::Probe).await?;
         let label = format!("to {} ({})", device.name, peer.conn.remote_address());

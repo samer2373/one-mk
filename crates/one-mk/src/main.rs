@@ -84,8 +84,9 @@ use std::process::ExitCode;
     about = "Share one mouse and keyboard across your computers"
 )]
 struct Cli {
-    /// Where settings and keys live (default: your config folder). With
-    /// another folder, pairing and forgetting leave your file manager's
+    /// Where settings and keys live (default: your config folder).
+    ///
+    /// With another folder, pairing and forgetting leave your file manager's
     /// "Send to" entries alone; received files still go to Downloads (see
     /// `run --downloads`), and install, integrate, pointer-extension and
     /// wallpaper still change this desktop when you run them.
@@ -111,7 +112,7 @@ struct RunArgs {
     /// UDP port to listen on (default: 24900).
     #[arg(long)]
     port: Option<u16>,
-    /// Also try this address, e.g. 192.168.1.20:24800 (for networks that block discovery; repeatable).
+    /// Also try this address, e.g. 192.168.1.20:24900 (for networks that block discovery; repeatable).
     #[arg(long, value_name = "IP:PORT")]
     connect: Vec<SocketAddr>,
     /// Don't advertise or look for computers on the local network.
@@ -201,7 +202,7 @@ enum Cmd {
         /// Name or id of the paired computer (needed if there are several).
         #[arg(long, value_name = "DEVICE")]
         to: Option<String>,
-        /// Also try this address, e.g. 192.168.1.20:24800 (for networks that block discovery; repeatable).
+        /// Also try this address, e.g. 192.168.1.20:24900 (for networks that block discovery; repeatable).
         #[arg(long, value_name = "IP:PORT")]
         connect: Vec<SocketAddr>,
         /// Also show a desktop notification if sending fails (the file manager's "Send to" entries use this).

@@ -828,7 +828,7 @@ pub struct EdgeArgs {
     /// While another computer controls this one but sends no input, let
     /// it go after this long: seconds, or with s, m or h (10s to 24h);
     /// off to never; default for 10 minutes. Its pointer then goes home
-    /// and its next movement comes back.
+    /// and its next movement enters this computer again.
     #[arg(long, value_name = "TIME|off|default")]
     pub idle_return: Option<IdleReturn>,
 }

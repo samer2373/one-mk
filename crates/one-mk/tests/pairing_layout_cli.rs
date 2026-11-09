@@ -264,6 +264,29 @@ fn incompatible_free_edges_stop_negotiating_and_request_placement() {
     }
 }
 
+/// The host refusing a joiner reads as a refusal there, not as
+/// "connection lost: closed by peer: 0"; neither saves anything.
+#[test]
+fn a_refused_join_says_so() {
+    let mut lab = Lab::new();
+    let host = lab.home("host");
+    let joiner = lab.home("joiner");
+    let address = if_addrs::get_if_addrs().unwrap().into_iter().map(|interface| interface.ip())
+        .find(|address| address.is_ipv4() && one_mk_net::invite::usable_address(*address)).expect("invitation needs a local non-loopback address");
+    let host_child = lab.spawn(&host, &["invite", "--machine", "--listen", &format!("{address}:0"), "--no-discovery", "--service-port", "9"], "pair.log");
+    let output = Lab::wait_text(&host, "pair.log", "onemk://");
+    let link = output.lines().find_map(|line| line.strip_prefix("invitation\t")).unwrap().to_owned();
+    let join_child = lab.spawn(&joiner, &["join", &link, "--yes", "--service-port", "9"], "pair.log");
+    Lab::wait_text(&host, "pair.log", "code\t");
+    drop(lab.children[host_child].stdin.take()); // no answer: refused
+    let status = wait(|| lab.children[join_child].try_wait().unwrap());
+    let said = std::fs::read_to_string(joiner.join("pair.log")).unwrap();
+    assert!(!status.success(), "{said}");
+    assert!(said.contains("did not accept this computer") && said.contains("nothing saved here") && !said.contains("closed by peer"), "{said}");
+    let _ = wait(|| lab.children[host_child].try_wait().unwrap());
+    assert!(TrustStore::load(&host).unwrap().devices().is_empty() && TrustStore::load(&joiner).unwrap().devices().is_empty());
+}
+
 /// An invitation made while one-mk runs on a port of its own tells the
 /// joiner that port, not the default one: the joiner (whose one-mk isn't
 /// running here, so nothing rewrites what it saved) dials the right place.

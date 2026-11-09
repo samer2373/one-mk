@@ -56,6 +56,17 @@ pub struct JoinArgs {
     service_port: Option<u16>,
 }
 
+/// "1 minute", "5 minutes", "30 seconds".
+fn expires_in(secs: u64) -> String {
+    match secs {
+        0..60 => format!("{secs} second{}", if secs == 1 { "" } else { "s" }),
+        _ => {
+            let minutes = secs.div_ceil(60);
+            format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" })
+        }
+    }
+}
+
 fn duration(text: &str) -> Result<Duration, String> {
     let (n, scale) = match text.as_bytes().last() {
         Some(b's') => (&text[..text.len() - 1], 1),
@@ -127,7 +138,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
         }
     };
     println!("Invitation from {} ({})", sanitize_name(&identity.name), identity.fingerprint);
-    println!("Expires in {} minutes. One use; closing this process cancels it.", wall_expiry.saturating_sub(one_mk_net::invite::unix_now()).div_ceil(60));
+    println!("Expires in {}. One use; closing this process cancels it.", expires_in(wall_expiry.saturating_sub(one_mk_net::invite::unix_now())));
     println!("Treat this link like a password: whoever uses it first can request trust.");
     println!("{}", link.as_str());
     if args.machine { println!("invitation\t{}", link.as_str()); } else { print_qr(&link)?; }
@@ -342,12 +353,32 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
         read_approval(end, None).await
     };
     std::io::stdout().flush()?;
-    ensure!(tokio::time::timeout_at(end, session.confirm(accept)).await.context("invitation approval expired")??, "invitation declined; nothing saved here");
+    let agreed = tokio::time::timeout_at(end, session.confirm(accept)).await.context("invitation approval expired")?;
+    // The host says no by closing the invitation, often before this side
+    // has answered: that is a refusal, not a network fault.
+    let agreed = agreed.map_err(|error| if closed_by_peer(&error) {
+        anyhow::anyhow!("{} did not accept this computer (it declined, or its invitation was closed); nothing saved here", sanitize_name(&name))
+    } else { error })?;
+    ensure!(accept, "you declined; nothing saved here");
+    ensure!(agreed, "{} did not accept this computer; nothing saved here", sanitize_name(&name));
     save(dir, &peer, &name, port, false).await?;
     acknowledge(session).await?;
     println!("Trusted {name} ({}). Start `one-mk run` only on computers not already running.", peer.fingerprint);
     if machine { println!("paired\t{}\t{}\tleft", peer.fingerprint, sanitize_name(&name)); }
     Ok(())
+}
+
+/// The other end closed the connection on purpose (as opposed to it
+/// timing out or the network failing).
+fn closed_by_peer(error: &anyhow::Error) -> bool {
+    use one_mk_net::quinn::{ConnectionError, ReadError, ReadExactError, WriteError};
+    let closed = |c: &ConnectionError| matches!(c, ConnectionError::ApplicationClosed(_) | ConnectionError::ConnectionClosed(_));
+    error.chain().any(|cause| {
+        cause.downcast_ref::<ConnectionError>().is_some_and(closed)
+            || cause.downcast_ref::<ReadExactError>().is_some_and(|e| matches!(e, ReadExactError::ReadError(ReadError::ConnectionLost(c)) if closed(c)))
+            || cause.downcast_ref::<ReadError>().is_some_and(|e| matches!(e, ReadError::ConnectionLost(c) if closed(c)))
+            || cause.downcast_ref::<WriteError>().is_some_and(|e| matches!(e, WriteError::ConnectionLost(c) if closed(c)))
+    }) || format!("{error:#}").contains("closed by peer")
 }
 
 async fn withdraw(discovery: &mut Option<Discovery>) {
@@ -515,6 +546,16 @@ fn print_qr(link: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// "Expires in 1 minute", never "1 minutes"; a short one in seconds.
+    #[test]
+    fn expiry_reads_naturally() {
+        assert_eq!(super::expires_in(3), "3 seconds");
+        assert_eq!(super::expires_in(1), "1 second");
+        assert_eq!(super::expires_in(60), "1 minute");
+        assert_eq!(super::expires_in(61), "2 minutes");
+        assert_eq!(super::expires_in(600), "10 minutes");
+    }
+
     #[tokio::test]
     async fn cancellation_after_save_waits_for_commit() {
         let saved = AtomicBool::new(true);
