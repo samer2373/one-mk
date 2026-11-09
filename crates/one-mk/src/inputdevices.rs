@@ -2,8 +2,8 @@
 //! the config folder), for per-device rules: written by the daemon when a
 //! device is plugged in, unplugged, falls asleep or wakes, read by `one-mk
 //! input-devices`, by `--device` and by the window, so a rule can be made
-//! for a keyboard that is asleep right now. See "Per-device rules" in
-//! `docs/INPUT-TUNING.md`.
+//! for a keyboard that is asleep right now. See "One keyboard or mouse" in
+//! `docs/INPUT.md`.
 
 use anyhow::{Context, Result, bail};
 use one_mk_proto::device::{Bus, Fingerprint, InputDevice};

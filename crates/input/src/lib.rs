@@ -122,7 +122,7 @@ pub enum Event {
     Activated { id: u32, side: Side, pos: Pos },
     /// The input events below say which keyboard or mouse they came from
     /// (`device`, an entry of the latest `Devices`), `None` when the
-    /// backend can't tell (see `docs/INPUT-TUNING.md`, "Per-device rules"):
+    /// backend can't tell (see `docs/INPUT.md`, "One keyboard or mouse"):
     /// such input gets only the rules that name no device.
     Motion { dx: f64, dy: f64, device: Option<DeviceRef> },
     Button { button: u32, down: bool, device: Option<DeviceRef> },

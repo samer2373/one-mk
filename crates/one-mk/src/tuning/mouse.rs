@@ -13,16 +13,25 @@ pub struct AutoscrollArgs {
     #[arg(long)]
     pub button: Option<String>,
     /// Scroll rate multiplier, from 0.1 to 10 (default 1).
-    #[arg(long)]
+    #[arg(long, allow_negative_numbers = true)]
     pub speed: Option<f64>,
     /// Movement before scrolling starts, 0 to 1000 backend motion units (default 8).
-    #[arg(long)]
+    #[arg(long, allow_negative_numbers = true)]
     pub dead_zone: Option<f64>,
     /// Scroll only up and down, or in both directions.
     #[arg(long, value_name = "on|off", value_parser = settings::parse_on_off)]
     pub vertical_only: Option<bool>,
+    /// Forget the autoscroll settings for this scope (and app), so the ones
+    /// for everything else apply again.
+    #[arg(long, conflicts_with_all = ["on", "off", "button", "speed", "dead_zone", "vertical_only"])]
+    pub reset: bool,
     #[command(flatten)]
     pub scope: ScopeArgs,
+}
+
+/// The gestures autoscroll's toggle button shadows, as `check` words them.
+fn reserved_gestures(input: &TuningSettings, paired: &[(String, String, u8)]) -> Vec<String> {
+    input.check(paired).into_iter().filter(|problem| problem.contains("reserved by autoscroll")).collect()
 }
 
 /// Autoscroll and swipes belong to the pointer of the visit, not to one
@@ -38,8 +47,8 @@ pub async fn autoscroll_command(dir: &Path, args: AutoscrollArgs) -> Result<()> 
     no_device(&args.scope)?;
     let scope = args.scope.scope(dir)?;
     let app = args.scope.app()?;
-    if !args.on && !args.off && args.button.is_none() && args.speed.is_none() && args.dead_zone.is_none() && args.vertical_only.is_none() {
-        let settings = Settings::load(dir)?;
+    if !args.reset && !args.on && !args.off && args.button.is_none() && args.speed.is_none() && args.dead_zone.is_none() && args.vertical_only.is_none() {
+        let settings = Settings::view(dir)?;
         for rule in settings.input.autoscroll.rules() {
             let global = rule.scope.is_global() && rule.app.is_none();
             let toggle = |value: Option<bool>, default| value.or(global.then_some(default))
@@ -53,11 +62,34 @@ pub async fn autoscroll_command(dir: &Path, args: AutoscrollArgs) -> Result<()> 
         }
         return Ok(());
     }
+    if args.reset {
+        let removed = Settings::update(dir, |settings| {
+            let auto = &mut settings.input.autoscroll;
+            if scope.is_global() && app.is_none() {
+                let had = auto.base != AutoscrollRule::default();
+                auto.base = AutoscrollRule::default();
+                Ok(had)
+            } else {
+                let before = auto.rule.len();
+                auto.rule.retain(|rule| !(rule.scope == scope && same_app(&rule.app, &app)));
+                Ok(auto.rule.len() != before)
+            }
+        })?;
+        if removed {
+            println!("Autoscroll settings forgotten{}.", where_suffix(&scope, &app));
+        } else {
+            println!("There were no autoscroll settings{} to forget.", where_suffix(&scope, &app));
+        }
+        return settings::apply(dir).await;
+    }
+    let (scope_shown, app_shown) = (scope.clone(), app.clone());
     let update = AutoscrollRule { enabled: if args.on { Some(true) } else if args.off { Some(false) } else { None },
         button: args.button, speed: args.speed, dead_zone: args.dead_zone, vertical_only: args.vertical_only,
         scope: scope.clone(), app: app.clone() };
-    update.validate().map_err(|error| anyhow::anyhow!("invalid autoscroll option: {error}; choose middle or a side mouse button"))?;
+    update.validate().map_err(|error| anyhow::anyhow!("invalid autoscroll option: {error}"))?;
+    let paired = paired(dir);
     Settings::update(dir, |settings| {
+        let known = reserved_gestures(&settings.input, &paired);
         let auto = &mut settings.input.autoscroll;
         let rule = if scope.is_global() && app.is_none() { &mut auto.base } else {
             if !auto.rule.iter().any(|rule| rule.scope == scope && same_app(&rule.app, &app)) {
@@ -71,12 +103,17 @@ pub async fn autoscroll_command(dir: &Path, args: AutoscrollArgs) -> Result<()> 
         rule.speed = update.speed.or(rule.speed);
         rule.dead_zone = update.dead_zone.or(rule.dead_zone);
         rule.vertical_only = update.vertical_only.or(rule.vertical_only);
+        if let Some(problem) = reserved_gestures(&settings.input, &paired).into_iter().find(|problem| !known.contains(problem)) {
+            bail!("{problem}");
+        }
         Ok(())
     })?;
     if args.off {
-        println!("Autoscroll disabled; the toggle button no longer starts scrolling in this scope.");
+        println!("Autoscroll disabled{}; the toggle button no longer starts scrolling.", where_suffix(&scope_shown, &app_shown));
+    } else if args.on {
+        println!("Autoscroll is on{}. Click the toggle button, then move away from it to scroll; click again, press Esc, or leave the computer to stop.", where_suffix(&scope_shown, &app_shown));
     } else {
-        println!("Autoscroll settings saved. Click the toggle button again, press Esc, or leave the computer to stop scrolling.");
+        println!("Autoscroll settings saved{}.", where_suffix(&scope_shown, &app_shown));
     }
     settings::apply(dir).await
 }
@@ -93,7 +130,8 @@ pub enum GesturesCmd {
         /// Direction to swipe while holding the button.
         #[arg(value_parser = ["up", "down", "left", "right"], ignore_case = true)]
         direction: String,
-        /// A key, chord, quoted action, or several chords for a sequence.
+        /// A key, chord, quoted action, or several chords for a sequence;
+        /// desktop-left and desktop-right switch virtual desktops on any OS.
         #[arg(required = true, num_args = 1..)]
         to: Vec<String>,
         /// Minimum swipe distance, 1 to 10000 backend motion units.
@@ -139,12 +177,12 @@ fn set_gesture(rules: &mut Vec<GestureRule>, rule: GestureRule) {
 pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()> {
     match cmd.unwrap_or(GesturesCmd::List) {
         GesturesCmd::List => {
-            let settings = Settings::load(dir)?;
+            let settings = Settings::view(dir)?;
             if settings.input.gesture.is_empty() {
                 println!("No gestures yet. Try `one-mk gestures preset side-swipe`, or `one-mk gestures add button4 left back`.");
             }
             for rule in settings.input.gesture {
-                println!("Hold {} and swipe {} to {} ({} px){}.", rule.button, rule.direction, rule.to.describe(), rule.threshold_px, where_suffix(&rule.scope, &rule.app));
+                println!("Hold {} and swipe {} to {} ({} units){}.", rule.button, rule.direction, rule.to.describe(), rule.threshold_px, where_suffix(&rule.scope, &rule.app));
             }
             return Ok(());
         }
@@ -155,8 +193,17 @@ pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()
             let rule = GestureRule { button, direction, to: output,
                 threshold_px: threshold, scope: scope.scope(dir)?, app: scope.app()? };
             rule.compile(remap::Target { os: os::local(), swap: false }).map_err(anyhow::Error::msg)?;
-            Settings::update(dir, |settings| { set_gesture(&mut settings.input.gesture, rule); Ok(()) })?;
+            let paired = paired(dir);
+            Settings::update(dir, |settings| {
+                let known = reserved_gestures(&settings.input, &paired);
+                set_gesture(&mut settings.input.gesture, rule);
+                match reserved_gestures(&settings.input, &paired).into_iter().find(|problem| !known.contains(problem)) {
+                    Some(problem) => bail!("{problem}; the gesture was not saved"),
+                    None => Ok(()),
+                }
+            })?;
             println!("Gesture saved. A short click still clicks normally; press Esc to cancel a swipe.");
+            run_note(dir);
         }
         GesturesCmd::Remove { button, direction, scope } => {
             no_device(&scope)?;
