@@ -1,6 +1,6 @@
 //! Two full pages without the desk: Health (`one-mk doctor`, run on open
 //! and on Recheck, off the window's thread, plus what the daemon says
-//! right now) and Advanced (edge rules, power and locking, gaming mode,
+//! right now) and Settings (edge rules, power and locking, gaming mode,
 //! keyboard shortcuts, Ctrl and Cmd, commands to run).
 
 use super::*;
@@ -484,7 +484,7 @@ impl App {
         }
     }
 
-    pub(super) fn advanced(&mut self, ui: &mut Ui, rect: Rect) {
+    pub(super) fn settings(&mut self, ui: &mut Ui, rect: Rect) {
         let area = Rect::from_min_max(rect.min + vec2(24.0, 16.0), rect.max - vec2(24.0, 12.0));
         let two = area.width() >= 700.0;
         let gap = 16.0;
@@ -519,7 +519,7 @@ impl App {
         let total = ys[0].max(ys[1]) - gap;
         let mut child = ui.new_child(UiBuilder::new().max_rect(area.expand2(vec2(6.0, 0.0))));
         child.set_clip_rect(area.expand2(vec2(8.0, 4.0)));
-        let scroll = egui::ScrollArea::vertical().id_salt("advanced").auto_shrink([false, false]);
+        let scroll = egui::ScrollArea::vertical().id_salt("settings").auto_shrink([false, false]);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|value| value.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(offset));
         scroll.show(&mut child, |ui| {

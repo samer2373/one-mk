@@ -91,14 +91,14 @@ pub(super) fn frame(full: Rect) -> Frame {
 }
 
 /// The pages in the sidebar, each with its shortcut key (with ⌘ or Ctrl).
-/// Layout lives in Desk (its Arrange view), Health behind the status line
-/// at the bottom, Advanced is Settings.
-const NAV: [(Tab, Icon, &str); 6] = [(Tab::Desk, Icon::Desk, "1"), (Tab::Wallpaper, Icon::Wallpaper, "2"), (Tab::Files, Icon::Clipboard, "3"), (Tab::Keys, Icon::Keys, "4"), (Tab::Health, Icon::Health, "5"), (Tab::Advanced, Icon::Advanced, ",")];
+/// Arrange lives in Desk (its second view), Health behind the status line
+/// at the bottom.
+const NAV: [(Tab, Icon, &str); 6] = [(Tab::Desk, Icon::Desk, "1"), (Tab::Wallpaper, Icon::Wallpaper, "2"), (Tab::Files, Icon::Clipboard, "3"), (Tab::Keys, Icon::Keys, "4"), (Tab::Health, Icon::Health, "5"), (Tab::Settings, Icon::Settings, ",")];
 
 /// The sidebar's page that `tab` belongs to.
 fn nav_of(tab: Tab) -> Tab {
     match tab {
-        Tab::Layout => Tab::Desk,
+        Tab::Arrange => Tab::Desk,
         t => t,
     }
 }

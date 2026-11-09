@@ -38,7 +38,7 @@ impl App {
         }
         let _ = ctx;
         // What to show lives in the sidebar's foot (shell.rs, update_box),
-        // and the choices in Advanced.
+        // and the choices in Settings.
     }
 }
 
@@ -80,7 +80,7 @@ impl App {
         48.0 + 2.0 * 36.0 + 44.0 + if rollback { 44.0 } else { 0.0 } + note_h.max(26.0) + 14.0
     }
 
-    /// Advanced > Updates: whether to look for new versions (at most once
+    /// Settings > Updates: whether to look for new versions (at most once
     /// a day) and whether to install them without asking; going back to
     /// the previous version when one is kept.
     pub(super) fn updates_card(&mut self, ui: &mut Ui, r: Rect) {
