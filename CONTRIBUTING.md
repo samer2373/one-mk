@@ -25,6 +25,10 @@ The release profile uses fat LTO and needs a lot of memory; a debug build
 is enough for development and for the packaging checks
 (`BIN_DIR=target/debug sh scripts/check-packaging.sh`).
 
+The window screenshots in `docs/screens` come from `scripts/doc-shots.sh` (a private X server, two
+paired test daemons and a throwaway home); rerun it when the window changes and look at every
+picture before committing.
+
 Some rules that keep the project healthy:
 
 - **Do not run `cargo fmt`.** The code is formatted by hand; match the style
