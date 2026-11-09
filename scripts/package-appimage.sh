@@ -33,6 +33,7 @@ icons=$ROOT/docs/brand/app-icon/windows-linux/hicolor
     install -Dm 0644 "$icons/$f" "$appdir/usr/share/icons/hicolor/$f"
 done
 install -Dm 0644 "$ROOT/packaging/linux/copyright" "$appdir/usr/share/doc/one-mk/copyright"
+sh "$ROOT/scripts/copy-notices.sh" "$appdir/usr/share/doc/one-mk"
 install -m 0755 "$ROOT/packaging/linux/AppRun" "$appdir/AppRun"
 # The files appimagetool wants at the top.
 cp "$appdir/usr/share/applications/one-mk.desktop" "$appdir/one-mk.desktop"

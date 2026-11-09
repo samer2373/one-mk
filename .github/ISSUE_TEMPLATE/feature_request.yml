@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest something oneMK should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The situation and the problem, before any solution. "When I ..., I have to ..., which is slow because ..."
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: How you imagine it working, in the window or on the command line.
+    validations:
+      required: true
+  - type: input
+    id: systems
+    attributes:
+      label: Your systems
+      description: The operating systems and desktops you would use it on.
+      placeholder: macOS 15 and Fedora 41 (KDE, Wayland)
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Anything you tried instead, or another tool that does this well.

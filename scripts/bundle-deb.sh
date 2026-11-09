@@ -22,6 +22,13 @@ for file in metadata.json extension.js bridge.xml; do
 done
 install -m 644 LICENSE-MIT LICENSE-APACHE "$root/usr/share/one-mk/gnome-extension/$extension/"
 install -m 644 docs/brand/app-icon/windows-linux/ico-png/onemk-256.png "$root/usr/share/icons/hicolor/256x256/apps/one-mk.png"
+# The polkit action of the update's one root step (docs/UPDATES.md): its own
+# message, and the password asked every time.
+install -d "$root/usr/share/polkit-1/actions"
+install -m 644 packaging/linux/io.github.onemk.OneMk.update.policy "$root/usr/share/polkit-1/actions/"
+# Licences: oneMK's, every statically linked crate's, the Geist fonts'.
+sh scripts/copy-notices.sh "$root/usr/share/doc/one-mk"
+install -m 644 packaging/linux/copyright "$root/usr/share/doc/one-mk/copyright"
 
 cat > "$root/usr/share/applications/one-mk.desktop" <<DESKTOP
 [Desktop Entry]
@@ -52,14 +59,25 @@ Maintainer: Samer Abu-Sleem <samer2373@users.noreply.github.com>
 Section: utils
 Priority: optional
 Homepage: https://github.com/samer2373/one-mk
+Recommends: pkexec | policykit-1
 Description: Share one mouse and keyboard across your computers
  Move the pointer off the edge of one screen and it appears on the next.
  The clipboard and files follow. Run one-mk-app to open the window.
 CONTROL
+# Purging the package removes the update's root-only replay record.
+cat > "$root/DEBIAN/postrm" <<'POSTRM'
+#!/bin/sh
+set -e
+if [ "$1" = purge ]; then rm -rf /var/lib/one-mk; fi
+POSTRM
+chmod 755 "$root/DEBIAN/postrm"
 
 dpkg-deb --root-owner-group --build "$root" "$out" >/dev/null
 listing=$(dpkg-deb -c "$out")
 for f in usr/bin/one-mk usr/share/applications/one-mk.desktop "$app_entry" usr/bin/one-mk-wallpaper \
+    usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy usr/share/doc/one-mk/copyright \
+    usr/share/doc/one-mk/LICENSE-MIT usr/share/doc/one-mk/LICENSE-APACHE usr/share/doc/one-mk/THIRD-PARTY-NOTICES \
+    usr/share/doc/one-mk/OFL-Geist.txt \
     "usr/share/one-mk/gnome-extension/$extension/extension.js" "usr/share/one-mk/gnome-extension/$extension/bridge.xml" \
     "usr/share/one-mk/gnome-extension/$extension/metadata.json"; do
     echo "$listing" | grep -q " \./$f\$" || { echo "bundle-deb.sh: $out is missing /$f" >&2; exit 1; }

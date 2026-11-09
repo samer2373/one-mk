@@ -17,9 +17,19 @@ commit it, or paste it into chat. Keep an offline backup on the owner's side.
 Tag pushes run `.github/workflows/release.yml`. After staging all release
 assets, the publish job signs the manifest's exact bytes, verifies against the
 compiled public key, uploads a draft, verifies the asset list, then publishes.
-Missing production signing credentials fail publication. Never rebuild or
+Missing production signing credentials fail publication, and so do missing
+macOS signing/notarization secrets (`MACOS_CERT_P12`, `MACOS_CERT_PASSWORD`,
+`NOTARY_APPLE_ID`, `NOTARY_PASSWORD`, `NOTARY_TEAM_ID`): the Mac updater
+refuses an ad-hoc signed app. Publishing also waits for the workspace tests
+and clippy on all three systems and the release checks. Never rebuild or
 overwrite a published release. The sequence is `GITHUB_RUN_NUMBER`, also
 compiled into release clients as a sequence floor; keep numbering monotonic.
+
+A bad release is withdrawn by publishing a newer one with the repository
+variable `ONE_MK_REVOKED` (space-separated versions no updater may install
+any more) and, when old installations must not update in place,
+`ONE_MK_MINIMUM_SUPPORTED_VERSION`; `scripts/make-update-manifest.sh` puts
+both into the signed manifest (empty: none revoked, minimum 0.1.0).
 
 Key rotation requires a bridge release embedding the new key in
 `ADDITIONAL_PUBLIC_KEYS` while still signing with the old key. Only then switch
@@ -166,17 +176,44 @@ package install the update then:
    folder (`update-staging`, mode 0700, in the settings folder) as the person,
    and checks its size and SHA-256 against that list;
 2. checks with `dpkg-deb --field` that it is the `one-mk` package at the
-   signed version;
-3. asks the system for the password once (`pkexec`, the desktop's own dialog)
-   to run `one-mk update --install-deb` as root. That step takes only a file
-   the asking account owns, in a folder named `update-staging` that no one else
-   can write to, opened without following links, checks the SHA-256 again,
-   copies it to a folder only root can use and checks the package name and
-   version once more, then runs `dpkg -i` on the copy;
+   signed version, and puts the signed update list and its signature
+   (`update-manifest.json`, `update-manifest.json.sig`, the exact downloaded
+   bytes) beside the package, under the name the list gives it;
+3. asks the system for the password once (`pkexec`, the desktop's own dialog,
+   with the polkit action `io.github.onemk.OneMk.update` the package ships in
+   `/usr/share/polkit-1/actions/`: "Authentication is required to install the
+   signed oneMK update", asked every time) to run
+   `/usr/bin/one-mk update --install-deb FOLDER` as root;
 4. restarts the service and the window like every other update.
 
+The root step believes nothing the asking account says: its only input is
+the staging folder. It
+
+- opens the folder without following links and requires that it is named
+  `update-staging`, owned by the account pkexec names (`PKEXEC_UID`) and not
+  writable by anyone else; every file in it is opened relative to that handle,
+  without following links, and must be a regular file that account owns
+  (a link, pipe or device is refused);
+- verifies the signature of the update list against the key compiled into
+  the installed `/usr/bin/one-mk` (never a key from the folder);
+- refuses a list that is not newer than the installed version, is older than
+  the build's release sequence or than a list the root step accepted before
+  (its own record in `/var/lib/one-mk/update-state.json`, root only), reuses
+  a sequence with other contents, is revoked, or needs a newer installed
+  version;
+- copies the `.deb` the list names through the one handle it opened into a
+  root-only file in `/var/lib/one-mk`, hashing while it copies, and requires
+  the signed size and SHA-256;
+- checks the package name and version of that copy with `dpkg-deb`, and runs
+  `dpkg -i` (with a clean environment) on that same copy, then deletes it.
+
+Replacing or relinking the staged file after it was opened changes nothing.
 It never installs without the person pressing the button: **Install them
 without asking** stays off for package installs, because a password is needed.
-Cancelling the prompt changes nothing. The hidden `--install-deb` options do
-nothing when run by hand (they refuse unless started through `pkexec`).
+Cancelling the prompt changes nothing. The hidden `--install-deb` option does
+nothing when run by hand (it refuses unless started as root through `pkexec`).
 Without `pkexec` the update says so and the package can be installed by hand.
+Tests (`update::tests::the_root_step_*`, `a_package_swapped_after_the_check_*`)
+cover tampering, foreign keys, downgrades, wrong hashes and sizes, a swapped
+or linked file, a pipe, replayed older lists, foreign owners and a shared
+folder; the real `pkexec` dialog and `dpkg -i` need a real desktop to check.

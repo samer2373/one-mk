@@ -30,6 +30,11 @@ Source: "{#ReleaseDir}\one-mk.exe"; DestDir: "{app}"
 Source: "{#ReleaseDir}\one-mk-tray.exe"; DestDir: "{app}"
 Source: "{#ReleaseDir}\one-mk-app.exe"; DestDir: "{app}"
 Source: "{#ReleaseDir}\one-mk-wallpaper.exe"; DestDir: "{app}"
+; Licences: oneMK's, every crate built in (THIRD-PARTY-NOTICES), the fonts'.
+Source: "..\LICENSE-MIT"; DestDir: "{app}\licenses"
+Source: "..\LICENSE-APACHE"; DestDir: "{app}\licenses"
+Source: "..\THIRD-PARTY-NOTICES"; DestDir: "{app}\licenses"; DestName: "THIRD-PARTY-NOTICES.txt"
+Source: "..\crates\app\fonts\OFL.txt"; DestDir: "{app}\licenses"; DestName: "OFL-Geist.txt"
 
 [Icons]
 Name: "{group}\oneMK"; Filename: "{app}\one-mk-app.exe"

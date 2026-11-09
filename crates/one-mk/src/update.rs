@@ -50,13 +50,11 @@ pub struct Options {
     /// GitHub-compatible releases/latest endpoint (HTTPS; signatures still required).
     #[arg(long)]
     pub url: Option<String>,
-    /// Only for the update itself, run with the account's password: install the downloaded package.
-    #[arg(long, hide = true, requires_all = ["expect_sha256", "expect_version"])]
+    /// Only for the update itself, run with the account's password: install
+    /// the package staged in this folder. It trusts nothing but the folder:
+    /// it checks the signed update list, the version and the package itself.
+    #[arg(long, hide = true, value_name = "STAGING_FOLDER")]
     pub install_deb: Option<PathBuf>,
-    #[arg(long, hide = true)]
-    pub expect_sha256: Option<String>,
-    #[arg(long, hide = true)]
-    pub expect_version: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -369,7 +367,15 @@ fn asset_url(release: &Release, name: &str, origin: &Url) -> Result<Url> {
     Ok(url)
 }
 
-fn checked(home: &Path, endpoint: &str, key: &[u8], current: &str, state: &mut State) -> Result<(Manifest, Release, Url)> {
+/// The exact signed bytes behind a checked manifest, kept so a later step
+/// (the root step of a package install) can verify them again by itself.
+/// Only Linux packages read them.
+#[cfg_attr(not(unix), allow(dead_code))]
+struct Signed { manifest: Vec<u8>, signature: Vec<u8> }
+
+type Checked = (Manifest, Release, Url, Signed);
+
+fn checked(home: &Path, endpoint: &str, key: &[u8], current: &str, state: &mut State) -> Result<Checked> {
     let origin = Url::parse(endpoint).context("invalid update URL; set an HTTPS releases/latest URL")?;
     validate_url(&origin)?;
     let release: Release = serde_json::from_slice(&fetch(&origin, &origin, 1024 * 1024)?).context("update server did not return a release; check the configured URL")?;
@@ -399,7 +405,7 @@ fn checked(home: &Path, endpoint: &str, key: &[u8], current: &str, state: &mut S
     state.available = available.then(|| manifest.version.clone());
     state.error = None;
     save_state(home, state)?;
-    Ok((manifest, release, origin))
+    Ok((manifest, release, origin, Signed { manifest: bytes, signature: signed }))
 }
 
 fn target() -> Result<(PathBuf, InstallKind)> {
@@ -599,11 +605,13 @@ fn apply(manifest: &Manifest, release: &Release, origin: &Url, target: &Path, ki
 }
 
 /// A Linux package: the update is downloaded and checked against the signed
-/// list as the person, then the system asks for the password once (pkexec)
-/// and a root step installs exactly that file. Nothing runs as root until
-/// the person has agreed in the system's own dialog.
+/// list as the person, then the system asks for the password once (pkexec,
+/// with the polkit action the package ships) and a root step installs it.
+/// The root step trusts nothing this account says: it is given only the
+/// staging folder and verifies the signed list, the version and the package
+/// itself before anything is installed.
 #[cfg(unix)]
-fn apply_deb(manifest: &Manifest, release: &Release, origin: &Url, home: &Path, program: &Path) -> Result<()> {
+fn apply_deb(signed: &Signed, manifest: &Manifest, release: &Release, origin: &Url, home: &Path, program: &Path) -> Result<()> {
     refuse_root()?;
     let asset = policy::select_install(manifest, std::env::consts::OS, std::env::consts::ARCH, InstallKind::Deb)?;
     let staging = home.join(DEB_STAGING);
@@ -616,15 +624,16 @@ fn apply_deb(manifest: &Manifest, release: &Release, origin: &Url, home: &Path, 
         let temporary = download(asset, release, origin, &staging)?;
         println!("Checking the update…");
         check_deb_fields(&deb_fields(&temporary.path)?, &manifest.version)?;
+        stage_signed(&staging, signed)?;
+        // The name the signed list gives it: the root step looks it up there.
+        fs::rename(&temporary.path, staging.join(&asset.name)).context("cannot prepare the update; check free disk space")?;
         println!("Installing… Your computer asks for your password.");
-        let status = Command::new("pkexec").arg(program).args(["update", "--install-deb"]).arg(&temporary.path)
-            .args(["--expect-sha256", &asset.sha256, "--expect-version", &manifest.version]).stdin(Stdio::null())
-            .status().context("this computer has no password prompt (pkexec); install the downloaded package with your package manager")?;
+        let status = root_command(program, &staging).stdin(Stdio::null()).status().context("this computer has no password prompt (pkexec); install the downloaded package with your package manager")?;
         match status.code() {
             Some(0) => Ok(()),
             Some(126) => bail!("The password was not given. Nothing was changed"),
             Some(127) => bail!("This account isn't allowed to install software. Nothing was changed"),
-            _ => bail!("The package could not be installed. Check that no other install is running, then try again"),
+            _ => bail!("The package could not be installed (the reason is above). Check that no other install is running, then try again"),
         }
     })();
     let _ = fs::remove_dir_all(&staging);
@@ -633,8 +642,38 @@ fn apply_deb(manifest: &Manifest, release: &Release, origin: &Url, home: &Path, 
     Ok(())
 }
 
+/// The one command run as root: the program and the staging folder, nothing
+/// the root step would have to believe (no checksum, no version).
+#[cfg(unix)]
+fn root_command(program: &Path, staging: &Path) -> Command {
+    let mut command = Command::new("pkexec");
+    command.arg(program).args(["update", "--install-deb"]).arg(staging);
+    command
+}
+
 #[cfg(unix)]
 const DEB_STAGING: &str = "update-staging";
+#[cfg(unix)]
+const STAGED_MANIFEST: &str = "update-manifest.json";
+#[cfg(unix)]
+const STAGED_SIGNATURE: &str = "update-manifest.json.sig";
+/// Where the root step keeps its own replay record and its private copy of
+/// the package: a folder only root can use, never the person's settings.
+#[cfg(unix)]
+const ROOT_STATE: &str = "/var/lib/one-mk";
+
+/// The signed list exactly as it was downloaded, next to the package.
+#[cfg(unix)]
+fn stage_signed(staging: &Path, signed: &Signed) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    for (name, bytes) in [(STAGED_MANIFEST, &signed.manifest), (STAGED_SIGNATURE, &signed.signature)] {
+        let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(staging.join(name))
+            .context("cannot prepare the update; check free disk space")?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    Ok(())
+}
 
 #[cfg(unix)]
 fn deb_fields(path: &Path) -> Result<String> {
@@ -653,52 +692,145 @@ fn check_deb_fields(fields: &str, version: &str) -> Result<()> {
     Ok(())
 }
 
-/// Reads the staged package without following a link, from a file the
-/// caller owns, checks its SHA-256 and returns the bytes (so what is
-/// installed is what was checked, not a file that can change after).
+/// Opens the staging folder without following a link and checks that it
+/// belongs to the account that asked and that no one else can write to it.
+/// Everything in it is then opened relative to this handle, so the folder
+/// can't be swapped for another one in between.
 #[cfg(unix)]
-fn read_staged_deb(path: &Path, expect_sha256: &str, owner: u32) -> Result<Vec<u8>> {
+fn open_staging(path: &Path, owner: u32) -> Result<File> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    ensure!(path.is_absolute() && path.parent().and_then(Path::file_name).is_some_and(|name| name == DEB_STAGING), "not an update package");
-    let parent = fs::symlink_metadata(path.parent().context("not an update package")?)?;
-    ensure!(parent.is_dir() && parent.uid() == owner && parent.mode() & 0o022 == 0, "the update folder is not private to the account that asked");
-    let file = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path).context("cannot open the downloaded package")?;
+    ensure!(path.is_absolute() && path.file_name().is_some_and(|name| name == DEB_STAGING), "not an update folder; nothing was installed");
+    let folder = OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC).open(path)
+        .context("cannot open the update folder; nothing was installed")?;
+    let meta = folder.metadata()?;
+    ensure!(meta.is_dir() && meta.uid() == owner && meta.mode() & 0o022 == 0, "the update folder is not private to the account that asked; nothing was installed");
+    Ok(folder)
+}
+
+/// Opens one file of the staging folder: a regular file (never a link, a
+/// pipe or a device) owned by the account that asked, at most `limit` bytes.
+#[cfg(unix)]
+fn open_staged(folder: &File, name: &str, owner: u32, limit: u64) -> Result<File> {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::MetadataExt;
+    ensure!(!name.is_empty() && !name.contains('/') && !name.starts_with('.'), "not an update file; nothing was installed");
+    let text = std::ffi::CString::new(name)?;
+    // SAFETY: a valid folder handle and a NUL-terminated name; the new
+    // descriptor is owned by the File made from it.
+    let fd = unsafe { libc::openat(folder.as_raw_fd(), text.as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+    if fd < 0 { return Err(std::io::Error::last_os_error()).with_context(|| format!("cannot open {name} in the update folder; nothing was installed")); }
+    let file = unsafe { File::from_raw_fd(fd) };
     let meta = file.metadata()?;
-    ensure!(meta.is_file() && meta.uid() == owner && meta.len() <= 512 * 1024 * 1024, "not an update package");
-    let mut bytes = Vec::with_capacity(meta.len() as usize);
-    file.take(meta.len() + 1).read_to_end(&mut bytes)?;
-    ensure!(bytes.len() as u64 == meta.len(), "the package changed while it was read");
-    let wanted = policy::hex_bytes::<32>(expect_sha256)?;
-    ensure!(constant_time_eq::constant_time_eq(digest::digest(&digest::SHA256, &bytes).as_ref(), &wanted),
-        "the package does not match the signed release; nothing was installed");
+    ensure!(meta.is_file() && meta.uid() == owner && meta.len() <= limit, "{name} in the update folder is not a file the update made; nothing was installed");
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn read_staged(folder: &File, name: &str, owner: u32, limit: u64) -> Result<Vec<u8>> {
+    let file = open_staged(folder, name, owner, limit)?;
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() as u64 <= limit, "{name} in the update folder is too large; nothing was installed");
     Ok(bytes)
 }
 
-/// Runs as root (through pkexec): installs the package the person's own
-/// update downloaded, after reading and checking it again from a copy only
-/// root can touch.
+/// Checks a signature (message, signature) against the trusted key(s).
 #[cfg(unix)]
-fn install_deb_as_root(path: &Path, expect_sha256: &str, expect_version: &str) -> Result<()> {
+type Verify = dyn Fn(&[u8], &[u8]) -> Result<()>;
+
+/// What the root step relies on, apart from the staging folder. Tests pass
+/// their own key, folders and a fake installer; the real step passes the
+/// compiled-in key, this program's version and `dpkg`.
+#[cfg(unix)]
+struct RootStep<'a> {
+    /// The account that asked (pkexec's `PKEXEC_UID`): it must own the staged files.
+    owner: u32,
+    /// The installed version: only a newer one is installed.
+    installed: &'a str,
+    /// The release sequence this build was made with: an older signed list is refused.
+    floor: u64,
+    /// A folder only root can use: the replay record and the private copy.
+    state: &'a Path,
+    verify: &'a Verify,
+    fields: &'a dyn Fn(&Path) -> Result<String>,
+    install: &'a dyn Fn(&Path) -> Result<()>,
+}
+
+/// Runs as root: verifies the signed list in the staging folder against the
+/// compiled-in key, refuses anything not newer than what is installed (and
+/// any list older than one this step already accepted), copies the package
+/// the list names through one open handle into a root-only file while
+/// hashing it, checks size, SHA-256, package name and version on that copy,
+/// and installs that same copy. A file swapped in the staging folder after
+/// it was opened changes nothing.
+#[cfg(unix)]
+fn install_staged(staging: &Path, step: &RootStep) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let folder = open_staging(staging, step.owner)?;
+    let bytes = read_staged(&folder, STAGED_MANIFEST, step.owner, policy::MANIFEST_LIMIT as u64)?;
+    let signed = read_staged(&folder, STAGED_SIGNATURE, step.owner, 64)?;
+    (step.verify)(&bytes, &signed).context("the update list is not signed by the publisher; nothing was installed")?;
+    let manifest = policy::parse(&bytes)?;
+    let digest = hex(digest::digest(&digest::SHA256, &bytes).as_ref());
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(step.state).context("cannot prepare the install")?;
+    fs::set_permissions(step.state, fs::Permissions::from_mode(0o700))?;
+    let _lock = lock(step.state)?;
+    clean_temporary(step.state, &[".one-mk-update-payload-"])?;
+    let mut state = load_state(step.state)?;
+    // Signed, but not newer than what is installed, older than a list this
+    // step accepted before, revoked or too new for this installation: refused.
+    ensure!(policy::accept(&manifest, step.installed, &state, &digest, step.floor)?, "this is not a newer version; nothing was installed");
+    let asset = policy::select_install(&manifest, "linux", std::env::consts::ARCH, InstallKind::Deb)?;
+    let mut source = open_staged(&folder, &asset.name, step.owner, asset.size)?;
+    drop(folder);
+    let mut copy = Temporary::new(step.state)?;
+    fs::set_permissions(&copy.path, fs::Permissions::from_mode(0o600))?;
+    let mut hash = digest::Context::new(&digest::SHA256);
+    let mut total = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = source.read(&mut buffer)?;
+        if count == 0 { break; }
+        total += count as u64;
+        ensure!(total <= asset.size, "the package is larger than the signed release says; nothing was installed");
+        hash.update(&buffer[..count]);
+        copy.file.write_all(&buffer[..count])?;
+    }
+    drop(source);
+    ensure!(total == asset.size, "the package size does not match the signed release; nothing was installed");
+    ensure!(constant_time_eq::constant_time_eq(hash.finish().as_ref(), &policy::hex_bytes::<32>(&asset.sha256)?),
+        "the package does not match the signed release; nothing was installed");
+    copy.file.sync_all()?;
+    check_deb_fields(&(step.fields)(&copy.path)?, &manifest.version)?;
+    (step.install)(&copy.path)?;
+    state.sequence = manifest.sequence;
+    state.digest = digest;
+    state.highest_version = Some(manifest.version.clone());
+    state.available = None;
+    state.error = None;
+    state.last_attempt = now()?;
+    save_state(step.state, &state)
+}
+
+/// Runs as root (through pkexec): installs the package staged by the
+/// person's own update, after checking everything again (`install_staged`).
+#[cfg(unix)]
+fn install_deb_as_root(staging: &Path) -> Result<()> {
     ensure!(unsafe { libc::geteuid() } == 0, "this step is run by the update, with your password");
     let owner: u32 = std::env::var("PKEXEC_UID").ok().and_then(|uid| uid.parse().ok()).context("this step is run by the update, with your password")?;
-    // Only forward: an older signed release must not be put back this way.
-    ensure!(policy::compare(expect_version, env!("CARGO_PKG_VERSION"))? == std::cmp::Ordering::Greater, "this is not a newer version; nothing was installed");
-    let bytes = read_staged_deb(path, expect_sha256, owner)?;
-    let work = PathBuf::from(format!("/var/tmp/one-mk-update-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()));
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        fs::DirBuilder::new().mode(0o700).create(&work).context("cannot prepare the install")?;
-    }
-    let result = (|| {
-        let copy = work.join("one-mk.deb");
-        fs::write(&copy, &bytes)?;
-        check_deb_fields(&deb_fields(&copy)?, expect_version)?;
-        let status = Command::new("/usr/bin/dpkg").arg("-i").arg(&copy).env("DEBIAN_FRONTEND", "noninteractive").status().context("dpkg could not be started")?;
+    ensure!(owner != 0, "this step is run by the update from your own account");
+    ensure!(crate::update_key::PRODUCTION_KEY, "release verification is not configured in this build; install the package with your package manager");
+    let install = |copy: &Path| -> Result<()> {
+        let status = Command::new("/usr/bin/dpkg").arg("-i").arg(copy).env_clear()
+            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin").env("DEBIAN_FRONTEND", "noninteractive")
+            .stdin(Stdio::null()).status().context("dpkg could not be started")?;
         ensure!(status.success(), "dpkg could not install the update");
         Ok(())
-    })();
-    let _ = fs::remove_dir_all(&work);
-    result
+    };
+    install_staged(staging, &RootStep {
+        owner, installed: env!("CARGO_PKG_VERSION"), floor: FLOOR.and_then(|value| value.parse().ok()).unwrap_or(0),
+        state: Path::new(ROOT_STATE), verify: &verify_embedded, fields: &deb_fields, install: &install,
+    })
 }
 
 fn rollback(target: &Path) -> Result<()> {
@@ -761,7 +893,7 @@ fn window_status(home: &Path) -> Result<policy::UpdateStatus> {
     })
 }
 
-fn check_release(home: &Path, endpoint: &str, state: &mut State) -> Result<(Manifest, Release, Url)> {
+fn check_release(home: &Path, endpoint: &str, state: &mut State) -> Result<Checked> {
     state.last_attempt = now()?;
     save_state(home, state)?;
     match checked(home, endpoint, &crate::update_key::PUBLIC_KEY, env!("CARGO_PKG_VERSION"), state) {
@@ -776,9 +908,11 @@ fn check_release(home: &Path, endpoint: &str, state: &mut State) -> Result<(Mani
 
 fn run_inner(home: &Path, options: Options) -> Result<()> {
     // The one step that runs as root, started by `apply_deb` through pkexec.
-    #[cfg(unix)]
-    if let (Some(path), Some(sha256), Some(version)) = (&options.install_deb, &options.expect_sha256, &options.expect_version) {
-        return install_deb_as_root(path, sha256, version);
+    if let Some(staging) = &options.install_deb {
+        #[cfg(unix)]
+        return install_deb_as_root(staging);
+        #[cfg(not(unix))]
+        bail!("package installs exist only on Linux; nothing was installed ({})", staging.display());
     }
     refuse_root()?;
     if options.status_json {
@@ -831,15 +965,15 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
     let endpoint = options.url.or(settings.url).unwrap_or_else(|| LATEST.into());
     let mut state = load_state(home)?;
     if options.startup_check && (!settings.check || !policy::startup_due(state.last_attempt, now()?)) { return Ok(()); }
-    let (manifest, release, origin) = check_release(home, &endpoint, &mut state)?;
+    let (manifest, release, origin, signed) = check_release(home, &endpoint, &mut state)?;
     if state.available.is_none() { println!("one-mk {} is up to date.", env!("CARGO_PKG_VERSION")); return Ok(()); }
     println!("one-mk {} is available (you have {}).", manifest.version, env!("CARGO_PKG_VERSION"));
     if options.check || options.startup_check { return Ok(()); }
     if kind == InstallKind::Deb {
         #[cfg(unix)]
-        return apply_deb(&manifest, &release, &origin, home, &target);
+        return apply_deb(&signed, &manifest, &release, &origin, home, &target);
         #[cfg(not(unix))]
-        bail!("{}", kind.advice());
+        { let _ = signed; bail!("{}", kind.advice()); }
     }
     if !kind.automatic() {
         bail!("{}. Choose Download to open the release page: {NOTES}", kind.advice());

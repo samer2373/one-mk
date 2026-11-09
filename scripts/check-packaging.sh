@@ -13,6 +13,8 @@
 #     needs Python 3 with Pillow);
 #   - the brand tokens (docs/brand/tokens.json, tokens.css, the README table)
 #     still match the window's style (scripts/brand-tokens.py --check).
+#   - the licence files every package carries (scripts/copy-notices.sh) and
+#     THIRD-PARTY-NOTICES is current (scripts/third-party-notices.py --check);
 # Optional tools (dpkg-deb, desktop-file-validate, appstreamcli, ruby, Pillow) are
 # used when present and reported as skipped when not.
 #   cargo build --locked -j 4 -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper
@@ -44,9 +46,20 @@ if command -v dpkg-deb >/dev/null; then
              usr/share/applications/io.github.onemk.OneMk.desktop usr/share/icons/hicolor/256x256/apps/one-mk.png \
              usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/extension.js \
              usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/bridge.xml \
-             usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/metadata.json; do
+             usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/metadata.json \
+             usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy usr/share/doc/one-mk/copyright \
+             usr/share/doc/one-mk/LICENSE-MIT usr/share/doc/one-mk/LICENSE-APACHE \
+             usr/share/doc/one-mk/THIRD-PARTY-NOTICES usr/share/doc/one-mk/OFL-Geist.txt; do
         [ -e "$root/$f" ] && ok ".deb contains /$f" || bad ".deb is missing /$f"
     done
+    cmp -s "$root/usr/share/doc/one-mk/THIRD-PARTY-NOTICES" "$ROOT/THIRD-PARTY-NOTICES" && ok ".deb ships the current THIRD-PARTY-NOTICES" || bad ".deb THIRD-PARTY-NOTICES differs from the checkout"
+    grep -q 'org.freedesktop.policykit.exec.path">/usr/bin/one-mk<' "$root/usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy" \
+        && grep -q '<allow_active>auth_admin</allow_active>' "$root/usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy" \
+        && ok ".deb polkit action covers only /usr/bin/one-mk and asks every time" || bad ".deb polkit action"
+    if command -v xmllint >/dev/null; then
+        check ".deb polkit action is well-formed XML" xmllint --noout "$root/usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy"
+    else check ".deb polkit action is well-formed XML" python3 -I -c "import sys, xml.dom.minidom; xml.dom.minidom.parse(sys.argv[1])" "$root/usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy"; fi
+    [ -x "$root/DEBIAN/postrm" ] && grep -q 'rm -rf /var/lib/one-mk' "$root/DEBIAN/postrm" && ok ".deb purge removes the update's root-only record" || bad ".deb postrm"
     [ ! -e "$root/usr/share/gnome-shell/extensions" ] && ok ".deb does not auto-install a GNOME extension" || bad ".deb installs an extension without user consent"
     check "bundled renderer requires a playback plan" sh -c "! '$root/usr/bin/one-mk-wallpaper'"
     [ -z "$(find "$root" -not -path "$root/DEBIAN*" \( -perm -002 -o -perm -4000 \) -not -type l)" ] && ok ".deb has no world-writable or setuid files" || bad ".deb has world-writable or setuid files"
@@ -72,6 +85,9 @@ OUT_DIR=$scratch/c APPIMAGETOOL= sh "$ROOT/scripts/package-appimage.sh" >/dev/nu
 appdir=$scratch/c/one-mk.AppDir
 got=$("$appdir/AppRun" --version) && [ "$got" = "one-mk $VERSION" ] && ok "AppDir: AppRun --version: $got" || bad "AppDir AppRun --version"
 [ -f "$appdir/one-mk.desktop" ] && [ -f "$appdir/one-mk.png" ] && [ -L "$appdir/.DirIcon" ] && ok "AppDir has desktop file and icons at the top" || bad "AppDir top level"
+for f in copyright LICENSE-MIT LICENSE-APACHE THIRD-PARTY-NOTICES OFL-Geist.txt; do
+    [ -s "$appdir/usr/share/doc/one-mk/$f" ] && ok "AppDir ships /usr/share/doc/one-mk/$f" || bad "AppDir is missing /usr/share/doc/one-mk/$f"
+done
 if command -v desktop-file-validate >/dev/null; then
     check "AppDir desktop file validates" desktop-file-validate "$appdir/one-mk.desktop"
 else skip "desktop-file-validate not installed"; fi
@@ -84,6 +100,7 @@ else skip "appstreamcli not installed"; fi
 # every path in the manifest must resolve there and match its checksum.
 mkdir -p "$scratch/t/one-mk-x86_64-unknown-linux-gnu"
 cp "$BIN_DIR/one-mk" "$BIN_DIR/one-mk-tray" "$BIN_DIR/one-mk-app" "$BIN_DIR/one-mk-wallpaper" "$scratch/t/one-mk-x86_64-unknown-linux-gnu/"
+sh "$ROOT/scripts/copy-notices.sh" "$scratch/t/one-mk-x86_64-unknown-linux-gnu"
 (cd "$scratch/t" && tar czf one-mk-x86_64-unknown-linux-gnu.tar.gz one-mk-x86_64-unknown-linux-gnu)
 OUT_DIR=$scratch/f sh "$ROOT/scripts/package-flatpak.sh" "$scratch/t/one-mk-x86_64-unknown-linux-gnu.tar.gz" >/dev/null 2>&1
 bundle=$(ls "$scratch"/f/one-mk-flatpak-sources.tar.gz 2>/dev/null) || bundle=
@@ -140,5 +157,10 @@ else skip "macOS installer window checks: Python 3 with Pillow not installed"; f
 # reads them, so a style change must regenerate them.
 if python3 "$ROOT/scripts/brand-tokens.py" --check >"$scratch/tokens.txt" 2>&1; then ok "brand tokens match the window's style"
 else cat "$scratch/tokens.txt"; bad "brand tokens are out of date: run python3 scripts/brand-tokens.py"; fi
+
+# Every package carries the same licence files; the crate list must match Cargo.lock.
+check "copy-notices.sh puts the four licence files in a folder" sh -c "sh '$ROOT/scripts/copy-notices.sh' '$scratch/n' && [ \$(ls '$scratch/n' | wc -l) = 4 ]"
+if python3 -I "$ROOT/scripts/third-party-notices.py" --check >"$scratch/notices.txt" 2>&1; then ok "THIRD-PARTY-NOTICES matches Cargo.lock"
+else cat "$scratch/notices.txt"; bad "THIRD-PARTY-NOTICES is out of date"; fi
 
 [ "$fail" = 0 ] && echo "all checks passed" || { echo "some checks failed"; exit 1; }

@@ -228,8 +228,14 @@ refuses a session to an app id with no installed desktop entry. It comes from
 `one_mk_ctl::install::packaged_files` (the script runs the `packaging-files`
 example with `cargo`, so building the `.deb` needs the checkout and cargo),
 the same text `one-mk install` writes, and the script checks the built
-package contains it, hidden. The package has no maintainer scripts, starts
-and enables nothing, and ships no systemd unit or autostart entry: `one-mk
+package contains it, hidden. It also ships the polkit action of the
+update's root step (`/usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy`,
+docs/UPDATES.md), recommends `pkexec`, and carries the licence files
+(`/usr/share/doc/one-mk/`: `copyright`, `LICENSE-MIT`, `LICENSE-APACHE`,
+`THIRD-PARTY-NOTICES`, `OFL-Geist.txt`; every other package carries the same
+four files through `scripts/copy-notices.sh`). Its only maintainer script is
+a `postrm` that, on purge, removes `/var/lib/one-mk` (the update's root-only
+replay record). It starts and enables nothing, and ships no systemd unit or autostart entry: `one-mk
 install`, run as yourself, writes the user service and the tray's autostart
 entry (and its own copy of the hidden entry) into the home folder. It is
 built on ubuntu-22.04 (glibc 2.35), the oldest distribution it is meant for.

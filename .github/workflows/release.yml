@@ -45,6 +45,45 @@ jobs:
           name: wallpaper-import-sbom-dry-run
           path: target/wallpaper-import.cdx.json
 
+  # Nothing is published unless the tagged commit passes the same tests and
+  # lints as CI, on every system, and the release checks below. They run
+  # beside the build; publish waits for both.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: stable, components: clippy }
+      - run: cargo test --workspace --locked --no-fail-fast
+        env: { RUST_BACKTRACE: "1" }
+      - run: cargo clippy --workspace --locked --all-targets -- -D warnings
+
+  # Licences, advisories, the installer and the publish steps themselves.
+  release-checks:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: stable }
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-deny@0.20.2 }
+      - name: THIRD-PARTY-NOTICES matches Cargo.lock
+        run: python3 scripts/third-party-notices.py --check
+      - name: Licences, advisories, bans and sources (deny.toml)
+        run: cargo deny --locked --all-features check
+      - name: install.sh against fake releases
+        run: bash scripts/test-install.sh
+      - name: Update manifest, signing and publish steps (stub gh)
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          bash scripts/check-updates.sh
+
   build:
     strategy:
       fail-fast: false
@@ -75,6 +114,7 @@ jobs:
           d=target/${{ matrix.target }}/release
           name=one-mk-${{ matrix.target }}
           mkdir "$name"
+          sh scripts/copy-notices.sh "$name"
           if [ "${{ runner.os }}" = Windows ]; then
             cp "$d/one-mk.exe" "one-mk-${{ matrix.target }}.exe"
             cp $d/one-mk.exe $d/one-mk-tray.exe $d/one-mk-app.exe $d/one-mk-wallpaper.exe "$name"/
@@ -97,6 +137,22 @@ jobs:
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
           NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
         run: |
+          # The updater installs only a Mac app signed with a Developer ID
+          # (docs/UPDATES.md, step 4): an ad-hoc signed release would break
+          # every Mac's update. A tag release therefore needs all five
+          # secrets; a manual run without them builds an ad-hoc app and says so.
+          missing=
+          for secret in MACOS_CERT_P12 MACOS_CERT_PASSWORD NOTARY_APPLE_ID NOTARY_PASSWORD NOTARY_TEAM_ID; do
+            eval "value=\${$secret:-}"
+            [ -n "$value" ] || missing="$missing $secret"
+          done
+          if [ -n "$missing" ]; then
+            if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+              echo "::error title=macOS signing secrets missing::Missing repository secrets:$missing. A release must be signed with a Developer ID and notarized: Macs refuse to update to an ad-hoc signed app. Add the secrets (Settings > Secrets and variables > Actions) and re-run this workflow." >&2
+              exit 1
+            fi
+            echo "::warning title=Unsigned Mac app::Missing secrets:$missing. This manual build is ad-hoc signed and not notarized; it cannot be released."
+          fi
           if [ -n "$MACOS_CERT_P12" ]; then
             kc=$RUNNER_TEMP/sign.keychain-db
             pw=$(uuidgen)
@@ -117,6 +173,18 @@ jobs:
           "$RUNNER_TEMP/dmgvenv/bin/pip" install --quiet dmgbuild==1.6.7
           export DMGBUILD="$RUNNER_TEMP/dmgvenv/bin/dmgbuild" REQUIRE_DMGBUILD=1
           sh scripts/bundle-mac.sh target/${{ matrix.target }}/release one-mk-${{ matrix.target }}.app.zip
+          # What the updater will check on every Mac: a Developer ID chain,
+          # a team, and (notarized) a stapled ticket.
+          if [ -n "${SIGN_IDENTITY:-}" ]; then
+            rm -rf "$RUNNER_TEMP/check" && mkdir "$RUNNER_TEMP/check"
+            ditto -x -k one-mk-${{ matrix.target }}.app.zip "$RUNNER_TEMP/check"
+            codesign --verify --deep --strict "--test-requirement==anchor apple generic" "$RUNNER_TEMP/check/one-mk.app" \
+              || { echo "::error::one-mk.app is not signed with a Developer ID; the updater would refuse it" >&2; exit 1; }
+            codesign --display --verbose=4 "$RUNNER_TEMP/check/one-mk.app" 2>&1 | grep -q '^TeamIdentifier=[A-Z0-9]\{10\}$' \
+              || { echo "::error::one-mk.app has no team identifier; the updater would refuse it" >&2; exit 1; }
+            xcrun stapler validate "$RUNNER_TEMP/check/one-mk.app" \
+              || { echo "::error::one-mk.app has no stapled notarization ticket" >&2; exit 1; }
+          fi
       - name: Windows installer
         if: runner.os == 'Windows'
         shell: bash
@@ -157,7 +225,7 @@ jobs:
           path: one-mk-*.*
 
   publish:
-    needs: build
+    needs: [test, release-checks, build]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -189,6 +257,10 @@ jobs:
       - name: Generate and sign update manifest
         env:
           ONE_MK_UPDATE_SIGNING_KEY: ${{ secrets.ONE_MK_UPDATE_SIGNING_KEY }}
+          # Repository variables, empty unless a bad release has to be
+          # withdrawn (scripts/make-update-manifest.sh, docs/UPDATES.md).
+          ONE_MK_REVOKED: ${{ vars.ONE_MK_REVOKED }}
+          ONE_MK_MINIMUM_SUPPORTED_VERSION: ${{ vars.ONE_MK_MINIMUM_SUPPORTED_VERSION }}
         run: |
           bash scripts/make-update-manifest.sh release-files "$GITHUB_RUN_NUMBER"
           bash scripts/sign-update-manifest.sh release-files

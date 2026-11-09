@@ -20,6 +20,8 @@ app="$tmp/one-mk.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$dir/one-mk" "$dir/one-mk-tray" "$dir/one-mk-app" "$dir/one-mk-wallpaper" "$app/Contents/MacOS/"
 cp docs/brand/app-icon/macos/onemk.icns "$app/Contents/Resources/onemk.icns"
+# Licences (oneMK's, every crate built in, the fonts'), inside the signed app.
+sh scripts/copy-notices.sh "$app/Contents/Resources/Licenses"
 
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
