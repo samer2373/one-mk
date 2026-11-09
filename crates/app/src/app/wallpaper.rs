@@ -115,8 +115,8 @@ impl App {
             let rows = list(ui, fills, "How it fills the screens", 2);
             let fit_row = rows[0];
             // The choices give way before the label does: in a narrow column
-            // the label keeps the room it needs (its name and the "i").
-            let fit_w = fit_track_w(fit_row.width(), text_width(ui, "Picture sizing", regular(T_BODY)) + 26.0);
+            // the label keeps the room it needs (its name, the "i" and a margin).
+            let fit_w = fit_track_w(fit_row.width(), text_width(ui, "Picture sizing", regular(T_BODY)) + 26.0 + 8.0);
             label_help(ui, short(fit_row), Id::unique("wallpaper-fit-label"), "Picture sizing", "wallpaper-fit", enabled && selected, fit_w + 12.0);
             let track = Rect::from_min_size(pos2(fit_row.right() - fit_w, fit_row.center().y - 14.0), vec2(fit_w, 28.0));
             if let Some(chosen) = (Pills { id: Id::unique("wallpaper-fit"), track, cells: Pills::even(track, 3, 2.0), labels: &["Fill", "Fit", "Stretch"], names: vec!["Fill the screens".into(), "Fit inside the screens".into(), "Stretch across the screens".into()], chosen: Some(match fit_now { Fit::Fill => 0, Fit::Fit => 1, Fit::Stretch => 2 }), enabled: vec![enabled && selected; 3], role: Role::RadioGroup, font: T_META }).show(ui, true) {

@@ -63,6 +63,18 @@ mod gesture_tests {
     }
 
     #[test]
+    fn a_rule_covers_the_computers_its_scope_names() {
+        let peer = |name: &str, os| tune::Peer { name: name.into(), id: format!("{name}-id"), os };
+        let (mac, linux) = (peer("Mac", one_mk_proto::os::MACOS), peer("Studio", one_mk_proto::os::LINUX));
+        assert!(scope_covers(&Scope::All, &mac) && scope_covers(&Scope::All, &linux));
+        assert!(scope_covers(&Scope::Os(one_mk_proto::os::LINUX), &linux) && !scope_covers(&Scope::Os(one_mk_proto::os::LINUX), &mac));
+        assert!(scope_covers(&Scope::Peer("Studio".into()), &linux) && !scope_covers(&Scope::Peer("Studio".into()), &mac));
+        // A keyboard narrows the rule to what is typed on it, not to a computer.
+        let device = Scope::Device("aaaa-bbbb".into(), Box::new(Scope::Os(one_mk_proto::os::LINUX)));
+        assert!(scope_covers(&device, &linux) && !scope_covers(&device, &mac));
+    }
+
+    #[test]
     fn narrow_keyboard_retains_board_space_and_stacks_cards() {
         for width in [600.0, 660.0] {
             assert_eq!(keyboard_columns(width), 1);

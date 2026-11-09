@@ -26,7 +26,14 @@ const POLL_UNFOCUSED: Duration = Duration::from_millis(500);
 const POLL_HIDDEN: Duration = Duration::from_secs(3);
 /// While a graph shows, the window is redrawn at least this often (the
 /// graph scrolls a little with time) even when no reading changed.
-pub const GRAPH_IDLE_REDRAW: Duration = Duration::from_secs(5);
+pub const GRAPH_IDLE_REDRAW: Duration = Duration::from_secs(10);
+/// ... and a reading that only reads as another number of milliseconds
+/// waits this long for its frame (a jittery link, a frame every 2 s).
+const GRAPH_VALUE_REDRAW: Duration = Duration::from_secs(2);
+/// A graph that has just come on screen is drawn for each of its first
+/// readings, so it fills in at once (it says nothing before
+/// [`crate::rtt::MIN_SAMPLES`]).
+const GRAPH_YOUNG_DRAWS: u32 = crate::rtt::MIN_SAMPLES as u32 + 1;
 
 /// How much attention the window gets, which sets how often it looks at
 /// the daemon.
@@ -76,8 +83,10 @@ pub struct Showing {
     attention: Arc<(std::sync::Mutex<Attention>, std::sync::Condvar)>,
 }
 
-/// A stamp older than this says the graph is no longer on screen.
-const SHOWING_FOR: Duration = Duration::from_millis(3000);
+/// A stamp older than this says the graph is no longer on screen. A window
+/// with a steady graph draws once per [`GRAPH_IDLE_REDRAW`], so the stamp
+/// must outlive that.
+const SHOWING_FOR: Duration = Duration::from_millis(GRAPH_IDLE_REDRAW.as_millis() as u64 + 3000);
 /// How often the connections are sampled while a graph is on screen.
 const SAMPLE: Duration = Duration::from_millis((crate::rtt::EVERY * 1000.0) as u64);
 
@@ -117,7 +126,12 @@ impl Showing {
 
     fn on_screen(&self) -> bool {
         let at = self.stamp.load(Ordering::Relaxed);
-        at != 0 && self.ms().saturating_sub(at) < SHOWING_FOR.as_millis() as u64
+        at != 0 && self.ms().saturating_sub(at) < SHOWING_FOR.as_millis() as u64 && !self.hidden()
+    }
+
+    /// The window says it is minimised or hidden.
+    fn hidden(&self) -> bool {
+        *self.attention.0.lock().unwrap_or_else(|e| e.into_inner()) == Attention::Hidden
     }
 }
 
@@ -320,6 +334,10 @@ impl Link {
                     available: true, poster: Some(poster.into()), message: "Playing on 3 monitors on 2 computers".into(), computers: Default::default(), gnome: None,
                 });
                 if let Some(wallpaper) = &mut status.wallpaper && let Some(plan) = &wallpaper.plan { wallpaper.message = plan.playing_message(); }
+                // ONE_MK_APP_GNOME=1: the GNOME video setup block, for layout checks.
+                if std::env::var_os("ONE_MK_APP_GNOME").is_some() && let Some(wallpaper) = &mut status.wallpaper {
+                    wallpaper.gnome = Some(one_mk_wallpaper::GnomeSetup { stage: one_mk_wallpaper::GnomeStage::NotInstalled, message: one_mk_wallpaper::GNOME_PLAYBACK_UNAVAILABLE.into(), can_install: true, can_enable: false });
+                }
             }
             return Ok(status);
         }
@@ -344,6 +362,8 @@ impl Link {
             // What the window was last redrawn with, and when.
             let mut drawn: Vec<(String, one_mk_ctl::status::LinkStats)> = Vec::new();
             let mut redrawn = Instant::now();
+            // Readings drawn since the graph came on screen.
+            let mut young = 0u32;
             let mut gone = 0;
             let mut stamp = None;
             let opened = std::time::SystemTime::now();
@@ -380,6 +400,10 @@ impl Link {
                     continue;
                 }
                 let same = now.as_ref().map(Status::without_links);
+                let visible = link.showing.on_screen();
+                if !visible {
+                    young = 0;
+                }
                 if last.as_ref() != Some(&same) {
                     if link.tx.send(Event::Status(Box::new(now))).is_err() {
                         return;
@@ -389,12 +413,16 @@ impl Link {
                     sampled = Instant::now();
                 } else if let Some(s) = now.filter(|s| !s.links.is_empty())
                     && sampled.elapsed() >= SAMPLE
-                    && link.showing.on_screen()
+                    && visible
                 {
                     // Every reading is kept, but a frame is only asked for
                     // when the picture would change, or now and then so the
                     // graph keeps scrolling: a steady line costs nothing.
-                    let draw = redrawn.elapsed() >= GRAPH_IDLE_REDRAW || crate::rtt::changed_enough(&drawn, &s.links);
+                    let draw = young < GRAPH_YOUNG_DRAWS || match crate::rtt::change(&drawn, &s.links) {
+                        crate::rtt::Change::Urgent => true,
+                        crate::rtt::Change::Value => redrawn.elapsed() >= GRAPH_VALUE_REDRAW,
+                        crate::rtt::Change::None => redrawn.elapsed() >= GRAPH_IDLE_REDRAW,
+                    };
                     let links = s.links;
                     if draw {
                         drawn.clone_from(&links);
@@ -404,6 +432,7 @@ impl Link {
                     }
                     if draw {
                         redrawn = Instant::now();
+                        young = young.saturating_add(1);
                         link.ctx.request_repaint();
                     }
                     sampled = Instant::now();
@@ -1071,6 +1100,23 @@ mod tests {
         showing.attend(Attention::Active);
         let slept = napping.join().unwrap();
         assert!(slept < Duration::from_secs(2), "slept the whole hidden pause: {slept:?}");
+    }
+
+    #[test]
+    fn a_graph_drawn_on_the_slow_redraw_still_counts_as_on_screen() {
+        // The window draws a steady graph once per GRAPH_IDLE_REDRAW: the
+        // watcher must not take the quiet between two frames for a hidden one.
+        assert!(SHOWING_FOR > GRAPH_IDLE_REDRAW);
+        let showing = Showing::new();
+        assert!(!showing.on_screen(), "nothing drawn yet");
+        showing.frame(true);
+        assert!(showing.on_screen());
+        showing.attend(Attention::Hidden);
+        assert!(!showing.on_screen(), "minimised: no more asking");
+        showing.attend(Attention::Active);
+        assert!(showing.on_screen());
+        showing.frame(false);
+        assert!(!showing.on_screen());
     }
 
     #[test]

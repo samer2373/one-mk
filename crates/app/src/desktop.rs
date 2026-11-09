@@ -65,7 +65,7 @@ pub fn app_rule_note(tuning: &[String], peer_os: &[u8]) -> Option<String> {
         return Some(format!("{first}{more}"));
     }
     peer_os.iter().any(|o| may_not_report_app(*o)).then(|| {
-        "A Linux computer on Wayland (GNOME, KDE) can't say which app has the focus, so a rule for an app never applies to its Wayland windows. oneMK shows a note here when it learns that.".to_owned()
+        "Linux computers on GNOME or KDE (Wayland) can't report which app has the focus, so a rule for an app does not apply to their Wayland windows.".to_owned()
     })
 }
 
