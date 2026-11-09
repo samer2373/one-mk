@@ -164,6 +164,9 @@ pub struct PortFacts {
     /// When that is another one-mk: the settings folder it runs with, if
     /// we could read it.
     pub holder_home: Option<String>,
+    /// That other one-mk runs with this very settings folder (so it is not
+    /// answering: hung, or still starting).
+    pub holder_is_this_folder: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -319,6 +322,10 @@ pub fn port_check(d: &Daemon, p: &PortFacts) -> Check {
             "Restart one-mk (`one-mk run`) and watch for an error about the port.",
         ),
         (false, Bind::Free) => Outcome::pass(format!("UDP port {port} is free for one-mk.")),
+        (false, Bind::InUse) if p.holder.as_deref() == Some("one-mk") && p.holder_is_this_folder => Outcome::fail(
+            format!("UDP port {port} is held by a one-mk that runs with this settings folder but does not answer (stuck, or still starting)."),
+            "Stop it with `one-mk stop` (or end that process), then start one-mk again.",
+        ),
         (false, Bind::InUse) if p.holder.as_deref() == Some("one-mk") => {
             // Not this settings folder's one-mk (it would be running): another one's.
             let folder = p.holder_home.as_deref().map_or(String::new(), |h| format!(" (settings folder {h})"));
@@ -1148,6 +1155,8 @@ fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
             } else if status == Status::Fail && let Some(who) = held {
                 carried = format!("The network port sharing needs is already used by {who}.");
                 &carried
+            } else if status == Status::Fail && original.contains("does not answer") {
+                "A copy of oneMK that does not answer is holding the network port sharing needs."
             } else if status == Status::Fail && original.contains("is not listening") { "Sharing is on but is not listening for other computers." }
             else if status == Status::Fail { "Sharing cannot use its network connection." }
                 else { "The network connection could not be checked." },
@@ -1309,7 +1318,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     );
 
     let (port_facts, mdns, firewall, mut portals, addrs, shortcuts) = tokio::join!(
-        blocking(move || probe_port(port), PortFacts { port, bind: Bind::Error("probe failed".into()), holder: None, holder_home: None },),
+        blocking({ let dir = dir.to_owned(); move || probe_port(port, &dir) }, PortFacts { port, bind: Bind::Error("probe failed".into()), holder: None, holder_home: None, holder_is_this_folder: false },),
         async { if daemon.status().is_some_and(|status| status.discovery == Some(false)) {
             MdnsFacts { join: Ok(()), seen: Ok(Vec::new()) }
         } else { probe_mdns(wanted).await } },
@@ -1438,7 +1447,7 @@ fn one_line(error: &str) -> String {
     error.lines().map(str::trim).filter(|l| !l.is_empty() && !quoted(l)).collect::<Vec<_>>().join("; ")
 }
 
-fn probe_port(port: u16) -> PortFacts {
+fn probe_port(port: u16, dir: &Path) -> PortFacts {
     let mut bind = Bind::Free;
     // The daemon binds dual-stack, so either address family collides with it.
     for addr in [format!("0.0.0.0:{port}"), format!("[::]:{port}")] {
@@ -1461,7 +1470,12 @@ fn probe_port(port: u16) -> PortFacts {
         Some((name, home)) => (Some(name), home),
         None => (None, None),
     };
-    PortFacts { port, bind, holder, holder_home }
+    let same = |home: &str| {
+        let home = Path::new(home);
+        home.is_absolute() && std::fs::canonicalize(home).ok().zip(std::fs::canonicalize(dir).ok()).is_some_and(|(a, b)| a == b)
+    };
+    let holder_is_this_folder = holder_home.as_deref().is_some_and(same);
+    PortFacts { port, bind, holder, holder_home, holder_is_this_folder }
 }
 
 /// The settings folder a one-mk process was started with (`--home X`,
@@ -1984,7 +1998,7 @@ mod tests {
     }
 
     fn pf(bind: Bind, holder: Option<&str>) -> PortFacts {
-        PortFacts { port: 24900, bind, holder: holder.map(str::to_owned), holder_home: None }
+        PortFacts { port: 24900, bind, holder: holder.map(str::to_owned), holder_home: None, holder_is_this_folder: false }
     }
 
     #[test]
@@ -2011,6 +2025,8 @@ mod tests {
         assert!(other.outcome.detail.contains("another oneMK (settings folder /tmp/other)") && !other.outcome.detail.contains("\"one-mk\""), "{}", other.outcome.detail);
         let fix = other.outcome.fix.clone().unwrap();
         assert!(fix.contains("--port") && fix.contains("--home") && !fix.contains("Close that program"), "{fix}");
+        let stuck = port_check(&Daemon::NotRunning, &PortFacts { holder_home: Some("/tmp/mine".into()), holder_is_this_folder: true, ..pf(Bind::InUse, Some("one-mk")) });
+        assert!(stuck.outcome.detail.contains("this settings folder but does not answer") && stuck.outcome.fix.unwrap().contains("one-mk stop"));
         let unknown = port_check(&Daemon::NotRunning, &pf(Bind::InUse, Some("one-mk")));
         assert!(unknown.outcome.detail.contains("another oneMK") && unknown.outcome.fix.unwrap().contains("stop it"));
         let (shown, _, visible) = window_check(&other);
