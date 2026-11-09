@@ -185,7 +185,7 @@ impl Clipboard {
         let worker_apps = history_apps.clone();
         std::thread::Builder::new()
             .name("one-mk-clipboard".into())
-            .spawn(move || Worker { backend, cache: None, filter: shared, history: worker_history, excluded: VecDeque::new(), restored: None,
+            .spawn(move || Worker { backend, cache: None, filter: shared, history: worker_history, excluded: VecDeque::new(), received_sensitive: VecDeque::new(), restored: None,
                 #[cfg(target_os = "linux")]
                 restored_owner: None,
                 history_apps: worker_apps }.run(rx))
@@ -504,6 +504,12 @@ struct Worker {
     filter: Arc<Mutex<Filter>>,
     history: Arc<Mutex<history::History>>,
     excluded: VecDeque<Digest>,
+    /// Copies another computer sent marked as sensitive. Unlike `excluded`
+    /// (this computer's own password copies, which the user may choose to
+    /// share by switching `skip_concealed` off), the sender's mark is
+    /// binding: these are never handed out by an automatic read, whatever
+    /// the local filter says.
+    received_sensitive: VecDeque<Digest>,
     restored: Option<Digest>,
     #[cfg(target_os = "linux")]
     restored_owner: Option<u32>,
@@ -539,7 +545,13 @@ impl Worker {
                     Cmd::Write { data, origin, record, concealed, reply } => {
                         let saved = (record && !concealed).then(|| Arc::new(data.clone()));
                         let r = self.write(data);
-                        if concealed && let Ok(digest) = &r { self.exclude(*digest); }
+                        if concealed && let Ok(digest) = &r {
+                            self.exclude(*digest);
+                            if !self.received_sensitive.contains(digest) {
+                                if self.received_sensitive.len() == 32 { self.received_sensitive.pop_front(); }
+                                self.received_sensitive.push_back(*digest);
+                            }
+                        }
                         if r.is_ok() && let Some(saved) = saved {
                             let digest = history::digest(&saved);
                             self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(saved, digest, false, &origin);
@@ -611,11 +623,14 @@ impl Worker {
         }
         let digest = raw.digest();
         if raw.concealed { self.exclude(digest); }
-        let concealed = raw.concealed || self.excluded.contains(&digest);
+        // A peer's sensitive copy is never read automatically, even with the
+        // local filter off: the sender asked for it to stay private.
+        let received = self.received_sensitive.contains(&digest);
+        let concealed = raw.concealed || received || self.excluded.contains(&digest);
         if skip.contains(&digest) {
             return Ok(Read::Unchanged(digest));
         }
-        if concealed && skip_concealed && !explicit {
+        if concealed && (skip_concealed || received) && !explicit {
             return Ok(Read::Concealed(digest));
         }
         if let Some((d, data)) = &self.cache
@@ -807,6 +822,21 @@ mod tests {
         cb.write_from(ClipData { text: Some("plain".into()), ..Default::default() }, "peer".into(), true).await.unwrap();
         assert_eq!(cb.history().lock().unwrap().len(), 1);
         assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }));
+    }
+
+    /// The sender's mark is binding: switching the local "skip sensitive"
+    /// filter off (which lets this computer's own password copies go out)
+    /// must not turn a peer's sensitive copy into an ordinary read that the
+    /// automatic push or a pull answer would send on unmarked.
+    #[tokio::test]
+    async fn a_marked_arrival_stays_private_with_the_local_filter_off() {
+        let (cb, _mem) = Clipboard::memory();
+        cb.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        cb.set_filter(Filter { skip_concealed: false, ..Filter::default() });
+        cb.write_concealed(ClipData { text: Some("TOPSECRET".into()), ..Default::default() }).await.unwrap();
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)), "never an ordinary automatic read");
+        assert!(matches!(cb.read_explicit(vec![]).await.unwrap(), Read::Sensitive { .. }), "an explicit send still sees it as sensitive");
+        assert!(cb.history().lock().unwrap().is_empty(), "never recorded");
     }
 
     #[tokio::test]

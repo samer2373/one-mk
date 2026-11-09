@@ -154,6 +154,7 @@ fn clip_request(
                 // name, what and size.
                 _ => format!("ok\n{name}\n{}\n{}\n", m.what, size(&m)),
             },
+            Err(e) if send && e.to_string() == crate::clip::SENSITIVE_UNSUPPORTED => format!("error {name} {}\n", crate::clip::SENSITIVE_UNSUPPORTED),
             Err(e) if !send && e.to_string() == crate::clip::FETCH_DISABLED_MESSAGE => format!("error {name} does not allow fetching its clipboard; on {name} run: one-mk clipboard --allow-fetch on\n"),
             Err(e) => format!("error {e:#}\n"),
         };
