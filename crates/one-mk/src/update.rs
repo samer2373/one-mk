@@ -94,7 +94,12 @@ impl Temporary {
         let suffix = if cfg!(windows) { ".exe" } else { "" };
         for _ in 0..100 {
             let path = parent.join(format!(".one-mk-update-{purpose}-{}-{}{suffix}", std::process::id(), TEMP_ID.fetch_add(1, Ordering::Relaxed)));
-            match OpenOptions::new().read(true).write(true).create_new(true).open(&path) {
+            let mut options = OpenOptions::new();
+            options.read(true).write(true).create_new(true);
+            // Private from the first byte (the saved state, and the update's payload).
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            match options.open(&path) {
                 Ok(file) => return Ok(Self { path, file }),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error).context("cannot create an update file beside one-mk; check directory permissions and free disk space"),
@@ -159,8 +164,8 @@ fn load_state(home: &Path) -> Result<State> {
 }
 
 fn lock(home: &Path) -> Result<File> {
-    fs::create_dir_all(home)?;
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(home.join("update.lock"))?;
+    one_mk_ctl::private::create_dir_all(home)?;
+    let file = one_mk_ctl::private::lock_file(&home.join("update.lock"))?;
     file.try_lock().context("another update check or installation is in progress; wait for it to finish and retry")?;
     clean_temporary(home, &[".one-mk-update-state-"])?;
     Ok(file)
@@ -947,7 +952,7 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
         // Remember the version gone back from, so it isn't installed again
         // by itself the next time the window opens.
         let skip = || {
-            let _ = fs::write(home.join(policy::SKIPPED), env!("CARGO_PKG_VERSION"));
+            let _ = one_mk_ctl::private::write(&home.join(policy::SKIPPED), env!("CARGO_PKG_VERSION"));
         };
         #[cfg(target_os = "macos")]
         if kind == InstallKind::MacApp {

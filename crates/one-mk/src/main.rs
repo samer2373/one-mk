@@ -36,6 +36,8 @@ mod control;
 mod doctor;
 mod wallpaper;
 mod pointer_extension;
+#[cfg(test)]
+mod testdir;
 mod live_wallpaper;
 mod hooks;
 mod hotkeys;
@@ -588,6 +590,8 @@ fn run(cli: Cli) -> Result<()> {
     // one-mk. Nothing it does by itself reaches outside that folder: the
     // "Send to" entries follow the default home's computers only.
     let (dir, custom_home) = select_home(cli.home.as_deref(), one_mk_ctl::default_home(), migrate_old_home)?;
+    // Files an earlier version made with the process umask become private.
+    one_mk_ctl::private::tighten_home(&dir);
 
     // One thread for networking is plenty and keeps the footprint small;
     // input capture and injection have their own threads.

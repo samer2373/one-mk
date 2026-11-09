@@ -30,7 +30,7 @@ pub fn spawn_detached(exe: &Path, args: &[String], log: Option<&Path>) -> std::i
     let mut cmd = Command::new(exe);
     cmd.args(args).stdin(Stdio::null());
     let sink = || {
-        log.and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok())
+        log.and_then(|p| crate::private::append(p).ok())
             .map_or_else(Stdio::null, Stdio::from)
     };
     cmd.stdout(sink()).stderr(sink());
@@ -45,4 +45,21 @@ pub fn spawn_detached(exe: &Path, args: &[String], log: Option<&Path>) -> std::i
     let mut child = cmd.spawn()?;
     std::thread::spawn(move || drop(child.wait()));
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// `daemon.log` holds what the service printed (names of computers and
+    /// networks): private from the first byte, whoever started it and
+    /// whatever their umask.
+    #[test]
+    fn the_daemon_log_is_created_private() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("daemon.log");
+        spawn_detached(Path::new("/bin/sh"), &["-c".to_owned(), "echo started".to_owned()], Some(&log)).unwrap();
+        assert_eq!(std::fs::metadata(&log).unwrap().permissions().mode() & 0o777, 0o600);
+    }
 }

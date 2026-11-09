@@ -121,7 +121,7 @@ pub fn uninstall() -> Result<String> {
 /// True if one-mk is set to start at login.
 pub fn is_installed() -> bool {
     if cfg!(target_os = "linux") {
-        home_dir().is_ok_and(|h| unit_path(&h).exists() || desktop_path(&h).exists())
+        crate::xdg::config_home().is_ok_and(|config| unit_path(&config).exists() || desktop_path(&config).exists())
     } else if cfg!(target_os = "macos") {
         home_dir().is_ok_and(|h| plist_path(&h, LABEL).exists())
     } else {
@@ -139,8 +139,8 @@ pub fn is_installed_for(home: Option<&Path>) -> bool {
 /// The text of this user's login entry.
 fn login_entry() -> Option<String> {
     if cfg!(target_os = "linux") {
-        let home = home_dir().ok()?;
-        let text: String = [unit_path(&home), desktop_path(&home)].iter().filter_map(|path| std::fs::read_to_string(path).ok()).collect();
+        let config = crate::xdg::config_home().ok()?;
+        let text: String = [unit_path(&config), desktop_path(&config)].iter().filter_map(|path| std::fs::read_to_string(path).ok()).collect();
         (!text.is_empty()).then_some(text)
     } else if cfg!(target_os = "macos") {
         std::fs::read_to_string(plist_path(&home_dir().ok()?, LABEL)).ok()
@@ -168,9 +168,9 @@ fn home_dir() -> Result<PathBuf> {
 
 fn write(path: &Path, text: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        crate::private::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
-    std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))
+    crate::private::write_readable(path, text).with_context(|| format!("writing {}", path.display()))
 }
 
 fn remove(path: &Path) -> Result<bool> {
@@ -183,22 +183,25 @@ fn remove(path: &Path) -> Result<bool> {
 
 // ----------------------------------------------------------------- Linux
 
-fn unit_path(home: &Path) -> PathBuf {
-    home.join(".config/systemd/user/one-mk.service")
+// All of these take the XDG base folders (`$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`:
+// `crate::xdg`), never `$HOME/.config` by hand, so the start-at-login entries
+// and the file manager's entries always land in the same tree.
+fn unit_path(config: &Path) -> PathBuf {
+    config.join("systemd/user/one-mk.service")
 }
 
-fn desktop_path(home: &Path) -> PathBuf {
-    home.join(".config/autostart/one-mk.desktop")
+fn desktop_path(config: &Path) -> PathBuf {
+    config.join("autostart/one-mk.desktop")
 }
 
-fn tray_desktop_path(home: &Path) -> PathBuf {
-    home.join(".config/autostart/one-mk-tray.desktop")
+fn tray_desktop_path(config: &Path) -> PathBuf {
+    config.join("autostart/one-mk-tray.desktop")
 }
 
 /// The (hidden) application entry that gives one-mk an app id, for the
 /// GlobalShortcuts portal.
-fn app_entry_path(home: &Path) -> PathBuf {
-    home.join(".local/share/applications").join(format!("{}.desktop", one_mk_proto::LINUX_APP_ID))
+fn app_entry_path(data: &Path) -> PathBuf {
+    data.join("applications").join(format!("{}.desktop", one_mk_proto::LINUX_APP_ID))
 }
 
 fn systemd_available() -> bool {
@@ -270,15 +273,15 @@ pub fn packaged_files(bindir: &Path) -> Vec<(String, String)> {
 }
 
 fn install_linux(l: &Launch) -> Result<String> {
-    let home = home_dir()?;
+    let (config, data) = (crate::xdg::config_home()?, crate::xdg::data_home()?);
     let mut msg = String::new();
     // Before the service starts: the daemon registers its app id at startup.
-    let app = app_entry_path(&home);
+    let app = app_entry_path(&data);
     write(&app, &(desktop_entry("one-mk", &l.exe, &l.args()).replace("X-GNOME-Autostart-enabled=true\n", "") + "NoDisplay=true\n"))?;
     if systemd_available() {
-        let unit = unit_path(&home);
+        let unit = unit_path(&config);
         write(&unit, &systemd_unit(l))?;
-        let _ = remove(&desktop_path(&home)); // never start twice
+        let _ = remove(&desktop_path(&config)); // never start twice
         let enable: &[&str] = if l.start_now { &["--user", "enable", "--now", "one-mk.service"] } else { &["--user", "enable", "one-mk.service"] };
         if !ok("systemctl", &["--user", "daemon-reload"]) || !ok("systemctl", enable) {
             bail!("wrote {} but `systemctl --user enable one-mk.service` failed", unit.display());
@@ -289,12 +292,12 @@ fn install_linux(l: &Launch) -> Result<String> {
             unit.display()
         );
     } else {
-        let entry = desktop_path(&home);
+        let entry = desktop_path(&config);
         write(&entry, &desktop_entry("one-mk", &l.exe, &l.args()))?;
         msg += &format!("one-mk will start the next time you log in (systemd is not available here).\n  autostart entry: {}\n  to start it now:  one-mk run\n", entry.display());
     }
     if let Some(tray) = &l.tray {
-        let entry = tray_desktop_path(&home);
+        let entry = tray_desktop_path(&config);
         write(&entry, &desktop_entry("one-mk tray", tray, &l.tray_args(false)))?;
         msg += &format!("  the tray icon will start at login too: {}\n", entry.display());
     }
@@ -304,8 +307,8 @@ fn install_linux(l: &Launch) -> Result<String> {
 }
 
 fn uninstall_linux() -> Result<bool> {
-    let home = home_dir()?;
-    let unit = unit_path(&home);
+    let (config, data) = (crate::xdg::config_home()?, crate::xdg::data_home()?);
+    let unit = unit_path(&config);
     let mut did = false;
     if unit.exists() {
         if systemd_available() {
@@ -316,9 +319,9 @@ fn uninstall_linux() -> Result<bool> {
             ok("systemctl", &["--user", "daemon-reload"]);
         }
     }
-    did |= remove(&desktop_path(&home))?;
-    did |= remove(&tray_desktop_path(&home))?;
-    did |= remove(&app_entry_path(&home))?;
+    did |= remove(&desktop_path(&config))?;
+    did |= remove(&tray_desktop_path(&config))?;
+    did |= remove(&app_entry_path(&data))?;
     Ok(did)
 }
 
@@ -601,11 +604,26 @@ mod tests {
 
     #[test]
     fn files_live_where_the_systems_look() {
-        let h = Path::new("/home/u");
-        assert_eq!(unit_path(h), Path::new("/home/u/.config/systemd/user/one-mk.service"));
-        assert_eq!(desktop_path(h), Path::new("/home/u/.config/autostart/one-mk.desktop"));
-        assert_eq!(tray_desktop_path(h), Path::new("/home/u/.config/autostart/one-mk-tray.desktop"));
-        assert_eq!(app_entry_path(h), Path::new("/home/u/.local/share/applications/io.github.onemk.OneMk.desktop"));
-        assert_eq!(plist_path(h, LABEL), Path::new("/home/u/Library/LaunchAgents/com.one-mk.daemon.plist"));
+        // Under the XDG folders, wherever they are: not under a hard-coded
+        // `$HOME/.config` while the file manager's entries follow `$XDG_DATA_HOME`.
+        let (config, data) = (Path::new("/cfg"), Path::new("/dat/share"));
+        assert_eq!(unit_path(config), Path::new("/cfg/systemd/user/one-mk.service"));
+        assert_eq!(desktop_path(config), Path::new("/cfg/autostart/one-mk.desktop"));
+        assert_eq!(tray_desktop_path(config), Path::new("/cfg/autostart/one-mk-tray.desktop"));
+        assert_eq!(app_entry_path(data), Path::new("/dat/share/applications/io.github.onemk.OneMk.desktop"));
+        assert_eq!(plist_path(Path::new("/home/u"), LABEL), Path::new("/home/u/Library/LaunchAgents/com.one-mk.daemon.plist"));
+    }
+
+    /// The entries the desktop must find are written readable but never
+    /// group-writable, in folders made private, whatever the umask.
+    #[cfg(unix)]
+    #[test]
+    fn login_entries_are_written_with_fixed_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config/autostart/one-mk.desktop");
+        write(&path, "[Desktop Entry]\n").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o133, 0, "readable by the owner, never group-writable");
+        assert_eq!(std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
     }
 }
