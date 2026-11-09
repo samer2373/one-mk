@@ -81,6 +81,20 @@ or `forward`, an action, or `none`. **Left and right cannot be made to do
 nothing or hold a layer** (the other computer would have no clicks); they are
 refused, and `keymap check` flags such a rule written by hand.
 
+## Mac and PC keyboards: Ctrl and Cmd
+
+When keys go between a Mac and a Windows or Linux computer, Ctrl and Cmd trade places by default, so
+Ctrl+C on the PC keyboard copies on the Mac and the other way round. The sending computer does the swap,
+after any key rules. Set it per paired computer:
+
+```
+one-mk layout "Mac" --swap-ctrl-cmd auto     # the default: swap only between a Mac and something else
+one-mk layout "Mac" --swap-ctrl-cmd on|off
+```
+
+It is stored for each computer on the computer where you set it (the window's **Settings > Ctrl and Cmd**
+card does the same).
+
 ## Pointer speed: `pointer`
 
 ```
