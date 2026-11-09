@@ -1107,7 +1107,7 @@ mod tests {
         assert!(shown.contains(&format!("on_enter: echo one  (only for computer {}, timeout 9 s, not through the shell)", fingerprint.short())), "{shown}");
         assert!(!hooks.accepts(Event::Enter, &Fingerprint([0xcd; 32]).to_string()));
         HooksArgs { on_enter: Some("echo two".into()), ..Default::default() }.apply(&mut hooks).unwrap();
-        assert!(hooks.options.get("enter").is_none());
+        assert!(!hooks.options.contains_key("enter"));
         assert!(hooks.accepts(Event::Enter, &Fingerprint([0xcd; 32]).to_string()), "the old computer filter went with the old command");
         assert!(hooks.describe().contains("on_enter: echo two\n") || hooks.describe().ends_with("on_enter: echo two"), "{}", hooks.describe());
         let help = <crate::Cli as clap::CommandFactory>::command().find_subcommand_mut("hooks").unwrap().render_long_help().to_string();

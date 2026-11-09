@@ -4775,7 +4775,7 @@ mod tests {
         let before = dials();
         tokio::time::sleep(Duration::from_secs(5)).await;
         assert_eq!(dials(), before, "B kept dialing a computer that refused it");
-        assert_eq!(status(&duo.db).await.removed, [a_id.clone()]);
+        assert_eq!(status(&duo.db).await.removed, std::slice::from_ref(&a_id));
         // Nothing to switch to: said so, not "already on this computer".
         let reply = ask(&duo.db, Request::Switch(SwitchTo::Next)).await;
         assert!(reply.starts_with("error no other computer is connected"), "{reply}");
