@@ -1074,15 +1074,24 @@ pub async fn command(dir: &Path, args: Args) -> Result<()> {
 }
 
 /// `one-mk uninstall`: the wallpaper goes off and the person's own picture
-/// comes back. A running oneMK does it (and tells the other computers);
-/// otherwise it is done here and the saved choice is marked off, so a later
-/// start doesn't bring it back.
+/// comes back. A running oneMK does it (and tells the other computers), and
+/// only its explicit "ok" counts. Only when no oneMK runs is it done here,
+/// holding the daemon's own [`InstanceLock`](crate::control::InstanceLock)
+/// so no daemon can start an apply meanwhile, and the saved choice is
+/// marked off, so a later start doesn't bring it back. A oneMK that is
+/// running but does not answer is an error, never a reason to restore
+/// beside it.
 pub async fn turn_off_for_uninstall(dir: &Path) -> Result<()> {
     let request = crate::control::Request::LiveWallpaper(serde_json::to_string(&Command::Off)?);
-    if let Ok(Some(reply)) = crate::control::request(dir, request).await {
-        ensure!(!reply.starts_with("error "), "{}", reply.trim_start_matches("error ").trim());
-        return Ok(());
+    match crate::control::request(dir, request).await {
+        Ok(Some(reply)) => return confirmed_off(&reply),
+        Ok(None) => {}
+        Err(error) => return Err(error.context("could not ask the running oneMK to turn its wallpaper off; stop it with `one-mk stop` and run this again")),
     }
+    let Some(_instance) = crate::control::InstanceLock::try_acquire(dir)? else {
+        bail!("oneMK is starting or running for {} but did not take the request; stop it with `one-mk stop` and run this again", dir.display());
+    };
+    // It may have started (and stopped) between the request and the lock.
     let selection = cache(dir).join("selection.json");
     if let Some(mut saved) = std::fs::read(&selection).ok().and_then(|bytes| serde_json::from_slice::<Saved>(&bytes).ok()) && saved.status.plan.is_some() {
         saved.status = one_mk_wallpaper::Status { message: "Wallpaper is off".into(), ..Default::default() };
@@ -1091,6 +1100,18 @@ pub async fn turn_off_for_uninstall(dir: &Path) -> Result<()> {
         save_selection(dir, &saved)?;
     }
     restore_picture(&cache(dir).join("pictures"))
+}
+
+/// The running oneMK's answer to "wallpaper off": only "ok" is success. An
+/// empty answer is what it says when it ran out of time.
+fn confirmed_off(reply: &str) -> Result<()> {
+    let reply = reply.trim();
+    if let Some(error) = reply.strip_prefix("error ") {
+        bail!("{}", error.trim());
+    }
+    ensure!(reply == "ok", "the running oneMK did not confirm the wallpaper is off{}; run `one-mk wallpaper off` and check again",
+        if reply.is_empty() { " (it did not finish in time)".to_owned() } else { format!(" (it said {reply:?})") });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1281,6 +1302,33 @@ mod tests {
         assert!(after.status.plan.is_none() && after.authority_off);
         // Nothing chosen at all: nothing to do, and no error.
         turn_off_for_uninstall(tempfile::tempdir().unwrap().path()).await.unwrap();
+    }
+
+    /// A oneMK that holds the folder (running, starting, or not answering)
+    /// is never raced: nothing is restored or rewritten beside it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn uninstall_never_restores_beside_a_daemon_that_holds_the_folder() {
+        let directory = tempfile::tempdir().unwrap();
+        let saved = Saved { status: one_mk_wallpaper::Status { plan: Some(plan()), message: "Playing".into(), ..Default::default() }, coordinator: None, previous: None, authority_off: false };
+        save_selection(directory.path(), &saved).unwrap();
+        let before = std::fs::read(cache(directory.path()).join("selection.json")).unwrap();
+        let held = crate::control::InstanceLock::try_acquire(directory.path()).unwrap().unwrap();
+        let error = format!("{:#}", turn_off_for_uninstall(directory.path()).await.unwrap_err());
+        assert!(error.contains("one-mk stop"), "{error}");
+        assert_eq!(std::fs::read(cache(directory.path()).join("selection.json")).unwrap(), before, "the saved choice is untouched");
+        drop(held);
+        turn_off_for_uninstall(directory.path()).await.unwrap();
+    }
+
+    /// Only an explicit "ok" from the running oneMK is success.
+    #[test]
+    fn only_an_explicit_ok_confirms_the_wallpaper_is_off() {
+        confirmed_off("ok\n").unwrap();
+        for reply in ["", "\n", "error Wallpaper is not available\n", "maybe\n"] {
+            assert!(confirmed_off(reply).is_err(), "{reply:?}");
+        }
+        assert!(confirmed_off("").unwrap_err().to_string().contains("did not finish in time"));
     }
 
     #[cfg(unix)]
