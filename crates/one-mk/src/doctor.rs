@@ -860,8 +860,13 @@ pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
             let title = format!("Computer \"{name}\"");
             let online = d.status().is_some_and(|s| s.peers.iter().any(|x| x.id == p.id && x.online));
             let found = seen.iter().find(|s| s.id == p.id);
+            let removed = d.status().is_some_and(|s| s.removed_us(&p.id));
             let out = match (online, found, d.status().is_some()) {
                 (true, ..) => Outcome::pass("Connected."),
+                (false, ..) if removed => Outcome::fail(
+                    format!("\"{name}\" removed this computer from its paired computers, so it refuses to connect. The network is fine."),
+                    &format!("Remove it here too with `one-mk forget {}`, or pair the two again with `one-mk pair` on both.", p.id),
+                ),
                 (false, Some(f), true) => Outcome::warn(
                     format!("It is on the network ({}) but not connected to this computer.", f.addrs.join(", ")),
                     &format!(
@@ -2122,6 +2127,17 @@ mod tests {
         let c = peer_checks(&down, &with_addr, &[]);
         assert!(c[0].outcome.fix.as_ref().unwrap().contains("10.0.0.7:24900"));
         assert!(peer_checks(&down, &[], &[]).is_empty());
+
+        // It forgot this computer: not a network problem, whatever discovery saw.
+        let mut s = status("aaaa-aaaa", 24900, &[("bbbb-bbbb", false)]);
+        s.removed = vec!["bbbb-bbbb".into()];
+        let removed = Daemon::Running(Box::new(s));
+        for seen_it in [vec![], vec![seen("bbbb-bbbb")]] {
+            let c = peer_checks(&removed, &with_addr, &seen_it);
+            assert_eq!(st(&c[0]), Status::Fail);
+            assert!(c[0].outcome.detail.contains("removed this computer") && c[0].outcome.detail.contains("network is fine"), "{:?}", c[0].outcome);
+            assert!(c[0].outcome.fix.as_ref().unwrap().contains("one-mk forget bbbb-bbbb"));
+        }
     }
 
     /// Advice to connect directly names the port one-mk really uses.

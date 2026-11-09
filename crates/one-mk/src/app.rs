@@ -68,6 +68,10 @@ const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
 const DIAL_INTERVAL: Duration = Duration::from_secs(2);
 const DIAL_MAX: Duration = Duration::from_secs(30);
 const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
+/// A paired computer that refused this one (it forgot us) is tried again
+/// only this often, or when something here changes (`Request::Reload`:
+/// a pairing, a forget), or it is discovered after this.
+const REMOVED_RETRY: Duration = Duration::from_secs(600);
 /// How often a paired computer that stays unreachable is mentioned in the log.
 const DIAL_LOG_EVERY: Duration = Duration::from_secs(600);
 /// How long a peer that connected to us may take to open its first stream.
@@ -226,6 +230,8 @@ enum AppEvent {
     Found(Found),
     /// A dial ended (or the link it made did); with why it failed, if it did.
     DialDone(SocketAddr, Option<String>),
+    /// A paired computer refused this one as not paired: it forgot us.
+    Removed(Fingerprint),
     /// The networks this computer is on changed (only watched while some
     /// layout profile switches by itself).
     Network(NetworkId),
@@ -633,6 +639,9 @@ struct App {
     extra_addrs: Vec<SocketAddr>,
     dialing: HashSet<SocketAddr>,
     dial_logged: HashMap<SocketAddr, Instant>,
+    /// Paired computers that refused this one because they forgot it, and
+    /// when they last said so (see [`REMOVED_RETRY`]).
+    removed: HashMap<Fingerprint, Instant>,
     services: Services,
     /// Peers whose first time controlling this machine (this run) has been
     /// announced with how to take control back.
@@ -797,6 +806,7 @@ pub async fn serve(
         extra_addrs: opts.connect,
         dialing: HashSet::new(),
         dial_logged: HashMap::new(),
+        removed: HashMap::new(),
         services,
         announced: HashSet::new(),
         focus,
@@ -1066,6 +1076,7 @@ async fn establish(
         return;
     };
     let addr = peer.conn.remote_address();
+    let fingerprint = peer.fingerprint;
     let first = if peer.initiator {
         peer.open_stream(StreamKind::Control).await
     } else {
@@ -1107,7 +1118,29 @@ async fn establish(
         Ok(link) => {
             let _ = tx.send(AppEvent::Connected(link));
         }
+        Err(e) if refused_as_unpaired(&e) => {
+            tracing::debug!(%addr, "{device_name} refused this computer: it no longer has it paired");
+            let _ = tx.send(AppEvent::Removed(fingerprint));
+        }
         Err(e) => tracing::warn!(%addr, "handshake failed: {e:#}"),
+    }
+}
+
+/// The peer closed the connection because it doesn't trust this computer
+/// (any more): `not paired` at the handshake, or `forgotten` as it let go.
+fn refused_as_unpaired(e: &anyhow::Error) -> bool {
+    e.chain().any(|cause| {
+        let closed = |c: &quinn::ConnectionError| matches!(c, quinn::ConnectionError::ApplicationClosed(close)
+            if [&b"not paired"[..], b"forgotten"].contains(&&close.reason[..]));
+        cause.downcast_ref::<quinn::ConnectionError>().is_some_and(closed)
+            || cause.downcast_ref::<quinn::ReadExactError>().is_some_and(|r| matches!(r, quinn::ReadExactError::ReadError(quinn::ReadError::ConnectionLost(c)) if closed(c)))
+            || cause.downcast_ref::<quinn::ReadError>().is_some_and(|r| matches!(r, quinn::ReadError::ConnectionLost(c) if closed(c)))
+            || cause.downcast_ref::<quinn::WriteError>().is_some_and(|w| matches!(w, quinn::WriteError::ConnectionLost(c) if closed(c)))
+            || cause.downcast_ref::<quinn::ReadToEndError>().is_some_and(|r| matches!(r, quinn::ReadToEndError::Read(quinn::ReadError::ConnectionLost(c)) if closed(c)))
+    }) || {
+        // Wrapped as text on the way (an error turned into a message).
+        let text = format!("{e:#}");
+        text.contains("closed by peer: not paired") || text.contains("closed by peer: forgotten")
     }
 }
 
@@ -2024,6 +2057,16 @@ impl App {
                     None => { self.dial_logged.remove(&addr); }
                 }
             }
+            AppEvent::Removed(fp) => {
+                if self.trust.is_trusted(&fp) && !self.peers.contains_key(&fp) {
+                    if !self.removed.contains_key(&fp) {
+                        let name = self.trust.get(&fp).map_or_else(String::new, |d| sanitize_name(&d.name));
+                        println!("{}", one_mk_ctl::status::removed_hint(&name, &fp.short()));
+                        tracing::warn!(peer = %name, "it refuses this computer: it no longer has it paired");
+                    }
+                    self.removed.insert(fp, Instant::now());
+                }
+            }
             AppEvent::Network(net) => self.on_network(&net),
             AppEvent::FocusMoved => {
                 self.check_focus_soon();
@@ -2047,6 +2090,8 @@ impl App {
             link.conn.close(1u32.into(), b"not paired");
             return;
         }
+        // It trusts us again (paired anew).
+        self.removed.remove(&fp);
         // Both sides may dial, at several addresses. Both keep the same
         // connection: the one with the lowest rank.
         if let Some(existing) = self.peers.get(&fp) {
@@ -2643,7 +2688,9 @@ impl App {
                 let fps: Vec<_> = self.peers.keys().copied().collect();
                 fps.into_iter().for_each(|fp| self.send_layout(fp));
                 self.watch_network_if_wanted();
-                self.redial_soon(); // a computer may have been paired
+                // A computer may have been paired (again, on both ends).
+                self.removed.clear();
+                self.redial_soon();
                 "ok\n".to_owned()
             }
             Request::Settings => match self.reload_settings() {
@@ -2747,6 +2794,8 @@ impl App {
             broadcast: self.broadcast_names(),
             broadcast_hotkey: self.broadcast_hotkey(),
             peers: peers.collect(),
+            removed: self.trust.devices().iter().filter_map(|d| d.fingerprint()).filter(|fp| self.removed.contains_key(fp) && !self.peers.contains_key(fp))
+                .map(|fp| fp.short()).collect(),
             screens: self.local.as_ref().map_or_else(Vec::new, |d| d.screens.clone()),
             offsets: offsets.collect(),
             links: links.collect(),
@@ -3168,7 +3217,15 @@ impl App {
     fn dial_missing(&mut self, screens: &watch::Receiver<Vec<Rect>>) {
         let mut addrs: Vec<SocketAddr> = Vec::new();
         let mut any_missing = false;
+        let now = Instant::now();
+        self.removed.retain(|fp, at| self.trust.is_trusted(fp) && now < *at + REMOVED_RETRY);
+        // One that refused us lately is left alone until it may have
+        // changed its mind; the timer still wakes for it then.
+        let removed_retry = self.removed.values().map(|at| *at + REMOVED_RETRY).min();
         for (fp, dev) in self.missing() {
+            if self.removed.contains_key(&fp) {
+                continue;
+            }
             any_missing = true;
             addrs.extend(self.discovered.get(&fp).into_iter().flatten());
             addrs.extend(dev.addrs.iter().filter_map(|a| a.parse::<SocketAddr>().ok()));
@@ -3180,11 +3237,14 @@ impl App {
             addrs.extend(self.extra_addrs.iter().filter(|a| !connected.contains(&canonical(**a))));
         }
         self.dial_at = (!addrs.is_empty()).then(|| Instant::now() + self.dial_backoff);
+        self.dial_at = self.dial_at.into_iter().chain(removed_retry).min();
         self.dial_backoff = (self.dial_backoff * 2).min(DIAL_MAX);
         for addr in addrs {
             if !self.dialing.insert(addr) {
                 continue;
             }
+            #[cfg(test)]
+            tests::dials_by(&self.dir).fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let (node, dir, screens, tx, services) =
                 (self.node.clone(), self.dir.clone(), screens.clone(), self.tx.clone(), self.services.clone());
             tokio::spawn(async move {
@@ -4684,6 +4744,41 @@ mod tests {
         duo.stop().await;
     }
 
+    /// A forgets B: B says that A removed it (status, and so doctor and the
+    /// window), not that A is offline, and stops dialing A every few
+    /// seconds; pairing again (A trusts B once more) clears it.
+    #[tokio::test]
+    async fn a_computer_that_forgot_us_is_shown_as_such() {
+        let duo = Duo::start("removed", None).await;
+        let (fa, fb) = (duo.fa.clone(), duo.fb.clone());
+        let kept = TrustStore::load(&duo.da).unwrap().find(&fb[..8]).unwrap().clone();
+        TrustStore::update(&duo.da, |t| Ok(t.remove(&fb[..8]))).unwrap();
+        assert_eq!(ask(&duo.da, Request::Reload).await, "ok\n");
+        let db = duo.db.clone();
+        let a_id = fa.parse::<Fingerprint>().unwrap().short();
+        let want = a_id.clone();
+        eventually_async("B to know A removed it", || { let db = db.clone(); let want = want.clone(); async move { status(&db).await.removed == [want] } }).await;
+        let s = status(&duo.db).await;
+        assert!(s.peers.iter().any(|p| p.id == a_id && !p.online));
+        let text = s.render();
+        assert!(text.contains("removed this computer") && text.contains(&format!("one-mk forget {a_id}")), "{text}");
+        assert!(!text.lines().any(|l| l.contains(&a_id) && l.trim_end().ends_with("offline")), "{text}");
+        // It stays that way, and B stops dialing A (it dialed every 2 s,
+        // doubling to 30 s, refused each time).
+        let dials = || tests::dials_by(&duo.db).load(std::sync::atomic::Ordering::SeqCst);
+        let before = dials();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(dials(), before, "B kept dialing a computer that refused it");
+        assert_eq!(status(&duo.db).await.removed, [a_id.clone()]);
+
+        // Paired again: A trusts B and dials it; B connects and forgets the refusal.
+        TrustStore::update(&duo.da, |t| { t.upsert(kept); Ok(()) }).unwrap();
+        assert_eq!(ask(&duo.da, Request::Reload).await, "ok\n");
+        let db = duo.db.clone();
+        eventually_async("B to connect again", || { let db = db.clone(); async move { let s = status(&db).await; s.removed.is_empty() && s.peers.iter().all(|p| p.online) } }).await;
+        duo.stop().await;
+    }
+
     /// The keys B was told to press and not to release since the start.
     fn injected_keys_held(h: &mut NullHandles) -> Vec<u32> {
         let mut down = Vec::new();
@@ -5642,6 +5737,17 @@ mod tests {
     mod layout;
 
     /// How many `Layout` messages the daemon in `dir` has sent.
+    /// How many dials the daemon using `dir` started.
+    pub(super) fn dials_by(dir: &std::path::Path) -> Arc<std::sync::atomic::AtomicUsize> {
+        static DIALS: std::sync::Mutex<Vec<(PathBuf, Arc<std::sync::atomic::AtomicUsize>)>> = std::sync::Mutex::new(Vec::new());
+        let mut all = DIALS.lock().unwrap();
+        if let Some((_, n)) = all.iter().find(|(d, _)| d == dir) {
+            return n.clone();
+        }
+        all.push((dir.to_owned(), Arc::default()));
+        all.last().unwrap().1.clone()
+    }
+
     pub(super) fn layouts_sent_by(dir: &std::path::Path) -> Arc<std::sync::atomic::AtomicUsize> {
         static SENT: std::sync::Mutex<Vec<(PathBuf, Arc<std::sync::atomic::AtomicUsize>)>> = std::sync::Mutex::new(Vec::new());
         let mut all = SENT.lock().unwrap();
