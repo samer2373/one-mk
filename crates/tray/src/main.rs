@@ -45,8 +45,8 @@ fn main() {
         let ctx = Arc::new(core::Ctx::new(args.home)?);
         // One icon per settings folder: the login entry and the window both
         // start the tray, and the second copy just leaves.
-        std::fs::create_dir_all(&ctx.dir)?;
-        let lock = std::fs::OpenOptions::new().create(true).write(true).truncate(false).open(ctx.dir.join("tray.lock"))?;
+        one_mk_ctl::private::create_dir_all(&ctx.dir)?;
+        let lock = one_mk_ctl::private::options().create(true).write(true).truncate(false).open(ctx.dir.join("tray.lock"))?;
         if lock.try_lock().is_err() {
             return Ok(());
         }
