@@ -454,10 +454,8 @@ async fn save(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool) -
 async fn save_marked(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool, saved: &AtomicBool) -> Result<()> {
     // Reload immediately before writing, as ordinary pairing does not own
     // the daemon's in-memory trust store.
-    let mut trust = TrustStore::load(dir)?;
     let addr = SocketAddr::new(peer.conn.remote_address().ip().to_canonical(), port);
-    let placement = crate::pairing_layout::remember(&mut trust, peer.fingerprint, name, addr, initiator);
-    trust.save()?;
+    let placement = TrustStore::update(dir, |trust| Ok(crate::pairing_layout::remember(trust, peer.fingerprint, name, addr, initiator)))?;
     saved.store(true, Ordering::SeqCst);
     let _ = crate::control::request(dir, Request::Reload).await;
     if placement.placed_by == one_mk_net::PlacedBy::Pending {

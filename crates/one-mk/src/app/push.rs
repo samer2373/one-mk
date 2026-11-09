@@ -248,14 +248,14 @@ impl App {
         if !self.trust.get(&fp).is_some_and(Device::learnable) {
             return; // the usual case: nothing to read or write
         }
-        // Saved from what is on disk now, so a change made meanwhile (a
-        // `one-mk layout` not yet applied) is not written over.
-        self.reload_trust();
-        let Some(d) = self.trust.get_mut(&fp).filter(|d| d.learnable()) else { return };
-        d.placed_by = PlacedBy::Confirmed;
-        if let Err(e) = self.trust.save() {
-            tracing::debug!("saving that the layout was used: {e:#}");
-        }
+        // Saved from what is on disk now, under the lock, so a change made
+        // meanwhile (a `one-mk layout` not yet applied) is not written over.
+        self.change_trust("that the layout was used", |trust| {
+            if let Some(d) = trust.get_mut(&fp).filter(|d| d.learnable()) {
+                d.placed_by = PlacedBy::Confirmed;
+            }
+            Ok(())
+        });
         self.update_sides(); // the probes may go
     }
 

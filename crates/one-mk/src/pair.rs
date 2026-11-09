@@ -230,11 +230,13 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
         return Ok(());
     }
 
-    *trust = TrustStore::load(dir)?;
     let addr = SocketAddr::new(peer.conn.remote_address().ip().to_canonical(), peer_port.unwrap_or(one_mk_proto::DEFAULT_PORT));
-    let placement = crate::pairing_layout::remember(trust, fingerprint, &name, addr, peer.initiator);
+    let (placement, fresh) = TrustStore::update(dir, |t| {
+        let placement = crate::pairing_layout::remember(t, fingerprint, &name, addr, peer.initiator);
+        Ok((placement, t.clone()))
+    })?;
+    *trust = fresh;
     let side = placement.side();
-    trust.save()?;
     let _ = crate::control::request(dir, crate::control::Request::Reload).await?;
     if placement.placed_by == one_mk_net::PlacedBy::Pending {
         out.say(|| crate::pairing_layout::warning(&name), || format!("placement-needed\t{fingerprint}\t{}", crate::pairing_layout::warning(&name)));

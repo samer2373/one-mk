@@ -741,10 +741,11 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
 }
 
 fn forget(dir: &Path, device: &str) -> Result<()> {
-    let mut trust = TrustStore::load(dir)?;
-    let d = trust.remove(device).ok_or_else(|| manage::unknown_device(device))?;
-    wallpaper::forget(dir, &d.fingerprint)?;
-    trust.save()?;
+    let d = TrustStore::update(dir, |trust| {
+        let d = trust.remove(device).ok_or_else(|| manage::unknown_device(device))?;
+        wallpaper::forget(dir, &d.fingerprint)?;
+        Ok(d)
+    })?;
     println!("Forgot {}.", d.name);
     Ok(())
 }

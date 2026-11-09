@@ -617,6 +617,8 @@ impl Settings {
             let mut values: toml::Table = toml::from_str(&toml::to_string(self)?)?;
             merge_unknown(&mut values, &self.unknown);
             file.write_all(toml::to_string_pretty(&values)?.as_bytes()).with_context(|| format!("writing {}", tmp.display()))?;
+            // On disk before it replaces the old file: a crash leaves one or the other.
+            file.sync_all().with_context(|| format!("flushing {}", tmp.display()))?;
             drop(file);
             if self.shortcut_upgrade && !dir.join(".wave5-shortcuts-noticed").exists() {
                 let pending = dir.join(".wave5-shortcuts-pending");

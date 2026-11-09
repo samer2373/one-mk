@@ -2066,18 +2066,20 @@ impl App {
         }
         let (side, offset) = self.trust.get(&fp).map_or((Side::Right, None), |d| (d.side(), d.offset));
         let addr = canonical(link.conn.remote_address());
-        if let Some(dev) = self.trust.get_mut(&fp) {
-            let a = addr.to_string();
-            let mut changed = std::mem::replace(&mut dev.os, link.os) != link.os;
-            if dev.addrs.first() != Some(&a) {
-                dev.addrs.retain(|x| *x != a);
-                dev.addrs.insert(0, a);
-                dev.addrs.truncate(4);
-                changed = true;
-            }
-            if changed && let Err(e) = self.trust.save() {
-                tracing::debug!("saving device details: {e:#}");
-            }
+        let a = addr.to_string();
+        if self.trust.get(&fp).is_some_and(|dev| dev.os != link.os || dev.addrs.first() != Some(&a)) {
+            let os = link.os;
+            self.change_trust("device details", |trust| {
+                if let Some(dev) = trust.get_mut(&fp) {
+                    dev.os = os;
+                    if dev.addrs.first() != Some(&a) {
+                        dev.addrs.retain(|x| *x != a);
+                        dev.addrs.insert(0, a);
+                        dev.addrs.truncate(4);
+                    }
+                }
+                Ok(())
+            });
         }
         // A better duplicate connection replaces the first one quietly.
         if !self.peers.contains_key(&fp) {
@@ -2282,6 +2284,29 @@ impl App {
     /// (they follow `Services::trusted`).
     fn reload_trust(&mut self) {
         let Ok(new) = TrustStore::load(&self.dir) else { return };
+        self.set_trust(new);
+    }
+
+    /// Changes `devices.toml` as [`TrustStore::update`] does: on what is on
+    /// disk now (never on this daemon's copy, which a `one-mk layout` or
+    /// `one-mk forget` may have changed since it was read), under the lock,
+    /// waiting for it at most [`one_mk_net::DAEMON_LOCK_WAIT`]. The result
+    /// becomes the daemon's copy. `None` if it could not be saved.
+    fn change_trust<R>(&mut self, what: &str, change: impl FnOnce(&mut TrustStore) -> Result<R>) -> Option<R> {
+        match TrustStore::update_within(&self.dir, one_mk_net::DAEMON_LOCK_WAIT, |t| Ok((change(t)?, t.clone()))) {
+            Ok((out, fresh)) => {
+                self.set_trust(fresh);
+                Some(out)
+            }
+            Err(e) => {
+                tracing::warn!("could not save {what}: {e:#}");
+                self.reload_trust();
+                None
+            }
+        }
+    }
+
+    fn set_trust(&mut self, new: TrustStore) {
         self.trust = new;
         let computers = crate::hotkeys::numbered_from(self.node.identity(), &self.trust).len();
         self.shortcuts.set_computers(computers);
@@ -2322,52 +2347,54 @@ impl App {
     /// A newer version wins; equal versions with different layouts are a
     /// tie, broken by [`resolve_layout`].
     fn on_peer_layout(&mut self, fp: Fingerprint, side_of_you: Side, version: u64, offset: Option<(i32, i32)>, clear_offset: bool) {
-        self.reload_trust();
         let our_fp = self.node.identity().fingerprint;
-        let occupied: Vec<_> = self.trust.devices().iter().filter(|device| device.fingerprint() != Some(fp) && device.placed_by != one_mk_net::PlacedBy::Pending)
-            .map(|device| device.side()).collect();
-        let Some(dev) = self.trust.get_mut(&fp) else { return };
-        if dev.placed_by == one_mk_net::PlacedBy::Pending && version <= crate::pairing_layout::AUTOMATIC_VERSION_LIMIT + 1 { return; }
-        let offset = match offset {
-            Some((x, y)) => Some((x.saturating_neg(), y.saturating_neg())),
-            None if clear_offset => None,
-            // It was for the old side.
-            None if dev.side() != side_of_you => None,
-            None => dev.offset,
-        };
-        let same = (dev.side(), dev.offset) == (side_of_you, offset);
-        let verdict = resolve_layout(dev.layout_version, version, same, &our_fp, &fp);
-        let mut resend = verdict == LayoutVerdict::Win;
-        match verdict {
-            LayoutVerdict::Keep => return,
-            LayoutVerdict::Adopt if dev.placed_by == one_mk_net::PlacedBy::Pairing
-                && version <= crate::pairing_layout::AUTOMATIC_VERSION_LIMIT + 1 && occupied.contains(&side_of_you) => {
-                match one_mk_proto::pairing_layout::next_side(occupied.into_iter().chain([dev.side()])) {
-                    Some(side) if version < crate::pairing_layout::AUTOMATIC_VERSION_LIMIT => {
-                        dev.side = side.to_string();
-                        dev.layout_version = version + 1;
-                        resend = true;
-                    }
-                    _ => {
-                        dev.placed_by = one_mk_net::PlacedBy::Pending;
-                        dev.layout_version = crate::pairing_layout::AUTOMATIC_VERSION_LIMIT;
+        // Decided on what is on disk now, under the lock: a `one-mk layout`
+        // made meanwhile is never written over with an older copy.
+        let resend = self.change_trust("the new layout", |trust| {
+            let occupied: Vec<_> = trust.devices().iter().filter(|device| device.fingerprint() != Some(fp) && device.placed_by != one_mk_net::PlacedBy::Pending)
+                .map(|device| device.side()).collect();
+            let Some(dev) = trust.get_mut(&fp) else { return Ok(None) };
+            if dev.placed_by == one_mk_net::PlacedBy::Pending && version <= crate::pairing_layout::AUTOMATIC_VERSION_LIMIT + 1 { return Ok(None); }
+            let offset = match offset {
+                Some((x, y)) => Some((x.saturating_neg(), y.saturating_neg())),
+                None if clear_offset => None,
+                // It was for the old side.
+                None if dev.side() != side_of_you => None,
+                None => dev.offset,
+            };
+            let same = (dev.side(), dev.offset) == (side_of_you, offset);
+            let verdict = resolve_layout(dev.layout_version, version, same, &our_fp, &fp);
+            let mut resend = verdict == LayoutVerdict::Win;
+            match verdict {
+                LayoutVerdict::Keep => return Ok(None),
+                LayoutVerdict::Adopt if dev.placed_by == one_mk_net::PlacedBy::Pairing
+                    && version <= crate::pairing_layout::AUTOMATIC_VERSION_LIMIT + 1 && occupied.contains(&side_of_you) => {
+                    match one_mk_proto::pairing_layout::next_side(occupied.into_iter().chain([dev.side()])) {
+                        Some(side) if version < crate::pairing_layout::AUTOMATIC_VERSION_LIMIT => {
+                            dev.side = side.to_string();
+                            dev.layout_version = version + 1;
+                            resend = true;
+                        }
+                        _ => {
+                            dev.placed_by = one_mk_net::PlacedBy::Pending;
+                            dev.layout_version = crate::pairing_layout::AUTOMATIC_VERSION_LIMIT;
+                        }
                     }
                 }
+                LayoutVerdict::Adopt => {
+                    dev.side = side_of_you.to_string();
+                    dev.offset = offset;
+                    dev.layout_version = version;
+                    dev.placed_by = one_mk_net::PlacedBy::User; // chosen there
+                }
+                // A newer version than the tie, which the peer (new or old)
+                // takes over. It stays quiet about it, so that is the one
+                // message the tie costs.
+                LayoutVerdict::Win => dev.layout_version = version.saturating_add(1),
             }
-            LayoutVerdict::Adopt => {
-                dev.side = side_of_you.to_string();
-                dev.offset = offset;
-                dev.layout_version = version;
-                dev.placed_by = one_mk_net::PlacedBy::User; // chosen there
-            }
-            // A newer version than the tie, which the peer (new or old)
-            // takes over. It stays quiet about it, so that is the one
-            // message the tie costs.
-            LayoutVerdict::Win => dev.layout_version = version.saturating_add(1),
-        }
-        if let Err(e) = self.trust.save() {
-            tracing::warn!("could not save the new layout: {e:#}");
-        }
+            Ok(Some(resend))
+        });
+        let Some(Some(resend)) = resend else { return };
         if resend {
             self.send_layout(fp);
         }

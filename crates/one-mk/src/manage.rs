@@ -114,31 +114,30 @@ pub fn set_layout_at(
     swap: Option<Swap>,
     now: u64,
 ) -> Result<Device> {
-    let mut trust = TrustStore::load(dir)?;
-    let Some(found) = trust.find(device) else { return Err(unknown_device(device)) };
-    let Some(fp) = found.fingerprint() else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
-    let dev = trust.get_mut(&fp).expect("found above");
-    if side.is_some() || offset.is_some() {
-        let new_side = side.unwrap_or_else(|| dev.side());
-        // An offset chosen for one side means something else on another.
-        let keep = if new_side == dev.side() { dev.offset } else { None };
-        place_at(dev, new_side, offset.unwrap_or(keep), now);
-    }
-    if let Some(side) = side {
-        if dev.side() != side {
-            dev.offset = None;
+    TrustStore::update(dir, |trust| {
+        let Some(found) = trust.find(device) else { return Err(unknown_device(device)) };
+        let Some(fp) = found.fingerprint() else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
+        let dev = trust.get_mut(&fp).expect("found above");
+        if side.is_some() || offset.is_some() {
+            let new_side = side.unwrap_or_else(|| dev.side());
+            // An offset chosen for one side means something else on another.
+            let keep = if new_side == dev.side() { dev.offset } else { None };
+            place_at(dev, new_side, offset.unwrap_or(keep), now);
         }
-        dev.side = side.to_string();
-    }
-    if let Some(offset) = offset {
-        dev.offset = offset;
-    }
-    if let Some(swap) = swap {
-        dev.swap_ctrl_cmd = swap;
-    }
-    let dev = dev.clone();
-    trust.save()?;
-    Ok(dev)
+        if let Some(side) = side {
+            if dev.side() != side {
+                dev.offset = None;
+            }
+            dev.side = side.to_string();
+        }
+        if let Some(offset) = offset {
+            dev.offset = offset;
+        }
+        if let Some(swap) = swap {
+            dev.swap_ctrl_cmd = swap;
+        }
+        Ok(dev.clone())
+    })
 }
 
 /// What to do with a layout the peer sent, given its version against ours.
@@ -202,13 +201,13 @@ pub fn place_at(dev: &mut Device, side: Side, offset: Option<(i32, i32)>, now: u
 /// place is no longer a guess: `devices.toml` may have changed since the
 /// daemon read it. Returns the device as it was before.
 pub fn learn_layout(dir: &Path, fp: &Fingerprint, side: Side) -> Result<Option<Device>> {
-    let mut trust = TrustStore::load(dir)?;
-    let Some(dev) = trust.get_mut(fp).filter(|d| d.learnable() && d.side() != side) else { return Ok(None) };
-    let before = dev.clone();
-    place_at(dev, side, None, now_ms());
-    dev.placed_by = PlacedBy::Learned;
-    trust.save()?;
-    Ok(Some(before))
+    TrustStore::update_within(dir, one_mk_net::DAEMON_LOCK_WAIT, |trust| {
+        let Some(dev) = trust.get_mut(fp).filter(|d| d.learnable() && d.side() != side) else { return Ok(None) };
+        let before = dev.clone();
+        place_at(dev, side, None, now_ms());
+        dev.placed_by = PlacedBy::Learned;
+        Ok(Some(before))
+    })
 }
 
 pub async fn layout(dir: &Path, device: &str, side: Option<Side>, offset: Option<&str>, swap: Option<Swap>) -> Result<()> {

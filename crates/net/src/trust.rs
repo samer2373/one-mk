@@ -3,8 +3,11 @@ use anyhow::{Context, Result};
 use one_mk_proto::Side;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 /// Whether Ctrl and Cmd (Meta) trade places for keys sent to a device, so
 /// copy and paste shortcuts work between a Mac and a PC.
@@ -149,13 +152,30 @@ fn bounded_offset((x, y): (i32, i32)) -> (i32, i32) {
     (x.clamp(-MAX_OFFSET, MAX_OFFSET), y.clamp(-MAX_OFFSET, MAX_OFFSET))
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct File {
     #[serde(default, rename = "device")]
     devices: Vec<Device>,
 }
 
+/// Held (an exclusive advisory lock on this file next to `devices.toml`)
+/// while the paired computers are changed; see [`TrustStore::update`].
+const LOCK_FILE: &str = "devices.toml.lock";
+
+/// How long the daemon waits for its turn to change `devices.toml` before
+/// it gives up on that one change (a command holding the lock does so only
+/// for the moment it takes to read and write the file).
+pub const DAEMON_LOCK_WAIT: Duration = Duration::from_secs(2);
+
 /// Devices this machine has paired with, in `devices.toml`.
+///
+/// The daemon and every `one-mk` command read and write this file. A change
+/// goes through [`TrustStore::update`]: it waits for an exclusive lock,
+/// reads what is on disk *now*, applies the change and writes the result
+/// through a private temporary file that is flushed and renamed over the
+/// old one. So a change made by someone else in between is never written
+/// over with a stale copy, and a reader never sees half a file.
+#[derive(Clone)]
 pub struct TrustStore {
     path: PathBuf,
     file: File,
@@ -175,14 +195,75 @@ impl TrustStore {
         Ok(Self { path, file })
     }
 
+    /// Writes this copy over `devices.toml`, under the lock. Whatever was
+    /// saved since this copy was loaded is lost: to change the paired
+    /// computers use [`TrustStore::update`].
     pub fn save(&self) -> Result<()> {
-        if let Some(dir) = self.path.parent() {
-            crate::identity::secure_dir(dir)?;
+        let dir = self.dir();
+        crate::identity::secure_dir(&dir)?;
+        let _lock = lock(&dir, None)?;
+        self.write()
+    }
+
+    /// Changes the paired computers: waits for an exclusive lock on a file
+    /// next to `devices.toml`, loads what is there now, applies `change`
+    /// and saves if anything changed. If `change` fails nothing is
+    /// written. Returns `change`'s result.
+    pub fn update<R>(dir: &Path, change: impl FnOnce(&mut TrustStore) -> Result<R>) -> Result<R> {
+        Self::update_locked(dir, None, change)
+    }
+
+    /// [`TrustStore::update`], but giving up (with an error) if the lock
+    /// is not free within `wait`: for the daemon, whose event loop must
+    /// never hang on a stopped command.
+    pub fn update_within<R>(dir: &Path, wait: Duration, change: impl FnOnce(&mut TrustStore) -> Result<R>) -> Result<R> {
+        Self::update_locked(dir, Some(wait), change)
+    }
+
+    fn update_locked<R>(dir: &Path, wait: Option<Duration>, change: impl FnOnce(&mut TrustStore) -> Result<R>) -> Result<R> {
+        crate::identity::secure_dir(dir)?;
+        let _lock = lock(dir, wait)?;
+        // Unlocked when `_lock` is dropped (also if this fails or panics).
+        let mut store = Self::load(dir)?;
+        let before = toml::to_string_pretty(&store.file)?;
+        let out = change(&mut store)?;
+        if toml::to_string_pretty(&store.file)? != before {
+            store.write()?;
         }
-        let tmp = self.path.with_extension("toml.tmp");
-        crate::identity::write_private(&tmp, toml::to_string_pretty(&self.file)?.as_bytes()).with_context(|| format!("writing paired computers {}", tmp.display()))?;
-        std::fs::rename(&tmp, &self.path).with_context(|| format!("saving paired computers {}", self.path.display()))?;
-        Ok(())
+        Ok(out)
+    }
+
+    fn dir(&self) -> PathBuf {
+        self.path.parent().map_or_else(PathBuf::new, Path::to_path_buf)
+    }
+
+    /// Writes through a temporary file of this writer's own, flushed to
+    /// disk before it is renamed over `devices.toml` (and the folder
+    /// flushed after), so a crash leaves the old file or the new one.
+    fn write(&self) -> Result<()> {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let name = self.path.file_name().and_then(|n| n.to_str()).unwrap_or("devices.toml");
+        let tmp = self.path.with_file_name(format!("{name}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let write = || -> Result<()> {
+            let text = toml::to_string_pretty(&self.file)?;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let mut file = options.open(&tmp).with_context(|| format!("writing paired computers {}", tmp.display()))?;
+            file.write_all(text.as_bytes()).with_context(|| format!("writing paired computers {}", tmp.display()))?;
+            file.sync_all().with_context(|| format!("flushing paired computers {}", tmp.display()))?;
+            drop(file);
+            std::fs::rename(&tmp, &self.path).with_context(|| format!("saving paired computers {}", self.path.display()))?;
+            #[cfg(unix)]
+            if let Ok(dir) = std::fs::File::open(self.dir()) {
+                let _ = dir.sync_all();
+            }
+            Ok(())
+        };
+        write().inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
     }
 
     pub fn devices(&self) -> &[Device] {
@@ -244,6 +325,30 @@ impl TrustStore {
         let fp = self.find(query)?.fingerprint.clone();
         let i = self.file.devices.iter().position(|d| d.fingerprint == fp)?;
         Some(self.file.devices.remove(i))
+    }
+}
+
+/// Takes the exclusive lock next to `devices.toml` in `dir`: waits for it,
+/// or for at most `wait`. Released when the file is dropped.
+fn lock(dir: &Path, wait: Option<Duration>) -> Result<std::fs::File> {
+    let path = dir.join(LOCK_FILE);
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let file = options.open(&path).with_context(|| format!("opening {}", path.display()))?;
+    let Some(wait) = wait else {
+        file.lock().with_context(|| format!("locking {}", path.display()))?;
+        return Ok(file);
+    };
+    let deadline = Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+            Err(std::fs::TryLockError::WouldBlock) => anyhow::bail!("{} is held by another one-mk command; try again", path.display()),
+            Err(std::fs::TryLockError::Error(e)) => return Err(e).with_context(|| format!("locking {}", path.display())),
+        }
     }
 }
 
@@ -335,6 +440,56 @@ mod tests {
         // reason to lose the paired computers: it reads as not said.
         std::fs::write(dir.join("devices.toml"), format!("[[device]]\nname = 'x'\nfingerprint = '{a}'\nplaced_by = 'robot'\n")).unwrap();
         assert_eq!(TrustStore::load(&dir).unwrap().devices()[0].placed_by, PlacedBy::Default);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Many writers at once (threads here; each takes its own lock, as
+    /// separate processes do): every change lands, none is written over
+    /// with a stale copy, and no temporary file is left behind.
+    #[test]
+    fn concurrent_updates_all_land() {
+        let dir = std::env::temp_dir().join(format!("one-mk-trust-race-{}-{}", std::process::id(), rand::random::<u64>()));
+        let fps: Vec<String> = (0..8u8).map(|i| format!("{i:02x}").repeat(32)).collect();
+        TrustStore::update(&dir, |t| {
+            for (i, fp) in fps.iter().enumerate() {
+                t.upsert(Device { name: format!("pc{i}"), fingerprint: fp.clone(), ..Default::default() });
+            }
+            Ok(())
+        })
+        .unwrap();
+        std::thread::scope(|scope| {
+            for fp in &fps {
+                let dir = &dir;
+                scope.spawn(move || {
+                    for round in 1..=25u64 {
+                        TrustStore::update(dir, |t| {
+                            t.get_mut(&fp.parse().unwrap()).unwrap().layout_version = round;
+                            Ok(())
+                        })
+                        .unwrap();
+                    }
+                });
+            }
+        });
+        let t = TrustStore::load(&dir).unwrap();
+        assert!(t.devices().iter().all(|d| d.layout_version == 25), "a change was lost");
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
+        // Nothing changed: nothing is written.
+        let before = std::fs::metadata(dir.join("devices.toml")).unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        TrustStore::update(&dir, |_| Ok(())).unwrap();
+        assert_eq!(std::fs::metadata(dir.join("devices.toml")).unwrap().modified().unwrap(), before);
+        // A held lock: the daemon's bounded wait gives up and changes nothing.
+        let held = lock(&dir, None).unwrap();
+        let err = TrustStore::update_within(&dir, Duration::from_millis(50), |t| {
+            t.remove("pc0");
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("held by another"), "{err:#}");
+        drop(held);
+        assert_eq!(TrustStore::load(&dir).unwrap().devices().len(), 8);
         let _ = std::fs::remove_dir_all(dir);
     }
 

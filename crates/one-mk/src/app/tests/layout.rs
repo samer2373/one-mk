@@ -506,3 +506,56 @@ async fn tie_with_an_old_peer_converges_either_way() {
         duo.stop().await;
     }
 }
+
+/// `one-mk layout` run over and over on A while B keeps moving A about (so
+/// A's daemon keeps saving the layouts B sends): every change A's command
+/// confirmed stays saved, and a computer forgotten meanwhile stays
+/// forgotten. (The daemon used to save its own, older copy of
+/// `devices.toml`, silently undoing a command's change.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn commands_and_the_daemon_never_undo_each_other() {
+    use one_mk_net::Swap;
+    let duo = Duo::start("stress", None).await;
+    let (fa, fb) = (duo.fa.clone(), duo.fb.clone());
+    let (da, db) = (duo.da.clone(), duo.db.clone());
+    let churn = {
+        let (db, fa) = (db.clone(), fa.clone());
+        tokio::spawn(async move {
+            for i in 0..120 {
+                let side = [Side::Left, Side::Top, Side::Bottom, Side::Right][i % 4];
+                let (db2, fa2) = (db.clone(), fa.clone());
+                tokio::task::spawn_blocking(move || crate::manage::set_layout(&db2, &fa2[..8], Some(side), None, None).unwrap()).await.unwrap();
+                let _ = control::request(&db, Request::Reload).await;
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        })
+    };
+    let mut lost = Vec::new();
+    for i in 0..60 {
+        let swap = if i % 2 == 0 { Swap::On } else { Swap::Off };
+        let (da2, fb2) = (da.clone(), fb.clone());
+        tokio::task::spawn_blocking(move || crate::manage::set_layout(&da2, &fb2[..8], None, None, Some(swap)).unwrap()).await.unwrap();
+        assert!(control::request(&da, Request::Reload).await.unwrap().is_some());
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        if record(&da, &fb).swap_ctrl_cmd != swap {
+            lost.push(i);
+        }
+    }
+    churn.await.unwrap();
+    assert!(lost.is_empty(), "changes undone by the daemon: {lost:?}");
+
+    // Forgotten on A while B keeps announcing layouts: it never comes back.
+    let fb2 = fb.clone();
+    TrustStore::update(&da, |t| Ok(t.remove(&fb2[..8]))).unwrap().expect("paired");
+    for i in 0..10 {
+        let side = [Side::Left, Side::Top][i % 2];
+        crate::manage::set_layout(&db, &fa[..8], Some(side), None, None).unwrap();
+        let _ = control::request(&db, Request::Reload).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(TrustStore::load(&da).unwrap().find(&fb[..8]).is_none(), "the forgotten computer came back");
+    }
+    assert!(control::request(&da, Request::Reload).await.unwrap().is_some());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(TrustStore::load(&da).unwrap().devices().is_empty());
+    duo.stop().await;
+}
