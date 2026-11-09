@@ -194,6 +194,16 @@ impl Glide {
     /// Stiffness: settles in about 0.6 s.
     const W: f32 = 11.0;
 
+    /// The stage the camera looks through moved on the screen without
+    /// changing size (the page scrolled a little): the camera moves with
+    /// it, so a glide in progress goes on instead of starting over.
+    fn shift(&mut self, by: egui::Vec2) {
+        if self.started {
+            self.at[1] += by.x;
+            self.at[2] += by.y;
+        }
+    }
+
     /// Moves on by `dt` seconds toward `to`: where the camera is now, and
     /// whether it is still moving. `jump` (or the first time, or reduced
     /// motion) goes straight there.
@@ -573,7 +583,14 @@ impl Keyboard {
         }
         let (target, (cam, moving)) = step.unwrap_or_else(|| {
             let target = Self::aim(rect, caps, view, focus);
-            let resized = slot.as_ref().is_none_or(|k| k.built_for.0 != rect);
+            // Only a stage of another size starts the camera over. One that
+            // merely moved (the page scrolled a few points as a key was
+            // chosen) takes the camera along, so the zoom still glides.
+            let before = slot.as_ref().map(|k| k.built_for.0);
+            let resized = before.is_none_or(|old| old.size() != rect.size());
+            if let Some(old) = before.filter(|old| !resized && old.min != rect.min) {
+                glide.shift(rect.min - old.min);
+            }
             (target, glide.step(target, dt, resized))
         });
         // Orientation follows the orbit while scale/position ease toward it.
@@ -1473,6 +1490,30 @@ mod tests {
         assert!(from.center().distance(to.center()) > 100.0, "the keys are far enough apart to see a jump");
         assert!(biggest < 45.0, "moved {biggest} px in one frame");
         assert!(frames > 24, "it took {frames} frames");
+    }
+
+    /// Choosing a key can scroll the page a few points, which moves the stage
+    /// on the screen. That must not turn the zoom into a snap.
+    #[test]
+    fn a_stage_that_moves_a_little_does_not_turn_the_glide_into_a_snap() {
+        let (caps, rect) = real_board();
+        let (mut b, mut g) = (None, Glide::default());
+        Keyboard::get(&mut b, rect, &caps, View::default(), None, &mut g, 1.0 / 60.0);
+        let moved = rect.translate(egui::vec2(0.0, -10.0));
+        let mut positions = vec![];
+        for _ in 0..12 {
+            Keyboard::get(&mut b, moved, &caps, View::default(), Some(37), &mut g, 1.0 / 60.0);
+            positions.push(b.as_ref().expect("built").bounds(37).center());
+        }
+        let steps = positions.windows(2).map(|w| w[0].distance(w[1])).collect::<Vec<_>>();
+        let biggest = steps.iter().cloned().fold(0.0, f32::max);
+        let total: f32 = steps.iter().sum();
+        assert!(biggest < total * 0.5, "one frame did most of the move (a snap): {steps:?}");
+        assert!(steps.iter().filter(|s| **s > 0.5).count() >= 8, "it glides over many frames: {steps:?}");
+        // A stage of another size does start over.
+        let bigger = Rect::from_min_size(rect.min, rect.size() + egui::vec2(40.0, 20.0));
+        Keyboard::get(&mut b, bigger, &caps, View::default(), Some(37), &mut g, 1.0 / 60.0);
+        assert!(!g.speed.iter().any(|v| *v != 0.0), "a resize goes straight there");
     }
 
     #[test]
