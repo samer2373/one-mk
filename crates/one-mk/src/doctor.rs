@@ -1123,6 +1123,17 @@ fn port_in_words(detail: &str) -> (String, String) {
         return (format!("oneMK is running but isn't using {port}."), "Stop sharing and start it again.".into());
     }
     let port = port.map_or_else(|| "Its network port".to_owned(), |p| format!("Network port {p}"));
+    // A one-mk of this settings folder that holds the port but does not answer.
+    if detail.contains("does not answer") {
+        return (format!("{port} is held by a oneMK that is not answering."), "Press Stop (or run `one-mk stop`), then start sharing again.".into());
+    }
+    // Another one-mk (the finding names its settings folder when it is known).
+    if detail.contains("another oneMK") {
+        return (
+            format!("{port} is already used by another copy of oneMK."),
+            "Quit the other oneMK (it may run from another settings folder or for another user), then start sharing again.".into(),
+        );
+    }
     match detail.split('"').nth(1) {
         Some("one-mk" | "one-mk-app" | "one-mk-tray") => (
             format!("{port} is already used by another copy of oneMK."),
@@ -2054,11 +2065,11 @@ mod tests {
         let unknown = port_check(&Daemon::NotRunning, &pf(Bind::InUse, Some("one-mk")));
         assert!(unknown.outcome.detail.contains("another oneMK") && unknown.outcome.fix.unwrap().contains("stop it"));
         let (shown, _, visible) = window_check(&other);
-        assert!(visible && shown.outcome.detail.contains("Another copy of oneMK"), "{}", shown.outcome.detail);
+        assert!(visible && shown.outcome.detail.contains("another copy of oneMK"), "{}", shown.outcome.detail);
         let (shown, ..) = window_check(&port_check(&Daemon::NotRunning, &pf(Bind::InUse, Some("deskflow"))));
         assert!(shown.outcome.detail.contains("used by deskflow"), "the program is named: {}", shown.outcome.detail);
         let (shown, ..) = window_check(&port_check(&running(), &pf(Bind::Free, None)));
-        assert!(shown.outcome.detail.contains("not listening"), "{}", shown.outcome.detail);
+        assert!(shown.outcome.detail.contains("isn't using network port"), "{}", shown.outcome.detail);
     }
 
     /// The window's wording says what is true: off is off, not running is
