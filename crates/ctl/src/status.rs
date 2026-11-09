@@ -693,7 +693,7 @@ impl Status {
             out += &format!("Gaming mode: {}{now}.\n", self.gaming);
         }
         if self.lock_sync {
-            out += "Lock sync is on: locking any computer locks the others.\n";
+            out += "Lock sync is on: locking this computer locks the connected ones that have lock sync on too.\n";
         }
         if let Some(line) = self.hotkeys_line() {
             out += &format!("{line}\n");

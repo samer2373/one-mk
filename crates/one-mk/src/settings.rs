@@ -687,7 +687,8 @@ impl Settings {
                     settings.clipboard.fetch_migrated = true;
                     settings.clipboard.fetch_notice = Some(dir.join(".clipboard-fetch-update-noticed"));
                 }
-                settings.settings_version = 2;
+                // Never lowered: a newer build wrote a newer one.
+                settings.settings_version = settings.settings_version.max(2);
                 settings.hooks.trust_permissions = crate::hooks::permissions_trusted(dir);
                 // Hooks and key actions (`run: ...`) both start programs.
                 if (settings.hooks.any() || settings.input.runs_commands()) && !settings.hooks.trust_permissions {
@@ -1021,7 +1022,7 @@ pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
         Ok(())
     })?;
     if on {
-        println!("Lock sync is on: locking this computer locks the connected ones (if they run one-mk too).");
+        println!("Lock sync is on: locking this computer locks the connected ones that have lock sync on too (`one-mk lock-sync on` there).");
     } else {
         println!("Lock sync is off. (`one-mk lock-all` still locks every computer.)");
     }
@@ -1342,6 +1343,13 @@ draw_when_no_mouse = "auto"
         let cli = <crate::Cli as clap::Parser>::try_parse_from(["one-mk", "edge", "--idle-return", "off"]);
         assert!(cli.is_ok());
         assert!(<crate::Cli as clap::Parser>::try_parse_from(["one-mk", "edge", "--idle-return", "2s"]).is_err());
+        // A newer build's settings version is kept, not downgraded.
+        let newer = std::env::temp_dir().join(format!("one-mk-newer-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&newer).unwrap();
+        std::fs::write(newer.join(FILE), "settings_version = 99\n").unwrap();
+        Settings::update(&newer, |s| { s.lock_sync = true; Ok(()) }).unwrap();
+        assert!(std::fs::read_to_string(newer.join(FILE)).unwrap().contains("settings_version = 99"));
+        let _ = std::fs::remove_dir_all(newer);
         // A settings file with it set loads without "unknown setting".
         let dir = std::env::temp_dir().join(format!("one-mk-idle-return-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

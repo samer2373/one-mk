@@ -2854,6 +2854,9 @@ impl App {
                 online.sort();
                 let order: Vec<Fingerprint> = online.into_iter().map(|(_, fp)| fp).collect();
                 let current = self.switching.map(|(fp, _)| fp).or(self.remote.as_ref().map(|r| r.peer));
+                if order.is_empty() && current.is_none() && self.owner.is_none() {
+                    return "error no other computer is connected to switch to (see `one-mk status`)\n".into();
+                }
                 match cycle_next(current, &order) {
                     Some(fp) => self.switch_to(fp),
                     None => self.switch_here(),
@@ -4773,6 +4776,9 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(5)).await;
         assert_eq!(dials(), before, "B kept dialing a computer that refused it");
         assert_eq!(status(&duo.db).await.removed, [a_id.clone()]);
+        // Nothing to switch to: said so, not "already on this computer".
+        let reply = ask(&duo.db, Request::Switch(SwitchTo::Next)).await;
+        assert!(reply.starts_with("error no other computer is connected"), "{reply}");
 
         // Paired again: A trusts B and dials it; B connects and forgets the refusal.
         TrustStore::update(&duo.da, |t| { t.upsert(kept); Ok(()) }).unwrap();

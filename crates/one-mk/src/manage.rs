@@ -23,6 +23,15 @@ pub fn unknown_device(device: &str) -> anyhow::Error {
     anyhow::anyhow!("no paired computer called {device:?}; see `one-mk devices` for names and ids")
 }
 
+/// Why `device` named no one computer in `trust`: none has that name or
+/// id, or several do (two computers may share a name).
+pub fn not_found(trust: &TrustStore, device: &str) -> anyhow::Error {
+    match trust.matching(device).count() {
+        0 | 1 => unknown_device(device),
+        n => anyhow::anyhow!("{n} paired computers are called {device:?}; use its id instead (see `one-mk devices`)"),
+    }
+}
+
 pub async fn status(dir: &Path) -> Result<()> {
     if let Some(notice) = crate::update::notice(dir) { println!("Updates: {notice}."); }
     #[cfg(any(windows, target_os = "macos"))]
@@ -115,7 +124,7 @@ pub fn set_layout_at(
     now: u64,
 ) -> Result<Device> {
     TrustStore::update(dir, |trust| {
-        let Some(found) = trust.find(device) else { return Err(unknown_device(device)) };
+        let Some(found) = trust.find(device) else { return Err(not_found(trust, device)) };
         let Some(fp) = found.fingerprint() else { bail!("corrupt fingerprint for {device:?} in devices.toml") };
         let dev = trust.get_mut(&fp).expect("found above");
         if side.is_some() || offset.is_some() {
@@ -284,6 +293,25 @@ mod tests {
         (lo.0[1], hi.0[1]) = (0xff, 0);
         assert_eq!(resolve_layout(3, 3, false, &hi, &lo), Win);
         assert_eq!(resolve_layout(3, 3, false, &lo, &hi), Adopt);
+    }
+
+    /// Two computers with one name: the error says so and asks for the id.
+    #[test]
+    fn a_shared_name_asks_for_the_id() {
+        let dir = std::env::temp_dir().join(format!("one-mk-shared-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        TrustStore::update(&dir, |t| {
+            for b in [0xaa_u8, 0xbb] {
+                t.upsert(Device { name: "Victus".into(), fingerprint: Fingerprint([b; 32]).to_string(), ..Device::default() });
+            }
+            Ok(())
+        }).unwrap();
+        let err = set_layout(&dir, "victus", Some(Side::Left), None, None).unwrap_err().to_string();
+        assert!(err.starts_with("2 paired computers are called \"victus\"; use its id"), "{err}");
+        let id = Fingerprint([0xaa; 32]).short();
+        assert_eq!(set_layout(&dir, &id, Some(Side::Left), None, None).unwrap().side(), Side::Left);
+        assert!(set_layout(&dir, "nobody", Some(Side::Left), None, None).unwrap_err().to_string().starts_with("no paired computer called"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

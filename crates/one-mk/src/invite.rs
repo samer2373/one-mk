@@ -267,10 +267,10 @@ async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, c
     let accept = accept && tokio::time::Instant::now() < end && one_mk_net::invite::unix_now() < wall_expiry;
     let ok = tokio::time::timeout(STEP_TIMEOUT, session.confirm(accept)).await.context("invitation approval transport timed out")??;
     if !ok { bail!("device refused; invitation consumed; nothing saved here"); }
-    save_marked(dir, peer, &name, port, true, saved).await?;
+    let placed = save_marked(dir, peer, &name, port, true, saved).await?;
     acknowledge(session).await?;
     println!("Trusted {name} ({}).", peer.fingerprint);
-    if machine { println!("paired\t{}\t{}\tleft", peer.fingerprint, sanitize_name(&name)); }
+    if machine { println!("paired\t{}\t{}\t{}", peer.fingerprint, sanitize_name(&name), placed_word(&placed)); }
     Ok(())
 }
 
@@ -361,10 +361,10 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
     } else { error })?;
     ensure!(accept, "you declined; nothing saved here");
     ensure!(agreed, "{} did not accept this computer; nothing saved here", sanitize_name(&name));
-    save(dir, &peer, &name, port, false).await?;
+    let placed = save(dir, &peer, &name, port, false).await?;
     acknowledge(session).await?;
     println!("Trusted {name} ({}). Start `one-mk run` only on computers not already running.", peer.fingerprint);
-    if machine { println!("paired\t{}\t{}\tleft", peer.fingerprint, sanitize_name(&name)); }
+    if machine { println!("paired\t{}\t{}\t{}", peer.fingerprint, sanitize_name(&name), placed_word(&placed)); }
     Ok(())
 }
 
@@ -487,11 +487,17 @@ impl SourceLimit {
     }
 }
 
-async fn save(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool) -> Result<()> {
+/// Where a computer just paired sits, for `--machine` output, as `pair`
+/// says it.
+fn placed_word(device: &one_mk_net::Device) -> String {
+    if device.placed_by == one_mk_net::PlacedBy::Pending { "unplaced".into() } else { device.side().to_string() }
+}
+
+async fn save(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool) -> Result<one_mk_net::Device> {
     save_marked(dir, peer, name, port, initiator, &AtomicBool::new(false)).await
 }
 
-async fn save_marked(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool, saved: &AtomicBool) -> Result<()> {
+async fn save_marked(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: bool, saved: &AtomicBool) -> Result<one_mk_net::Device> {
     // Reload immediately before writing, as ordinary pairing does not own
     // the daemon's in-memory trust store.
     let addr = SocketAddr::new(peer.conn.remote_address().ip().to_canonical(), port);
@@ -501,7 +507,7 @@ async fn save_marked(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: 
     if placement.placed_by == one_mk_net::PlacedBy::Pending {
         println!("{}", crate::pairing_layout::warning(name));
     }
-    Ok(())
+    Ok(placement)
 }
 
 async fn read_stdin(limit: usize) -> Result<Zeroizing<String>> {

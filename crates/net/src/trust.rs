@@ -302,10 +302,16 @@ impl TrustStore {
     /// A query that fits two devices finds neither: a computer's name is its
     /// own to choose, and must not stand in for another's ID.
     pub fn find(&self, query: &str) -> Option<&Device> {
-        let q = query.replace('-', "").to_ascii_lowercase();
-        let mut hits = self.file.devices.iter().filter(|d| d.name.eq_ignore_ascii_case(query) || (q.len() >= 4 && d.fingerprint.starts_with(&q)));
+        let mut hits = self.matching(query);
         let first = hits.next()?;
         hits.next().is_none().then_some(first)
+    }
+
+    /// Every device `query` names (see [`TrustStore::find`]): more than one
+    /// when two computers share a name.
+    pub fn matching(&self, query: &str) -> impl Iterator<Item = &Device> + use<'_> {
+        let (name, q) = (query.to_owned(), query.replace('-', "").to_ascii_lowercase());
+        self.file.devices.iter().filter(move |d| d.name.eq_ignore_ascii_case(&name) || (q.len() >= 4 && d.fingerprint.starts_with(&q)))
     }
 
     /// By fingerprint (or its leading part, as the window shows it) only:

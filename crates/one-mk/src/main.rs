@@ -767,7 +767,7 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
 
 fn forget(dir: &Path, device: &str) -> Result<()> {
     let d = TrustStore::update(dir, |trust| {
-        let d = trust.remove(device).ok_or_else(|| manage::unknown_device(device))?;
+        let Some(d) = trust.remove(device) else { return Err(manage::not_found(trust, device)) };
         wallpaper::forget(dir, &d.fingerprint)?;
         Ok(d)
     })?;

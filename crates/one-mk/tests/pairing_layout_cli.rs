@@ -310,7 +310,10 @@ fn invitation_without_a_service_port_offers_the_running_port() {
         writeln!(lab.children[child].stdin.as_mut().unwrap(), "yes").unwrap();
     }
     lab.finished(host_child, &host, "pair.log");
-    lab.finished(join_child, &joiner, "pair.log");
+    let said = lab.finished(join_child, &joiner, "pair.log");
+    // `--machine` says where it was placed (not always "left").
+    let side = said.lines().find_map(|line| line.strip_prefix("paired\t")).and_then(|rest| rest.split('\t').nth(2)).unwrap();
+    assert_eq!(side, device(&joiner, &host).side().to_string(), "{said}");
     let saved = device(&joiner, &host).addrs;
     assert!(!saved.is_empty() && saved.iter().all(|a| a.ends_with(&format!(":{host_port}"))), "{saved:?} (one-mk runs on {host_port})");
 }
