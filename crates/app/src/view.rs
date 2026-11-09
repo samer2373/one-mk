@@ -237,6 +237,16 @@ fn split_list(s: &str) -> Vec<String> {
 
 // ---------- the settings, as the window shows them ----------
 
+/// The largest clipboard one-mk will carry, in MB: the same ceiling as
+/// `one-mk clipboard --max-mb` (`CEILING_BYTES` in the clipboard crate).
+pub const CLIP_MAX_MB: u32 = 256;
+
+/// Whether this desktop can have file edge drops at all (Windows, macOS, or
+/// Linux on X11; not Wayland). The same rule as `one_mk_input::dropzone::supported`.
+pub fn drop_zones_available() -> bool {
+    cfg!(any(windows, target_os = "macos")) || (cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_some())
+}
+
 /// `settings.toml` (and `profiles.toml`), with one-mk's defaults for what
 /// isn't there. The same defaults as `crates/one-mk/src/settings.rs`.
 #[derive(Clone, Debug, PartialEq)]
@@ -332,12 +342,13 @@ impl Prefs {
             clip_text: flag("clipboard", "text", true),
             clip_html: flag("clipboard", "html", true),
             clip_image: flag("clipboard", "image", true),
-            clip_max_mb: num("clipboard", "max_mb", 25).clamp(1, 4096) as u32,
+            clip_max_mb: num("clipboard", "max_mb", 25).clamp(1, i64::from(CLIP_MAX_MB)) as u32,
             // Off unless the file says so: oneMK writes `allow_pull` only when it is on, and
             // a file from before `settings_version = 2` has its old `true` switched off.
             clip_allow_fetch: num("", "settings_version", 1) >= 2 && flag("clipboard", "allow_pull", false),
             clip_skip_sensitive: flag("clipboard", "skip_sensitive", true),
-            drop_zones: flag("drag", "enabled", cfg!(any(windows, target_os = "macos")) || (cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_some())),
+            // Opt-in: on only when the file says so, with the current settings version (older files held a default written out by whichever session saved first).
+            drop_zones: num("", "settings_version", 1) >= 3 && flag("drag", "enabled", false),
             broadcast_idle: num("broadcast", "idle_off_minutes", 15).clamp(0, 1440) as u32,
             pointer_draw: text("pointer", "draw_when_no_mouse", "auto"),
             edge_wrap: get("edge", "wrap").and_then(Val::as_bool).map(|on| if on { "on" } else { "off" }.to_owned()).unwrap_or_else(|| text("edge", "wrap", "off")),
@@ -892,9 +903,11 @@ mod tests {
     #[test]
     fn desktop_settings_read_nested_overrides_and_defaults() {
         let defaults = Prefs::read("", "");
-        assert!(defaults.clip_skip_sensitive && !defaults.history_persist);
+        assert!(defaults.clip_skip_sensitive && !defaults.history_persist && !defaults.drop_zones, "file edge drops are opt-in");
+        assert!(!Prefs::read("settings_version = 2\n[drag]\nenabled=true\n", "").drop_zones, "an old file's true was a frozen default, not a choice");
+        assert_eq!(CLIP_MAX_MB, 256, "the window and one-mk clipboard --max-mb share one ceiling");
         assert_eq!((defaults.pointer_draw.as_str(), defaults.edge_wrap.as_str(), defaults.edge_learn.as_str(), defaults.broadcast_idle), ("auto", "off", "suggest", 15));
-        let settings = "[clipboard]\nskip_sensitive=false\nhistory_persist=true\nhistory_max=20\n[drag]\nenabled=true\n[broadcast]\nidle_off_minutes=7\n[pointer]\ndraw_when_no_mouse='always'\n[edge]\nwrap='all'\nlearn='suggest'\ncorner=12\ndwell_ms=100\nmodifier='ctrl'\n[edge.left]\ndwell_ms=250\n[hooks]\non_enter='echo hi'\ntimeout_secs=9\nshell=false\n[hooks.options.enter]\ncomputer='abcdef01'\ntimeout_secs=12\nshell=true\n";
+        let settings = "settings_version = 3\n[clipboard]\nskip_sensitive=false\nhistory_persist=true\nhistory_max=20\n[drag]\nenabled=true\n[broadcast]\nidle_off_minutes=7\n[pointer]\ndraw_when_no_mouse='always'\n[edge]\nwrap='all'\nlearn='suggest'\ncorner=12\ndwell_ms=100\nmodifier='ctrl'\n[edge.left]\ndwell_ms=250\n[hooks]\non_enter='echo hi'\ntimeout_secs=9\nshell=false\n[hooks.options.enter]\ncomputer='abcdef01'\ntimeout_secs=12\nshell=true\n";
         let prefs = Prefs::read(settings, "");
         assert!(!prefs.clip_skip_sensitive && prefs.history_persist && prefs.drop_zones);
         assert_eq!(prefs.broadcast_idle, 7);
