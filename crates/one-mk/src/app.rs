@@ -2543,7 +2543,10 @@ impl App {
     /// can't be read changes nothing.
     fn reload_settings(&mut self) -> Result<()> {
         let previous_caps = self.local_caps();
-        self.settings = Settings::load(&self.dir)?;
+        self.settings = Settings::load_lenient(&self.dir)?;
+        for problem in &self.settings.problems {
+            tracing::warn!("{problem}");
+        }
         one_mk_input::typing::character_mode(self.settings.typing.has_character_request());
         self.wallpaper.refresh(&self.settings.wallpaper);
         let peers: Vec<_> = self.peers.keys().copied().collect();

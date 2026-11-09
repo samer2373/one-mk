@@ -40,6 +40,38 @@ fn destination() -> Result<PathBuf> {
     Ok(data.join("gnome-shell/extensions").join(UUID))
 }
 
+/// The GNOME Shell versions the bundled extension declares (and was tried
+/// on), from its metadata.json.
+fn qualified_shells() -> Vec<String> {
+    let metadata: Value = serde_json::from_str(FILES[0].1).unwrap_or_default();
+    metadata["shell-version"].as_array().map(|all| all.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+}
+
+/// `gnome-shell --version` ("GNOME Shell 50.1"), if GNOME Shell is here.
+fn shell_version() -> Option<String> {
+    let out = std::process::Command::new("gnome-shell").arg("--version").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// Whether the extension can be used with the shell that said `version`:
+/// it is only installed for versions it declares and was tried on, because
+/// GNOME refuses an extension that doesn't list its version and nothing
+/// here has been tried on the others.
+fn check_shell(version: Option<&str>, qualified: &[String]) -> Result<()> {
+    let Some(version) = version else {
+        bail!("GNOME Shell was not found on this computer, and the extension is for GNOME only: nothing was installed. one-mk works without it.");
+    };
+    let number = version.rsplit(' ').next().unwrap_or(version);
+    let major = number.split('.').next().unwrap_or(number);
+    if qualified.iter().any(|q| q == major) {
+        return Ok(());
+    }
+    bail!(
+        "this extension is qualified for GNOME Shell {} only, and this computer has {version}: nothing was installed. The extension is optional; without it the pointer simply stays drawn at the screen edge while the mouse is on another computer.",
+        qualified.join(", ")
+    );
+}
+
 fn hash(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
@@ -111,6 +143,7 @@ pub async fn command(action: &Action) -> Result<()> {
     let dir = destination()?;
     match action {
         Action::Install => {
+            check_shell(shell_version().as_deref(), &qualified_shells())?;
             let upgrade = managed(&dir)?;
             if upgrade {
                 std::fs::remove_dir_all(&dir)?;
@@ -213,6 +246,18 @@ mod tests {
         let metadata: Value = serde_json::from_str(FILES[0].1).unwrap();
         assert_eq!(metadata["uuid"], UUID);
         assert!(FILES[1].1.contains("org.onemk.Pointer1") && FILES[2].1.contains("org.onemk.Pointer1"));
+    }
+
+    #[test]
+    fn only_the_declared_shell_versions_are_installed_for() {
+        let qualified = qualified_shells();
+        assert!(!qualified.is_empty());
+        let ok = format!("GNOME Shell {}.1", qualified[0]);
+        assert!(check_shell(Some(&ok), &qualified).is_ok());
+        let old = check_shell(Some("GNOME Shell 47.2"), &qualified).unwrap_err().to_string();
+        assert!(old.contains("qualified for GNOME Shell") && old.contains("47.2") && old.contains("nothing was installed"), "{old}");
+        assert!(check_shell(Some("GNOME Shell 5.0"), &qualified).is_err(), "50 is not 5");
+        assert!(check_shell(None, &qualified).unwrap_err().to_string().contains("not found"));
     }
 
     #[test]

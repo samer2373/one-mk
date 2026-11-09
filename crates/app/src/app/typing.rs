@@ -12,7 +12,9 @@ impl App {
             track,
             cells: Pills::even(track, 3, 2.0),
             labels: &labels,
-            names: choices.iter().map(|(_, label)| format!("Typing preference: {label}")).collect(),
+            names: choices.iter().map(|(value, label)| {
+                if *value == "physical" { format!("Typing preference: {label}") } else { format!("Typing preference: {label} (experimental)") }
+            }).collect(),
             chosen: choices.iter().position(|(value, _)| *value == self.prefs.typing),
             enabled: vec![true; 3],
             role: Role::RadioButton,
@@ -23,11 +25,10 @@ impl App {
             self.set_pref("typing preference", &["typing", "--keys", mode], |prefs| prefs.typing = mode);
         }
         let what = match self.prefs.typing {
-            "characters" => "The other computer types the letters printed on your keys, even with a different layout. Shortcuts still use the keys.",
-            "auto" => "Letters when the two keyboard layouts differ, the same keys when they match.",
-            _ => "Each key you press is the same key on the other computer, whatever its layout.",
+            "characters" => "Experimental: the other computer types the letters printed on your keys, even with a different layout. Only Windows and Mac computers can, untested on real hardware; Linux uses the keys.",
+            "auto" => "Experimental: letters when the two keyboard layouts differ, the same keys when they match. Only Windows and Mac computers can type letters; Linux uses the keys.",
+            _ => "Each key you press is the same key on the other computer, whatever its layout. Letters and Auto are experimental.",
         };
-        let note = if cfg!(target_os = "linux") && self.prefs.typing != "physical" { " Letters work when you control a Mac or Windows computer." } else { "" };
-        para(ui, pos2(content.left(), content.top() + 40.0), content.width(), &format!("{what}{note} It changes the next time the pointer crosses."), regular(T_META), INK2);
+        para(ui, pos2(content.left(), content.top() + 40.0), content.width(), &format!("{what} It changes the next time the pointer crosses."), regular(T_META), INK2);
     }
 }

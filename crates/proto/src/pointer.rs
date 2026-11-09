@@ -9,7 +9,7 @@
 //! Acceleration other than the system's needs *unaccelerated* deltas; it
 //! can't be divided back out of accelerated ones. [`PointerTune::apply`]
 //! is told whether the deltas are raw, and without them uses the system's
-//! (see `docs/INPUT-TUNING.md` for which backends can give raw deltas).
+//! (no backend gives raw deltas yet, so `off` and `curve` are not offered).
 
 pub const MIN_SPEED: f64 = 0.1;
 pub const MAX_SPEED: f64 = 10.0;

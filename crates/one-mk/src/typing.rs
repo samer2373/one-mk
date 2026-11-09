@@ -6,14 +6,20 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
+/// Said wherever letters (characters, auto) are offered.
+pub const EXPERIMENTAL: &str = "experimental: it works only toward Windows and Mac computers, and has not been tested on real hardware";
+
 pub const UNAVAILABLE: &str = "physical (letters follow the receiving computer's keyboard layout)";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
+    /// The same physical keys; letters follow the other computer's layout (default).
     #[default]
     Physical,
+    /// The letters printed on your keys (experimental).
     Characters,
+    /// Characters only when the two layouts differ (experimental).
     Auto,
 }
 
@@ -44,7 +50,7 @@ impl TypingSettings {
         if self.keys == Mode::Physical && self.peers.values().all(|mode| *mode == Mode::Physical) {
             "physical (same keys; receiver keyboard layout)".into()
         } else {
-            format!("requested {}; characters need a supported sender and receiver, otherwise {UNAVAILABLE}; {} peer override(s)", self.keys, self.peers.len())
+            format!("requested {} ({EXPERIMENTAL}); characters need a supported sender and receiver, otherwise {UNAVAILABLE}; {} peer override(s)", self.keys, self.peers.len())
         }
     }
 
@@ -53,14 +59,35 @@ impl TypingSettings {
     }
 }
 
+/// What `mode` will do toward one paired computer, as its own words for it:
+/// letters are only ever typed by Windows and Mac receivers.
+pub fn receiver_line(name: &str, os: u8, mode: Mode) -> String {
+    use one_mk_proto::os;
+    let (system, what) = match os {
+        os::WINDOWS => ("Windows", true),
+        os::MACOS => ("Mac", true),
+        os::LINUX => ("Linux", false),
+        _ => ("unknown system", false),
+    };
+    match (mode, what) {
+        (Mode::Physical, _) => format!("{name} ({system}): the same physical keys, so letters follow its own keyboard layout."),
+        (Mode::Characters, true) => format!("{name} ({system}): types the letters printed on your keys (experimental: not yet tested on a real {system} computer; shortcuts still use the keys)."),
+        (Mode::Auto, true) => format!("{name} ({system}): types the letters printed on your keys only when your two keyboard layouts differ, otherwise the same keys (experimental: not yet tested on a real {system} computer)."),
+        (_, false) if os == os::LINUX => format!("{name} (Linux): keeps using the same physical keys: Linux computers can't type letters yet, so this changes nothing for it."),
+        _ => format!("{name}: its system is not known yet, so it keeps using the same physical keys until it connects."),
+    }
+}
+
 pub async fn run(dir: &Path, keys: Option<Mode>, peer: Option<&str>) -> Result<()> {
     let mut peer_name = None;
+    let mut peer_os = None;
     let peer = if let Some(query) = peer {
         let store = one_mk_net::TrustStore::load(dir)?;
         let Some(device) = store.find(query) else {
             bail!("no unique paired computer matches {query:?}; use its id from `one-mk devices`");
         };
         peer_name = Some(device.name.clone());
+        peer_os = Some(device.os);
         Some(device.fingerprint.clone())
     } else {
         None
@@ -75,13 +102,30 @@ pub async fn run(dir: &Path, keys: Option<Mode>, peer: Option<&str>) -> Result<(
             Ok(settings.typing.clone())
         })?
     } else {
-        Settings::load(dir)?.typing
+        Settings::view(dir)?.typing
     };
-    println!("Typing preference: {}{}.", typing.requested(peer.as_deref()), peer_name.as_ref().map_or(String::new(), |name| format!(" for {name}")));
+    let requested = typing.requested(peer.as_deref());
+    println!("Typing preference: {requested}{}.", peer_name.as_ref().map_or(String::new(), |name| format!(" for {name}")));
+    if typing.has_character_request() {
+        println!("Letters (characters, auto) are {EXPERIMENTAL}.");
+    }
+    // What each paired computer will really do with it.
+    match (&peer_name, peer_os) {
+        (Some(name), Some(os)) => println!("  {}", receiver_line(name, os, requested)),
+        _ => {
+            if let Ok(store) = one_mk_net::TrustStore::load(dir) {
+                for device in store.devices() {
+                    println!("  {}", receiver_line(&device.name, device.os, typing.requested(Some(&device.fingerprint))));
+                }
+            }
+        }
+    }
     let effective = crate::control::request(dir, crate::control::Request::Status).await.ok().flatten()
-        .and_then(|text| crate::manage::Status::decode(&text)).map(|status| status.typing)
-        .unwrap_or_else(|| "no active daemon; Keys stays physical, Letters uses supported receivers, Auto also requires different layouts".into());
-    println!("Typing effective: {effective}.");
+        .and_then(|text| crate::manage::Status::decode(&text)).map(|status| status.typing);
+    match effective {
+        Some(effective) => println!("Right now: {effective}."),
+        None => println!("one-mk is not running; this applies the next time it starts."),
+    }
     if keys.is_some() {
         settings::apply(dir).await?;
     }
@@ -111,6 +155,16 @@ mod tests {
         assert_eq!(decoded.typing.requested(Some("peer-id")), Mode::Characters);
         assert_eq!(decoded.typing.requested(Some("other")), Mode::Auto);
         assert!(decoded.typing.summary().contains("supported sender and receiver"));
+    }
+
+    #[test]
+    fn each_receiver_is_told_what_will_really_happen() {
+        use one_mk_proto::os;
+        assert!(receiver_line("Desk", os::LINUX, Mode::Characters).contains("keeps using the same physical keys"));
+        assert!(receiver_line("Air", os::MACOS, Mode::Characters).contains("experimental"));
+        assert!(receiver_line("Air", os::MACOS, Mode::Auto).contains("only when your two keyboard layouts differ"));
+        assert!(receiver_line("Box", os::WINDOWS, Mode::Physical).contains("physical keys"));
+        assert!(receiver_line("New", os::UNKNOWN, Mode::Characters).contains("not known"));
     }
 
     #[test]

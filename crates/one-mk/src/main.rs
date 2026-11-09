@@ -56,6 +56,7 @@ mod profiles;
 mod send;
 mod drag;
 mod settings;
+mod settings_tolerant;
 mod steer;
 mod track;
 mod transfer;
@@ -282,9 +283,12 @@ enum Cmd {
         #[arg(long)]
         remove: bool,
     },
-    /// Show or save a typing preference (native character mode is not implemented yet).
+    /// Show or choose what the other computer types for your keys: the same
+    /// physical keys (default), or the letters printed on them. Experimental:
+    /// letters (characters, auto) only work toward Windows and Mac computers
+    /// and have not been tested on real hardware.
     Typing {
-        #[arg(long, value_enum, help = "Requested outgoing typing mode (characters/auto are not yet supported by native backends)")]
+        #[arg(long, value_enum, help = "physical: the same keys, so letters follow the other computer's layout (default). characters (experimental): the letters printed on your keys. auto (experimental): characters only when the layouts differ. Letters work only toward Windows and Mac computers")]
         keys: Option<typing::Mode>,
         #[arg(long, value_name = "NAME_OR_ID", help = "Change or show only this paired computer's preference")]
         peer: Option<String>,
@@ -374,7 +378,7 @@ enum Cmd {
     /// and put displays to sleep together.
     Power(power::PowerArgs),
     /// Change what keys do on the computers this one controls: remaps,
-    /// combos, tap/hold keys, layers, actions (see docs/INPUT-TUNING.md).
+    /// combos, tap/hold keys, layers, actions (see docs/INPUT.md).
     Keymap {
         #[command(subcommand)]
         cmd: Option<tuning::KeymapCmd>,
@@ -558,7 +562,9 @@ fn run(cli: Cli) -> Result<()> {
     let verbose = cli.verbose;
     let action = Action::of(cli.run, cli.cmd)?;
     let dir = match cli.home {
-        Some(d) => d,
+        // Relative, a folder can't be checked up to the root (and the daemon
+        // would see another folder after a `cd`): make it absolute now.
+        Some(d) => std::path::absolute(&d).with_context(|| format!("--home {}", d.display()))?,
         None => default_home()?,
     };
 

@@ -2,7 +2,7 @@
 //! sleep, reconnecting and replugging) and which one an input event came
 //! from (a [`DeviceRef`] into the backend's table of connected devices).
 //! Pure data; the input backends fill it in, the tuning rules match it.
-//! See "Per-device rules" in `docs/INPUT-TUNING.md`.
+//! See "One keyboard or mouse" in `docs/INPUT.md`.
 
 use std::fmt;
 use std::str::FromStr;

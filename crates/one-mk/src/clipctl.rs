@@ -41,7 +41,7 @@ pub struct Online {
 
 /// Reads `settings.toml` and applies it to the running services.
 pub fn apply_settings(dir: &Path, services: &Services) -> Result<Settings> {
-    let s = Settings::load(dir)?;
+    let s = Settings::load_lenient(dir)?;
     apply(&s, services);
     Ok(s)
 }

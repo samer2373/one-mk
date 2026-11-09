@@ -116,6 +116,9 @@ pub async fn request(dir: &Path, req: Request) -> Result<Option<String>> {
         Ok(Err(e)) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused) => {
             return Ok(None);
         }
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::InvalidInput => {
+            bail!("the settings folder {} is too long for one-mk's control socket (about 100 characters at most): your change is saved, but one-mk can't be told about it; use a shorter --home", dir.display());
+        }
         Ok(Err(e)) => return Err(e).with_context(|| format!("connecting to control endpoint {}", sys::path(dir).display())),
         Err(_) => bail!("one-mk did not answer"),
     };

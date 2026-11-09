@@ -816,8 +816,11 @@ impl App {
                 View::Keyboard => self.keyboard_view(ui, body.width(), now),
                 View::Mouse => self.mouse_view(ui, body.width()),
             }
-            ui.add_space(GAP);
-            self.local_rules_card(ui, body.width());
+            // Only where it can work: on Linux there is nothing to switch.
+            if cfg!(any(windows, target_os = "macos")) {
+                ui.add_space(GAP);
+                self.local_rules_card(ui, body.width());
+            }
         });
     }
 
@@ -829,13 +832,13 @@ impl App {
         let card = card_begin(ui, rect.min, width, "Where your rules work", false);
         let content = card.inner;
         let row = Rect::from_min_size(content.min, vec2(content.width(), ROW));
-        if widgets::switch_help_dimmed(ui, row, Id::unique("also-on-this-computer"), "Also on this computer", "also-on-this-computer", input.local_rules,
+        if widgets::switch_help_dimmed(ui, row, Id::unique("also-on-this-computer"), "Also on this computer (experimental)", "also-on-this-computer", input.local_rules,
             available && !self.tuning_busy() && !self.prefs.unreadable).clicked() {
             self.tune_cmds("local rules", "local-rules", vec![vec!["keymap".into(), "local".into(),
                 if input.local_rules { "off".into() } else { "on".into() }]], None);
         }
         let text = if available {
-            "Apply your key and button rules here as well as on the other computers. Pointer speed and scrolling stay unchanged. Ctrl + Alt + Shift + Esc turns local rules off and brings you back here. Local rules keep working when this window closes. Stopping oneMK restores the original mappings; your preference is kept for the next start."
+            "Experimental, not yet tested on real hardware: apply your key and button rules here as well as on the other computers. Pointer speed and scrolling stay unchanged. Ctrl + Alt + Shift + Esc turns local rules off and brings you back here. Local rules keep working when this window closes. Stopping oneMK restores the original mappings; your preference is kept for the next start."
         } else {
             "Not available on this desktop. Local rules need macOS or Windows; your rules still work on the other computers."
         };

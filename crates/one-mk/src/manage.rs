@@ -31,7 +31,7 @@ pub async fn status(dir: &Path) -> Result<()> {
     match reply.as_deref().and_then(Status::decode) {
         Some(s) => {
             print!("{}", s.render());
-            if let Some(line) = crate::settings::Settings::load(dir).ok().and_then(|s| s.input.summary()) {
+            if let Some(line) = crate::settings::Settings::load_lenient(dir).ok().and_then(|s| s.input.summary()) {
                 println!("{line}");
             }
         }
@@ -44,7 +44,7 @@ pub async fn status(dir: &Path) -> Result<()> {
             }
         }
     }
-    let settings = crate::settings::Settings::load(dir)?;
+    let settings = crate::settings::Settings::view(dir)?;
     if settings.hooks.blocked.is_some() {
         println!("{}", settings.hooks.describe());
     }
