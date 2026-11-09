@@ -60,6 +60,25 @@ jobs:
       # cross-compiled, and some code only exists on one system.
       - run: cargo clippy --workspace --locked --all-targets -- -D warnings
 
+  # The same release checks release.yml runs before publishing: licence
+  # notices, cargo-deny over the whole workspace, install.sh, and the
+  # manifest/sign/publish steps against a stub gh.
+  release-gates:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: stable }
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-deny@0.20.2 }
+      - run: python3 scripts/third-party-notices.py --check
+      - run: cargo deny --locked --all-features check
+      - run: bash scripts/test-install.sh
+      - run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          bash scripts/check-updates.sh
+
   # The Linux packages and the package-manager files, built from a debug
   # build and checked without installing anything (scripts/check-packaging.sh).
   packaging:
