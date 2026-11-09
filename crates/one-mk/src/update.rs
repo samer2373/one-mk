@@ -457,7 +457,13 @@ impl Drop for VersionProbe {
 }
 
 fn version_check(path: &Path, expected: Option<&str>) -> Result<()> {
-    let mut output_file = Temporary::named(path.parent().context("executable has no directory")?, "probe")?;
+    // Never beside the executable of a Mac app: a file added inside the app
+    // while it starts makes macOS kill it as "damaged", so the probe goes next to the app.
+    let mut probe_dir = path.parent().context("executable has no directory")?;
+    if let Some(app) = path.ancestors().find(|dir| dir.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("app"))) {
+        probe_dir = app.parent().context("the app has no parent folder")?;
+    }
+    let mut output_file = Temporary::named(probe_dir, "probe")?;
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut command = Command::new(path);
     command.arg("--version").stdin(Stdio::null()).stdout(Stdio::from(output_file.file.try_clone()?)).stderr(Stdio::null());
@@ -717,7 +723,7 @@ pub fn run(home: &Path, options: Options) -> Result<()> {
     run_inner(home, options).map_err(|error| {
         tracing::debug!(error = ?error, "explicit update failed");
         let message = if error.chain().count() == 1 && error.is::<std::io::Error>() {
-            "cannot access update files or the update server; check directory permissions, free disk space and your connection, then retry".to_owned()
+            format!("cannot access update files or the update server ({error}); check directory permissions, free disk space and your connection, then retry")
         } else {
             error.to_string()
         };
