@@ -219,6 +219,15 @@ fn install(destination: &Path, renderer: &Path) -> Result<()> {
 
 fn uninstall(destination: &Path) -> Result<()> {
     if !destination.try_exists()? { return Ok(()); }
+    check_managed(destination)?;
+    std::fs::remove_dir_all(destination)?;
+    Ok(())
+}
+
+/// That `destination` is exactly the copy oneMK installed, unchanged: its
+/// manifest, every file's hash, and nothing else in it. Anything else is
+/// someone else's (or was edited) and is left alone entirely.
+fn check_managed(destination: &Path) -> Result<()> {
     if !std::fs::symlink_metadata(destination)?.is_dir() { bail!("refusing unmanaged extension path"); }
     let marker = destination.join(MARKER);
     if regular(&marker)?.len() > 4096 { bail!("invalid install manifest"); }
@@ -240,7 +249,6 @@ fn uninstall(destination: &Path) -> Result<()> {
         std::fs::read_dir(destination.join("libexec"))?.count() != 1 {
         bail!("extension contains unmanaged files; refusing to remove them");
     }
-    std::fs::remove_dir_all(destination)?;
     Ok(())
 }
 
@@ -290,16 +298,26 @@ pub async fn command(command: &Command) -> Result<Value> {
 /// left where it is and the error says so.
 pub async fn remove() -> Result<String> {
     if !cfg!(target_os = "linux") { bail!("GNOME wallpaper extensions are Linux-only"); }
-    let destination = destination()?;
+    remove_from(&destination()?, || async {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        disable_now().await;
+        let _ = forget_from_login_list().await;
+    }).await
+}
+
+/// [`remove`] for the copy at `destination`. The copy is checked to be
+/// oneMK's own, unchanged, before anything is touched: only then is it
+/// switched off (`switch_off`: in GNOME now and on its login list) and
+/// deleted. No copy, or a foreign or edited one, leaves GNOME's state, and
+/// the login list, exactly as they were.
+async fn remove_from<F: std::future::Future<Output = ()>>(destination: &Path, switch_off: impl FnOnce() -> F) -> Result<String> {
     let existed = destination.try_exists().with_context(|| format!("checking extension {}", destination.display()))?;
     if !existed {
-        let _ = forget_from_login_list().await;
         return Ok("oneMK's GNOME extension is not installed; nothing changed.".into());
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    disable_now().await;
-    let _ = forget_from_login_list().await;
-    uninstall(&destination).with_context(|| format!("Could not remove the GNOME extension in {}", destination.display()))?;
+    check_managed(destination).with_context(|| format!("Left the GNOME extension in {} untouched (still switched on if it was)", destination.display()))?;
+    switch_off().await;
+    uninstall(destination).with_context(|| format!("Could not remove the GNOME extension in {}", destination.display()))?;
     Ok("Switched off and removed oneMK's GNOME extension.".into())
 }
 
@@ -505,6 +523,42 @@ mod tests {
         uninstall(&destination).unwrap();
         install(&destination, &renderer).unwrap();
         assert_eq!(std::fs::read_to_string(destination.join("extension.js")).unwrap(), FILES[1].1);
+    }
+
+    /// A copy oneMK did not install (or one that was edited) is not even
+    /// switched off, and with no copy at all GNOME's login list is not
+    /// touched: only a verified managed copy is switched off and removed.
+    #[tokio::test]
+    async fn removal_switches_off_only_a_verified_managed_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let renderer = root.path().join("renderer");
+        std::fs::write(&renderer, "renderer").unwrap();
+        let destination = root.path().join(UUID);
+        let switched = std::sync::atomic::AtomicUsize::new(0);
+        let switch_off = || async { switched.fetch_add(1, std::sync::atomic::Ordering::SeqCst); };
+
+        // Nothing installed: nothing changes.
+        assert!(remove_from(&destination, switch_off).await.unwrap().contains("nothing changed"));
+        assert_eq!(switched.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        // An edited copy and a foreign copy: refused before switching anything off.
+        install(&destination, &renderer).unwrap();
+        std::fs::write(destination.join("extension.js"), "user changes").unwrap();
+        assert!(remove_from(&destination, switch_off).await.is_err());
+        std::fs::remove_dir_all(&destination).unwrap();
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(destination.join("metadata.json"), "{}").unwrap();
+        let error = format!("{:#}", remove_from(&destination, switch_off).await.unwrap_err());
+        assert!(error.contains("untouched"), "{error}");
+        assert_eq!(switched.load(std::sync::atomic::Ordering::SeqCst), 0, "a copy that isn't ours is never switched off");
+        assert!(destination.join("metadata.json").exists());
+
+        // Our own unchanged copy: switched off, then removed.
+        std::fs::remove_dir_all(&destination).unwrap();
+        install(&destination, &renderer).unwrap();
+        remove_from(&destination, switch_off).await.unwrap();
+        assert_eq!(switched.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(!destination.exists());
     }
 
     #[test]
