@@ -21,6 +21,13 @@ one-mk wallpaper status
 one-mk wallpaper off
 ```
 
+Every `wallpaper` command takes `--json` (`{"ok": true, "message": ...}`, or
+`{"ok": false, "error": ...}` with a non-zero exit). `status` with no oneMK
+running says the wallpaper is off because oneMK is not running; the other
+commands say to start it. A wallpaper chosen while the screen is locked or the
+computer asleep says it is paused for that reason and resumes on unlock. A file
+that cannot be played is refused with the reason and is not kept.
+
 Videos: MP4, MOV, M4V, WebM and MKV, played by the system's own decoder
 (GStreamer on Linux). Pictures: PNG, JPEG and WebP everywhere, HEIC on macOS
 and on Windows with the HEIF extension.
@@ -70,7 +77,13 @@ on GNOME 50 (any 50.x release); on other GNOME versions oneMK says the
 version is not supported, and pictures still work. Until the extension is
 active, a video another computer shares with this one is shown as a still of
 its first frame, and the Wallpaper page says so together with the step above.
-`one-mk wallpaper extension uninstall` switches it off and removes it.
+`one-mk wallpaper extension uninstall` switches it off and removes it. Both
+commands say what really happened and exit non-zero when a step failed: install
+is refused on a GNOME version it does not run on (and on a computer without
+GNOME), and one that copies the files but cannot switch the extension on says
+so with the one step left; uninstall removes the files either way, and if
+GNOME could not be told to switch it off it says `gnome-extensions disable
+one-mk-wallpaper@one-mk.org` is the step left.
 
 ## Troubleshooting
 

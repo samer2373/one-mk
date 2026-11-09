@@ -30,14 +30,7 @@ pub enum Action {
 }
 
 fn destination() -> Result<PathBuf> {
-    let data = match std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        Some(data) => PathBuf::from(data),
-        None => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?).join(".local/share"),
-    };
-    if !data.is_absolute() {
-        bail!("HOME/XDG_DATA_HOME must be absolute");
-    }
-    Ok(data.join("gnome-shell/extensions").join(UUID))
+    Ok(one_mk_ctl::xdg::data_home()?.join("gnome-shell/extensions").join(UUID))
 }
 
 /// The GNOME Shell versions the bundled extension declares (and was tried
@@ -48,7 +41,7 @@ fn qualified_shells() -> Vec<String> {
 }
 
 /// `gnome-shell --version` ("GNOME Shell 50.1"), if GNOME Shell is here.
-fn shell_version() -> Option<String> {
+pub(crate) fn shell_version() -> Option<String> {
     let out = std::process::Command::new("gnome-shell").arg("--version").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
 }
@@ -117,16 +110,16 @@ fn managed(dir: &Path) -> Result<bool> {
 
 fn write(dir: &Path) -> Result<()> {
     let parent = dir.parent().context("missing extensions folder")?;
-    std::fs::create_dir_all(parent)?;
+    one_mk_ctl::private::create_dir_all(parent)?;
     let stage = parent.join(format!(".one-mk-install-{}-{}", std::process::id(), rand::random::<u64>()));
-    std::fs::create_dir(&stage)?;
+    one_mk_ctl::private::create_dir_readable(&stage)?;
     let result = (|| -> Result<()> {
         let mut hashes = serde_json::Map::new();
         for &(name, contents) in FILES {
-            std::fs::write(stage.join(name), contents)?;
+            one_mk_ctl::private::write_readable(&stage.join(name), contents)?;
             hashes.insert(name.into(), json!(hash(contents.as_bytes())));
         }
-        std::fs::write(stage.join(MARKER), serde_json::to_vec(&json!({"uuid": UUID, "version": 1, "files": hashes}))?)?;
+        one_mk_ctl::private::write_readable(&stage.join(MARKER), serde_json::to_vec(&json!({"uuid": UUID, "version": 1, "files": hashes}))?)?;
         std::fs::rename(&stage, dir)?;
         Ok(())
     })();

@@ -1206,7 +1206,7 @@ Commands:
 
 Options:
       --json
-          Print the result as JSON (only `extension` commands)
+          Print the result as JSON ({"ok": true, "message": ...}), or {"ok": false, "error": ...} with a non-zero exit when it failed
 ```
 
 ### one-mk wallpaper set
@@ -1222,7 +1222,7 @@ Arguments:
 
 Options:
       --json
-          Print the result as JSON (only `extension` commands)
+          Print the result as JSON ({"ok": true, "message": ...}), or {"ok": false, "error": ...} with a non-zero exit when it failed
 ```
 
 ### one-mk wallpaper off
@@ -1234,7 +1234,7 @@ Usage: one-mk wallpaper off [OPTIONS]
 
 Options:
       --json
-          Print the result as JSON (only `extension` commands)
+          Print the result as JSON ({"ok": true, "message": ...}), or {"ok": false, "error": ...} with a non-zero exit when it failed
 ```
 
 ### one-mk wallpaper status
@@ -1246,7 +1246,7 @@ Usage: one-mk wallpaper status [OPTIONS]
 
 Options:
       --json
-          Print the result as JSON (only `extension` commands)
+          Print the result as JSON ({"ok": true, "message": ...}), or {"ok": false, "error": ...} with a non-zero exit when it failed
 ```
 
 ### one-mk wallpaper pause
@@ -1258,7 +1258,7 @@ Usage: one-mk wallpaper pause [OPTIONS]
 
 Options:
       --json
-          Print the result as JSON (only `extension` commands)
+          Print the result as JSON ({"ok": true, "message": ...}), or {"ok": false, "error": ...} with a non-zero exit when it failed
 ```
 
 ### one-mk wallpaper play
@@ -1270,7 +1270,7 @@ Usage: one-mk wallpaper play [OPTIONS]
 
 Options:
       --json
-          Print the result as JSON (only `extension` commands)
+          Print the result as JSON ({"ok": true, "message": ...}), or {"ok": false, "error": ...} with a non-zero exit when it failed
 ```
 
 ### one-mk wallpaper extension
@@ -1289,7 +1289,7 @@ Commands:
 
 Options:
       --json
-          Print the result as JSON (only `extension` commands)
+          Print the result as JSON ({"ok": true, "message": ...}), or {"ok": false, "error": ...} with a non-zero exit when it failed
 ```
 
 #### one-mk wallpaper extension install
@@ -1301,7 +1301,7 @@ Usage: one-mk wallpaper extension install [OPTIONS]
 
 Options:
       --json
-          Print the result as JSON (only `extension` commands)
+          Print the result as JSON ({"ok": true, "message": ...}), or {"ok": false, "error": ...} with a non-zero exit when it failed
 
       --renderer <PATH>
           Use this wallpaper helper (an absolute path) instead of the one installed with oneMK
@@ -1316,7 +1316,7 @@ Usage: one-mk wallpaper extension enable [OPTIONS]
 
 Options:
       --json
-          Print the result as JSON (only `extension` commands)
+          Print the result as JSON ({"ok": true, "message": ...}), or {"ok": false, "error": ...} with a non-zero exit when it failed
 ```
 
 #### one-mk wallpaper extension uninstall
@@ -1328,7 +1328,7 @@ Usage: one-mk wallpaper extension uninstall [OPTIONS]
 
 Options:
       --json
-          Print the result as JSON (only `extension` commands)
+          Print the result as JSON ({"ok": true, "message": ...}), or {"ok": false, "error": ...} with a non-zero exit when it failed
 ```
 
 #### one-mk wallpaper extension status
@@ -1340,7 +1340,7 @@ Usage: one-mk wallpaper extension status [OPTIONS]
 
 Options:
       --json
-          Print the result as JSON (only `extension` commands)
+          Print the result as JSON ({"ok": true, "message": ...}), or {"ok": false, "error": ...} with a non-zero exit when it failed
 ```
 
 ## one-mk scroll

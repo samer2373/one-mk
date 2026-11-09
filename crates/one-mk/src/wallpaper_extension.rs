@@ -37,12 +37,7 @@ pub enum Command {
 }
 
 fn destination() -> Result<PathBuf> {
-    let data = match std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
-        Some(data) => PathBuf::from(data),
-        None => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?).join(".local/share"),
-    };
-    if !data.is_absolute() { bail!("HOME/XDG_DATA_HOME must be absolute"); }
-    Ok(data.join("gnome-shell/extensions").join(UUID))
+    Ok(one_mk_ctl::xdg::data_home()?.join("gnome-shell/extensions").join(UUID))
 }
 
 fn bundled_renderer_at(executable: &Path) -> Option<PathBuf> {
@@ -57,6 +52,19 @@ fn bundled_renderer_at(executable: &Path) -> Option<PathBuf> {
 
 fn bundled_renderer() -> Result<PathBuf> {
     bundled_renderer_at(&std::env::current_exe()?).context("The bundled GNOME renderer is missing. Reinstall oneMK; nothing will be downloaded.")
+}
+
+/// Install only for a GNOME Shell this extension runs on: it would be
+/// refused (or throw in `enable()`) on any other, and on a computer without
+/// GNOME Shell there is nothing to install it for. `version` is
+/// `gnome-shell --version` ("GNOME Shell 50.1"), if it could be asked.
+fn check_shell(version: Option<&str>) -> Result<()> {
+    let Some(version) = version else {
+        bail!("GNOME Shell was not found on this computer, and this extension is for GNOME only: nothing was installed. Pictures and X11 video need no extension.");
+    };
+    let number = version.trim().rsplit(' ').next().unwrap_or(version);
+    ensure!(qualified(number), "{} Nothing was installed.", one_mk_wallpaper::unsupported_gnome_shell(number));
+    Ok(())
 }
 
 fn qualified(version: &str) -> bool { one_mk_wallpaper::supported_gnome_shell(version) }
@@ -105,8 +113,24 @@ async fn gsettings(arguments: &[&str]) -> Result<String> {
     let output = tokio::time::timeout(std::time::Duration::from_secs(3),
         tokio::process::Command::new("gsettings").args(arguments).kill_on_drop(true).output()).await
         .context("GNOME settings took too long")?.context("GNOME settings could not start")?;
-    ensure!(output.status.success(), "GNOME settings said: {}", String::from_utf8_lossy(&output.stderr).trim());
+    ensure!(output.status.success(), "{}", gsettings_failure(&output.status.to_string(), &String::from_utf8_lossy(&output.stderr)));
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// What a failed `gsettings` says. It often says nothing (no desktop
+/// session to talk to), which must not read as "GNOME settings said: ".
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn gsettings_failure(status: &str, stderr: &str) -> String {
+    let said = stderr.trim();
+    if said.is_empty() { format!("GNOME settings (gsettings) failed ({status}) without saying why; this works from inside your GNOME session") }
+    else { format!("GNOME settings (gsettings) said: {said}") }
+}
+
+/// Whether `error` is `gsettings` itself not being installed: then there
+/// is no GNOME settings database to keep tidy.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn gsettings_missing(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<std::io::Error>().is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// Switches the extension on for the next login. GNOME refuses a live
@@ -191,16 +215,16 @@ fn install(destination: &Path, renderer: &Path) -> Result<()> {
     if !renderer.is_absolute() { bail!("--renderer must name an absolute path: {}", renderer.display()); }
     if regular(renderer)?.len() == 0 { bail!("renderer is empty: {}", renderer.display()); }
     let parent = destination.parent().context("missing extension parent")?;
-    std::fs::create_dir_all(parent)?;
+    one_mk_ctl::private::create_dir_all(parent)?;
     let stage = parent.join(format!(".one-mk-install-{}-{}", std::process::id(), rand::random::<u64>()));
-    std::fs::create_dir(&stage)?;
+    one_mk_ctl::private::create_dir_readable(&stage)?;
     let result = (|| -> Result<()> {
         let mut hashes = serde_json::Map::new();
         for &(name, contents) in FILES {
-            std::fs::write(stage.join(name), contents)?;
+            one_mk_ctl::private::write_readable(&stage.join(name), contents)?;
             hashes.insert(name.into(), json!(blake3::hash(contents.as_bytes()).to_hex().to_string()));
         }
-        std::fs::create_dir(stage.join("libexec"))?;
+        one_mk_ctl::private::create_dir_readable(&stage.join("libexec"))?;
         let copied = stage.join("libexec/one-mk-wallpaper");
         std::fs::copy(renderer, &copied)?;
         #[cfg(unix)] {
@@ -208,7 +232,7 @@ fn install(destination: &Path, renderer: &Path) -> Result<()> {
             std::fs::set_permissions(&copied, std::fs::Permissions::from_mode(0o755))?;
         }
         hashes.insert("libexec/one-mk-wallpaper".into(), json!(blake3::hash(&std::fs::read(copied)?).to_hex().to_string()));
-        std::fs::write(stage.join(MARKER), serde_json::to_vec(&json!({"uuid": UUID, "version": 1, "files": hashes}))?)?;
+        one_mk_ctl::private::write_readable(&stage.join(MARKER), serde_json::to_vec(&json!({"uuid": UUID, "version": 1, "files": hashes}))?)?;
         if std::fs::symlink_metadata(destination).is_ok() { bail!("extension appeared during install"); }
         std::fs::rename(&stage, destination)?;
         Ok(())
@@ -257,6 +281,7 @@ pub async fn command(command: &Command) -> Result<Value> {
     let destination = destination()?;
     let message = match command {
         Command::Install { renderer } => {
+            check_shell(crate::pointer_extension::shell_version().as_deref())?;
             let renderer = renderer.clone().map_or_else(bundled_renderer, Ok)?;
             let target = destination.clone();
             tokio::task::spawn_blocking(move || {
@@ -267,7 +292,9 @@ pub async fn command(command: &Command) -> Result<Value> {
                 .with_context(|| format!("installing renderer {} into {}", renderer.display(), target.display()))).await??;
             match switch_on_for_next_login().await {
                 Ok(()) => format!("Installed in {}. One step left: log out and back in once. The extension turns itself on, and video can start after that.", destination.display()),
-                Err(error) => format!("Installed in {}, but GNOME could not switch it on for your next login ({error:#}). Log out and back in once, then choose Switch on here.", destination.display()),
+                // The files are in place but the command's job (installed and
+                // switched on) is not done: said as a failure, with the one step.
+                Err(error) => bail!("Installed in {}, but could not switch it on for your next login: {error:#}. One step left: from inside your GNOME session run `one-mk wallpaper extension enable` (or choose Switch on on the Wallpaper page), then log out and back in once.", destination.display()),
             }
         }
         Command::Enable => {
@@ -299,9 +326,13 @@ pub async fn command(command: &Command) -> Result<Value> {
 pub async fn remove() -> Result<String> {
     if !cfg!(target_os = "linux") { bail!("GNOME wallpaper extensions are Linux-only"); }
     remove_from(&destination()?, || async {
+        #[allow(unused_mut)]
+        let mut problems = Vec::new();
         #[cfg(all(unix, not(target_os = "macos")))]
-        disable_now().await;
-        let _ = forget_from_login_list().await;
+        if let Err(error) = disable_now().await { problems.push(format!("{error:#}")); }
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Err(error) = forget_from_login_list().await && !gsettings_missing(&error) { problems.push(format!("{error:#}")); }
+        problems
     }).await
 }
 
@@ -309,15 +340,20 @@ pub async fn remove() -> Result<String> {
 /// oneMK's own, unchanged, before anything is touched: only then is it
 /// switched off (`switch_off`: in GNOME now and on its login list) and
 /// deleted. No copy, or a foreign or edited one, leaves GNOME's state, and
-/// the login list, exactly as they were.
-async fn remove_from<F: std::future::Future<Output = ()>>(destination: &Path, switch_off: impl FnOnce() -> F) -> Result<String> {
+/// the login list, exactly as they were. `switch_off` returns what it could
+/// not do: if anything, the copy is still removed (it is what the person
+/// asked for) but the answer is an error that says what is left and the one
+/// step that finishes it.
+async fn remove_from<F: std::future::Future<Output = Vec<String>>>(destination: &Path, switch_off: impl FnOnce() -> F) -> Result<String> {
     let existed = destination.try_exists().with_context(|| format!("checking extension {}", destination.display()))?;
     if !existed {
         return Ok("oneMK's GNOME extension is not installed; nothing changed.".into());
     }
     check_managed(destination).with_context(|| format!("Left the GNOME extension in {} untouched (still switched on if it was)", destination.display()))?;
-    switch_off().await;
+    let problems = switch_off().await;
     uninstall(destination).with_context(|| format!("Could not remove the GNOME extension in {}", destination.display()))?;
+    ensure!(problems.is_empty(), "Removed oneMK's GNOME extension from {}, but could not switch it off in GNOME ({}). One step left: from inside your GNOME session run `gnome-extensions disable {UUID}`, or log out and back in once.",
+        destination.display(), problems.join("; "));
     Ok("Switched off and removed oneMK's GNOME extension.".into())
 }
 
@@ -337,14 +373,44 @@ fn session_bus_named(address: Option<std::ffi::OsString>, runtime: Option<std::f
     address.is_some_and(|value| !value.is_empty()) || runtime.is_some_and(|value| !value.is_empty())
 }
 
-/// Asks a running GNOME Shell to switch the extension off; outside a GNOME
-/// session there is nothing running to switch off.
+/// Asks a running GNOME Shell to switch the extension off. Outside a GNOME
+/// session there is nothing running to switch off (`Ok`); a Shell that is
+/// there but does not answer is an error, because the extension then keeps
+/// running.
 #[cfg(all(unix, not(target_os = "macos")))]
-async fn disable_now() {
-    let Ok(builder) = session_bus() else { return };
-    let Ok(Ok(connection)) = tokio::time::timeout(std::time::Duration::from_secs(2), builder.method_timeout(std::time::Duration::from_secs(2)).build()).await else { return };
-    let Ok(extensions) = zbus::Proxy::new(&connection, "org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions", "org.gnome.Shell.Extensions").await else { return };
-    let _ = extensions.call::<_, _, bool>("DisableExtension", &(UUID,)).await;
+async fn disable_now() -> Result<()> {
+    let Ok(builder) = session_bus() else { return Ok(()) };
+    let connection = match tokio::time::timeout(std::time::Duration::from_secs(2), builder.method_timeout(std::time::Duration::from_secs(2)).build()).await {
+        Err(_) => bail!("GNOME did not answer in time"),
+        Ok(Err(error)) if no_gnome_shell(&error) => return Ok(()),
+        Ok(Err(error)) => return Err(anyhow::Error::from(error).context("could not reach GNOME")),
+        Ok(Ok(connection)) => connection,
+    };
+    let call = async {
+        let extensions = zbus::Proxy::new(&connection, "org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions", "org.gnome.Shell.Extensions").await?;
+        // `false`: GNOME had it switched off already (or never loaded it).
+        extensions.call::<_, _, bool>("DisableExtension", &(UUID,)).await
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(3), call).await {
+        Err(_) => bail!("GNOME did not answer in time"),
+        Ok(Err(error)) if no_gnome_shell(&error) => Ok(()),
+        Ok(Err(error)) => Err(anyhow::Error::from(error).context("GNOME refused to switch it off")),
+        Ok(Ok(_)) => Ok(()),
+    }
+}
+
+/// An error that means "no desktop session or no GNOME Shell is there to
+/// ask" rather than "it is there and failed".
+#[cfg(all(unix, not(target_os = "macos")))]
+fn no_gnome_shell(error: &zbus::Error) -> bool {
+    const GONE: [&str; 2] = ["org.freedesktop.DBus.Error.ServiceUnknown", "org.freedesktop.DBus.Error.NameHasNoOwner"];
+    match error {
+        zbus::Error::Address(_) => true,
+        zbus::Error::InputOutput(error) | zbus::Error::Connection(error, _) => matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused),
+        zbus::Error::MethodError(name, ..) => GONE.contains(&name.as_str()),
+        zbus::Error::FDO(error) => matches!(**error, zbus::fdo::Error::ServiceUnknown(_) | zbus::fdo::Error::NameHasNoOwner(_)),
+        _ => false,
+    }
 }
 
 pub async fn status() -> Result<Value> {
@@ -535,7 +601,7 @@ mod tests {
         std::fs::write(&renderer, "renderer").unwrap();
         let destination = root.path().join(UUID);
         let switched = std::sync::atomic::AtomicUsize::new(0);
-        let switch_off = || async { switched.fetch_add(1, std::sync::atomic::Ordering::SeqCst); };
+        let switch_off = || async { switched.fetch_add(1, std::sync::atomic::Ordering::SeqCst); Vec::new() };
 
         // Nothing installed: nothing changes.
         assert!(remove_from(&destination, switch_off).await.unwrap().contains("nothing changed"));
@@ -559,6 +625,61 @@ mod tests {
         remove_from(&destination, switch_off).await.unwrap();
         assert_eq!(switched.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(!destination.exists());
+    }
+
+    /// Uninstall never claims "Switched off" when GNOME could not be asked:
+    /// the files still go (that is what was asked for), but the answer is an
+    /// error saying what is left and the one step that finishes it.
+    #[tokio::test]
+    async fn removal_says_so_when_switching_off_failed() {
+        let root = tempfile::tempdir().unwrap();
+        let renderer = root.path().join("renderer");
+        std::fs::write(&renderer, "renderer").unwrap();
+        let destination = root.path().join(UUID);
+        install(&destination, &renderer).unwrap();
+        let error = format!("{:#}", remove_from(&destination, || async { vec!["GNOME did not answer in time".to_owned()] }).await.unwrap_err());
+        assert!(error.contains("could not switch it off in GNOME") && error.contains("GNOME did not answer in time"), "{error}");
+        assert!(error.contains(&format!("gnome-extensions disable {UUID}")) && !error.contains("Switched off and removed"), "{error}");
+        assert!(!destination.exists(), "the files are removed all the same");
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn an_absent_desktop_session_is_not_a_failure_to_switch_off_but_a_silent_shell_is() {
+        let io = |kind| zbus::Error::InputOutput(std::sync::Arc::new(std::io::Error::from(kind)));
+        assert!(no_gnome_shell(&io(std::io::ErrorKind::NotFound)));
+        assert!(no_gnome_shell(&io(std::io::ErrorKind::ConnectionRefused)));
+        assert!(no_gnome_shell(&zbus::Error::Connection(std::sync::Arc::new(std::io::Error::from(std::io::ErrorKind::NotFound)), "unix:path=/nowhere".parse().unwrap())));
+        assert!(!no_gnome_shell(&zbus::Error::Connection(std::sync::Arc::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied)), "unix:path=/nowhere".parse().unwrap())));
+        assert!(no_gnome_shell(&zbus::Error::Address("bad".into())));
+        assert!(no_gnome_shell(&zbus::Error::FDO(Box::new(zbus::fdo::Error::ServiceUnknown("x".into())))));
+        assert!(!no_gnome_shell(&io(std::io::ErrorKind::PermissionDenied)));
+        assert!(!no_gnome_shell(&zbus::Error::Failure("refused".into())));
+        assert!(!no_gnome_shell(&zbus::Error::FDO(Box::new(zbus::fdo::Error::AccessDenied("no".into())))));
+    }
+
+    #[test]
+    fn a_failed_gsettings_never_reads_as_an_empty_quote() {
+        let nothing = gsettings_failure("exit status: 1", " \n");
+        assert!(nothing.contains("exit status: 1") && nothing.contains("without saying why") && !nothing.ends_with(": "), "{nothing}");
+        assert_eq!(gsettings_failure("exit status: 1", "No such schema\n"), "GNOME settings (gsettings) said: No such schema");
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            assert!(gsettings_missing(&anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::NotFound)).context("GNOME settings could not start")));
+            assert!(!gsettings_missing(&anyhow::anyhow!("failed")));
+        }
+    }
+
+    #[test]
+    fn install_goes_ahead_only_for_a_gnome_shell_it_runs_on() {
+        check_shell(Some("GNOME Shell 50.1")).unwrap();
+        check_shell(Some("GNOME Shell 50.0\n")).unwrap();
+        for bad in ["GNOME Shell 49.4", "GNOME Shell 51.0", "GNOME Shell", "", "garbage", "GNOME Shell 5.0"] {
+            let error = check_shell(Some(bad)).unwrap_err().to_string();
+            assert!(error.contains("Nothing was installed"), "{bad}: {error}");
+        }
+        let error = check_shell(None).unwrap_err().to_string();
+        assert!(error.contains("not found") && error.contains("nothing was installed"), "{error}");
     }
 
     #[test]
