@@ -269,7 +269,8 @@ pub fn snapshot(trust: &TrustStore) -> Vec<Placed> {
 /// saved are left where they are; those no longer paired are skipped.
 /// Returns the names of the computers that moved.
 pub fn apply(dir: &Path, profile: &Profile) -> Result<Vec<String>> {
-    TrustStore::update(dir, |trust| {
+    // Bounded: the daemon runs this too (switching by network).
+    TrustStore::update_within(dir, one_mk_net::DAEMON_LOCK_WAIT, |trust| {
         let mut moved = Vec::new();
         for p in &profile.devices {
             let Some(fp) = p.fingerprint.parse().ok() else { continue };
