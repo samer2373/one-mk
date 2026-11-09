@@ -138,7 +138,7 @@ one-mk.app/Contents/Info.plist
 ### The installer window
 
 Opening the `.dmg` shows a fixed 660 x 400 window in the brand's dark look:
-the oneMK icon on the left, the Applications folder on the right, an amber
+the oneMK icon on the left, the Applications folder on the right, a cobalt
 arrow between them and one line, "Drag oneMK to Applications, then open it.
 Setup takes a minute." No toolbar, sidebar or status bar. The app then guides
 the user through pairing, so there is no terminal step.
@@ -146,7 +146,7 @@ the user through pairing, so there is no terminal step.
 | file | what it is |
 |---|---|
 | `scripts/dmg/settings.py` | the dmgbuild settings: window size and place, icon size, the two icon positions, the hidden toolbar and sidebar, the `Applications` link, the volume icon (`docs/brand/app-icon/macos/onemk.icns`) |
-| `scripts/dmg/make_background.py` | draws the artwork with Pillow from the brand files (`docs/brand/tokens.json`, the Geist fonts in `crates/app/fonts`, the logo) and the numbers in `settings.py`; `--check` validates everything and writes the preview |
+| `scripts/dmg/make_background.py` | draws the artwork with Pillow from the brand files (the dark colours in `docs/brand/tokens.json`, Inter from `crates/app/fonts`, `docs/brand/logo/onemk-lockup-on-dark.svg` drawn by `scripts/brand_render.py`) and the numbers in `settings.py`; `--check` validates everything and writes the preview |
 | `scripts/dmg/background.png`, `background@2x.png` | the drawn art, **checked in**: the release then needs no fonts, no Pillow and no particular Pillow version, and a change to the art shows in review. `check.sh` fails if they no longer match the script. Tagged 72 and 144 dpi; dmgbuild finds the `@2x` file next to the first and joins them with `tiffutil -cathidpicheck` into the multi-resolution TIFF Finder wants |
 | `scripts/dmg/check.sh` | the check, runs anywhere with Python 3 and Pillow; also part of `check-packaging.sh` and CI |
 

@@ -25,7 +25,7 @@ for file in metadata.json extension.js bridge.xml; do
     install -m 644 "extensions/gnome/$extension/$file" "$root/usr/share/one-mk/gnome-extension/$extension/"
 done
 install -m 644 LICENSE-MIT LICENSE-APACHE "$root/usr/share/one-mk/gnome-extension/$extension/"
-install -m 644 docs/brand/app-icon/windows-linux/ico-png/onemk-256.png "$root/usr/share/icons/hicolor/256x256/apps/one-mk.png"
+install -m 644 docs/brand/app-icon/windows-linux/hicolor/256x256/apps/one-mk.png "$root/usr/share/icons/hicolor/256x256/apps/one-mk.png"
 # The polkit action of the update's one root step (docs/UPDATES.md): its own
 # message, and the password asked every time.
 install -d "$root/usr/share/polkit-1/actions"
