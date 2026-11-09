@@ -14,8 +14,8 @@
 #     skipped and says so; authenticity then rests on GitHub and HTTPS. On
 #     macOS the app's code signature is checked too.
 # Installing replaces each program by renaming a complete copy over it, so
-# re-running it while oneMK runs works, and a failure leaves the previous
-# installation as it was. ONE_MK_RELEASE_URL picks another release folder
+# re-running it while oneMK runs works, and a failure (at any point, also
+# after some programs were replaced) puts the previous installation back. ONE_MK_RELEASE_URL picks another release folder
 # (default: GitHub's latest release); the signature still has to verify.
 set -eu
 
@@ -117,8 +117,33 @@ else
     if grep -v "^$folder/" "$tmp/listing" | grep -qv "^$folder\$" || grep -q '\(^\|/\)\.\.\(/\|$\)' "$tmp/listing"; then
         die "$file holds files outside $folder/ (nothing was installed)"
     fi
+    # Links may only point inside the folder: a symbolic link's target
+    # neither absolute nor with a "..", a hard link's inside $folder/. (The
+    # whole text after the first arrow is checked, so a name that contains
+    # one can only make this stricter.)
+    tar -tvzf "$tmp/$file" > "$tmp/verbose" || die "$file is not a valid archive (nothing was installed)"
+    while IFS= read -r line; do
+        case "$line" in
+            l*" -> "*)
+                target=${line#*" -> "}
+                case "$target" in /*|..|../*|*/..|*/../*|*" -> /"*) die "$file holds a link that points outside $folder/ (nothing was installed)" ;; esac ;;
+            h*" link to "*)
+                target=${line#*" link to "}
+                case "$target" in "$folder"/*) ;; *) die "$file holds a link that points outside $folder/ (nothing was installed)" ;; esac
+                case "$target" in *..*) die "$file holds a link that points outside $folder/ (nothing was installed)" ;; esac ;;
+            l*|h*) die "$file holds a link this installer cannot check (nothing was installed)" ;;
+        esac
+    done < "$tmp/verbose"
     mkdir "$tmp/x"
     tar -xzf "$tmp/$file" -C "$tmp/x" || die "could not unpack $file (nothing was installed)"
+    # And what was unpacked: every link resolves inside the folder.
+    find "$tmp/x" -type l > "$tmp/links" || die "could not check the links in $file (nothing was installed)"
+    while IFS= read -r link; do
+        case "$(readlink -f "$link" 2>/dev/null || echo /)" in
+            "$tmp/x/$folder"/*) ;;
+            *) die "$file holds a link that points outside $folder/ (nothing was installed)" ;;
+        esac
+    done < "$tmp/links"
     programs=
     for path in "$tmp/x/$folder"/one-mk*; do
         if [ -f "$path" ] && [ ! -L "$path" ]; then programs="$programs ${path##*/}"; fi
@@ -126,21 +151,66 @@ else
     case " $programs " in *" one-mk "*) ;; *) die "$file does not contain one-mk (nothing was installed)" ;; esac
     bin=$HOME/.local/bin
     mkdir -p "$bin" || die "cannot create $bin"
-    # Every program is copied next to its old version first; only when all
-    # copies are complete are they renamed into place. A rename replaces a
-    # running program safely ("Text file busy" only stops writing into one).
-    staged=
-    unstage() { for name in $staged; do rm -f "$bin/.$name.new.$$"; done; }
-    trap 'unstage; cleanup' EXIT
+    # A folder where a program goes would swallow the new copy (mv moves a
+    # file into a folder) while the old version stays in use.
+    for name in $programs; do
+        if [ -d "$bin/$name" ]; then die "$bin/$name is a folder, not a program; move it out of the way and run this again (nothing was installed)"; fi
+    done
+    # GNU mv's -T never moves into a folder; where mv has no -T, the check
+    # above and the one after each rename stand in for it.
+    : > "$tmp/mv-probe"
+    if mv -T "$tmp/mv-probe" "$tmp/mv-probe-done" 2>/dev/null; then mv_t=-T; else mv_t=; fi
+    # Every program is copied next to its old version first, and the old
+    # version kept (a hard link, or a copy) until all are in place: then a
+    # failure at any point puts back every program already replaced. A
+    # rename replaces a running program safely ("Text file busy" only
+    # stops writing into one).
+    staged= kept= replaced=
+    unstage() {
+        for name in $staged; do rm -f "$bin/.$name.new.$$"; done
+        for name in $kept; do rm -f "$bin/.$name.old.$$"; done
+    }
+    rollback() {
+        for name in $replaced; do
+            if [ -d "$bin/$name" ]; then
+                # A folder made there meanwhile: take our copy back out of
+                # it, and leave the previous program where it was kept.
+                rm -f "$bin/$name/.$name.new.$$"
+                if [ -e "$bin/.$name.old.$$" ]; then
+                    kept=$(printf '%s\n' $kept | grep -vx "$name" || true)
+                    echo "install.sh: $bin/$name is a folder now; the previous $name is in $bin/.$name.old.$$" >&2
+                fi
+            elif [ -e "$bin/.$name.old.$$" ]; then
+                mv -f $mv_t "$bin/.$name.old.$$" "$bin/$name" || echo "install.sh: could not put back $bin/$name" >&2
+            else
+                rm -f "$bin/$name"
+            fi
+        done
+        replaced=
+    }
+    trap 'rollback; unstage; cleanup' EXIT
     for name in $programs; do
         staged="$staged $name"
         cp "$tmp/x/$folder/$name" "$bin/.$name.new.$$" && chmod 755 "$bin/.$name.new.$$" \
             || die "could not copy $name into $bin; check free space and permissions (nothing was installed)"
+        if [ -e "$bin/$name" ] || [ -L "$bin/$name" ]; then
+            kept="$kept $name"
+            ln -f "$bin/$name" "$bin/.$name.old.$$" 2>/dev/null || cp -p "$bin/$name" "$bin/.$name.old.$$" \
+                || die "could not keep a copy of the installed $name; check free space and permissions (nothing was installed)"
+        fi
     done
     for name in $programs; do
-        mv -f "$bin/.$name.new.$$" "$bin/$name" || die "could not install $bin/$name; run this again to finish"
+        if [ -d "$bin/$name" ] || ! mv -f $mv_t "$bin/.$name.new.$$" "$bin/$name"; then
+            die "could not install $bin/$name; the previous installation was put back"
+        fi
+        replaced="$replaced $name"
+        # Without -T, checked after: the copy must have left its temporary
+        # name for a plain file, not gone into a folder made meanwhile.
+        if [ -e "$bin/.$name.new.$$" ] || [ -d "$bin/$name" ] || [ ! -f "$bin/$name" ]; then
+            die "could not install $bin/$name; the previous installation was put back"
+        fi
     done
-    staged=
+    replaced=
     echo "Installed$programs to $bin"
     case ":$PATH:" in
         *":$bin:"*) ;;
