@@ -91,10 +91,21 @@ impl Temporary {
     }
 
     fn named(parent: &Path, purpose: &str) -> Result<Self> {
+        Self::create(parent, purpose, OpenOptions::new())
+    }
+
+    /// A temporary file only this account can read (the update state in
+    /// the settings folder).
+    fn private(parent: &Path, purpose: &str) -> Result<Self> {
+        Self::create(parent, purpose, one_mk_ctl::private::options())
+    }
+
+    fn create(parent: &Path, purpose: &str, mut options: OpenOptions) -> Result<Self> {
         let suffix = if cfg!(windows) { ".exe" } else { "" };
+        options.read(true).write(true).create_new(true);
         for _ in 0..100 {
             let path = parent.join(format!(".one-mk-update-{purpose}-{}-{}{suffix}", std::process::id(), TEMP_ID.fetch_add(1, Ordering::Relaxed)));
-            match OpenOptions::new().read(true).write(true).create_new(true).open(&path) {
+            match options.open(&path) {
                 Ok(file) => return Ok(Self { path, file }),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error).context("cannot create an update file beside one-mk; check directory permissions and free disk space"),
@@ -117,7 +128,7 @@ fn sync_directory(path: &Path) -> Result<()> {
 }
 
 fn save_state(home: &Path, state: &State) -> Result<()> {
-    let mut temporary = Temporary::named(home, "state")?;
+    let mut temporary = Temporary::private(home, "state")?;
     temporary.file.write_all(&serde_json::to_vec(state)?)?;
     temporary.file.sync_all()?;
     atomic_rename(&temporary.path, &home.join(STATE))?;
@@ -159,8 +170,8 @@ fn load_state(home: &Path) -> Result<State> {
 }
 
 fn lock(home: &Path) -> Result<File> {
-    fs::create_dir_all(home)?;
-    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(home.join("update.lock"))?;
+    one_mk_ctl::private::create_dir_all(home)?;
+    let file = one_mk_ctl::private::options().read(true).write(true).create(true).truncate(false).open(home.join("update.lock"))?;
     file.try_lock().context("another update check or installation is in progress; wait for it to finish and retry")?;
     clean_temporary(home, &[".one-mk-update-state-"])?;
     Ok(file)
@@ -207,10 +218,36 @@ fn target_lock(target: &Path, denied: &str) -> Result<File> {
     Ok(file)
 }
 
+/// What a check said when its address wasn't https.
+const INSECURE_URL: &str = "The update address must start with https://; oneMK only downloads updates over a secure connection";
+
+/// What an update server's refusal (HTTP `code` from `host`) means for
+/// someone waiting for an update.
+fn refused(code: u16, host: Option<&str>) -> String {
+    let github = host.is_some_and(|h| h == "github.com" || h.ends_with(".github.com") || h.ends_with(".githubusercontent.com"));
+    let server = if github { "GitHub" } else { "The update server" };
+    match code {
+        403 | 429 => format!("{server} is limiting requests from your network; try again in a while"),
+        404 => format!("{server} has no signed oneMK release at the update address yet; try again later"),
+        500..=599 => format!("{server} isn't working right now (HTTP {code}); try again later"),
+        _ => format!("{server} refused the update check (HTTP {code}); try again later"),
+    }
+}
+
+/// A saved check error from an older version, in today's words.
+fn plain_error(error: String) -> String {
+    if error.contains("update URL must use HTTPS") {
+        INSECURE_URL.to_owned()
+    } else if let Some(code) = error.strip_prefix("update server returned HTTP ").and_then(|rest| rest.get(..3)).and_then(|code| code.parse().ok()) {
+        refused(code, Some("github.com"))
+    } else {
+        error
+    }
+}
+
 fn validate_url(url: &Url) -> Result<()> {
     ensure!(url.username().is_empty() && url.password().is_none() && url.fragment().is_none(), "update URL must not contain credentials or a fragment");
-    ensure!(url.scheme() == "https" || (cfg!(test) && url.scheme() == "http" && url.host_str() == Some("127.0.0.1")),
-        "update URL must use HTTPS (HTTP is allowed only for 127.0.0.1 in unit tests)");
+    ensure!(url.scheme() == "https" || (cfg!(test) && url.scheme() == "http" && url.host_str() == Some("127.0.0.1")), "{INSECURE_URL}");
     ensure!(url.host_str().is_some(), "update URL has no hostname");
     Ok(())
 }
@@ -301,7 +338,7 @@ fn request(url: &Url, origin: &Url, limit: u64, output: &mut impl Write) -> Resu
             current = next;
             continue;
         }
-        ensure!(code == 200, "update server returned HTTP {code}; check for a published signed release and retry later");
+        ensure!(code == 200, "{}", refused(code, current.host_str()));
         ensure!(!(chunked && length.is_some()), "ambiguous HTTP body framing refused");
         ensure!(length.is_none_or(|size| size <= limit), "download exceeds its allowed size; no files were replaced");
         let mut total = 0;
@@ -879,7 +916,7 @@ fn window_status(home: &Path) -> Result<policy::UpdateStatus> {
     });
     Ok(policy::UpdateStatus {
         check: settings.check, install_automatically: settings.install_automatically,
-        available: policy::cached_version(home, env!("CARGO_PKG_VERSION")), error: state.error,
+        available: policy::cached_version(home, env!("CARGO_PKG_VERSION")), error: state.error.map(plain_error),
         can_update: kind.installs_in_app() && !movable && !leaves_behind, needs_password: kind.needs_password(),
         move_to_applications: movable, rollback_available,
         advice: if movable {
@@ -1030,7 +1067,7 @@ pub fn notice(home: &Path) -> Option<String> {
 
 pub fn doctor(home: &Path) -> (bool, String) {
     match load_state(home) {
-        Ok(state) if state.error.is_some() => (false, format!("Couldn't check: {}", state.error.unwrap_or_default())),
+        Ok(state) if state.error.is_some() => (false, format!("Couldn't check: {}", state.error.map(plain_error).unwrap_or_default())),
         Ok(state) if state.sequence > 0 => {
             if policy::cached_version(home, env!("CARGO_PKG_VERSION")).is_some() {
                 (true, "Update available — Update now".into())
