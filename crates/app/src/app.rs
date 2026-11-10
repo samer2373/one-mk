@@ -7,6 +7,7 @@ mod cells;
 mod clipboard_history;
 mod keys;
 mod links;
+mod page_ui;
 mod pages;
 mod place;
 mod shell;
@@ -74,7 +75,7 @@ impl Tab {
     /// Tabs that show the desk of computers (where they can be dragged
     /// into place).
     fn desk(self) -> bool {
-        matches!(self, Tab::Desk | Tab::Files | Tab::Arrange)
+        matches!(self, Tab::Desk | Tab::Files)
     }
     /// Tabs that mean something while oneMK is off.
     fn when_off(self) -> bool {
@@ -205,9 +206,6 @@ enum Cell {
     Inspector(Option<String>),
     /// This computer's switches.
     Controls,
-    Arrange(Option<String>),
-    LineUp(Option<String>),
-    Profiles,
 }
 
 struct Slot {
@@ -421,36 +419,6 @@ fn separate_crowded_slots(places: &mut HashMap<String, (scene::V3, f32)>, widths
 }
 
 // ---------- the panel's painted rows ----------
-
-/// Status by shape, not colour: a filled dot when connected, a ring when
-/// not, no dot for this computer. Returns the width it took.
-fn chip(ui: &Ui, c: Rect, label: &str, dot: Option<bool>) -> f32 {
-    let p = ui.painter();
-    let mid = c.top() + 10.0;
-    let tw = text_width(ui, label, regular(T_META));
-    p.text(pos2(c.right(), mid), Align2::RIGHT_CENTER, label, regular(T_META), pal().ink2);
-    let at = pos2(c.right() - tw - 9.0, mid);
-    match dot {
-        Some(true) => {
-            widgets::status_mark(p, at, 7.0, widgets::Mark::Ok);
-        }
-        Some(false) => {
-            widgets::status_mark(p, at, 7.0, widgets::Mark::Off);
-        }
-        None => {}
-    }
-    tw + if dot.is_some() { 22.0 } else { 10.0 }
-}
-
-/// A computer's name on the inspector's first row, shortened to fit.
-fn title_row(ui: &Ui, c: Rect, name: &str, room: f32) {
-    let font = semibold(T_TITLE);
-    let text = fit(ui.painter(), name, &font, c.width() - room);
-    ui.painter().text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, &text, font, pal().ink);
-    if text != name {
-        ui.interact(Rect::from_min_size(c.min, vec2(c.width() - room, 20.0)), Id::unique(("title", name)), Sense::hover()).on_hover_text(name);
-    }
-}
 
 /// A key on the left and its value on the right, centred on `y`.
 fn info_row(ui: &Ui, c: Rect, y: f32, key: &str, val: &str, mono_val: bool, alpha: f32) {
@@ -1746,21 +1714,13 @@ impl App {
                 _ => vec![(Cell::Inspector(None), cell(0, 1)), (Cell::Controls, cell(1, 3))],
             },
             Tab::Desk => vec![(Cell::Inspector(self.selected_id()), cell(0, 2)), (Cell::Controls, cell(2, 3))],
-            Tab::Arrange => {
-                let sel = self.selected_id().filter(|id| id != "me");
-                vec![(Cell::Arrange(sel.clone()), cell(0, 1)), (Cell::LineUp(sel), cell(1, 2)), (Cell::Profiles, cell(2, 3))]
-            }
-            Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files => vec![],
+            Tab::Arrange | Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files => vec![],
         }
     }
 
     fn panel(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
         if self.tab == Tab::Files {
             self.files_panel(ui, rect);
-            return;
-        }
-        if self.tab == Tab::Arrange && rect.width() < 760.0 {
-            self.layout_stacked(ui, rect, now);
             return;
         }
         let cells = self.cells(rect);
@@ -1839,65 +1799,6 @@ impl App {
         }
     }
 
-    /// Arrange in a narrow window: its three cards behind one tab row
-    /// (Position, Exact place, Profiles), each shown full width and full
-    /// height, so every one is a click away and nothing is shortened or cut.
-    fn layout_stacked(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
-        let sel = self.selected_id().filter(|id| id != "me");
-        let key = Id::unique("arrange-tab");
-        #[allow(unused_mut)]
-        let mut chosen = ui.ctx().data(|d| d.get_temp::<usize>(key)).unwrap_or(0);
-        #[cfg(any(debug_assertions, feature = "design-evidence"))]
-        if let Some(k) = std::env::var("ONE_MK_APP_LAYOUT_TAB").ok().and_then(|v| v.parse::<usize>().ok()) {
-            chosen = k.min(2);
-        }
-        // An open profile's options belong to Profiles: show that tab.
-        if self.profile_scroll {
-            chosen = 2;
-        }
-        let height_key = Id::unique(("layout-position-height", &sel, rect.width().to_bits()));
-        let panel_height = if chosen == 0 { ui.ctx().data(|data| data.get_temp::<f32>(height_key)).unwrap_or(232.0).min(rect.height()) } else { rect.height() };
-        let rect = Rect::from_min_size(rect.min, vec2(rect.width(), panel_height));
-        widgets::group(ui, rect, R_PANEL);
-        let inner = rect.shrink(PAD);
-        let labels = ["Position", "Exact place", "Profiles"];
-        let track = Rect::from_min_size(inner.min, vec2(inner.width().min(420.0), 30.0));
-        let pills = Pills {
-            id: Id::unique("arrange-tabs"),
-            track,
-            cells: Pills::even(track, 3, 2.0),
-            labels: &labels,
-            names: labels.iter().map(|l| format!("Arrange: {l}")).collect(),
-            chosen: Some(chosen),
-            enabled: vec![true; 3],
-            role: Role::Tab,
-            font: T_BODY,
-        };
-        if let Some(k) = pills.show(ui, self.arrowed) {
-            chosen = k;
-        }
-        ui.ctx().data_mut(|d| d.insert_temp(key, chosen));
-        let body = Rect::from_min_max(pos2(inner.left(), track.bottom() + 16.0), inner.max);
-        let cell = match chosen {
-            0 => Cell::Arrange(sel),
-            1 => Cell::LineUp(sel),
-            _ => Cell::Profiles,
-        };
-        let mut child = ui.new_child(UiBuilder::new().max_rect(body).id_salt(("arrange-tab-body", chosen)));
-        child.set_clip_rect(body.expand(4.0).intersect(ui.clip_rect()));
-        let layer = child.layer_id();
-        let start = ui.ctx().graphics(|graphics| graphics.get(layer).map_or(0, |list| list.all_entries().len()));
-        self.draw_cell(&mut child, &cell, body, now);
-        if chosen == 0 {
-            let bottom = ui.ctx().graphics(|graphics| graphics.get(layer).map_or(body.top(), |list| list.all_entries().skip(start).map(|entry| entry.shape.visual_bounding_rect()).filter(|bounds| bounds.is_finite()).fold(body.top(), |bottom, bounds| bottom.max(bounds.bottom()))));
-            let measured = (bottom + PAD - rect.top()).max(120.0);
-            if (measured - panel_height).abs() > 0.5 {
-                ui.ctx().data_mut(|data| data.insert_temp(height_key, measured));
-                ui.ctx().request_repaint();
-            }
-        }
-    }
-
     fn draw_cell(&mut self, ui: &mut Ui, cell: &Cell, r: Rect, now: f64) {
         match cell {
             Cell::Head(title, sub) => {
@@ -1919,9 +1820,6 @@ impl App {
             }
             Cell::Inspector(sel) => self.peer_card(ui, r, sel.clone(), now),
             Cell::Controls => self.controls(ui, r),
-            Cell::Arrange(sel) => self.arrange_cell(ui, r, sel.clone()),
-            Cell::LineUp(sel) => self.line_up_cell(ui, r, sel.clone()),
-            Cell::Profiles => self.profiles_cell(ui, r),
         }
     }
 
@@ -2425,11 +2323,8 @@ fn cell_key(c: &Cell) -> Option<&'static str> {
     match c {
         Cell::Controls => Some("controls"),
         Cell::Head(..) => Some("head"),
-        // Arrange's three cards share one height (a row of equals).
         Cell::Inspector(None) => Some("me"),
         Cell::Inspector(Some(_)) => Some("peer"),
-        Cell::LineUp(_) => Some("lineup"),
-        _ => None,
     }
 }
 
@@ -2480,7 +2375,7 @@ impl eframe::App for App {
         let f = shell::frame(full);
         let content = f.content;
         let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
-        let with_cards = !matches!(self.tab, Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files);
+        let with_cards = !matches!(self.tab, Tab::Arrange | Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files);
         let cards = Rect::from_min_max(pos2(content.left(), content.bottom() - if with_cards { self.panel_h() } else { 0.0 }), content.max);
         let desk = Rect::from_min_max(pos2(content.left(), head.bottom()), pos2(content.right(), if with_cards { cards.top() - M } else { content.bottom() }));
         // Files let go over a page without the desk: ask where they go.
@@ -2503,9 +2398,7 @@ impl eframe::App for App {
             child
         };
         self.refresh_notice(ui, now);
-        // Layout learning's question has a strip of its own under the desk.
-        let card = self.suggestion_card(ui, desk);
-        let scene = card.as_ref().map_or(desk, |c| Rect::from_min_max(desk.min, pos2(desk.right(), c.rect.top() - 6.0)));
+        let scene = desk;
         // The computers are framed below a banner over the desk, and below
         // the transfer where a small window puts it at the top.
         let mut frame = scene;
@@ -2555,14 +2448,22 @@ impl eframe::App for App {
             self.desk_overlay(ui, scene, hovering);
         }
         let mut body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
+        // These pages draw their own title: their content starts at the top.
+        if shell::own_head(self.tab) {
+            body.min.y = content.top();
+        }
         // Broadcasting is said on every page (the desk says it in its band).
-        if !matches!(self.tab, Tab::Desk | Tab::Arrange) {
+        if !matches!(self.tab, Tab::Desk) {
             body.min.y += self.page_banner(ui, body);
         }
         match self.tab {
             Tab::Files => {
                 let mut child = page(ui, body, "files");
                 self.files_panel(&mut child, body);
+            }
+            Tab::Arrange => {
+                let mut child = page(ui, body, "arrange");
+                self.arrange_page(&mut child, body);
             }
             Tab::Wallpaper => {
                 let mut child = page(ui, body, "wallpaper");
@@ -2583,12 +2484,11 @@ impl eframe::App for App {
             _ => {}
         }
         let (title, sub) = self.page_title();
-        self.page_head(ui, head, &title, &sub);
+        if !shell::own_head(self.tab) {
+            self.page_head(ui, head, &title, &sub);
+        }
         if with_cards {
             self.panel(ui, cards, now);
-        }
-        if let Some(card) = card {
-            self.suggestion_banner(ui, card);
         }
         widgets::set_locked(ui.ctx(), false);
         // The sheet sits over the panel, leaving the desk room to show
