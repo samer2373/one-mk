@@ -121,6 +121,154 @@ fn short_warning(apart: bool, warnings: &[String]) -> Option<&'static str> {
     }
 }
 
+/// The suggestion banner's question and reason laid out `w` wide, its
+/// height, and the room its two buttons take.
+fn suggestion_text(ui: &Ui, question: &str, w: f32) -> (std::sync::Arc<egui::Galley>, std::sync::Arc<egui::Galley>, f32, f32) {
+    let buttons_w = button_width(ui, SUGGEST_YES) + 8.0 + button_width(ui, SUGGEST_NO);
+    let text_w = (w - buttons_w - 48.0).max(120.0);
+    let q = ui.painter().layout(question.to_owned(), semibold(T_BODY), pal().ink, text_w);
+    let d = ui.painter().layout(SUGGEST_WHY.to_owned(), regular(T_META), pal().ink2, text_w);
+    let h = (q.size().y + 2.0 + d.size().y).max(34.0) + 24.0;
+    (q, d, h, buttons_w)
+}
+
+/// The farthest an offset goes on either axis: what `one-mk layout
+/// --offset DX,DY` accepts (`one_mk_net::MAX_OFFSET`, what the wire carries).
+pub(super) const MAX_OFFSET: i64 = 1 << 24;
+const PLACE_WHOLE: &str = "Use whole pixels for X and Y, like -1920 and 0.";
+const PLACE_BOUNDS: &str = "X and Y must be within -16777216 and 16777216 pixels.";
+/// How near an edge of ours a block let go on the plan snaps to it, in
+/// points of the plan.
+const PLAN_REACH: f64 = 10.0;
+/// A field's height (the handoff's 38).
+const FIELD_H: f32 = 38.0;
+
+/// X and Y as typed in Exact place, checked as `one-mk layout --offset`
+/// checks them: whole pixels, within ±2^24. Returns the offset or what is
+/// wrong, in a sentence.
+pub(super) fn parse_place(x: &str, y: &str) -> Result<(i32, i32), &'static str> {
+    let num = |s: &str| s.trim().replace('\u{2212}', "-").parse::<i64>().ok();
+    let (Some(x), Some(y)) = (num(x), num(y)) else { return Err(PLACE_WHOLE) };
+    if x.abs() > MAX_OFFSET || y.abs() > MAX_OFFSET {
+        return Err(PLACE_BOUNDS);
+    }
+    Ok((x as i32, y as i32))
+}
+
+/// An arrow key moves a computer on the plan by a pixel (ten with Shift).
+pub(super) fn nudge(at: (i32, i32), key: Key, shift: bool) -> Option<(i32, i32)> {
+    let step = if shift { 10 } else { 1 };
+    let (dx, dy) = match key {
+        Key::ArrowLeft => (-step, 0),
+        Key::ArrowRight => (step, 0),
+        Key::ArrowUp => (0, -step),
+        Key::ArrowDown => (0, step),
+        _ => return None,
+    };
+    let m = MAX_OFFSET as i32;
+    Some(((at.0 + dx).clamp(-m, m), (at.1 + dy).clamp(-m, m)))
+}
+
+/// The side of ours a computer at `offset` is on: the one its screens
+/// touch, or else the one it is mostly beyond.
+pub(super) fn side_for(mine: &Desktop, theirs: &Desktop, offset: (i32, i32)) -> Side {
+    if let Some(side) = Side::ALL.into_iter().find(|s| !one_mk_proto::touching(mine, theirs, *s, offset).is_empty()) {
+        return side;
+    }
+    let (b, r) = (mine.bounds(), theirs.bounds());
+    let (rx, ry) = (r.x + offset.0, r.y + offset.1);
+    let dx = f64::from(2 * rx + r.w - 2 * b.x - b.w) / f64::from((b.w + r.w).max(1));
+    let dy = f64::from(2 * ry + r.h - 2 * b.y - b.h) / f64::from((b.h + r.h).max(1));
+    match (dx.abs() >= dy.abs(), dx < 0.0, dy < 0.0) {
+        (true, true, _) => Side::Left,
+        (true, false, _) => Side::Right,
+        (false, _, true) => Side::Top,
+        (false, _, false) => Side::Bottom,
+    }
+}
+
+/// Where a computer whose (0,0) the pointer (or the arrow keys) put at
+/// `at` lands, as on the desk (`scene::landing`): beside the nearest edge
+/// of ours, so the pointer crosses; or, `apart` (Place freely, or Alt
+/// held), exactly there, touching nothing. `reach` is how near an edge
+/// snaps to it, in our pixels.
+pub(super) fn plan_landing(mine: &Desktop, theirs: &Desktop, at: (i32, i32), reach: f64, apart: bool) -> scene::Landing {
+    let edges: Vec<Edge> = Side::ALL.into_iter().flat_map(|s| mine.exposed_edges(s)).collect();
+    let b = theirs.bounds();
+    let corner = (f64::from(at.0) + f64::from(b.x), f64::from(at.1) + f64::from(b.y));
+    let dropped = scene::drop_place(&mine.screens, &edges, b, corner, if apart { 0.0 } else { reach });
+    scene::landing(mine, theirs, dropped, apart)
+}
+
+/// The plan's scale and where its top left is, in our pixels: kept while
+/// a computer is carried, so the plan doesn't grow under the pointer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PlanFrame {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    /// Points of the plan per pixel.
+    pub scale: f64,
+}
+
+impl PlanFrame {
+    /// The frame for `bounds`, as large as `inner_w` and `max_h` allow.
+    pub fn fit(bounds: one_mk_wallpaper::Rect, inner_w: f32, max_h: f64) -> PlanFrame {
+        let scale = (f64::from(inner_w) / bounds.width).min(max_h / bounds.height);
+        PlanFrame { x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height, scale }
+    }
+    /// How big the plan is on screen.
+    pub fn size(&self) -> egui::Vec2 {
+        vec2((self.w * self.scale) as f32, (self.h * self.scale) as f32)
+    }
+    /// Where a pixel of ours is on screen, with the plan's top left at `top_left`.
+    pub fn screen(&self, top_left: Pos2, x: f64, y: f64) -> Pos2 {
+        top_left + vec2(((x - self.x) * self.scale) as f32, ((y - self.y) * self.scale) as f32)
+    }
+    /// The pixel of ours under a point on screen.
+    pub fn px(&self, top_left: Pos2, p: Pos2) -> (f64, f64) {
+        (self.x + f64::from(p.x - top_left.x) / self.scale, self.y + f64::from(p.y - top_left.y) / self.scale)
+    }
+}
+
+/// Where a carried computer's (0,0) is with the pointer at `pointer`
+/// (in our pixels), held by `grab` (the pointer's distance from it).
+pub(super) fn carried_to(pointer: (f64, f64), grab: (f64, f64)) -> (i32, i32) {
+    let m = MAX_OFFSET as f64;
+    (((pointer.0 - grab.0).round()).clamp(-m, m) as i32, ((pointer.1 - grab.1).round()).clamp(-m, m) as i32)
+}
+
+/// Where computer `id`'s (0,0) is on `canvas`, in our pixels (its place,
+/// or where it is drawn when it has none).
+pub(super) fn shown_offset(canvas: &Canvas, id: &str) -> Option<(i32, i32)> {
+    let m = canvas.monitors.iter().find(|m| m.computer == id)?;
+    let local = m.local?;
+    Some(((m.rect.x - local.x).round() as i32, (m.rect.y - local.y).round() as i32))
+}
+
+/// `at` moved as little as needed for screens spanning `span` (in their
+/// pixels) to stay between `lo` and `hi` (ours): the plan's room.
+pub(super) fn keep_within(at: (i32, i32), span: one_mk_proto::Rect, lo: (f64, f64), hi: (f64, f64)) -> (i32, i32) {
+    let axis = |at: i32, from: i32, len: i32, lo: f64, hi: f64| {
+        let (min, max) = ((lo - f64::from(from)).ceil(), (hi - f64::from(from + len)).floor());
+        if min > max { at } else { (f64::from(at)).clamp(min, max) as i32 }
+    };
+    (axis(at.0, span.x, span.w, lo.0, hi.0), axis(at.1, span.y, span.h, lo.1, hi.1))
+}
+
+/// A computer being placed on the plan.
+pub(super) struct PlanDrag {
+    pub id: String,
+    frame: PlanFrame,
+    /// From its (0,0) to the pointer, in our pixels (none: the keyboard).
+    grab: Option<(f64, f64)>,
+    /// Where the pointer or the arrow keys put its (0,0), before snapping.
+    at: (i32, i32),
+    /// Where it lands if let go now.
+    landing: scene::Landing,
+}
+
 impl App {
     /// The layout warnings the daemon has about `name`.
     fn layout_warnings(status: &Status, name: &str) -> Vec<String> {
@@ -131,7 +279,57 @@ impl App {
     /// one and it wasn't answered here: "Yes, place it" places the computer
     /// there (`one-mk layout`), "No" hides the question (`one-mk edge
     /// --dismiss`); either way it goes at once. Returns its height.
-    fn suggestion_banner(&mut self, ui: &mut Ui, x: f32, y: f32, w: f32) -> Option<f32> {
+    /// How tall the suggestion banner is `w` wide, when there is one to show
+    /// (the Desk makes room for it above the computers).
+    pub(super) fn suggestion_h(&self, ui: &Ui, w: f32) -> Option<f32> {
+        let g = self.running()?.suggestion.as_ref()?;
+        if self.answered.as_ref() == Some(&(g.id.clone(), g.side)) {
+            return None;
+        }
+        Some(suggestion_text(ui, &one_mk_ctl::status::is_it_there(&g.name, g.side), w).2)
+    }
+
+    /// Whether the Desk asks layout learning's question in its toolbar's
+    /// row (a narrow window, where a banner above would leave the computers
+    /// too little room) rather than in a banner above it.
+    pub(super) fn suggestion_in_row(&self, ui: &Ui) -> bool {
+        ui.ctx().content_rect().width() < desk_panel::STACK_BELOW && self.desk_views_shown()
+    }
+
+    /// The question in one line, `r` (the toolbar row's free part): the
+    /// banner's look, its words, Yes and No; why it asks, on hover.
+    pub(super) fn suggestion_row(&mut self, ui: &mut Ui, r: Rect) {
+        let Some(g) = self.running().and_then(|s| s.suggestion.clone()) else {
+            self.answered = None;
+            return;
+        };
+        if self.answered.as_ref() == Some(&(g.id.clone(), g.side)) || r.width() < 220.0 {
+            return;
+        }
+        let question = one_mk_ctl::status::is_it_there(&g.name, g.side);
+        page_ui::banner_frame(ui, r, false);
+        let (yes_w, no_w) = (button_width(ui, SUGGEST_YES), button_width(ui, SUGGEST_NO));
+        let no_r = Rect::from_min_size(pos2(r.right() - 2.0 - no_w, r.top() + 2.0), vec2(no_w, r.height() - 4.0));
+        let yes_r = Rect::from_min_size(pos2(no_r.left() - 6.0 - yes_w, r.top() + 2.0), vec2(yes_w, r.height() - 4.0));
+        let room = yes_r.left() - r.left() - 24.0;
+        let p = ui.painter();
+        let shown = fit(p, &question, &semibold(T_BODY), room);
+        let text = p.text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, shown, semibold(T_BODY), pal().ink);
+        ui.interact(text, Id::unique(("suggestion-why", &g.id)), Sense::hover()).on_hover_text(format!("{question} {SUGGEST_WHY}"));
+        a11y_text(ui, Id::unique(("suggestion", &g.id)), r, Role::Status, &format!("{question} {SUGGEST_WHY}"), Some(Live::Polite));
+        let place = format!("Yes: place {} {}", g.name, on_your(g.side));
+        let keep = format!("No: {} stays where it is", g.name);
+        if button(ui, yes_r, Id::unique(("suggestion-yes", &g.id)), SUGGEST_YES, Look::Primary, true, Some(&place)).clicked() {
+            self.answered = Some((g.id.clone(), g.side));
+            self.choose_side(&g.id, g.side, false);
+        }
+        if button(ui, no_r, Id::unique(("suggestion-no", &g.id)), SUGGEST_NO, Look::Quiet, true, Some(&keep)).clicked() {
+            self.answered = Some((g.id.clone(), g.side));
+            self.link.set("the layout suggestion", &["edge", "--dismiss"]);
+        }
+    }
+
+    pub(super) fn suggestion_banner(&mut self, ui: &mut Ui, x: f32, y: f32, w: f32) -> Option<f32> {
         let Some(g) = self.running().and_then(|s| s.suggestion.clone()) else {
             self.answered = None; // asked again later, it shows again
             return None;
@@ -140,11 +338,7 @@ impl App {
             return None;
         }
         let question = one_mk_ctl::status::is_it_there(&g.name, g.side);
-        let buttons_w = button_width(ui, SUGGEST_YES) + 8.0 + button_width(ui, SUGGEST_NO);
-        let text_w = (w - buttons_w - 48.0).max(120.0);
-        let q = ui.painter().layout(question.clone(), semibold(T_BODY), pal().ink, text_w);
-        let d = ui.painter().layout(SUGGEST_WHY.to_owned(), regular(T_META), pal().ink2, text_w);
-        let h = (q.size().y + 2.0 + d.size().y).max(34.0) + 24.0;
+        let (q, d, h, buttons_w) = suggestion_text(ui, &question, w);
         let rect = Rect::from_min_size(pos2(x, y), vec2(w, h));
         page_ui::banner_frame(ui, rect, false);
         let qh = q.size().y;
@@ -184,7 +378,7 @@ impl App {
             if let Some(h) = self.suggestion_banner(ui, page.x, y, page.w) {
                 page.skip_to(y + h + 16.0);
             }
-            self.plan_card(ui, &mut page, &canvas, &status, selected.as_deref());
+            self.plan_card(ui, &mut page, &status, selected.as_deref());
 
             // Where each computer sits, and the chosen one's place.
             let mut card = page.card(ui, 0, "Where each computer sits");
@@ -211,54 +405,262 @@ impl App {
         });
     }
 
+    /// What Exact place holds for `id` while it is being typed: the offset,
+    /// or what is wrong with it; `None` when nothing was typed.
+    fn place_draft(&self, id: &str) -> Option<Result<(i32, i32), &'static str>> {
+        let (x, y) = (self.drafts.get(&format!("place-x:{id}")), self.drafts.get(&format!("place-y:{id}")));
+        if x.is_none() && y.is_none() {
+            return None;
+        }
+        Some(parse_place(x.map_or("", String::as_str), y.map_or("", String::as_str)))
+    }
+
+    /// The status as the plan shows it: each computer where it is being
+    /// placed (carried, moved by the arrow keys, typed in Exact place), or
+    /// where it was chosen here, or where the daemon says it is.
+    fn plan_status(&self, status: &Status) -> Status {
+        let mut shown = status.clone();
+        shown.offsets.clear();
+        let mine = Desktop::new(status.screens.clone());
+        for peer in &mut shown.peers {
+            let (mut side, mut offset) = self.place_shown(&peer.id, (peer.side, status.offset_of(&peer.id)));
+            if let Some(d) = self.plan.as_ref().filter(|d| d.id == peer.id) {
+                (side, offset) = match d.landing {
+                    scene::Landing::Beside(s, o) | scene::Landing::Apart(s, o) => (s, Some(o)),
+                    scene::Landing::Along(s) => (s, None),
+                };
+            } else if let Some(Ok(o)) = self.place_draft(&peer.id)
+                && !status.screens.is_empty()
+                && !peer.screens.is_empty()
+            {
+                (side, offset) = (side_for(&mine, &Desktop::new(peer.screens.clone()), o), Some(o));
+            }
+            peer.side = side;
+            if let Some(o) = offset {
+                shown.offsets.push((peer.id.clone(), o));
+            }
+        }
+        shown
+    }
+
+    /// A computer let go on the plan (or placed with Enter) goes where it
+    /// landed, through the same `one-mk layout` as a drag on the desk.
+    fn plan_let_go(&mut self, d: PlanDrag) {
+        match d.landing {
+            scene::Landing::Beside(side, o) | scene::Landing::Apart(side, o) => self.choose_place(&d.id, side, Some(o), false),
+            scene::Landing::Along(side) => self.choose_side(&d.id, side, false),
+        }
+    }
+
     /// The plan of screens: one flat rectangle per screen, named by its
-    /// computer, the edges where two computers touch in the accent. A
-    /// click on one chooses that computer.
-    fn plan_card(&mut self, ui: &mut Ui, page: &mut Page, canvas: &Canvas, status: &Status, selected: Option<&str>) {
-        let Some(bounds) = canvas.bounds().filter(|_| canvas.monitors.len() > 1) else { return };
+    /// computer, the edges where two computers touch in the accent. A click
+    /// chooses a computer; dragging one (or the arrow keys, Enter to place,
+    /// Esc to cancel) places it: beside the nearest edge of ours, as on the
+    /// desk, or anywhere with Place freely (or Alt held), apart.
+    fn plan_card(&mut self, ui: &mut Ui, page: &mut Page, status: &Status, selected: Option<&str>) {
+        let before = one_mk_ctl::wallpaper::canvas(&self.plan_status(status));
+        let Some(bounds) = before.bounds().filter(|_| before.monitors.len() > 1) else {
+            self.plan = None;
+            return;
+        };
         let mut card = page.wide(ui, "");
         let inner_w = page.w - 48.0;
-        let scale = (f64::from(inner_w) / bounds.width).min(150.0 / bounds.height);
-        let (pw, ph) = ((bounds.width * scale) as f32, (bounds.height * scale) as f32);
-        let area = card.more(ph + 48.0);
-        let top_left = pos2(area.center().x - pw / 2.0, area.top() + 24.0);
-        let map = |x: f64, y: f64| top_left + vec2(((x - bounds.x) * scale) as f32, ((y - bounds.y) * scale) as f32);
-        let gap = 1.5;
-        let mut named = std::collections::BTreeSet::new();
-        for monitor in &canvas.monitors {
-            let r = monitor.rect;
-            let rect = Rect::from_min_max(map(r.x, r.y), map(r.x + r.width, r.y + r.height)).shrink(gap);
-            let chosen = Some(monitor.computer.as_str()) == selected || (selected == Some("me") && monitor.computer == status.id);
+        let frame = self.plan.as_ref().map_or_else(|| PlanFrame::fit(bounds, inner_w, 150.0), |d| d.frame);
+        let size = frame.size();
+        let area = card.row(ui, size.y + 24.0 + 40.0);
+        let top_left = pos2(area.center().x - size.x / 2.0, area.top() + 24.0);
+        let mine = Desktop::new(status.screens.clone());
+        let movable = |id: &str| -> Option<Desktop> {
+            status.peers.iter().find(|p| p.id == id).filter(|p| !p.screens.is_empty() && !status.screens.is_empty()).map(|p| Desktop::new(p.screens.clone()))
+        };
+        let reach = PLAN_REACH / frame.scale;
+        let (alt, shift, escape, enter) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift, i.key_pressed(Key::Escape), i.key_pressed(Key::Enter)));
+        let apart = self.plan_free || alt;
+        let block = |r: one_mk_wallpaper::Rect| Rect::from_min_max(frame.screen(top_left, r.x, r.y), frame.screen(top_left, r.x + r.width, r.y + r.height)).shrink(1.5);
+
+        // Each block where it is drawn now: what the pointer and keys do.
+        let mut responses = Vec::with_capacity(before.monitors.len());
+        let (mut pick, mut start, mut moved_to, mut let_go, mut nudged, mut focused) = (None, None, None, false, None, None);
+        for monitor in &before.monitors {
+            let can_move = monitor.computer != status.id && movable(&monitor.computer).is_some();
             let id = Id::unique(("plan-screen", &monitor.computer, &monitor.name));
-            let response = ui.interact(rect, id, widgets::sense(ui, Sense::click()));
-            let p = ui.painter();
+            let resp = ui.interact(block(monitor.rect), id, widgets::sense(ui, if can_move { Sense::click_and_drag() } else { Sense::click() }));
+            if resp.clicked() {
+                pick = Some(monitor.computer.clone());
+            }
+            if can_move {
+                if resp.drag_started() {
+                    start = resp.interact_pointer_pos().map(|p| (monitor.computer.clone(), p));
+                }
+                if resp.dragged() {
+                    moved_to = resp.interact_pointer_pos();
+                }
+                let_go |= resp.drag_stopped();
+                if resp.has_focus() {
+                    // The arrow keys and Esc are the block's while it has the keyboard.
+                    ui.memory_mut(|m| m.set_focus_lock_filter(id, egui::EventFilter { tab: false, horizontal_arrows: true, vertical_arrows: true, escape: true }));
+                    focused = Some(monitor.computer.clone());
+                    for key in [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown] {
+                        if ui.input(|i| i.key_pressed(key)) {
+                            nudged = Some((monitor.computer.clone(), key));
+                        }
+                    }
+                }
+            }
+            responses.push(resp);
+        }
+        if let Some(id) = pick {
+            self.select(if id == status.id { "me".to_owned() } else { id });
+        }
+        // Picked up: held where the pointer took it.
+        if let Some((id, p)) = start
+            && let (Some(theirs), Some(at)) = (movable(&id), shown_offset(&before, &id))
+        {
+            let px = frame.px(top_left, p);
+            let grab = (px.0 - f64::from(at.0), px.1 - f64::from(at.1));
+            self.select(id.clone());
+            self.plan = Some(PlanDrag { id, frame, grab: Some(grab), at, landing: plan_landing(&mine, &theirs, at, reach, apart) });
+        }
+        // An arrow key: a pixel (ten with Shift) from where it is shown.
+        if let Some((id, key)) = nudged
+            && movable(&id).is_some()
+        {
+            let from = match &self.plan {
+                Some(d) if d.id == id => Some(d.at),
+                _ => shown_offset(&before, &id),
+            };
+            if let Some(at) = from.and_then(|at| nudge(at, key, shift)) {
+                let landing = scene::Landing::Along(Side::Left);
+                self.plan = Some(PlanDrag { id, frame, grab: None, at, landing });
+            }
+        }
+        if let Some(d) = self.plan.as_mut() {
+            if let (Some(p), Some(grab)) = (moved_to, d.grab) {
+                d.at = carried_to(frame.px(top_left, p), grab);
+            }
+            // It stays on the plan (above the line under it), not under the cards.
+            if let Some(theirs) = movable(&d.id) {
+                let room = Rect::from_min_max(area.min + vec2(0.0, 4.0), area.max - vec2(0.0, 30.0));
+                d.at = keep_within(d.at, theirs.bounds(), frame.px(top_left, room.min), frame.px(top_left, room.max));
+            }
+            match movable(&d.id) {
+                Some(theirs) => d.landing = plan_landing(&mine, &theirs, d.at, reach, apart),
+                None => self.plan = None,
+            }
+        }
+        let keyboard = self.plan.as_ref().is_some_and(|d| d.grab.is_none());
+        let id_of = self.plan.as_ref().map(|d| d.id.clone());
+        if self.plan.is_some() && (escape || (keyboard && focused != id_of)) {
+            // Esc, or the keyboard went elsewhere: it stays where it was.
+            self.plan = None;
+        } else if (let_go && !keyboard) || (enter && keyboard && focused == id_of) {
+            if let Some(d) = self.plan.take() {
+                self.plan_let_go(d);
+            }
+        } else if let_go {
+            self.plan = None;
+        }
+
+        // Painted where it is now.
+        let canvas = one_mk_ctl::wallpaper::canvas(&self.plan_status(status));
+        let carried = self.plan.as_ref().map(|d| d.id.clone());
+        // Placed elsewhere (a typed place, a layout chosen), a computer
+        // glides there; carried, it follows the pointer exactly.
+        let mut glide: HashMap<String, egui::Vec2> = HashMap::new();
+        for monitor in &canvas.monitors {
+            if glide.contains_key(&monitor.computer) {
+                continue;
+            }
+            let Some(o) = shown_offset(&canvas, &monitor.computer) else { continue };
+            let secs = if carried.as_deref() == Some(monitor.computer.as_str()) { 0.0 } else { motion::space(0.18) };
+            let gx = tween(ui.ctx(), Id::unique(("plan-glide", &monitor.computer, 0)), o.0 as f32, secs, motion::out_cubic);
+            let gy = tween(ui.ctx(), Id::unique(("plan-glide", &monitor.computer, 1)), o.1 as f32, secs, motion::out_cubic);
+            glide.insert(monitor.computer.clone(), vec2((f64::from(gx - o.0 as f32) * frame.scale) as f32, (f64::from(gy - o.1 as f32) * frame.scale) as f32));
+        }
+        let p = ui.painter_at(area.expand(2.0));
+        let mut named = std::collections::BTreeSet::new();
+        for (k, monitor) in canvas.monitors.iter().enumerate() {
+            let rect = block(monitor.rect).translate(glide.get(&monitor.computer).copied().unwrap_or_default());
+            let Some(response) = responses.get(k) else { continue };
+            let is_me = monitor.computer == status.id;
+            let chosen = Some(monitor.computer.as_str()) == selected || (selected == Some("me") && is_me) || carried.as_deref() == Some(monitor.computer.as_str());
             let fill = if chosen { pal().accent_soft } else { mix(pal().surface2, pal().surface2_hover, f32::from(response.hovered())) };
             let fill = if monitor.online { fill } else { fill.gamma_multiply(0.55) };
             p.rect_filled(rect, CornerRadius::same(5), fill);
+            let name = if is_me { status.name.clone() } else { status.peers.iter().find(|peer| peer.id == monitor.computer).map_or_else(|| monitor.name.clone(), |peer| peer.name.clone()) };
             if named.insert(monitor.computer.clone()) {
-                let computer = if monitor.computer == status.id { status.name.clone() } else { status.peers.iter().find(|peer| peer.id == monitor.computer).map_or_else(|| monitor.name.clone(), |peer| peer.name.clone()) };
-                let label = if monitor.online { computer } else { format!("{computer} · Offline") };
+                let label = if monitor.online { name.clone() } else { format!("{name} · Offline") };
                 let colour = if chosen { pal().accent_text } else if monitor.online { pal().ink2 } else { pal().ink3 };
-                let shown = fit(p, &label, &regular(T_META), rect.width() - 10.0);
+                let shown = fit(&p, &label, &regular(T_META), rect.width() - 10.0);
                 if rect.width() > 36.0 && rect.height() > 18.0 {
                     p.text(rect.center(), Align2::CENTER_CENTER, shown, regular(T_META), colour);
                 }
             }
-            widgets::focus_ring(ui, &response, rect, 5);
-            let name = status.peers.iter().find(|peer| peer.id == monitor.computer).map_or(status.name.clone(), |peer| peer.name.clone());
-            widgets::a11y(&response, Role::Button, &format!("Choose {name} to place it"), Some(chosen));
-            if response.clicked() {
-                let id = monitor.computer.clone();
-                self.select(if id == status.id { "me".to_owned() } else { id });
-            }
-            if response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            widgets::focus_ring(ui, response, rect, 5);
+            let can_move = !is_me && movable(&monitor.computer).is_some();
+            let words = if can_move {
+                format!("{name}: drag it to place it, or use the arrow keys (Shift moves 10 pixels), Enter to place it, Esc to cancel")
+            } else {
+                format!("Choose {name} to place it")
+            };
+            widgets::a11y(response, Role::Button, &words, Some(chosen));
+            #[cfg(any(debug_assertions, feature = "design-evidence"))]
+            widgets::targets::note(&format!("plan {name}"), rect);
+            if response.hovered() && carried.is_none() {
+                ui.ctx().set_cursor_icon(if can_move { egui::CursorIcon::Grab } else { egui::CursorIcon::PointingHand });
             }
         }
-        for (from, to) in touching_edges(canvas) {
-            ui.painter().line_segment([map(from.0, from.1), map(to.0, to.1)], Stroke::new(2.0, pal().accent));
+        if self.plan.as_ref().is_some_and(|d| d.grab.is_some()) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        // Carried with snapping: where the pointer has it, as an outline;
+        // the block shows where it lands.
+        if let Some(d) = self.plan.as_ref().filter(|d| d.grab.is_some())
+            && let scene::Landing::Beside(_, o) = d.landing
+            && o != d.at
+            && let Some(peer) = status.peers.iter().find(|peer| peer.id == d.id)
+        {
+            for s in &peer.screens {
+                let (x, y) = (f64::from(s.x + d.at.0), f64::from(s.y + d.at.1));
+                let r = Rect::from_min_max(frame.screen(top_left, x, y), frame.screen(top_left, x + f64::from(s.w), y + f64::from(s.h))).shrink(1.5);
+                p.rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, pal().line2), StrokeKind::Inside);
+            }
+        }
+        for (from, to) in touching_edges(&canvas) {
+            p.line_segment([frame.screen(top_left, from.0, from.1), frame.screen(top_left, to.0, to.1)], Stroke::new(2.0, pal().accent));
         }
         a11y_text(ui, Id::unique("arrange-plan"), area, Role::Image, "Plan of every computer's screens; the edges where the pointer crosses are marked", None);
+
+        // Under the plan: how to place, or (placed apart) the warning.
+        let line_y = area.bottom() - 20.0;
+        let landing_apart = self.plan.as_ref().is_some_and(|d| matches!(d.landing, scene::Landing::Apart(..)));
+        let typed_apart = carried.is_none()
+            && status.peers.iter().any(|peer| match self.place_draft(&peer.id) {
+                Some(Ok(o)) if !peer.screens.is_empty() && !status.screens.is_empty() => {
+                    let theirs = Desktop::new(peer.screens.clone());
+                    one_mk_proto::touching(&mine, &theirs, side_for(&mine, &theirs, o), o).is_empty()
+                }
+                _ => false,
+            });
+        if landing_apart || typed_apart {
+            let text = short_warning(true, &[]).unwrap_or_default();
+            let shown = fit(&p, text, &regular(T_META), area.width() - 24.0);
+            let w = text_width(ui, &shown, regular(T_META));
+            let x = area.center().x - (w + 16.0) / 2.0;
+            widgets::status_mark(&p, pos2(x + 4.0, line_y), 8.0, Mark::Warn);
+            p.text(pos2(x + 16.0, line_y), Align2::LEFT_CENTER, shown, regular(T_META), pal().ink2);
+            a11y_text(ui, Id::unique("plan-warning"), Rect::from_center_size(pos2(area.center().x, line_y), vec2(area.width(), 18.0)), Role::Status, text, Some(Live::Polite));
+        } else {
+            let hint = "Drag a computer to place it. Arrow keys move the chosen one; Enter places it.";
+            p.text(pos2(area.center().x, line_y), Align2::CENTER_CENTER, fit(&p, hint, &regular(T_META), area.width() - 24.0), regular(T_META), pal().ink3);
+        }
+
+        // Place freely: let go anywhere, even apart (Alt does it for one drag).
+        let row = card.row(ui, ROW);
+        let caption = format!("Let go anywhere, even apart (or hold {})", if cfg!(target_os = "macos") { "Option" } else { "Alt" });
+        if page_ui::toggle_row(ui, row, Id::unique("plan-free"), &Words::new("Place freely").caption(&caption), None, self.plan_free, true).clicked() {
+            self.plan_free = !self.plan_free;
+        }
         page.finish(ui, card);
     }
 
@@ -377,24 +779,77 @@ impl App {
         para(ui, row.min + vec2(0.0, 12.0), inner, &sentence, regular(T_BODY), pal().ink2);
         a11y_text(ui, Id::unique(("arrange-sentence", &peer.id)), row, Role::Label, &sentence, Some(Live::Polite));
 
-        // Exact place.
+        // Exact place: where its top left corner sits in our pixels, as X
+        // and Y to type (checked as `one-mk layout --offset` checks them;
+        // the plan shows it there while it is typed).
         let text = match offset {
             Some((x, y)) => format!("Its top-left corner sits at {x}, {y} of your screens."),
             None if peer.screens.is_empty() => "Its monitors are known once it is connected; then drag it beside one of yours.".to_owned(),
             None => format!("Anywhere along your {} edge. Drag it next to a monitor to place it exactly.", edge_word(side)),
         };
         let h = page_ui::text_h(ui, &text, inner, regular(T_META));
+        let (kx, ky) = (format!("place-x:{}", peer.id), format!("place-y:{}", peer.id));
+        let error = self.place_draft(&peer.id).and_then(Result::err);
         let buttons = offset.is_some();
-        let row = card.row(ui, 14.0 + 18.0 + 4.0 + h + if buttons { 12.0 + 30.0 } else { 0.0 } + 14.0);
+        let fields_h = 12.0 + FIELD_H + if error.is_some() { 6.0 + 16.0 } else { 0.0 };
+        let row = card.row(ui, 14.0 + 18.0 + 4.0 + h + fields_h + if buttons { 12.0 + 30.0 } else { 0.0 } + 14.0);
         ui.painter().text(row.left_top() + vec2(0.0, 23.0), Align2::LEFT_CENTER, "Exact place", regular(T_BODY), pal().ink);
         let ch = para(ui, row.min + vec2(0.0, 36.0), inner, &text, regular(T_META), pal().ink2);
         a11y_text(ui, Id::unique(("exact-place", &peer.id)), Rect::from_min_size(row.min + vec2(0.0, 14.0), vec2(inner, 22.0 + ch)), Role::Label, &text, Some(Live::Polite));
+
+        // X [   ]  Y [   ]  Place
+        let can = !status.screens.is_empty() && !peer.screens.is_empty();
+        let (cx, cy) = offset.map_or((String::new(), String::new()), |(x, y)| (x.to_string(), y.to_string()));
+        let hint = shown_offset(&one_mk_ctl::wallpaper::canvas(status), &peer.id).map_or(("X".to_owned(), "Y".to_owned()), |(x, y)| (x.to_string(), y.to_string()));
+        let mut xs = self.drafts.get(&kx).cloned().unwrap_or_else(|| cx.clone());
+        let mut ys = self.drafts.get(&ky).cloned().unwrap_or_else(|| cy.clone());
+        let fy = row.top() + 36.0 + ch + 12.0;
+        let field_w = ((inner - 2.0 * 18.0 - 12.0 - 14.0 - button_width(ui, "Place")) / 2.0).clamp(80.0, 132.0);
+        let p = ui.painter().clone();
+        p.text(pos2(row.left(), fy + FIELD_H / 2.0), Align2::LEFT_CENTER, "X", mono(T_META), pal().ink2);
+        let xr = Rect::from_min_size(pos2(row.left() + 18.0, fy), vec2(field_w, FIELD_H));
+        let rx = widgets::field(ui, xr, Id::unique(("field", &kx)), &mut xs, &hint.0, &format!("X: how far right {}'s top-left corner sits from yours, in pixels", peer.name), can, true);
+        p.text(pos2(xr.right() + 14.0, fy + FIELD_H / 2.0), Align2::LEFT_CENTER, "Y", mono(T_META), pal().ink2);
+        let yr = Rect::from_min_size(pos2(xr.right() + 14.0 + 18.0, fy), vec2(field_w, FIELD_H));
+        let ry = widgets::field(ui, yr, Id::unique(("field", &ky)), &mut ys, &hint.1, &format!("Y: how far down {}'s top-left corner sits from yours, in pixels", peer.name), can, true);
+        if xs == cx && ys == cy {
+            self.drafts.remove(&kx);
+            self.drafts.remove(&ky);
+        } else {
+            self.drafts.insert(kx.clone(), xs.clone());
+            self.drafts.insert(ky.clone(), ys.clone());
+        }
+        let left = rx.lost_focus() || ry.lost_focus();
+        let (enter, escape) = ui.input(|i| (i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)));
+        if left && escape {
+            // Esc: back to where it is.
+            self.drafts.remove(&kx);
+            self.drafts.remove(&ky);
+        }
+        let typed = self.place_draft(&peer.id).and_then(Result::ok).filter(|o| Some(*o) != offset);
+        let ready = can && typed.is_some();
+        let place_r = Rect::from_min_size(pos2(yr.right() + 12.0, fy + (FIELD_H - 30.0) / 2.0), vec2(button_width(ui, "Place"), 30.0));
+        let clicked = button(ui, place_r, Id::unique(("place-xy", &peer.id)), "Place", Look::Quiet, ready, Some(&format!("Place {} at this X and Y", peer.name))).clicked();
+        if let Some(o) = typed.filter(|_| ready && (clicked || (left && enter))) {
+            self.drafts.remove(&kx);
+            self.drafts.remove(&ky);
+            let side = side_for(&Desktop::new(status.screens.clone()), &Desktop::new(peer.screens.clone()), o);
+            self.choose_place(&peer.id, side, Some(o), false);
+        }
+        let mut y = fy + FIELD_H;
+        if let Some(e) = error {
+            p.text(pos2(row.left(), y + 6.0 + 8.0), Align2::LEFT_CENTER, fit(&p, e, &regular(T_META), inner), regular(T_META), pal().danger);
+            a11y_text(ui, Id::unique(("exact-place-error", &peer.id)), Rect::from_min_size(pos2(row.left(), y + 6.0), vec2(inner, 16.0)), Role::Status, e, Some(Live::Polite));
+            y += 6.0 + 16.0;
+        }
         if buttons {
-            let y = row.top() + 36.0 + ch + 12.0;
+            let y = y + 12.0;
             let label = "Anywhere along the side";
             let b = Rect::from_min_size(pos2(row.left(), y), vec2(button_width(ui, label).min(inner), 30.0));
             let shown = fit(ui.painter(), label, &semibold(T_BODY), b.width() - 28.0);
             if button(ui, b, Id::unique(("place-anywhere", &peer.id)), &shown, Look::Quiet, true, Some(&format!("Let {} take the pointer anywhere along your {} edge", peer.name, edge_word(side)))).clicked() {
+                self.drafts.remove(&kx);
+                self.drafts.remove(&ky);
                 self.choose_side(&peer.id, side, false);
             }
             // Placed apart: one step to where the screens touch.
@@ -631,6 +1086,109 @@ mod tests {
         assert_eq!(edges, vec![((0.0, 120.0), (0.0, 1076.0))]);
         let stacked = Canvas { monitors: vec![monitor("a", 0.0, 0.0, 100.0, 50.0), monitor("b", 40.0, 50.0, 100.0, 50.0)] };
         assert_eq!(touching_edges(&stacked), vec![((40.0, 50.0), (100.0, 50.0))]);
+    }
+
+    /// Ours: 2560×1440 and, right of it, 1920×1080 lower by 180. Theirs: a 1470×956 laptop.
+    fn desks() -> (Desktop, Desktop) {
+        (Desktop::new(vec![screen(0, 0, 2560, 1440), screen(2560, 180, 1920, 1080)]), Desktop::new(vec![screen(0, 0, 1470, 956)]))
+    }
+
+    #[test]
+    fn exact_place_is_checked_as_the_command_line_checks_it() {
+        assert_eq!(parse_place("-1470", "120"), Ok((-1470, 120)));
+        assert_eq!(parse_place(" 0 ", "+5"), Ok((0, 5)));
+        // A typographic minus, as some keyboards type it.
+        assert_eq!(parse_place("\u{2212}1920", "0"), Ok((-1920, 0)));
+        assert_eq!(parse_place("16777216", "-16777216"), Ok((16_777_216, -16_777_216)), "2^24 itself is allowed");
+        assert_eq!(parse_place("16777217", "0"), Err(PLACE_BOUNDS));
+        assert_eq!(parse_place("0", "-16777217"), Err(PLACE_BOUNDS));
+        assert_eq!(parse_place("99999999999999", "0"), Err(PLACE_BOUNDS), "beyond i32 is out of bounds, not garbage");
+        for (x, y) in [("", "0"), ("12.5", "0"), ("1920x", "0"), ("0", "abc"), ("1,2", "3")] {
+            assert_eq!(parse_place(x, y), Err(PLACE_WHOLE), "{x:?}, {y:?}");
+        }
+    }
+
+    #[test]
+    fn arrow_keys_nudge_by_a_pixel_or_ten_with_shift() {
+        assert_eq!(nudge((0, 0), Key::ArrowLeft, false), Some((-1, 0)));
+        assert_eq!(nudge((0, 0), Key::ArrowRight, true), Some((10, 0)));
+        assert_eq!(nudge((5, 5), Key::ArrowUp, false), Some((5, 4)));
+        assert_eq!(nudge((5, 5), Key::ArrowDown, true), Some((5, 15)));
+        assert_eq!(nudge((0, 0), Key::Enter, false), None);
+        let edge = MAX_OFFSET as i32;
+        assert_eq!(nudge((edge, -edge), Key::ArrowRight, true), Some((edge, -edge)), "never past what the wire carries");
+        // Moved along our left edge by the keyboard, it stays touching there.
+        let (mine, theirs) = desks();
+        let mut at = (-1470, 120);
+        for _ in 0..3 {
+            at = nudge(at, Key::ArrowDown, true).unwrap();
+        }
+        assert_eq!(plan_landing(&mine, &theirs, at, 100.0, false), scene::Landing::Beside(Side::Left, (-1470, 150)));
+    }
+
+    #[test]
+    fn the_plan_maps_points_to_pixels_and_a_carried_block_follows_the_pointer() {
+        let bounds = one_mk_wallpaper::Rect { x: -1470.0, y: 0.0, width: 5950.0, height: 1440.0 };
+        let frame = PlanFrame::fit(bounds, 1000.0, 300.0);
+        assert!((frame.scale - 1000.0 / 5950.0).abs() < 1e-9, "as wide as the room allows");
+        assert!(PlanFrame::fit(bounds, 1000.0, 150.0).size().y <= 150.0 + 1e-3, "no taller than allowed");
+        let top_left = pos2(100.0, 50.0);
+        let p = frame.screen(top_left, 0.0, 120.0);
+        let back = frame.px(top_left, p);
+        assert!((back.0 - 0.0).abs() < 0.01 && (back.1 - 120.0).abs() < 0.01);
+        // Picked up at its middle; the pointer goes 17 points left and 10 down.
+        let at = (-1470, 120);
+        let start = frame.screen(top_left, -1470.0 + 735.0, 120.0 + 478.0);
+        let px = frame.px(top_left, start);
+        let grab = (px.0 - f64::from(at.0), px.1 - f64::from(at.1));
+        let now = carried_to(frame.px(top_left, start + vec2(-17.0, 10.0)), grab);
+        assert_eq!(now, ((-1470.0 - 17.0 / frame.scale).round() as i32, (120.0 + 10.0 / frame.scale).round() as i32));
+    }
+
+    #[test]
+    fn let_go_on_the_plan_it_snaps_beside_us_unless_placed_apart() {
+        let (mine, theirs) = desks();
+        // Let go 300 pixels left of our left edge, level with it.
+        let away = (-1470 - 300, 200);
+        assert_eq!(plan_landing(&mine, &theirs, away, 50.0, false), scene::Landing::Beside(Side::Left, (-1470, 200)), "snaps to the edge it was near");
+        assert_eq!(plan_landing(&mine, &theirs, away, 50.0, true), scene::Landing::Apart(Side::Left, away), "stays where it was let go");
+        // Touching already: beside, either way.
+        assert_eq!(plan_landing(&mine, &theirs, (-1470, 120), 50.0, true), scene::Landing::Beside(Side::Left, (-1470, 120)));
+        // Far above, snapping: beside our top edge, where the pointer can cross.
+        match plan_landing(&mine, &theirs, (500, -2400), 50.0, false) {
+            scene::Landing::Beside(Side::Top, (_, y)) => assert_eq!(y, -956),
+            other => panic!("expected beside the top, got {other:?}"),
+        }
+        // Over our screens, even placed freely, it never covers them.
+        assert!(matches!(plan_landing(&mine, &theirs, (400, 300), 50.0, true), scene::Landing::Beside(..)));
+    }
+
+    #[test]
+    fn a_typed_place_is_on_the_side_it_touches_or_mostly_is() {
+        let (mine, theirs) = desks();
+        assert_eq!(side_for(&mine, &theirs, (-1470, 120)), Side::Left);
+        assert_eq!(side_for(&mine, &theirs, (4480, 300)), Side::Right);
+        assert_eq!(side_for(&mine, &theirs, (300, -2000)), Side::Top);
+        assert_eq!(side_for(&mine, &theirs, (300, 1440)), Side::Bottom);
+        assert_eq!(side_for(&mine, &theirs, (-1800, 200)), Side::Left, "apart, but on the left");
+    }
+
+    #[test]
+    fn a_carried_block_stays_on_the_plan() {
+        let span = screen(0, 0, 1470, 956);
+        assert_eq!(keep_within((-5000, 9000), span, (-3000.0, -1000.0), (6000.0, 3000.0)), (-3000, 3000 - 956));
+        assert_eq!(keep_within((10, 20), span, (-3000.0, -1000.0), (6000.0, 3000.0)), (10, 20));
+        // Bigger than the room: left alone.
+        assert_eq!(keep_within((10, 20), span, (0.0, 0.0), (100.0, 100.0)), (10, 20));
+    }
+
+    #[test]
+    fn where_a_computer_is_shown_on_the_canvas() {
+        let mut m = monitor("mac", -1470.0, 120.0, 1470.0, 956.0);
+        m.local = Some(Wr { x: 0.0, y: 0.0, width: 1470.0, height: 956.0 });
+        let canvas = Canvas { monitors: vec![m] };
+        assert_eq!(shown_offset(&canvas, "mac"), Some((-1470, 120)));
+        assert_eq!(shown_offset(&canvas, "pc"), None);
     }
 
     #[test]

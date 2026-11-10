@@ -108,6 +108,12 @@ impl App {
             self.paint_notice(ui, r, n);
             top = r.bottom() + 8.0;
         }
+        // Layout learning's question, as on Arrange (place.rs).
+        if !self.suggestion_in_row(ui)
+            && let Some(h) = self.suggestion_banner(ui, desk.left(), top, desk.width())
+        {
+            top += h + 8.0;
+        }
         if let Some(t) = self.running().and_then(|s| s.transfers.first()).cloned() {
             let (title, detail, frac) = crate::view::transfer_lines(&t);
             let more = self.running().map_or(0, |s| s.transfers.len() - 1);
@@ -199,6 +205,11 @@ impl App {
         let mut h = 0.0;
         if let Some(n) = self.notice_lay(ui, desk_w) {
             h += n.h + 8.0;
+        }
+        if !self.suggestion_in_row(ui)
+            && let Some(s) = self.suggestion_h(ui, desk_w)
+        {
+            h += s + 8.0;
         }
 
         if self.running().is_some_and(|s| !s.transfers.is_empty()) {

@@ -34,11 +34,29 @@ fn compact(ui: &Ui) -> bool {
     ui.ctx().content_rect().width() < shell::COMPACT_BELOW
 }
 
+/// A page's head (handoff 5.2): the title (22, 600) and its sentence (13,
+/// `ink2`) from `origin`, inset as the cards are. Returns where what comes
+/// under it starts.
+pub(super) fn head(ui: &Ui, origin: Pos2, width: f32, title: &str, sub: &str) -> f32 {
+    let x = origin.x + INSET;
+    let w = (width - 2.0 * INSET).max(200.0);
+    let p = ui.painter();
+    p.text(pos2(x, origin.y + 36.0), Align2::LEFT_CENTER, fit(p, title, &semibold(T_PAGE), w), semibold(T_PAGE), pal().ink);
+    let sub_h = if sub.is_empty() { 0.0 } else { para(ui, pos2(x, origin.y + 52.0), w, sub, regular(T_BODY), pal().ink2).max(19.0) };
+    a11y_text(ui, Id::unique(("page-title", title)), Rect::from_min_size(pos2(x, origin.y + 18.0), vec2(w, 36.0)), Role::Heading, title, None);
+    if !sub.is_empty() {
+        a11y_text(ui, Id::unique(("page-sub", title)), Rect::from_min_size(pos2(x, origin.y + 52.0), vec2(w, sub_h)), Role::Label, sub, None);
+    }
+    origin.y + 52.0 + sub_h + 16.0
+}
+
 /// A page being laid out.
 pub(super) struct Page {
     pub x: f32,
     pub w: f32,
     pub col_w: f32,
+    /// The right column's width (the left's, unless [`Page::split`]).
+    right_w: f32,
     pub two: bool,
     origin_y: f32,
     /// Where the next group label of each column goes.
@@ -52,13 +70,23 @@ impl Page {
         let x = origin.x + INSET;
         let w = (width - 2.0 * INSET).max(200.0);
         let two = !compact(ui);
-        let p = ui.painter();
-        p.text(pos2(x, origin.y + 36.0), Align2::LEFT_CENTER, fit(p, title, &semibold(T_PAGE), w), semibold(T_PAGE), pal().ink);
-        a11y_text(ui, Id::unique(("page-title", title)), Rect::from_min_size(pos2(x, origin.y + 18.0), vec2(w, 36.0)), Role::Heading, title, None);
-        let sub_h = if sub.is_empty() { 0.0 } else { para(ui, pos2(x, origin.y + 52.0), w, sub, regular(T_BODY), pal().ink2).max(19.0) };
-        let top = origin.y + 52.0 + sub_h + 16.0;
+        let top = head(ui, origin, width, title, sub);
         let col_w = if two { (w - GAP) / 2.0 } else { w };
-        Page { x, w, col_w, two, origin_y: origin.y, y: [top, top] }
+        Page { x, w, col_w, right_w: col_w, two, origin_y: origin.y, y: [top, top] }
+    }
+
+    /// The two columns in the proportion `left` : 1 (Health's 1.2 : 1)
+    /// instead of halves; one column stays the page's width.
+    pub fn split(&mut self, left: f32) {
+        if self.two {
+            let unit = (self.w - GAP) / (left + 1.0);
+            (self.col_w, self.right_w) = (unit * left, unit);
+        }
+    }
+
+    /// How wide a card in column `col` is.
+    pub fn width_of(&self, col: usize) -> f32 {
+        if col.min(usize::from(self.two)) == 1 { self.right_w } else { self.col_w }
     }
 
     pub fn col_x(&self, col: usize) -> f32 {
@@ -79,7 +107,7 @@ impl Page {
     pub fn card(&mut self, ui: &Ui, col: usize, label: &str) -> Card {
         let col = col.min(usize::from(self.two));
         let (x, y) = (self.col_x(col), self.y[col]);
-        Card::start(ui, x, y, self.col_w, label, Some(col))
+        Card::start(ui, x, y, if col == 1 { self.right_w } else { self.col_w }, label, Some(col))
     }
 
     /// A card across the whole page, under every card above it.

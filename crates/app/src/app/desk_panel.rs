@@ -194,8 +194,9 @@ impl App {
     /// The toolbar at the desk's top left (handoff 5.1): Choose computer
     /// (5 computers or more), Type on every computer, Timer and Lock every
     /// screen; icons only in a narrow window or when the labels don't fit.
-    pub(super) fn desk_toolbar(&mut self, ui: &mut Ui, row: Rect, narrow_window: bool) {
-        let Some(status) = self.running().cloned() else { return };
+    /// Returns where its last button ends.
+    pub(super) fn desk_toolbar(&mut self, ui: &mut Ui, row: Rect, narrow_window: bool) -> f32 {
+        let Some(status) = self.running().cloned() else { return row.left() };
         let online = status.peers.iter().any(|p| p.online);
         let on = self.broadcasting();
         let menu = status.peers.len() + 1 >= 5;
@@ -276,6 +277,7 @@ impl App {
             self.busy.push(Job::LockAll);
             self.link.lock_all();
         }
+        r.right()
     }
 
     /// The panel (handoff 4.2): a card with what the chosen computer is and

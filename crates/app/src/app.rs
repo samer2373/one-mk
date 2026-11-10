@@ -267,6 +267,11 @@ pub struct App {
     answered: Option<(String, Side)>,
     /// Computers placed where no screen of theirs touches ours.
     apart: HashSet<String>,
+    /// A computer being placed on Arrange's plan, by the pointer or the
+    /// arrow keys (place.rs).
+    plan: Option<place::PlanDrag>,
+    /// Arrange's "Place freely": let go anywhere, even apart.
+    plan_free: bool,
     /// The banner over the desk as drawn this frame (see `refresh_notice`).
     notice: desk_cards::NoticeHold,
     /// Whether the window had the focus last frame (see `pointer_away`).
@@ -492,6 +497,8 @@ impl App {
             pending_side: HashMap::new(),
             answered: None,
             apart: HashSet::new(),
+            plan: None,
+            plan_free: false,
             notice: desk_cards::NoticeHold::default(),
             was_focused: true,
             pending_swap: HashMap::new(),
@@ -1535,20 +1542,6 @@ impl App {
 
     // ---------- the top bar ----------
 
-    /// The title and the quieter words after it, for the pages that use the
-    /// shared title row (Health and Settings; see `shell::own_head`).
-    fn page_title(&self) -> (String, String) {
-        let name = TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1).to_owned();
-        let sub = match (self.tab, self.status.as_ref()) {
-            (_, None) => String::new(),
-            (Tab::Settings, _) => "Changes save right away.".to_owned(),
-            (Tab::Health, Some(Some(_))) => self.health_sub(),
-            (_, Some(None)) => "oneMK is off".to_owned(),
-            _ => String::new(),
-        };
-        (name, sub)
-    }
-
     /// Changes whenever what is drawn behind the glass may have changed.
     fn backdrop_sig(&self, full: Rect) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -2236,6 +2229,8 @@ impl eframe::App for App {
         }
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         debug::hooks(self, now);
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        debug::place_xy(self, now);
         widgets::track_focus_mode(ui.ctx());
         self.arrowed = self.arrow_down;
         // Only along a row: Up and Down move between rows without choosing.
@@ -2255,7 +2250,6 @@ impl eframe::App for App {
         crate::chrome::paint_room(ui.painter(), full);
         let f = shell::frame(full);
         let content = f.content;
-        let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
         // The Desk: the desk left of (or above) its panel (desk_panel.rs).
         let desk_lay = (self.tab == Tab::Desk).then(|| desk_panel::desk_layout(full, f.bar.bottom()));
         let desk = desk_lay.as_ref().map_or(content, |l| l.scene);
@@ -2305,7 +2299,13 @@ impl eframe::App for App {
             let mut top = ui.new_child(UiBuilder::new().layer_id(over).max_rect(full).id_salt("chrome"));
             self.top_bar(&mut top, f.bar, now);
             if let Some(row) = tools {
-                self.desk_toolbar(&mut top, row, full.width() < desk_panel::STACK_BELOW);
+                let narrow = full.width() < desk_panel::STACK_BELOW;
+                let end = self.desk_toolbar(&mut top, row, narrow);
+                // A narrow window: layout learning's question in the
+                // toolbar's row, so the computers keep their room.
+                if narrow {
+                    self.suggestion_row(&mut top, Rect::from_min_max(pos2(end + 8.0, row.top()), row.max));
+                }
             }
         }
         if self.tab == Tab::Desk {
@@ -2335,11 +2335,9 @@ impl eframe::App for App {
             }
             self.desk_overlay(ui, Rect::from_min_max(scene.min + vec2(desk_panel::EDGE, desk_panel::EDGE), scene.max - vec2(desk_panel::EDGE, 8.0)), hovering);
         }
-        let mut body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
-        // These pages draw their own title: their content starts at the top.
-        if shell::own_head(self.tab) {
-            body.min.y = content.top();
-        }
+        // Every page draws its own title (page_ui::head; Keys & mouse its
+        // header row): its content starts at the top.
+        let mut body = content;
         // Broadcasting is said on every page (the desk says it in its band).
         if self.tab != Tab::Desk {
             // Keys & mouse draws its own title row (handoff 5.5) from the
@@ -2379,10 +2377,6 @@ impl eframe::App for App {
                 self.keys_page(&mut child, body, now);
             }
             _ => {}
-        }
-        if !shell::own_head(self.tab) {
-            let (title, sub) = self.page_title();
-            self.page_head(ui, head, &title, &sub);
         }
         if let Some(l) = &desk_lay {
             self.desk_panel(ui, l.panel, now);
@@ -2429,6 +2423,7 @@ impl eframe::App for App {
             debug::tab_press(_ctx, raw_input);
             debug::point_at(_ctx, raw_input);
             debug::press_enter(_ctx, raw_input);
+            debug::plan_drag(_ctx, raw_input);
         }
         // Nothing here is under a pointer that has gone elsewhere: no
         // tooltip or highlight is left standing over the window.
@@ -2793,6 +2788,62 @@ mod debug {
         let Some(at) = var("ONE_MK_APP_PALETTE_ENTER").and_then(|v| v.parse::<f64>().ok()) else { return };
         if raw.time.unwrap_or(0.0) >= at && once(ctx, "palette-enter") {
             raw.events.push(egui::Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        }
+    }
+
+    /// `ONE_MK_APP_PLAN_DRAG=Name;dx,dy[;alt][;hold]` (with
+    /// `ONE_MK_APP_TARGETS`, on Arrange): real pointer events pick up that
+    /// computer's block on the plan at 1.5 s, carry it dx, dy points over
+    /// 0.8 s (Alt held with `alt`) and let go at 2.5 s (not with `hold`:
+    /// a screenshot of the drag).
+    pub fn plan_drag(ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(spec) = var("ONE_MK_APP_PLAN_DRAG") else { return };
+        let mut parts = spec.split(';');
+        let (Some(name), Some(d)) = (parts.next(), parts.next()) else { return };
+        let Some((dx, dy)) = d.split_once(',').and_then(|(x, y)| Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))) else { return };
+        let flags: Vec<&str> = parts.collect();
+        let (alt, hold) = (flags.contains(&"alt"), flags.contains(&"hold"));
+        let t = raw.time.unwrap_or(0.0);
+        if t < 3.5 {
+            ctx.request_repaint_after_secs(0.03);
+        }
+        if t < 1.5 {
+            return;
+        }
+        let key = Id::unique("plan-drag-from");
+        let Some(from) = ctx.data(|d| d.get_temp::<Pos2>(key)).or_else(|| widgets::targets::rect_of(&format!("plan {name}")).map(|r| r.center())) else { return };
+        ctx.data_mut(|d| d.insert_temp(key, from));
+        let modifiers = if alt { Modifiers::ALT } else { Modifiers::NONE };
+        let step = Id::unique("plan-drag-step");
+        let done = ctx.data(|d| d.get_temp::<u8>(step).unwrap_or(0));
+        if done == 0 {
+            raw.events.push(egui::Event::ModifiersChanged(modifiers));
+            raw.events.push(egui::Event::PointerMoved(from));
+            raw.events.push(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers });
+            ctx.data_mut(|d| d.insert_temp(step, 1u8));
+            return;
+        }
+        let k = ((t - 1.55) / 0.8).clamp(0.0, 1.0) as f32;
+        let at = from + vec2(dx, dy) * k;
+        if done == 1 {
+            raw.events.push(egui::Event::PointerMoved(at));
+        }
+        if done == 1 && t > 2.5 && !hold {
+            raw.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers });
+            ctx.data_mut(|d| d.insert_temp(step, 2u8));
+        }
+    }
+
+    /// `ONE_MK_APP_PLACE_XY=x,y` (on Arrange): at one second, Exact place
+    /// of the chosen computer holds that X and Y, as if typed.
+    pub fn place_xy(app: &mut App, now: f64) {
+        let Some(xy) = var("ONE_MK_APP_PLACE_XY") else { return };
+        let Some((x, y)) = xy.split_once(',') else { return };
+        if now > 1.0 && app.tab == Tab::Arrange && once(&app.ctx.clone(), "place-xy")
+            && let Some(id) = app.selected_id()
+        {
+            app.drafts.insert(format!("place-x:{id}"), x.to_owned());
+            app.drafts.insert(format!("place-y:{id}"), y.to_owned());
         }
     }
 
