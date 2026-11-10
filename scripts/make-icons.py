@@ -259,19 +259,36 @@ def overview(out):
 
 
 # ------------------------------------------------------------------- check ----
-# --check compares pictures by their pixels, not their bytes: another Pillow or zlib version may
-# compress the same picture differently, round an edge pixel by a level, or soften a shadow a
-# little differently (CI's Ubuntu has an older Pillow than a developer's machine). So two pictures
-# are the same when no pixel differs by more than TOLERANCE, or when they agree once averaged down
-# to a coarse grid and their average difference is tiny. A real change (another colour, a moved
-# or reshaped part) moves whole areas, which the coarse grid sees; a different resampler does not.
+# What --check promises: the checked-in icons were made from the SVGs and drawing code as they are
+# now, and nothing is missing or the wrong size. It cannot promise the pixels equal what another
+# machine draws: Pillow's edges, shadows and resampling differ between versions (CI's Ubuntu has an
+# older one than a developer's machine), by tens of levels on a 16 px icon. So the build writes a
+# fingerprint of its inputs (the logo SVGs and this drawing code), --check compares fingerprints and
+# the files' structure, and `--check --pixels` also compares pictures by eye (what they look like
+# on any background), for use on the machine that made them.
+STAMP = "docs/brand/app-icon/SOURCE-DIGEST"
 TOLERANCE = 3
 COARSE = 16
 COARSE_TOLERANCE = 10
 MEAN_TOLERANCE = 3.0
-
-
 LAST = {}  # how far apart the last pictures compared were, for the report of a failed check
+
+
+def inputs_digest():
+    """A fingerprint of what the icons are drawn from: every logo SVG, the SVG renderer, and this
+    file up to (not including) the checking code below, which draws nothing."""
+    import hashlib
+    h = hashlib.sha256()
+    for name in sorted(os.listdir(LOGO)):
+        if name.endswith(".svg"):
+            with open(os.path.join(LOGO, name), "rb") as f:
+                h.update(name.encode() + b"\0" + f.read() + b"\0")
+    with open(os.path.join(HERE, "brand_render.py"), "rb") as f:
+        h.update(f.read() + b"\0")
+    with open(os.path.abspath(__file__), "rb") as f:
+        source = f.read()
+    h.update(source.split(b"# ------------------------------------------------------------------- check ----")[0])
+    return h.hexdigest() + "\n"
 
 
 def premultiplied(im):
@@ -292,7 +309,6 @@ def close(ia, ib):
     LAST["coarse"] = max(hi for lo, hi in ImageChops.difference(ca, cb).getextrema())
     if LAST["coarse"] > COARSE_TOLERANCE:
         return False
-    # Averaged over every pixel and channel, how far apart they are.
     histogram = ImageChops.difference(ia, ib).convert("L").histogram()
     LAST["mean"] = sum(level * count for level, count in enumerate(histogram)) / max(1, ia.width * ia.height)
     return LAST["mean"] <= MEAN_TOLERANCE
@@ -322,20 +338,28 @@ def frames(path, data):
     return None
 
 
-def same(path, full, data):
+def same(path, full, data, pixels=False):
+    """Whether the checked-in file `full` is what `data` (built now) stands for."""
     if not os.path.isfile(full):
+        LAST["why"] = "missing"
         return False
     with open(full, "rb") as f:
         old = f.read()
     if old == data:
         return True
     a, b = frames(path, old), frames(path, data)
-    if a is None or b is None or len(a) != len(b):
+    if a is None or b is None:
+        LAST["why"] = "differs"          # not a picture (an SVG, the fingerprint): must be exact
+        return False
+    if len(a) != len(b):
+        LAST["why"] = "has %d pictures, not %d" % (len(a), len(b))
         return False
     for (na, ia), (nb, ib) in zip(a, b):
         if na != nb or ia is None or ia.size != ib.size:
+            LAST["why"] = "has a picture of another kind or size"
             return False
-        if not close(ia, ib):
+        if pixels and not close(ia, ib):
+            LAST["why"] = "differs (worst pixel %s, coarse %s, mean %s)" % (LAST.get("worst"), LAST.get("coarse"), None if LAST.get("mean") is None else round(LAST["mean"], 2))
             return False
     return True
 
@@ -346,22 +370,30 @@ def build():
     make_tray(out)
     copy_app_svgs(out)
     overview(out)
+    out.raw(STAMP, inputs_digest().encode())
     return out
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--check", action="store_true", help="fail if a checked-in file differs from what is built now")
+    ap.add_argument("--check", action="store_true", help="fail if the checked-in icons were not made from the SVGs and drawing code as they are now, or a file is missing or the wrong size")
+    ap.add_argument("--pixels", action="store_true", help="with --check: also compare the pictures (use on the machine that made them; another Pillow draws edges a little differently)")
     args = ap.parse_args()
     out = build()
     if args.check:
         bad = []
         for path, data in sorted(out.files.items()):
             LAST.clear()
-            if not same(path, os.path.join(ROOT, path), data):
+            if path == STAMP:
+                continue
+            if not same(path, os.path.join(ROOT, path), data, args.pixels):
                 bad.append(path)
-                how = "missing" if not os.path.isfile(os.path.join(ROOT, path)) else "differs (worst pixel %s, coarse %s, mean %s)" % (LAST.get("worst"), LAST.get("coarse"), None if LAST.get("mean") is None else round(LAST["mean"], 2))
-                print("stale or missing:", path, "-", how)
+                print("stale or missing:", path, "-", LAST.get("why", "differs"))
+        stamp = os.path.join(ROOT, STAMP)
+        recorded = open(stamp).read() if os.path.isfile(stamp) else None
+        if recorded != inputs_digest():
+            bad.append(STAMP)
+            print("the SVGs or the drawing code changed since the icons were made" if recorded else "no %s: the icons were never made by this script" % STAMP)
         print("%s" % ("all %d icon files match" % len(out.files) if not bad else "%d icon file(s) out of date: run python3 scripts/make-icons.py" % len(bad)))
         sys.exit(1 if bad else 0)
     for path, data in sorted(out.files.items()):

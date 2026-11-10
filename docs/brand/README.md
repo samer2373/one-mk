@@ -100,9 +100,15 @@ Don't:
 
 ```sh
 python3 scripts/make-icons.py          # every icon, the tray icons, the window's embedded files, overview.png
-python3 scripts/make-icons.py --check  # fails if a checked-in file is not what the SVGs give now
+python3 scripts/make-icons.py --check  # fails if the SVGs or the drawing code changed since the icons were made, or a file is missing or the wrong size
+python3 scripts/make-icons.py --check --pixels  # also compares the pictures themselves (run it on the machine that made them)
 python3 scripts/dmg/make_background.py # the macOS installer window's artwork (see docs/PACKAGING.md)
 ```
+
+`--check` compares a fingerprint of the inputs (`docs/brand/app-icon/SOURCE-DIGEST`), not pixels, because Pillow
+draws edges and small sizes a little differently from one version to the next (CI's Ubuntu has an older one than a
+developer's machine, by tens of levels on a 16 px icon). It therefore cannot see a picture edited by hand at the same
+size; `--pixels` can, on the machine that made the icons.
 
 They need Python 3 and Pillow only: `scripts/brand_render.py` is a small deterministic SVG rasteriser that reads exactly what
 the files in `logo/` use, so no rsvg, Inkscape, ImageMagick, Chrome or `iconutil` is needed. `.icns` and `.ico` are
