@@ -446,8 +446,10 @@ impl Link {
         });
     }
 
-    fn prefs_stamp(&self) -> [Option<(std::time::SystemTime, u64)>; 3] {
-        let look = |f: &str| std::fs::metadata(self.dir.join(f)).ok().map(|m| (m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()));
+    /// When each settings file changed, how long it is, and who may read it
+    /// (a file made readable again is read again, though its time is the same).
+    fn prefs_stamp(&self) -> [Option<(std::time::SystemTime, u64, u32)>; 3] {
+        let look = |f: &str| std::fs::metadata(self.dir.join(f)).ok().map(|m| (m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len(), mode(&m)));
         [look("settings.toml"), look("profiles.toml"), look("update-state.json")]
     }
 
