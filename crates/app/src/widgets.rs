@@ -755,11 +755,115 @@ pub fn paint_chip(p: &Painter, rect: Rect, label: &str, on: bool, s: State) {
 /// A key or shortcut in mono, on a `surface2` chip (padding 4 × 8, corner
 /// 6), with `anchor` placing it like `Painter::text`; returns its rectangle.
 pub fn kbd(p: &Painter, at: Pos2, anchor: Align2, text: &str) -> Rect {
-    let g = p.layout_no_wrap(text.to_owned(), mono(T_META), pal().ink2);
+    // A symbol JetBrains Mono lacks (↵) is drawn from Inter instead.
+    let covered = p.ctx().fonts_mut(|f| text.chars().all(|c| f.has_glyph(&mono(T_META), c)));
+    let font = if covered { mono(T_META) } else { regular(T_META) };
+    let g = p.layout_no_wrap(text.to_owned(), font, pal().ink2);
     let rect = anchor.anchor_size(at, g.size() + vec2(16.0, 8.0));
     p.rect_filled(rect, CornerRadius::same(6), pal().surface2);
     p.galley(rect.center() - g.size() / 2.0, g, pal().ink2);
     rect
+}
+
+/// Where a menu row puts its parts (handoff 5.8): 30 tall, 44 with a second
+/// line; a choice keeps a column at the left for its ✓; a status mark, if
+/// any, comes before the words.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MenuRow {
+    pub height: f32,
+    /// The ✓'s centre from the row's left (a choice only).
+    pub check_x: Option<f32>,
+    /// The status mark's centre from the row's left.
+    pub mark_x: Option<f32>,
+    /// Where the words start, from the row's left.
+    pub text_x: f32,
+}
+
+pub fn menu_row(choice: bool, mark: bool, two_lines: bool) -> MenuRow {
+    let height = if two_lines { MENU_ROW_TALL } else { MENU_ROW };
+    let check_x = choice.then_some(15.0);
+    let start = if choice { 28.0 } else { 10.0 };
+    let (mark_x, text_x) = if mark { (Some(start + 4.0), start + 16.0) } else { (None, start) };
+    MenuRow { height, check_x, mark_x, text_x }
+}
+
+/// One row of a popover menu.
+pub struct MenuItem<'a> {
+    pub title: &'a str,
+    /// A second, quieter line.
+    pub sub: Option<&'a str>,
+    /// A choice: ✓ when it is the one in force. `None`: a command.
+    pub chosen: Option<bool>,
+    pub mark: Option<Mark>,
+    /// What assistive technology reads.
+    pub name: &'a str,
+    pub enabled: bool,
+}
+
+impl<'a> MenuItem<'a> {
+    pub fn command(title: &'a str, name: &'a str) -> Self {
+        MenuItem { title, sub: None, chosen: None, mark: None, name, enabled: true }
+    }
+
+    pub fn choice(title: &'a str, name: &'a str, chosen: bool) -> Self {
+        MenuItem { title, sub: None, chosen: Some(chosen), mark: None, name, enabled: true }
+    }
+}
+
+/// A menu row `width` wide: `surface2` under the pointer (corner 6), the
+/// ✓ for the chosen one, the focus ring; clicked when chosen.
+pub fn menu_item(ui: &mut Ui, width: f32, item: MenuItem) -> Response {
+    let lay = menu_row(item.chosen.is_some(), item.mark.is_some(), item.sub.is_some());
+    let (r, resp) = ui.allocate_exact_size(vec2(width, lay.height), if item.enabled { sense(ui, Sense::click()) } else { Sense::hover() });
+    let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(item.enabled && resp.hovered()), 0.1, motion::out_cubic);
+    let down = item.enabled && resp.is_pointer_button_down_on();
+    // The painter of the area it is in: a list that scrolls clips it.
+    let p = ui.painter().clone();
+    let well = if down { pressed(pal().surface2_hover, 1.0) } else { mix(Color32::TRANSPARENT, pal().surface2, hover) };
+    p.rect_filled(r, CornerRadius::same(6), well);
+    focus_ring(ui, &resp, r, 6);
+    let on = item.chosen == Some(true);
+    let mid = if item.sub.is_some() { r.top() + 15.0 } else { r.center().y };
+    if let Some(x) = lay.check_x.filter(|_| on) {
+        draw_check(&p, pos2(r.left() + x, mid), 10.0, pal().ink, 1.0);
+    }
+    if let (Some(x), Some(mark)) = (lay.mark_x, item.mark) {
+        status_mark(&p, pos2(r.left() + x, mid), 7.0, mark);
+    }
+    let room = width - lay.text_x - 10.0;
+    let ink = if !item.enabled { pal().ink3 } else if on || item.chosen.is_none() { pal().ink } else { mix(pal().ink_hover, pal().ink, hover) };
+    p.text(pos2(r.left() + lay.text_x, mid), Align2::LEFT_CENTER, fit(&p, item.title, &regular(T_BODY), room), regular(T_BODY), ink);
+    if let Some(sub) = item.sub {
+        p.text(pos2(r.left() + lay.text_x, r.top() + 31.0), Align2::LEFT_CENTER, fit(&p, sub, &regular(T_META), room), regular(T_META), pal().ink2);
+    }
+    if resp.hovered() && item.enabled {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let role = if item.chosen.is_some() { Role::MenuItemRadio } else { Role::MenuItem };
+    a11y(&resp, role, item.name, item.chosen);
+    resp
+}
+
+/// A small heading inside a menu (12, `ink2`), 24 tall.
+pub fn menu_heading(ui: &mut Ui, width: f32, text: &str) {
+    let (r, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+    ui.painter().text(r.left_center() + vec2(10.0, 2.0), Align2::LEFT_CENTER, text, regular(T_META), pal().ink2);
+    a11y_text(ui, Id::unique(("menu-heading", text)), r, Role::Heading, text, None);
+}
+
+/// Development aid (screenshots): `ONE_MK_APP_MENU=name` opens the popover
+/// of the control `resp` once, a second in.
+pub fn debug_open_menu(ui: &Ui, resp: &Response, name: &str) {
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
+    if std::env::var("ONE_MK_APP_MENU").is_ok_and(|v| v == name) && ui.input(|i| i.time) > 1.0 {
+        let once = Id::unique(("debug-menu", name));
+        if !ui.ctx().data(|d| d.get_temp::<bool>(once).unwrap_or(false)) {
+            ui.ctx().data_mut(|d| d.insert_temp(once, true));
+            egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(resp));
+        }
+    }
+    #[cfg(not(any(debug_assertions, feature = "design-evidence")))]
+    let _ = (ui, resp, name);
 }
 
 /// A row's hairline: across `x` at `y`, in `line` (none after the last row).
@@ -975,89 +1079,56 @@ pub fn glass_shapes_as(ctx: &egui::Context, key: u64, rect: Rect, r: f32, kind: 
     let g = glass(ctx);
     let radius = CornerRadius::same(r.round().clamp(0.0, 255.0) as u8);
     let mut out = vec![];
+    // The theme's shadow (handoff 5.8), a 1-point `line2` edge, and inside
+    // it `surface` at 96 % over the blurred window (solid `surface` where the
+    // blur can't be made). No lit edge: no glows.
     if kind.shadow {
-        out.push(egui::epaint::Shadow { offset: [0, 12], blur: 32, spread: 0, color: pal().shadow(80) }.as_shape(rect, radius).into());
+        out.extend(card_shadow(rect, radius));
     }
     if g.works() {
         let [top, bottom] = [pal().glass_top, pal().glass];
         g.backdrop_shapes(&mut out, key, rect, r, crate::glass::Look { top, bottom, bend: kind.bend });
-        // A hairline for the shape's edge where the light doesn't reach.
-        out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, pal().line), StrokeKind::Inside)));
     } else {
-        out.push(rounded_gradient(rect, r, pal().surface, pal().surface));
-        out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, pal().line), StrokeKind::Inside)));
-        out.push(lit_edge(rect.shrink(0.5), r - 0.5));
+        out.push(egui::Shape::Rect(egui::epaint::RectShape::filled(rect, radius, pal().surface)));
     }
+    out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, pal().line2), StrokeKind::Inside)));
     out
-}
-
-/// Light catching a panel's top edge: along the top and round both top
-/// corners, fading out as the corners turn down.
-fn lit_edge(rect: Rect, r: f32) -> egui::Shape {
-    use egui::epaint::{Mesh, Vertex, WHITE_UV};
-    const STEPS: usize = 10;
-    let mut pts: Vec<(Pos2, f32)> = vec![];
-    // Left corner from its side (dark) to the top (lit), then the right.
-    for i in 0..=STEPS {
-        let a = std::f32::consts::PI + i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2;
-        pts.push((pos2(rect.left() + r + r * a.cos(), rect.top() + r + r * a.sin()), i as f32 / STEPS as f32));
-    }
-    for i in 0..=STEPS {
-        let a = -std::f32::consts::FRAC_PI_2 + i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2;
-        pts.push((pos2(rect.right() - r + r * a.cos(), rect.top() + r + r * a.sin()), 1.0 - i as f32 / STEPS as f32));
-    }
-    // A 1-point band, inward from the edge, its alpha eased along it.
-    let mut m = Mesh::default();
-    for (k, &(p, t)) in pts.iter().enumerate() {
-        let next = pts[(k + 1).min(pts.len() - 1)].0;
-        let prev = pts[k.saturating_sub(1)].0;
-        let d = (next - prev).normalized();
-        let inward = vec2(-d.y, d.x);
-        let c = pal().glass_edge.gamma_multiply(t * t * (3.0 - 2.0 * t));
-        m.vertices.push(Vertex { pos: p, uv: WHITE_UV, color: c });
-        m.vertices.push(Vertex { pos: p + inward, uv: WHITE_UV, color: c });
-    }
-    for k in 0..pts.len() as u32 - 1 {
-        let (a, b) = (2 * k, 2 * k + 2);
-        m.add_triangle(a, a + 1, b + 1);
-        m.add_triangle(a, b + 1, b);
-    }
-    egui::Shape::mesh(m)
-}
-
-/// A rounded rectangle filled from `top` at its top to `bottom` at its
-/// bottom (premultiplied colours), as rows of quads: corners follow the
-/// arc; the rim drawn over it smooths their edge.
-pub fn rounded_gradient(rect: Rect, radius: f32, top: Color32, bottom: Color32) -> egui::Shape {
-    use egui::epaint::{Mesh, Vertex, WHITE_UV};
-    let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0).max(0.0);
-    // Rows: down the top arc, the straight middle, down the bottom arc.
-    const STEPS: usize = 8;
-    let mut ys: Vec<f32> = (0..=STEPS).map(|i| rect.top() + r * (1.0 - (i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2).cos())).collect();
-    ys.extend((0..=STEPS).map(|i| rect.bottom() - r + r * (i as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2).sin()));
-    let inset = |y: f32| {
-        let d = if y < rect.top() + r { rect.top() + r - y } else if y > rect.bottom() - r { y - (rect.bottom() - r) } else { 0.0 };
-        r - (r * r - d * d).max(0.0).sqrt()
-    };
-    let mut m = Mesh::default();
-    for &y in &ys {
-        let t = ((y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0);
-        let c = mix(top, bottom, t);
-        let dx = inset(y);
-        m.vertices.push(Vertex { pos: pos2(rect.left() + dx, y), uv: WHITE_UV, color: c });
-        m.vertices.push(Vertex { pos: pos2(rect.right() - dx, y), uv: WHITE_UV, color: c });
-    }
-    for k in 0..ys.len() as u32 - 1 {
-        let (a, b) = (2 * k, 2 * k + 2);
-        m.add_triangle(a, a + 1, b + 1);
-        m.add_triangle(a, b + 1, b);
-    }
-    egui::Shape::mesh(m)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Popovers and menus (handoff 5.8): rows 30 (44 with a second line),
+    /// the ✓ in a column of its own so choices line up whether chosen or
+    /// not, a status mark before the words.
+    #[test]
+    fn menu_rows_are_thirty_with_the_check_in_its_own_column() {
+        let plain = menu_row(false, false, false);
+        assert_eq!(plain.height, 30.0);
+        assert_eq!(plain.check_x, None);
+        let choice = menu_row(true, false, false);
+        assert_eq!(choice.height, 30.0);
+        assert!(choice.check_x.unwrap() + 5.0 < choice.text_x, "the ✓ ends before the words");
+        let two = menu_row(true, true, true);
+        assert_eq!(two.height, 44.0);
+        let mark = two.mark_x.unwrap();
+        assert!(mark > two.check_x.unwrap() + 5.0 && mark + 4.0 < two.text_x);
+        // Drawn: a chosen row and a plain one take their heights, say their
+        // role and state, and a click chooses.
+        let ctx = egui::Context::default();
+        crate::style::install(&ctx);
+        let mut rects = vec![];
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            rects.push(menu_item(ui, 200.0, MenuItem::choice("Auto", "Ctrl and Cmd: Auto", true)).rect);
+            rects.push(menu_item(ui, 200.0, MenuItem::command("Reset", "Reset Caps Lock")).rect);
+            let item = MenuItem { title: "Studio PC", sub: Some("Connected · 4 ms"), chosen: Some(false), mark: Some(Mark::Ok), name: "Studio PC", enabled: true };
+            rects.push(menu_item(ui, 300.0, item).rect);
+        });
+        out.textures_delta.clear();
+        assert_eq!(rects.iter().map(|r| r.height()).collect::<Vec<_>>(), vec![30.0, 30.0, 44.0]);
+        assert_eq!(rects[0].width(), 200.0);
+    }
 
     #[test]
     fn mixing_ends_at_each_colour() {

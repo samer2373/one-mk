@@ -261,10 +261,13 @@ impl App {
             let r = place(if icons_only { TOOL_H } else { label_w(ui, label) });
             let name = "Timer: when typing on every computer stops by itself";
             let resp = tool(ui, r, "broadcast-options", Icon::Clock, label, false, !on, name).on_hover_text(name);
+            widgets::debug_open_menu(ui, &resp, "timer");
             egui::Popup::menu(&resp).width(280.0).align(egui::RectAlign::BOTTOM_START).show(|ui| {
                 let (row, _) = ui.allocate_exact_size(vec2(280.0, 34.0), Sense::hover());
-                self.broadcast_timeout(ui, row);
-                ui.label("Use zero to keep broadcasting until you stop it.");
+                self.broadcast_timeout(ui, row.shrink2(vec2(4.0, 0.0)));
+                let (note, _) = ui.allocate_exact_size(vec2(280.0, 22.0), Sense::hover());
+                ui.painter().text(note.left_center() + vec2(4.0, 0.0), Align2::LEFT_CENTER, "Use zero to keep broadcasting until you stop it.", regular(T_META), pal().ink2);
+                a11y_text(ui, Id::unique("broadcast-timeout-note"), note, Role::Label, "Use zero to keep broadcasting until you stop it.", None);
             });
         }
         let label = if icons_only { "" } else { "Lock every screen" };
@@ -566,20 +569,11 @@ impl App {
         let row = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), ROW));
         let resp = self.value_row(ui, row, &format!("swap-{}", peer.id), "Ctrl and Cmd", words);
         let mut chosen = None;
+        widgets::debug_open_menu(ui, &resp, "swap");
         egui::Popup::menu(&resp).width(200.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
             for (val, label) in SWAPS {
-                let (r, resp) = ui.allocate_exact_size(vec2(200.0, 30.0), Sense::click());
-                let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
-                let p = ui.painter();
-                p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, pal().hover, hover));
-                widgets::focus_ring(ui, &resp, r, 6);
-                let on = current == val;
-                if on {
-                    widgets::draw_check(p, pos2(r.left() + 16.0, r.center().y), 10.0, pal().ink, 1.0);
-                }
-                p.text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, label, regular(T_BODY), pal().ink);
-                widgets::a11y(&resp, Role::MenuItemRadio, &format!("Ctrl and Cmd for {}: {label}", peer.name), Some(on));
-                if resp.clicked() {
+                let name = format!("Ctrl and Cmd for {}: {label}", peer.name);
+                if widgets::menu_item(ui, 200.0, widgets::MenuItem::choice(label, &name, current == val)).clicked() {
                     chosen = Some(val);
                     ui.close();
                 }
