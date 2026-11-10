@@ -930,6 +930,14 @@ pub fn group_shapes(rect: Rect, radius: u8) -> Vec<egui::Shape> {
     out
 }
 
+/// The right-hand panel (handoff 4.2, shared by Desk and Keys & mouse):
+/// `surface`, a 1-point `line`, corner 16, the theme's shadow.
+pub fn panel(ui: &Ui, rect: Rect) {
+    for s in group_shapes(rect, 16) {
+        ui.painter().add(s);
+    }
+}
+
 /// The same as shapes, to place behind contents drawn first.
 pub fn glass_shapes(ctx: &egui::Context, key: u64, rect: Rect, radius: u8) -> Vec<egui::Shape> {
     glass_shapes_as(ctx, key, rect, f32::from(radius), PANEL_GLASS)

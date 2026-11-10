@@ -642,8 +642,8 @@ impl Keyboard {
         let (x0, z0) = (-w / 2.0, -d / 2.0);
         let lit = Lighting { eye: cam.eye, rim: 0.12 };
         let mut m = Mesh::default();
-        desk(&mut m, &cam, p3(0.0, -16.0, 0.0), w * 0.9, d * 1.6);
-        fade_to_edges(&mut m, 0, rect, 48.0);
+        // The floor under it is the page's (a soft ellipse of the theme's
+        // `floor`, drawn by the page); the board brings only its shadow.
         let (hw, hd) = (w / 2.0 + margin, d / 2.0 + margin);
         let shadow = rring(0.0, 6.0, hw + 6.0, hd + 6.0, 14.0, -15.9);
         soft_blob(&mut m, &cam, &shadow, p3(0.0, -15.9, 6.0), 16.0, 150);
@@ -746,11 +746,22 @@ impl Keyboard {
         }
         if let Some(t) = chosen.and_then(|i| self.tops.get(i)).filter(|t| t.len() > 2) {
             // The selection: a soft ring of the accent round a 2-point outline.
-            let ring = grown(t, 3.5);
-            p.add(Shape::closed_line(ring, Stroke::new(5.0, pal().ring)));
+            // On a small board (a short window) the ring narrows with the key
+            // and follows fewer points, so its corners never fold into spikes.
+            let size = self.bounds(chosen.unwrap_or(0)).size().min_elem();
+            let k = (size / 24.0).clamp(0.3, 1.0);
+            let mut sparse: Vec<Pos2> = Vec::with_capacity(t.len());
+            for q in t {
+                if sparse.last().is_none_or(|last: &Pos2| last.distance(*q) >= 1.5) {
+                    sparse.push(*q);
+                }
+            }
+            if sparse.len() > 2 {
+                p.add(Shape::closed_line(grown(&sparse, 3.5 * k), Stroke::new(5.0 * k, pal().ring)));
+            }
             let mut outline = t.clone();
             outline.push(outline[0]);
-            p.add(Shape::line(outline, Stroke::new(2.0, pal().accent)));
+            p.add(Shape::line(outline, Stroke::new(2.0_f32.min(1.0 + k), pal().accent)));
         }
     }
 
