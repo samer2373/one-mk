@@ -30,7 +30,7 @@ pub fn reduce_transparency() -> bool {
 
 /// Where the macOS window buttons go, in points from the window's top left:
 /// centred in this strip (the top bar), the close button this far in,
-/// before the logo (which starts 78 points in, app/shell.rs `MAC_INSET`).
+/// before the logo (which starts 96 points in, app/shell.rs `MAC_INSET`).
 pub const BUTTONS_Y: egui::Rangef = egui::Rangef { min: 0.0, max: 60.0 };
 pub const BUTTONS_X: f32 = 18.0;
 
