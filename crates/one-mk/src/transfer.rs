@@ -427,7 +427,14 @@ impl Inbox {
             };
             if let Err(e) = res {
                 tracing::warn!(%peer, "file transfer stopped: {e:#}");
+                // Say why, so the sender can tell the person ("is being
+                // sent again", "nothing arrived for 30 s") instead of
+                // "stopped by peer: error 1". It reads this when its
+                // writes start failing, or as the answer to `End`.
+                let why = FileMsg::Failed { reason: format!("{e:#}") };
+                let _ = tokio::time::timeout(Duration::from_secs(1), write_file_msg(&mut send, &why)).await;
                 let _ = recv.stop(1u32.into());
+                let _ = send.finish();
                 return;
             }
         }
@@ -1777,6 +1784,9 @@ mod tests {
         let got = secs(read_file_msg(&mut r2)).await.expect("replacement hung").unwrap();
         assert!(matches!(got, Some(FileMsg::Accept { offset: 10 })), "{got:?}");
         tokio::time::timeout(Duration::from_secs(5), t1).await.expect("stalled stream did not end").unwrap();
+        // The first sender is told why, not just that its stream was stopped.
+        let why = tokio::time::timeout(Duration::from_secs(5), read_file_msg(&mut r1)).await.unwrap().unwrap();
+        assert!(matches!(&why, Some(FileMsg::Failed { reason }) if reason.contains("is being sent again")), "{why:?}");
         assert!(root.join(PARTIAL_DIR).join(part_id(fp, "f.bin", 10, 1)).exists(), "partial kept");
         // Its reservation is gone; the replacement holds none (nothing left).
         assert_eq!(inbox.limits.lock().unwrap().reserved_total, 0);
