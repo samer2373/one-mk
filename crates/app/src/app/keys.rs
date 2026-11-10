@@ -142,7 +142,9 @@ mod gesture_tests {
     #[test]
     fn the_panel_rows_say_what_a_key_does_tapped_and_held() {
         let tap_hold = What::TapHold { tap: "esc".parse().unwrap(), hold: "lctrl".parse().unwrap(), timeout: None };
-        assert_eq!(tap_hold_text(Some(&tap_hold), "Caps Lock"), ("Esc".to_owned(), "Ctrl".to_owned()));
+        // The held key is named the way this system names it (Ctrl, or Control on a Mac).
+        let ctrl = if cfg!(target_os = "macos") { "Control" } else { "Ctrl" };
+        assert_eq!(tap_hold_text(Some(&tap_hold), "Caps Lock"), ("Esc".to_owned(), ctrl.to_owned()));
         let to = What::To("esc".parse().unwrap());
         assert_eq!(tap_hold_text(Some(&to), "Caps Lock"), ("Esc".to_owned(), "Esc".to_owned()));
         assert_eq!(tap_hold_text(None, "Caps Lock"), ("Caps Lock".to_owned(), "Caps Lock".to_owned()));

@@ -958,7 +958,8 @@ mod tests {
         let mut found = vec![];
         // Only the window's painting code: the daemon link's numbers aren't colours.
         for path in files.iter().filter(|p| !p.ends_with("style.rs") && !p.ends_with("daemon.rs")) {
-            let text = std::fs::read_to_string(path).unwrap();
+            // Windows checkouts may end lines in \r\n.
+            let text = std::fs::read_to_string(path).unwrap().replace("\r\n", "\n");
             // Tests may build what they compare against.
             let code = text.split("#[cfg(test)]\nmod tests").next().unwrap_or(&text);
             for (n, line) in code.lines().enumerate() {
