@@ -1662,6 +1662,28 @@ draw_when_no_mouse = "auto"
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// The window saves its appearance itself (no `one-mk` needed): the
+    /// daemon reads that file with every other setting intact, and its own
+    /// next save keeps the window's choice.
+    #[test]
+    fn appearance_saved_by_the_window_is_read_and_kept() {
+        let dir = temp_dir("appearance-window");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "settings_version = 3\nlock_sync = true\ngaming = \"auto\"\n[edge.left]\ndwell_ms = 300\n").unwrap();
+        let before = Settings::load(&dir).unwrap();
+        one_mk_ctl::settings_file::set_window_appearance(&dir, "light").unwrap();
+        let s = Settings::load(&dir).unwrap();
+        assert_eq!(s.window.appearance, "light");
+        assert_eq!(Settings { window: before.window.clone(), ..s.clone() }, before);
+        Settings::update(&dir, |s| {
+            s.lock_sync = false;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(Settings::load(&dir).unwrap().window.appearance, "light");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn clipboard_defaults_share_everything_up_to_25_mb() {
         let s = Settings::default();

@@ -362,7 +362,7 @@ impl App {
             cells: Pills::even(track, 3, 2.0),
             labels: &labels,
             names: Appearance::ALL.iter().map(|a| format!("Appearance: {}", a.label())).collect(),
-            chosen: Appearance::ALL.iter().position(|a| *a == self.prefs.appearance),
+            chosen: Appearance::ALL.iter().position(|a| *a == self.appearance()),
             enabled: vec![true; 3],
             role: Role::RadioButton,
             font: T_META,
@@ -372,9 +372,20 @@ impl App {
         }
     }
 
-    /// Light, Dark, or the system's: shown at once, kept in `settings.toml`.
+    /// Light, Dark, or the system's: shown at once and kept for this
+    /// session even if it can't be saved; saved in `settings.toml` by the
+    /// window itself.
     pub(super) fn set_appearance(&mut self, appearance: crate::style::Appearance) {
-        self.set_pref("appearance", &["appearance", appearance.key()], |p| p.appearance = appearance);
+        self.appearance_choice.choose(appearance);
+        self.prefs.appearance = appearance;
+        self.busy.push(Job::Appearance(appearance));
+        self.link.save_appearance(appearance);
+    }
+
+    /// The appearance shown: the one chosen in this window until the file
+    /// says the same (then the file's, so `one-mk appearance` is followed).
+    pub(super) fn appearance(&self) -> crate::style::Appearance {
+        self.appearance_choice.shown(self.prefs.appearance)
     }
 }
 

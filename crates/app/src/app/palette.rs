@@ -150,7 +150,7 @@ impl App {
             out.push(act(format!("Update oneMK to {v}"), "", Act::Update));
         }
         for a in crate::style::Appearance::ALL {
-            let hint = if a == self.prefs.appearance { "Now" } else { "" };
+            let hint = if a == self.appearance() { "Now" } else { "" };
             out.push(Entry { group: "Settings", title: format!("Appearance: {}", a.label()), hint: hint.into(), act: Act::Appearance(a) });
         }
         // Settings' own rows: each opens its category and lights its row.

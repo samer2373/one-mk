@@ -299,6 +299,9 @@ pub struct App {
     /// A fix just copied (its row), and when, to say so.
     copied: Option<(usize, f64)>,
     pending_lock: Option<(bool, f64)>,
+    /// Settings → Appearance as chosen here, kept until `settings.toml`
+    /// says the same (or for the whole session if it can't be saved).
+    appearance_choice: crate::style::AppearanceChoice,
     /// Broadcast asked to start (true) or stop, and when: shown so until
     /// the daemon says, or 5 s pass.
     pending_broadcast: Option<(bool, f64)>,
@@ -513,6 +516,7 @@ impl App {
             doctor: None,
             copied: None,
             pending_lock: None,
+            appearance_choice: Default::default(),
             pending_broadcast: None,
             keys: keys::KeysUi::new(),
             drafts: HashMap::new(),
@@ -570,7 +574,7 @@ impl App {
 
     /// Whether `job` can simply be run again from an error toast.
     fn retryable(job: &Job) -> bool {
-        matches!(job, Job::Layout { .. } | Job::Swap { .. } | Job::TakeBack | Job::Start | Job::Autostart(_) | Job::Set { .. } | Job::Open)
+        matches!(job, Job::Layout { .. } | Job::Swap { .. } | Job::TakeBack | Job::Start | Job::Autostart(_) | Job::Set { .. } | Job::Appearance(_) | Job::Open)
     }
 
     /// Runs a failed job again, as the control that asked for it did.
@@ -605,6 +609,7 @@ impl App {
                 self.busy.push(job);
                 self.link.open_downloads();
             }
+            Job::Appearance(_) => self.set_appearance(self.appearance()),
             _ => {}
         }
     }
@@ -679,6 +684,7 @@ impl App {
                     self.finished(what, error, now);
                 }
                 Event::Prefs(p) => {
+                    self.appearance_choice.read(p.appearance);
                     self.prefs = *p;
                     self.keys.check_due = true;
                     // What was being dragged or typed is saved now.
@@ -808,6 +814,8 @@ impl App {
                     self.toast_error(settings_controls::shortcut_error(e.as_deref().unwrap_or("")), None, now);
                 } else { self.toast_error(format!("Couldn't change {what}."), e, now); }
             }
+            // Kept on screen for this session all the same.
+            Job::Appearance(_) => self.toast_error("Couldn't save the appearance. This window keeps it until it closes.", e, now),
             Job::Doctor => {}
             // Shown where the change was made, not as a toast.
             Job::Tune { area, what, .. } => self.tuned(area, &what, e),
@@ -2365,7 +2373,7 @@ impl eframe::App for App {
         let now = ui.input(|i| i.time);
         self.now = now;
         // The theme first: everything below paints with it.
-        self.themer.frame(ui.ctx(), self.prefs.appearance, now);
+        self.themer.frame(ui.ctx(), self.appearance(), now);
         if self.size.x > 0.0 {
             // Some desktops (GNOME on Wayland) ignore the size asked for at
             // start; asking again once the window is mapped works.

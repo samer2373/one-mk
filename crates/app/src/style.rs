@@ -469,6 +469,31 @@ pub fn set_palette(palette: Palette, ctx: Option<&egui::Context>) {
     }
 }
 
+/// Settings → Appearance as the window shows it: a choice made here wins
+/// until `settings.toml` says the same, then the file is followed again
+/// (so `one-mk appearance` changes the window). A choice that can't be
+/// saved stays for the session instead of springing back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AppearanceChoice(Option<Appearance>);
+
+impl AppearanceChoice {
+    pub fn choose(&mut self, appearance: Appearance) {
+        self.0 = Some(appearance);
+    }
+
+    /// What to show, given what `settings.toml` says.
+    pub fn shown(self, saved: Appearance) -> Appearance {
+        self.0.unwrap_or(saved)
+    }
+
+    /// `settings.toml` was read again and says `saved`.
+    pub fn read(&mut self, saved: Appearance) {
+        if self.0 == Some(saved) {
+            self.0 = None;
+        }
+    }
+}
+
 /// Follows the Appearance setting (and, set to System, the system's own
 /// light or dark), cross-fading 200 ms between themes; with reduced motion
 /// the change is immediate.
@@ -1118,6 +1143,41 @@ mod tests {
         assert_eq!(Appearance::System.theme(Some(Theme::Light)), Theme::Light);
         assert_eq!(Appearance::System.theme(None), Theme::Dark);
         assert_eq!(Appearance::Dark.theme(Some(Theme::Light)), Theme::Dark);
+    }
+
+    /// A choice shows at once, outlives a file that still says otherwise
+    /// (not saved yet, or never: an old or missing `one-mk`), and gives
+    /// way to the file once the file agrees.
+    #[test]
+    fn appearance_choice_sticks_until_saved() {
+        let mut c = AppearanceChoice::default();
+        assert_eq!(c.shown(Appearance::Light), Appearance::Light);
+        c.choose(Appearance::Dark);
+        assert_eq!(c.shown(Appearance::System), Appearance::Dark);
+        c.read(Appearance::System);
+        assert_eq!(c.shown(Appearance::System), Appearance::Dark, "a stale read must not undo the choice");
+        c.choose(Appearance::Light);
+        c.read(Appearance::Dark);
+        assert_eq!(c.shown(Appearance::Dark), Appearance::Light, "the last click wins");
+        c.read(Appearance::Light);
+        assert_eq!(c.shown(Appearance::Light), Appearance::Light);
+        assert_eq!(c.shown(Appearance::Dark), Appearance::Dark, "once saved, the file is followed again");
+    }
+
+    /// What the window saves itself, the window reads back.
+    #[test]
+    fn appearance_saved_by_the_window_reads_back() {
+        let dir = std::env::temp_dir().join(format!("one-mk-app-appearance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.toml"), "settings_version = 3\n[clipboard]\ntext = false\n").unwrap();
+        for a in Appearance::ALL {
+            one_mk_ctl::settings_file::set_window_appearance(&dir, a.key()).unwrap();
+            let p = crate::view::Prefs::read(&std::fs::read_to_string(dir.join("settings.toml")).unwrap(), "");
+            assert_eq!(p.appearance, a);
+            assert!(!p.clip_text, "other settings are kept");
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// No colour is written down outside this file: every other file of

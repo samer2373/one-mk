@@ -207,6 +207,8 @@ pub enum Job {
     Clip { send: bool, id: String, name: String },
     /// A setting changed with `one-mk <args>`; `what` names it in a sentence.
     Set { what: String, args: Vec<String> },
+    /// Settings → Appearance saved by the window itself.
+    Appearance(crate::style::Appearance),
     Doctor,
     /// Input tuning changed with `one-mk keymap|pointer|scroll|buttons`;
     /// `what` names it, `area` is where its error shows, `n` tells two
@@ -762,6 +764,21 @@ impl Link {
         let id = peer.to_owned();
         let req = if send { Request::ClipSend(Some(id)) } else { Request::ClipGet(Some(id)) };
         self.job(Job::Clip { send, id: peer.into(), name: name.into() }, move |l| l.ask(req));
+    }
+
+    /// Saves Settings → Appearance in `settings.toml` from here: only the
+    /// window reads it, so it needs no `one-mk` (which may be missing, older
+    /// than this window, or not running). Saves run one at a time and each
+    /// writes the latest choice, so quick clicks end on the last one.
+    pub fn save_appearance(&self, appearance: crate::style::Appearance) {
+        static LATEST: std::sync::Mutex<Option<crate::style::Appearance>> = std::sync::Mutex::new(None);
+        static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        *LATEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(appearance);
+        self.job(Job::Appearance(appearance), move |l| {
+            let _turn = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+            let latest = LATEST.lock().unwrap_or_else(|e| e.into_inner()).unwrap_or(appearance);
+            one_mk_ctl::settings_file::set_window_appearance(&l.dir, latest.key())
+        });
     }
 
     /// Changes a setting with `one-mk <args>`; `what` names it for an error.

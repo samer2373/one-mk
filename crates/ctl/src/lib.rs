@@ -9,6 +9,7 @@ pub mod integrate;
 pub mod macos_windows;
 pub mod private;
 pub mod proc;
+pub mod settings_file;
 pub mod setup;
 pub mod status;
 pub mod wallpaper;
