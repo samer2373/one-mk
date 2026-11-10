@@ -9,7 +9,8 @@ one-mk partials [--clear]                # what an interrupted transfer left beh
 
 Files land in `Downloads/one-mk` on the other computer (change it with
 `one-mk run --downloads <dir>`). The same transfer is behind dropping files on a computer
-in the window's **Desk**, the **Clipboard & files** tab, the file manager entry below, and the
+in the window's **Desk**, the **Clipboard & files** tab (a recipient's row, or the small desk its
+**Show desk** opens), the file manager entry below, and the
 experimental edge drop ([DRAG-FILES.md](DRAG-FILES.md)).
 
 - **Resumable.** An interrupted transfer resumes when you send the same file again; the
