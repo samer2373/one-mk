@@ -41,7 +41,7 @@ pub(super) const MAX_W: f32 = 1160.0;
 /// (At least the type scale's page title, should that grow.)
 pub(super) const TITLE: f32 = T_PAGE.max(26.0);
 /// The page's sentence under its title.
-pub(super) const SUBTITLE: f32 = 14.0;
+pub(super) const SUBTITLE: f32 = T_LEAD;
 
 /// Where a page's content sits across `width` from `origin_x`: its left
 /// edge and width, inset on both sides and centred once it reaches `max_w`.
