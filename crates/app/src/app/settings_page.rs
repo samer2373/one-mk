@@ -70,6 +70,8 @@ impl Cat {
         }
     }
 
+    /// The debug hook's `ONE_MK_APP_SETTINGS=<slug>`.
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
     pub(super) fn from_slug(slug: &str) -> Option<Cat> {
         Cat::ALL.into_iter().find(|c| c.slug() == slug)
     }
@@ -137,13 +139,13 @@ pub(super) const JUMPS: &[(&str, Cat, &str)] = &[
 ];
 
 /// The row a palette title stands for.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(super) fn jump_for(title: &str) -> Option<(Cat, &'static str)> {
     JUMPS.iter().find(|(t, _, _)| *t == title).map(|(_, cat, key)| (*cat, *key))
 }
 
 /// The category a row is in.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(super) fn cat_of(key: &str) -> Option<Cat> {
     Cat::ALL.into_iter().find(|cat| groups(*cat).iter().any(|g| g.rows.contains(&key)))
 }

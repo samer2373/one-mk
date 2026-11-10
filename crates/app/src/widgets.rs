@@ -203,7 +203,6 @@ pub enum Look {
     /// Everything else: a quiet `surface2` fill.
     Quiet,
     /// A link: no fill, the accent's text colour.
-    #[cfg_attr(not(any(debug_assertions, feature = "design-evidence")), allow(dead_code))]
     Text,
     /// A destructive link: no fill, the danger colour.
     Danger,
@@ -219,7 +218,7 @@ pub struct State {
 }
 
 impl State {
-    #[cfg_attr(not(any(debug_assertions, feature = "design-evidence")), allow(dead_code))] // The widget gallery (debug) and the new layout use it.
+    #[cfg_attr(not(any(debug_assertions, feature = "design-evidence")), allow(dead_code))] // The widget gallery (debug) uses it.
     pub const REST: State = State { hover: 0.0, press: 0.0, enabled: true, focus: false };
 }
 
@@ -499,7 +498,7 @@ pub struct Switch {
 }
 
 impl Switch {
-    #[cfg_attr(not(any(debug_assertions, feature = "design-evidence")), allow(dead_code))] // The widget gallery (debug) and the new layout use it.
+    #[cfg_attr(not(any(debug_assertions, feature = "design-evidence")), allow(dead_code))] // The widget gallery (debug) uses it.
     pub fn at(on: bool) -> Switch {
         let t = f32::from(on);
         Switch { on, knob: t, fill: t, undimmed: false }
@@ -739,7 +738,7 @@ pub fn status_mark(p: &Painter, c: Pos2, d: f32, mark: Mark) {
 
 /// A chip or pill: 30 tall, a capsule edged in `line2`; on, the accent's
 /// edge on `accent_soft` with `accent_text`.
-#[cfg_attr(not(any(debug_assertions, feature = "design-evidence")), allow(dead_code))] // The widget gallery (debug) and the new layout use it.
+#[cfg_attr(not(any(debug_assertions, feature = "design-evidence")), allow(dead_code))] // The widget gallery (debug) uses it.
 pub fn paint_chip(p: &Painter, rect: Rect, label: &str, on: bool, s: State) {
     let pal = pal();
     let r = CornerRadius::same((rect.height() / 2.0).round() as u8);
@@ -764,18 +763,15 @@ pub fn kbd(p: &Painter, at: Pos2, anchor: Align2, text: &str) -> Rect {
 }
 
 /// A row's hairline: across `x` at `y`, in `line` (none after the last row).
-#[cfg_attr(not(any(debug_assertions, feature = "design-evidence")), allow(dead_code))] // The widget gallery (debug) and the new layout use it.
 pub fn hairline(p: &Painter, x: egui::Rangef, y: f32) {
     p.hline(x, y, Stroke::new(1.0, pal().line));
 }
 
 /// Row heights: on a page (52; in a panel, 46).
-#[cfg_attr(not(any(debug_assertions, feature = "design-evidence")), allow(dead_code))] // The widget gallery (debug) and the new layout use it.
 pub const ROW_PAGE: f32 = 52.0;
 
 /// A row: its label (13) with a caption (12, `ink2`) under it when there is
 /// one, and a value (13, `ink2`) at the right.
-#[cfg_attr(not(any(debug_assertions, feature = "design-evidence")), allow(dead_code))] // The widget gallery (debug) and the new layout use it.
 pub fn paint_row(p: &Painter, row: Rect, label: &str, caption: Option<&str>, value: Option<&str>) {
     let pal = pal();
     let value_w = value.map_or(0.0, |v| p.layout_no_wrap(v.to_owned(), regular(T_BODY), pal.ink2).size().x + 12.0);

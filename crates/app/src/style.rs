@@ -559,10 +559,8 @@ pub const M: f32 = 12.0;
 // is the handoff's (tokens.json `type.scale`).
 
 /// A page's title (22/600).
-#[allow(dead_code)] // The new layout (top bar, panels) uses it.
 pub const T_PAGE: f32 = 22.0;
 /// A section's title, as Keys & mouse's (20/600).
-#[allow(dead_code)] // The new layout (top bar, panels) uses it.
 pub const T_SECTION: f32 = 20.0;
 /// Panel titles and the sheet title (16/600).
 pub const T_TITLE: f32 = 16.0;
@@ -573,7 +571,6 @@ pub const T_META: f32 = 12.0;
 /// Mono chips (11).
 pub const T_CHIP: f32 = 11.0;
 /// A big number, as the latency (36/500 mono).
-#[allow(dead_code)] // The new layout (top bar, panels) uses it.
 pub const T_BIG: f32 = 36.0;
 /// The wordmark beside the 24-point symbol (Unbounded Bold 15).
 pub const T_WORDMARK: f32 = 15.0;
