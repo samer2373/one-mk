@@ -788,6 +788,13 @@ impl App {
             Job::Stop => self.toast_error("Couldn't stop oneMK. If it was started before an update, quit it once from Activity Monitor or Task Manager; after that Stop works.", e, now),
             Job::Open => self.toast_error("Couldn't open the received files folder.", e, now),
             Job::Profile { verb, name } => {
+                // A name that couldn't be saved stays in its field to be fixed.
+                if verb == "save" {
+                    let draft = self.drafts.entry("profile-new".to_owned()).or_default();
+                    if draft.trim().is_empty() {
+                        draft.clone_from(&name);
+                    }
+                }
                 let what = match verb {
                     "save" => format!("save this layout as “{name}”"),
                     "delete" => format!("delete “{name}”"),
