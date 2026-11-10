@@ -1626,6 +1626,10 @@ impl App {
         if online.is_empty() && let Some(p) = s.peers.iter().find(|p| s.removed_us(&p.id)) {
             return (format!("{} removed this computer", p.name), "It no longer trusts this computer, so it refuses to connect. Remove it here too, or pair the two computers again.".into());
         }
+        // Something keeps trying to connect and never gets in: say who and what to do.
+        if online.is_empty() && let Some(note) = s.unrecognised.first() {
+            return ("A computer can't get in".into(), note.clone());
+        }
         match online[..] {
             [] if s.peers.is_empty() => ("No computers paired yet".into(), "Choose Pair a computer, then do the same on the other computer.".into()),
             [] => (

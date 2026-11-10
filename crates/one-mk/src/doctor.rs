@@ -982,6 +982,20 @@ pub fn layout_check(d: &Daemon) -> Option<Check> {
     )))
 }
 
+/// Computers that keep trying to connect but never get in (see
+/// `Status::unrecognised`): the daemon says who and what to do. Nothing
+/// to say otherwise, or when one-mk isn't running.
+pub fn unrecognised_check(d: &Daemon) -> Option<Check> {
+    let notes = &d.status()?.unrecognised;
+    if notes.is_empty() {
+        return None;
+    }
+    Some(check("unrecognised", "Computers that can't get in", Outcome::warn(
+        notes.join(" "),
+        "Pair again only a computer you know is yours (`one-mk pair` on both): oneMK never trusts one by itself.",
+    )))
+}
+
 /// Private IPv4 ranges (RFC 1918): what a home or office LAN uses.
 pub fn network_check(addrs: &[Addr]) -> Check {
     let title = "Network";
@@ -1432,6 +1446,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         checks.push(edge_push_check(&settings.edge, status.map_or("", |s| s.backend.as_str()), question));
     }
     checks.extend(layout_check(&daemon));
+    checks.extend(unrecognised_check(&daemon));
     checks.push(network_check(&addrs));
     checks.push(connection_check(&daemon));
     let seen = mdns.seen.as_deref().unwrap_or_default();
@@ -2406,6 +2421,13 @@ mod tests {
         let mut s = status("aaaa-aaaa", 24900, &[("bbbb-bbbb", true)]);
         assert!(layout_check(&Daemon::Running(Box::new(s.clone()))).is_none());
         assert!(layout_check(&Daemon::NotRunning).is_none());
+        assert!(unrecognised_check(&Daemon::NotRunning).is_none());
+        assert!(unrecognised_check(&Daemon::Running(Box::new(s.clone()))).is_none());
+        let mut knocked = s.clone();
+        knocked.unrecognised = vec!["A computer this one doesn't recognise (id ab12-cd34, at 10.0.0.5) tried to connect.".into()];
+        let c = unrecognised_check(&Daemon::Running(Box::new(knocked))).unwrap();
+        assert_eq!(c.outcome.status, Status::Warn);
+        assert!(c.outcome.detail.contains("ab12-cd34") && c.outcome.fix.as_deref().is_some_and(|f| f.contains("never trusts")), "{c:?}");
         s.layout.warnings = vec!["layout of desk does not overlap yours: none of its screens touches this computer's on its right, so the pointer can't cross to it".into()];
         let c = layout_check(&Daemon::Running(Box::new(s))).unwrap();
         assert_eq!(st(&c), Status::Warn);

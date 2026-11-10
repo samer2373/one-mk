@@ -146,7 +146,7 @@ impl App {
         let h = (14.0 + title.size().y + 4.0 + sub.size().y + 14.0).max(if take_back { 56.0 } else { 0.0 });
         // Being controlled, a permission still missing, a computer that no
         // longer trusts this one: these need the user.
-        let attention = self.running().is_some_and(|s| s.controlled_by.is_some() || (!s.input.is_empty() && !s.peers.is_empty()) || s.peers.iter().any(|p| !p.online && s.removed_us(&p.id)));
+        let attention = self.running().is_some_and(|s| s.controlled_by.is_some() || (!s.input.is_empty() && !s.peers.is_empty()) || s.peers.iter().any(|p| !p.online && s.removed_us(&p.id)) || !s.unrecognised.is_empty());
         Some(NoticeLay { title, sub, h, w, take_back, attention })
     }
 
