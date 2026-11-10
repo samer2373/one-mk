@@ -156,9 +156,6 @@ struct SheetView {
     appear: f64,
     /// Changes when the step changes, to move focus into it again.
     key: String,
-    /// A confirmation: centred in the window over a dimmed ground (the
-    /// scrim), where the pairing sheet sits low to leave the desk its room.
-    modal: bool,
 }
 
 struct Toast {
@@ -249,7 +246,8 @@ pub struct App {
     health_passed_open: bool,
     /// The sheet as last drawn, and when it started to leave.
     sheet_was: Option<(SheetView, f64)>,
-    sheet_top: Option<f32>,
+    /// Where the sheet is this frame (the toast keeps clear of it).
+    sheet_rect: Option<Rect>,
     sheet_key: String,
     toast: Option<Toast>,
     latency: HashSet<String>,
@@ -481,7 +479,7 @@ impl App {
             settings_jump: None,
             health_passed_open: false,
             sheet_was: None,
-            sheet_top: None,
+            sheet_rect: None,
             sheet_key: String::new(),
             toast: None,
             latency: HashSet::new(),
@@ -1470,8 +1468,10 @@ impl App {
             Some(Drag::Device { i, .. }) => Some(i),
             _ => None,
         };
-        self.scene.raise.go(f32::from(self.sheet_open()), now, motion::space(0.38), motion::out_expo);
-        self.scene.sheet_top = self.sheet_top;
+        // The sheet is centred over the scrim (handoff 5.8): the desk stays
+        // where it is behind it, rather than making room below.
+        self.scene.raise.go(0.0, now, motion::space(0.38), motion::out_expo);
+        self.scene.sheet_top = None;
         self.scene.drop_preview.go(f32::from(self.tab == Tab::Files), now, motion::fade(0.28), motion::out_cubic);
         let several = self.scene.devices.iter().filter(|d| !d.leaving && d.id != GHOST).count() > 1;
         let shown = several && self.tab == Tab::Desk;
@@ -1510,23 +1510,12 @@ impl App {
         };
         let (id, name) = (self.scene.devices[i].id.clone(), self.scene.devices[i].name.clone());
         let width = 180.0;
-        let p = ui.painter().clone();
-        let head = fit(&p, &format!("Where is {name}?"), &regular(T_META), width - 16.0);
-        let (r, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
-        p.text(r.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, head, regular(T_META), pal().ink2);
+        let head = fit(ui.painter(), &format!("Where is {name}?"), &regular(T_META), width - 20.0);
+        widgets::menu_heading(ui, width, &head);
         let current = self.side_of(&id);
         for (side, label) in [(Side::Left, "On the left"), (Side::Right, "On the right"), (Side::Top, "Above"), (Side::Bottom, "Below")] {
-            let (r, resp) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
-            let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
-            p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, pal().hover, hover));
-            widgets::focus_ring(ui, &resp, r, 6);
-            let on = current == Some(side);
-            if on {
-                widgets::draw_check(&p, pos2(r.left() + 16.0, r.center().y), 10.0, pal().ink, 1.0);
-            }
-            p.text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, label, regular(T_BODY), if on { pal().ink } else { pal().ink_hover });
-            widgets::a11y(&resp, Role::MenuItemRadio, &format!("{name}: {label}"), Some(on));
-            if resp.clicked() {
+            let full = format!("{name}: {label}");
+            if widgets::menu_item(ui, width, widgets::MenuItem::choice(label, &full, current == Some(side))).clicked() {
                 self.choose_side(&id, side, true);
                 ui.close();
             }
@@ -1740,10 +1729,9 @@ impl App {
                 code: None,
                 check: None,
                 buttons,
-                focus: 1,
+                focus: 0,
                 appear: *at,
                 key: "drop".into(),
-                modal: false,
             });
         }
         if let Some((id, name, at)) = &self.removing {
@@ -1756,7 +1744,6 @@ impl App {
                 focus: 0,
                 appear: *at,
                 key: "remove".into(),
-                modal: false,
             });
         }
         if let Some((name, at)) = &self.deleting_profile {
@@ -1771,7 +1758,6 @@ impl App {
                 focus: 0,
                 appear: *at,
                 key: "delete-profile".into(),
-                modal: true,
             });
         }
         let pair = self.pairing.as_ref()?;
@@ -1829,10 +1815,16 @@ impl App {
         };
         let check = matches!(pair.step, Step::Paired { .. }).then_some(pair.since);
         let key = format!("{:?}", std::mem::discriminant(&pair.step));
-        Some(SheetView { title, sub, code, check, buttons, focus, appear: pair.opened + motion::space(0.4) as f64, key, modal: false })
+        Some(SheetView { title, sub, code, check, buttons, focus, appear: pair.opened + motion::space(0.4) as f64, key })
     }
 
-    fn sheet(&mut self, ui: &mut Ui, desk: Rect, now: f64) {
+    /// The sheet (handoff 5.8): pairing, where dropped files go, and every
+    /// confirmation, one way: centred in the window over the dimmed window
+    /// (the scrim), `surface`, corner 16, padding 24, at least 440 wide. It
+    /// holds the keyboard while it is up (Tab goes round its own controls,
+    /// Esc is its way out, a click on the scrim too where that is safe), and
+    /// a body taller than the window scrolls inside it.
+    fn sheet(&mut self, ui: &mut Ui, now: f64) {
         let (view, leaving) = match self.sheet_view() {
             Some(v) => {
                 self.sheet_was = Some((v.clone(), now));
@@ -1847,7 +1839,7 @@ impl App {
                         ui.memory_mut(|m| m.request_focus(Id::unique("action")));
                     }
                     self.sheet_was = None;
-                    self.sheet_top = None;
+                    self.sheet_rect = None;
                     self.sheet_key.clear();
                     return;
                 }
@@ -1856,20 +1848,17 @@ impl App {
         if leaving.is_none() && self.keys_on_sheet(ui) {
             return;
         }
-        // A confirmation breathes more (24); the pairing sheet keeps its 18.
-        let pad = if view.modal { 24.0 } else { 18.0 };
-        let widest = view.buttons.iter().map(|(label, _, _)| button_width(ui, label) + 2.0 * pad).fold(440.0f32, f32::max);
-        // A confirmation is centred in the whole window; the others sit in the page.
-        let desk = if view.modal { ui.ctx().content_rect() } else { desk };
-        let width = widest.min(desk.width() - 40.0);
-        let x = desk.center().x - width / 2.0 + pad;
+        let ctx = ui.ctx().clone();
+        let window = ctx.content_rect();
+        let pad = SHEET_PAD;
+        let widest = view.buttons.iter().map(|(label, _, _)| button_width(ui, label) + 2.0 * pad).fold(0.0f32, f32::max);
+        let width = sheet_width(window.width(), widest);
         let inner = width - 2.0 * pad;
         let sub_g = {
             let mut job = egui::text::LayoutJob::simple(view.sub.clone(), regular(T_BODY), pal().ink2, inner);
             job.sections[0].format.line_height = Some((T_BODY * LEADING).round());
             ui.painter().layout_job(job)
         };
-        let code_h = if view.code.is_some() { 60.0 } else { 0.0 };
         // Buttons in a row if they fit, else one under another with the
         // way out last.
         let row = view.buttons.iter().map(|(l, _, _)| button_width(ui, l) + 8.0).sum::<f32>() - 8.0 <= inner;
@@ -1879,19 +1868,17 @@ impl App {
             view.focus = view.focus.saturating_sub(1);
         }
         let widths: Vec<f32> = view.buttons.iter().map(|(l, _, _)| button_width(ui, l).min(inner)).collect();
-        let button_labels: Vec<_> = view.buttons.iter().map(|(label, _, _)| ui.painter().layout(label.clone(), regular(T_BODY), pal().ink, inner - 28.0)).collect();
-        let button_heights: Vec<f32> = button_labels.iter().map(|label| (label.size().y + 16.0).max(34.0)).collect();
-        let btn_h = if view.buttons.is_empty() { 0.0 } else if row { 34.0 } else { button_heights.iter().sum::<f32>() + 8.0 * button_heights.len().saturating_sub(1) as f32 };
+        let button_labels: Vec<_> = view.buttons.iter().map(|(label, look, _)| ui.painter().layout(label.clone(), widgets::button_font(*look), pal().ink, inner - 28.0)).collect();
+        let button_heights: Vec<f32> = button_labels.iter().map(|label| (label.size().y + 18.0).max(SHEET_BUTTON_H)).collect();
+        let btn_h = if view.buttons.is_empty() { 0.0 } else if row { SHEET_BUTTON_H } else { button_heights.iter().sum::<f32>() + 8.0 * button_heights.len().saturating_sub(1) as f32 };
         let title_g = ui.painter().layout(view.title.clone(), semibold(T_TITLE), pal().ink, inner - if view.check.is_some() { 26.0 } else { 0.0 });
         let title_h = title_g.size().y.max(22.0);
         let alternatives = leaving.is_none() && self.pairing.as_ref().is_some_and(|pair| matches!(pair.step, Step::Searching { .. } | Step::Hint));
-        let height = pad + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { pad + btn_h } else { 0.0 } + pad + if alternatives { 212.0 } else { 0.0 };
-        let rect = if view.modal {
-            Rect::from_center_size(desk.center(), vec2(width, height))
-        } else {
-            Rect::from_min_size(pos2(x - pad, desk.bottom() - height - 20.0), vec2(width, height))
-        };
-        self.sheet_top = Some(rect.top());
+        let alt_h = if alternatives { settings_controls::pairing_controls_h(ui, inner) } else { 0.0 };
+        let body = SheetBody { title: title_h, sub: sub_g.size().y, code: view.code.is_some(), alternatives: alt_h };
+        let fit = sheet_fit(window, width, body.height(), btn_h);
+        let rect = fit.rect;
+        self.sheet_rect = Some(rect);
 
         // In: rises 16 points and grows from 98%; out: fades and drops 8.
         let (o, dy, s) = match leaving {
@@ -1906,104 +1893,125 @@ impl App {
             }
         };
         if o < 1.0 || dy > 0.0 {
-            ui.ctx().request_repaint();
+            ctx.request_repaint();
         }
-        // A confirmation dims the window behind it (light: black 20 %, dark:
-        // 50 %) and catches the clicks there: one is a "no".
-        let mut scrim_clicked = false;
-        if view.modal {
-            let full = ui.ctx().content_rect();
-            let scrim = egui::LayerId::new(egui::Order::Foreground, Id::unique("sheet-scrim"));
-            let dim = ui.new_child(UiBuilder::new().layer_id(scrim).max_rect(full));
-            dim.painter().rect_filled(full, 0.0, crate::style::scrim().gamma_multiply(o));
-            scrim_clicked = leaving.is_none() && dim.interact(full, Id::unique("sheet-scrim-hit"), Sense::click()).clicked();
-        }
-        let layer = egui::LayerId::new(egui::Order::Foreground, Id::unique("sheet-layer"));
+        // The scrim: the window dimmed (light: black 20 %, dark: 50 %). It is
+        // egui's modal layer, so nothing behind it takes the pointer or the
+        // keyboard (Tab stays in the sheet), and a click on it is a "no"
+        // where that is safe.
+        let (scrim_area, sheet_area) = sheet_areas(window, rect);
+        let layer = sheet_area.layer();
+        hold_keyboard(&ctx, scrim_area.layer(), layer);
+        let scrim_clicked = scrim_area
+            .show(&ctx, |ui| {
+                ui.painter().rect_filled(window, 0.0, crate::style::scrim().gamma_multiply(o));
+                // Clicks, never the keyboard's focus.
+                ui.allocate_rect(window, Sense::CLICK).clicked()
+            })
+            .inner
+            && leaving.is_none()
+            && o >= 0.5;
         let c = rect.center();
-        ui.ctx().set_transform_layer(layer, egui::emath::TSTransform::new(c.to_vec2() * (1.0 - s) + vec2(0.0, dy), s));
-        let mut child = ui.new_child(UiBuilder::new().layer_id(layer).max_rect(rect));
-        child.set_opacity(o);
-        if leaving.is_some() || o < 0.5 {
-            child.disable();
-        }
-        // The sheet is modal: what is behind it doesn't get its clicks.
-        child.interact(rect, Id::unique("sheet-body"), Sense::CLICK | Sense::DRAG);
-        let p = child.painter().clone();
-        let radius = if view.modal { 16 } else { R_PANEL };
-        p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: pal().shadow(115) }.as_shape(rect, CornerRadius::same(radius)));
-        p.rect(rect, CornerRadius::same(radius), pal().surface, Stroke::new(1.0, pal().line2), StrokeKind::Inside);
-        if !view.modal {
-            p.hline(rect.x_range().shrink(f32::from(R_PANEL)), rect.top() + 1.0, Stroke::new(1.0, pal().glass_edge));
-        }
-        let mut y = rect.top() + pad;
-        let mut tx = x;
-        if let Some(t0) = view.check {
-            // A tick drawn in, then it holds.
-            let k = motion::progress(now, t0, motion::fade(0.24), motion::out_cubic);
-            widgets::draw_check(&p, pos2(x + 8.0, y + title_h / 2.0), 16.0, pal().ink, k);
-            tx += 26.0;
-            if k < 1.0 {
-                ui.ctx().request_repaint();
-            }
-        }
-        p.galley(pos2(tx, y), title_g, pal().ink);
-        y += title_h + 4.0;
-        let sub_h = sub_g.size().y;
-        p.galley(pos2(x, y), sub_g, pal().ink2);
-        y += sub_h;
-        a11y_text(&child, Id::unique("sheet-dialog"), rect, Role::Dialog, &format!("{}. {}", view.title, view.sub), Some(Live::Polite));
-        if let Some((code, _)) = &view.code {
-            // Digits rise in one by one, in the same rhythm as the other screen.
-            let font = mono_medium(28.0);
-            let adv = text_width(&child, "0", font.clone()) + 3.0;
-            let mut cx = x;
-            for (i, ch) in code.chars().enumerate() {
-                if i == 3 {
-                    cx += 12.0;
-                }
-                p.text(pos2(cx, y + 14.0), Align2::LEFT_TOP, ch, font.clone(), pal().ink);
-                cx += adv;
-            }
-            let digits: Vec<String> = code.chars().map(String::from).collect();
-            let spoken = if digits.len() == 6 { format!("{}, {}", digits[..3].join(" "), digits[3..].join(" ")) } else { digits.join(" ") };
-            a11y_text(&child, Id::unique("sheet-code"), Rect::from_min_size(pos2(x, y), vec2(inner, code_h)), Role::Label, &format!("Pairing code {spoken}"), None);
-            y += code_h;
-        }
-        if alternatives { self.pairing_controls(&mut child, Rect::from_min_size(pos2(x, y + 12.0), vec2(inner, 200.0)), now); y += 212.0; }
-        if view.buttons.is_empty() {
-            return;
-        }
-        y += pad;
+        ctx.set_transform_layer(layer, egui::emath::TSTransform::new(c.to_vec2() * (1.0 - s) + vec2(0.0, dy), s));
         let mut clicked = None;
-        let mut bx = rect.right() - pad - widths.iter().sum::<f32>() - 8.0 * widths.len().saturating_sub(1) as f32;
-        for (k, ((label, look, act), w)) in view.buttons.iter().zip(&widths).enumerate() {
-            let r = if row {
-                let r = Rect::from_min_size(pos2(bx, y), vec2(*w, 34.0));
-                bx += w + 8.0;
-                r
-            } else {
-                Rect::from_min_size(pos2(x, y + button_heights[..k].iter().sum::<f32>() + k as f32 * 8.0), vec2(inner, button_heights[k]))
+        sheet_area.show(&ctx, |child| {
+            child.set_opacity(o);
+            if leaving.is_some() || o < 0.5 {
+                child.disable();
+            }
+            // The sheet takes its own clicks: none reach the scrim.
+            let _ = child.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
+            let p = child.painter().clone();
+            let radius = CornerRadius::same(R_SHEET);
+            p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: pal().shadow(115) }.as_shape(rect, radius));
+            p.rect(rect, radius, pal().surface, Stroke::new(1.0, pal().line2), StrokeKind::Inside);
+            a11y_text(child, Id::unique("sheet-dialog"), rect, Role::Dialog, &format!("{}. {}", view.title, view.sub), Some(Live::Polite));
+            let body_rect = Rect::from_min_size(rect.min + vec2(pad, pad), vec2(inner, fit.body));
+            // What the sheet says, from `at` down (in a list that scrolls
+            // when the window is too short for all of it).
+            let draw_body = |this: &mut Self, ui: &mut Ui, at: Pos2| {
+                let p = ui.painter().clone();
+                let mut y = at.y;
+                let mut tx = at.x;
+                if let Some(t0) = view.check {
+                    // A tick drawn in, then it holds.
+                    let k = motion::progress(now, t0, motion::fade(0.24), motion::out_cubic);
+                    widgets::draw_check(&p, pos2(at.x + 8.0, y + title_h / 2.0), 16.0, pal().ink, k);
+                    tx += 26.0;
+                    if k < 1.0 {
+                        ui.ctx().request_repaint();
+                    }
+                }
+                p.galley(pos2(tx, y), title_g.clone(), pal().ink);
+                y += title_h + SheetBody::GAP_SUB;
+                p.galley(pos2(at.x, y), sub_g.clone(), pal().ink2);
+                y += sub_g.size().y;
+                if let Some((code, _)) = &view.code {
+                    y += SheetBody::GAP;
+                    let block = Rect::from_min_size(pos2(at.x, y), vec2(inner, SheetBody::CODE_H));
+                    pairing_code(ui, block, code);
+                    y += SheetBody::CODE_H;
+                }
+                if alternatives {
+                    y += SheetBody::GAP;
+                    this.pairing_controls(ui, Rect::from_min_size(pos2(at.x, y), vec2(inner, alt_h)), now);
+                }
             };
-            let shown = if row { label.as_str() } else { "" };
-            let id = Id::unique(("sheet-btn", &view.key, k));
-            let resp = button(&mut child, r, id, shown, *look, true, Some(label));
-            widgets::a11y(&resp, Role::Button, label, None);
-            if !row {
-                p.galley(r.center() - button_labels[k].size() / 2.0, button_labels[k].clone(), if *look == Look::Primary { pal().on_accent } else { pal().ink });
+            if fit.scrolls {
+                let mut list = child.new_child(UiBuilder::new().max_rect(body_rect));
+                egui::ScrollArea::vertical().id_salt("sheet-body").max_height(fit.body).auto_shrink([false, false]).show(&mut list, |ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(inner, body.height()), Sense::hover());
+                    draw_body(self, ui, r.min);
+                });
+            } else {
+                draw_body(self, child, body_rect.min);
             }
-            if k == view.focus && self.sheet_key != view.key && o >= 0.5 {
-                resp.request_focus();
-                self.sheet_key = view.key.clone();
+            if view.buttons.is_empty() {
+                return;
             }
-            if resp.clicked() {
-                clicked = Some(act.clone());
+            let y = rect.bottom() - pad - btn_h;
+            let mut bx = rect.right() - pad - widths.iter().sum::<f32>() - 8.0 * widths.len().saturating_sub(1) as f32;
+            for (k, ((label, look, act), w)) in view.buttons.iter().zip(&widths).enumerate() {
+                let r = if row {
+                    let r = Rect::from_min_size(pos2(bx, y), vec2(*w, SHEET_BUTTON_H));
+                    bx += w + 8.0;
+                    r
+                } else {
+                    Rect::from_min_size(pos2(rect.left() + pad, y + button_heights[..k].iter().sum::<f32>() + k as f32 * 8.0), vec2(inner, button_heights[k]))
+                };
+                let shown = if row { label.as_str() } else { "" };
+                let id = Id::unique(("sheet-btn", &view.key, k));
+                let resp = button(child, r, id, shown, *look, true, Some(label));
+                if !row {
+                    p.galley(r.center() - button_labels[k].size() / 2.0, button_labels[k].clone(), if *look == Look::Primary { pal().on_accent } else { pal().ink });
+                }
+                // The keyboard starts on the safe button (never the one
+                // that confirms), each time the sheet's step changes.
+                if k == view.focus && self.sheet_key != view.key && o >= 0.5 {
+                    resp.request_focus();
+                    self.sheet_key = view.key.clone();
+                }
+                if resp.clicked() {
+                    clicked = Some(act.clone());
+                }
             }
-        }
-        if scrim_clicked && clicked.is_none() {
-            clicked = Some(Act::Close);
+        });
+        if clicked.is_none() && scrim_clicked {
+            clicked = self.scrim_act();
         }
         if let Some(act) = clicked {
             self.sheet_act(act, now);
+        }
+    }
+
+    /// What a click on the scrim means: Cancel, except while two computers
+    /// compare codes, wait for each other or have just paired (a stray click
+    /// must not say "no" to the other computer).
+    fn scrim_act(&self) -> Option<Act> {
+        let confirm = self.pending_drop.is_some() || self.removing.is_some() || self.deleting_profile.is_some();
+        match self.pairing.as_ref().map(|p| &p.step) {
+            Some(Step::Code { .. } | Step::Waiting { .. } | Step::Paired { .. }) if !confirm => None,
+            _ => Some(Act::Close),
         }
     }
 
@@ -2025,11 +2033,12 @@ impl App {
 
     fn sheet_act(&mut self, act: Act, now: f64) {
         match act {
+            // Only the sheet showing goes (in `sheet_view`'s order): a
+            // confirmation over pairing leaves the pairing as it was.
             Act::Close => {
-                self.pairing = None;
-                self.pending_drop = None;
-                self.removing = None;
-                self.deleting_profile = None;
+                if self.pending_drop.take().is_none() && self.removing.take().is_none() && self.deleting_profile.take().is_none() {
+                    self.pairing = None;
+                }
             }
             Act::DeleteProfile(name) => {
                 self.deleting_profile = None;
@@ -2093,7 +2102,9 @@ impl App {
         let w_max = 560.0f32.min(page.width() - 32.0);
         let (g, d, h) = desk_cards::toast_lay(ui, t, w_max);
         let w = (g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x)) + 46.0 + if t.error { desk_cards::toast_action_w(ui, t) } else { 0.0 }).min(w_max);
-        let y = page.bottom() - 16.0 - h / 2.0 + motion::space(8.0) * (1.0 - a_in);
+        // Clear of the sheet's buttons when one is up.
+        let bottom = toast_bottom(page, h, ui.ctx().content_rect(), self.sheet_rect.filter(|_| self.sheet_was.is_some()));
+        let y = bottom - h / 2.0 + motion::space(8.0) * (1.0 - a_in);
         let rect = Rect::from_center_size(pos2(page.center().x, y), vec2(w, h));
         let layer = egui::LayerId::new(egui::Order::Tooltip, Id::unique("toast"));
         let mut child = ui.new_child(UiBuilder::new().layer_id(layer).max_rect(rect));
@@ -2211,6 +2222,131 @@ impl App {
 /// The sheet grows from 98% as it arrives.
 fn lerp_scale(t: f32) -> f32 {
     if motion::reduced() { 1.0 } else { 0.98 + 0.02 * t }
+}
+
+/// The sheet's two layers: the scrim over the whole `window`, and the
+/// sheet at `rect` over it.
+fn sheet_areas(window: Rect, rect: Rect) -> (egui::Area, egui::Area) {
+    let area = |id: &str, at: Pos2| {
+        egui::Area::new(Id::unique(id)).order(egui::Order::Foreground).fixed_pos(at).constrain(false).movable(false).interactable(true).fade_in(false)
+    };
+    (area("sheet-scrim", window.min), area("sheet-layer", rect.min))
+}
+
+/// While a sheet is up: the scrim is egui's modal layer (nothing behind it
+/// takes the pointer, or a place in the Tab order: the keyboard stays in
+/// the sheet), and the sheet is always over its scrim.
+fn hold_keyboard(ctx: &egui::Context, scrim: egui::LayerId, sheet: egui::LayerId) {
+    ctx.memory_mut(|m| {
+        m.set_modal_layer(scrim);
+        m.areas_mut().move_to_top(scrim);
+        m.areas_mut().move_to_top(sheet);
+    });
+}
+
+/// A sheet's buttons: 36 tall (handoff 6's middle size).
+const SHEET_BUTTON_H: f32 = 36.0;
+
+/// The heights in a sheet's body (handoff 5.8): the title, the sentence
+/// under it, then the pairing code's block or pairing's other ways in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SheetBody {
+    title: f32,
+    sub: f32,
+    code: bool,
+    /// Pairing's other ways in (0: none).
+    alternatives: f32,
+}
+
+impl SheetBody {
+    const GAP_SUB: f32 = 6.0;
+    const GAP: f32 = 16.0;
+    /// The pairing code's `surface2` block.
+    const CODE_H: f32 = 64.0;
+
+    fn height(&self) -> f32 {
+        self.title + Self::GAP_SUB + self.sub
+            + if self.code { Self::GAP + Self::CODE_H } else { 0.0 }
+            + if self.alternatives > 0.0 { Self::GAP + self.alternatives } else { 0.0 }
+    }
+}
+
+/// A sheet's width in a window `window_w` wide: 440 at least, wider for a
+/// button that needs it (`widest`, with its padding), never closer than 16
+/// to the window's sides.
+fn sheet_width(window_w: f32, widest: f32) -> f32 {
+    widest.max(SHEET_MIN_W).min((window_w - 2.0 * SHEET_MARGIN).max(0.0))
+}
+
+/// Where a sheet goes: centred in the window, `body` tall inside its
+/// padding and above its `buttons` row; when the window is too short for
+/// all of it, the body scrolls (`scrolls`) and shows `body` of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SheetFit {
+    rect: Rect,
+    body: f32,
+    scrolls: bool,
+}
+
+fn sheet_fit(window: Rect, width: f32, body: f32, buttons: f32) -> SheetFit {
+    let chrome = 2.0 * SHEET_PAD + if buttons > 0.0 { SHEET_PAD + buttons } else { 0.0 };
+    let room = (window.height() - 2.0 * SHEET_MARGIN - chrome).max(48.0);
+    let shown = body.min(room);
+    SheetFit { rect: Rect::from_center_size(window.center(), vec2(width, chrome + shown)), body: shown, scrolls: shown < body }
+}
+
+/// The pairing code (handoff 5.8): JetBrains Mono 500 at 32, spaced 0.08 em,
+/// in two groups of three, centred on a `surface2` block.
+fn pairing_code(ui: &Ui, block: Rect, code: &str) {
+    const SIZE: f32 = 32.0;
+    let p = ui.painter();
+    p.rect_filled(block, CornerRadius::same(R_INNER), pal().surface2);
+    let font = mono_medium(SIZE);
+    let adv = text_width(ui, "0", font.clone()) + 0.08 * SIZE;
+    let digits: Vec<char> = code.chars().collect();
+    let group = if digits.len() == 6 { 12.0 } else { 0.0 };
+    let total = adv * digits.len() as f32 - 0.08 * SIZE + group;
+    let mut x = block.center().x - total / 2.0;
+    for (i, ch) in digits.iter().enumerate() {
+        if i == 3 {
+            x += group;
+        }
+        p.text(pos2(x, block.center().y), Align2::LEFT_CENTER, ch, font.clone(), pal().ink);
+        x += adv;
+    }
+    let spoken: Vec<String> = digits.iter().map(char::to_string).collect();
+    let spoken = if spoken.len() == 6 { format!("{}, {}", spoken[..3].join(" "), spoken[3..].join(" ")) } else { spoken.join(" ") };
+    a11y_text(ui, Id::unique("sheet-code"), block, Role::Label, &format!("Pairing code {spoken}"), None);
+}
+
+/// The room a toast sits at the bottom of: the desk's side of the window
+/// (`desk`: its scene, and whether its panel is stacked under it), the
+/// whole content otherwise. A small window's desk is too short to give up
+/// any of it: the toast goes to the window's foot, over the panel's end.
+fn toast_room(content: Rect, desk: Option<(Rect, bool)>) -> Rect {
+    match desk {
+        Some((scene, false)) => scene.shrink2(vec2(desk_panel::EDGE, 0.0)),
+        _ => content,
+    }
+}
+
+/// Where a toast `h` tall ends: 16 above the foot of `room`, unless a
+/// `sheet` is there; then under the sheet if there is room, else over it,
+/// else (a window too short for both) over the sheet's title, never on its
+/// buttons.
+fn toast_bottom(room: Rect, h: f32, window: Rect, sheet: Option<Rect>) -> f32 {
+    let bottom = room.bottom() - 16.0;
+    let Some(sheet) = sheet else { return bottom };
+    if bottom - h > sheet.bottom() + 8.0 {
+        return bottom;
+    }
+    if sheet.bottom() + 12.0 + h <= window.bottom() - 8.0 {
+        sheet.bottom() + 12.0 + h
+    } else if sheet.top() - 12.0 - h >= window.top() + 8.0 {
+        sheet.top() - 12.0
+    } else {
+        sheet.top() + 8.0 + h
+    }
 }
 
 impl eframe::App for App {
@@ -2388,11 +2524,10 @@ impl eframe::App for App {
             self.desk_panel(ui, l.panel, now);
         }
         widgets::set_locked(ui.ctx(), false);
-        // The sheet sits over the panel, leaving the desk room to show
-        // what is being paired.
-        // On the Desk, under the computers, clear of the panel at the side.
-        self.sheet(ui, desk_lay.as_ref().filter(|l| !l.stacked).map_or(content, |l| Rect::from_min_max(l.scene.min, pos2(l.scene.right(), content.bottom()))), now);
-        self.toast_view(ui, desk_lay.as_ref().map_or(content, |l| l.scene.shrink2(vec2(desk_panel::EDGE, 0.0))), now);
+        // The sheet: centred in the window, over everything but the toast
+        // and the palette.
+        self.sheet(ui, now);
+        self.toast_view(ui, toast_room(content, desk_lay.as_ref().map(|l| (l.scene, l.stacked))), now);
         self.palette(ui.ctx(), now);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         crate::chrome::paint_fake_buttons(&ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("fake-window-buttons"))));
@@ -2654,7 +2789,32 @@ mod debug {
         if ready && now > 1.0 && let Some(n) = var("ONE_MK_APP_DROP").and_then(|n| n.parse::<usize>().ok()) && once(&ctx, "drop") {
             app.pending_drop = Some(((0..n).map(|i| PathBuf::from(format!("/tmp/file{i}"))).collect(), now));
         }
-        if ready && var("ONE_MK_APP_TOAST").is_some() && now > 1.0 && once(&ctx, "toast") {
+        // ONE_MK_APP_TOAST=info: a plain message instead of an error.
+        if ready && var("ONE_MK_APP_TOAST").as_deref() == Some("info") && now > 1.0 && once(&ctx, "toast") {
+            app.toast("Sent 3 files to Studio PC.", now);
+        }
+        // ONE_MK_APP_REMOVE=name: the sheet that asks whether to remove that computer.
+        if ready && now > 0.5 && let Some(name) = var("ONE_MK_APP_REMOVE") && once(&ctx, "remove") {
+            let id = app.running().and_then(|s| s.peers.iter().find(|p| p.name == name)).map_or_else(|| "1111-2222".to_owned(), |p| p.id.clone());
+            app.removing = Some((id, name, now));
+        }
+        // ONE_MK_APP_INVITE=link: pairing's private invitation link has come;
+        // ONE_MK_APP_JOIN=text: that typed into "Join with a link".
+        if let Some(link) = var("ONE_MK_APP_INVITE") {
+            ctx.data_mut(|data| data.insert_temp(Id::unique("invitation-link"), link));
+        }
+        if let Some(text) = var("ONE_MK_APP_JOIN") && once(&ctx, "join") {
+            app.drafts.insert("join-link".into(), text);
+        }
+        // ONE_MK_APP_TIP=1: a tooltip held open (over the search button),
+        // as the pointer resting there would show it.
+        if var("ONE_MK_APP_TIP").is_some() && now > 1.0 {
+            let at = pos2(ctx.content_rect().center().x, 56.0);
+            egui::Tooltip::always_open(ctx.clone(), egui::LayerId::background(), Id::unique("debug-tip"), egui::PopupAnchor::Position(at)).show(|ui| {
+                ui.label("Search: open the command palette  Ctrl K");
+            });
+        }
+        if ready && var("ONE_MK_APP_TOAST").is_some_and(|t| t != "info") && now > 1.0 && once(&ctx, "toast") {
             app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was.", Some("oneMK didn't answer within 3 seconds".into()), now);
             let peer = app.running().and_then(|s| s.peers.first().map(|p| (p.id.clone(), p.name.clone())));
             if let (Some(t), Some((id, name))) = (app.toast.as_mut(), peer) {
@@ -2967,6 +3127,101 @@ mod tests {
         let s = slots((-29.0, 29.0), &[("b".into(), Side::Bottom, 29.0)]);
         assert!(s["b"].0.z > 0.0, "in front");
         assert!(s["b"].0.x.abs() > 20.0, "but to one side");
+    }
+
+    #[test]
+    fn a_sheet_fits_the_smallest_window_centred_and_scrolls_inside_when_it_must() {
+        let small = Rect::from_min_size(Pos2::ZERO, vec2(820.0, 540.0));
+        // 440 at least, wider for a long button, never closer than 16 to the sides.
+        assert_eq!(sheet_width(820.0, 0.0), SHEET_MIN_W);
+        assert_eq!(sheet_width(820.0, 500.0), 500.0);
+        assert_eq!(sheet_width(820.0, 2000.0), 820.0 - 2.0 * SHEET_MARGIN);
+        // The pairing code: title, sentence, the 64-point block, buttons.
+        let code = SheetBody { title: 22.0, sub: 19.0, code: true, alternatives: 0.0 };
+        assert_eq!(code.height(), 22.0 + 6.0 + 19.0 + 16.0 + 64.0);
+        // Looking for a computer, with the other ways in: fits 820 × 540 whole.
+        let looking = SheetBody { title: 22.0, sub: 38.0, code: false, alternatives: 181.0 };
+        let fit = sheet_fit(small, sheet_width(820.0, 0.0), looking.height(), SHEET_BUTTON_H);
+        assert!(!fit.scrolls);
+        assert_eq!(fit.rect.center(), small.center());
+        assert_eq!(fit.rect.width(), 440.0);
+        assert!(small.shrink(SHEET_MARGIN).contains_rect(fit.rect), "{:?}", fit.rect);
+        assert_eq!(fit.rect.height(), 2.0 * SHEET_PAD + looking.height() + SHEET_PAD + SHEET_BUTTON_H);
+        // More than the window holds: the sheet stops 16 from the edges and
+        // its body scrolls; the buttons stay.
+        let fit = sheet_fit(small, 440.0, 900.0, SHEET_BUTTON_H);
+        assert!(fit.scrolls);
+        assert_eq!(fit.rect.height(), 540.0 - 2.0 * SHEET_MARGIN);
+        assert_eq!(fit.body, 540.0 - 2.0 * SHEET_MARGIN - 3.0 * SHEET_PAD - SHEET_BUTTON_H);
+        // No buttons (paired): no room kept for them.
+        assert_eq!(sheet_fit(small, 440.0, 50.0, 0.0).rect.height(), 2.0 * SHEET_PAD + 50.0);
+    }
+
+    #[test]
+    fn a_toast_keeps_clear_of_a_sheets_buttons() {
+        let window = Rect::from_min_size(Pos2::ZERO, vec2(820.0, 540.0));
+        // No sheet: 16 above the foot of its room.
+        assert_eq!(toast_bottom(window, 52.0, window, None), 524.0);
+        // A short sheet: under it.
+        let sheet = Rect::from_center_size(window.center(), vec2(440.0, 160.0));
+        let b = toast_bottom(window, 52.0, window, Some(sheet));
+        assert!(b - 52.0 >= sheet.bottom() && b <= window.bottom() - 8.0, "{b}");
+        // A tall one: above it, or over its title, never on its buttons
+        // (the sheet's last 24 + 36 + 24).
+        for h in [380.0, 420.0, 508.0] {
+            let sheet = Rect::from_center_size(window.center(), vec2(440.0, h));
+            let b = toast_bottom(window, 52.0, window, Some(sheet));
+            let buttons_top = sheet.bottom() - SHEET_PAD - SHEET_BUTTON_H;
+            assert!(b <= buttons_top || b - 52.0 >= sheet.bottom(), "{h}: {b}");
+            assert!(b - 52.0 >= window.top() && b <= window.bottom(), "{h}: {b} on screen");
+        }
+        // The Desk in a small window: the window's foot, not the short scene.
+        let scene = Rect::from_min_max(pos2(0.0, 60.0), pos2(820.0, 260.0));
+        assert_eq!(toast_room(window, Some((scene, true))), window);
+        assert_eq!(toast_room(window, Some((scene, false))).bottom(), scene.bottom());
+    }
+
+    /// The focus check Xvfb screenshots can't show: with a sheet up, Tab
+    /// goes round the sheet's own buttons and never reaches what is behind
+    /// it; without the hold, it would.
+    #[test]
+    fn the_keyboard_stays_in_the_sheet() {
+        let tab_round = |hold: bool| {
+            let ctx = egui::Context::default();
+            let window = Rect::from_min_size(Pos2::ZERO, vec2(820.0, 540.0));
+            let rect = Rect::from_center_size(window.center(), vec2(440.0, 160.0));
+            let (mut behind, mut ours) = (vec![], vec![]);
+            for frame in 0..12 {
+                let tab = egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+                let input = egui::RawInput { screen_rect: Some(window), events: if frame > 0 { vec![tab] } else { vec![] }, time: Some(f64::from(frame) * 0.1), ..Default::default() };
+                let mut ids = (vec![], vec![]);
+                let mut out = ctx.run_ui(input, |ui| {
+                    ids.0.push(ui.add(egui::Button::new("A control behind")).id);
+                    ids.0.push(ui.add(egui::Button::new("Another")).id);
+                    let (scrim, sheet) = sheet_areas(window, rect);
+                    if hold {
+                        hold_keyboard(ui.ctx(), scrim.layer(), sheet.layer());
+                    }
+                    scrim.show(ui.ctx(), |ui| {
+                        ui.allocate_rect(window, Sense::CLICK);
+                    });
+                    sheet.show(ui.ctx(), |ui| {
+                        ids.1.push(ui.add(egui::Button::new("Cancel")).id);
+                        ids.1.push(ui.add(egui::Button::new("Remove")).id);
+                    });
+                });
+                out.textures_delta.clear();
+                if let Some(f) = ctx.memory(|m| m.focused()) {
+                    if ids.0.contains(&f) { behind.push(f) } else if ids.1.contains(&f) { ours.push(f) }
+                }
+            }
+            (behind, ours)
+        };
+        let (behind, ours) = tab_round(true);
+        assert!(behind.is_empty(), "Tab reached the window behind the sheet");
+        assert_eq!(ours.iter().collect::<HashSet<_>>().len(), 2, "Tab goes round both buttons: {ours:?}");
+        let (behind, _) = tab_round(false);
+        assert!(!behind.is_empty(), "without the hold Tab would leave the sheet (the check is real)");
     }
 
     #[test]
