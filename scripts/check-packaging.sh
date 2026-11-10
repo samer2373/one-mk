@@ -191,7 +191,7 @@ if python3 -c 'import PIL' 2>/dev/null; then
 else skip "icon check: Python 3 with Pillow not installed"; fi
 
 # Every package carries the same licence files; the crate list must match Cargo.lock.
-check "copy-notices.sh puts the four licence files in a folder" sh -c "sh '$ROOT/scripts/copy-notices.sh' '$scratch/n' && [ \$(ls '$scratch/n' | wc -l) = 4 ]"
+check "copy-notices.sh puts the six licence files in a folder" sh -c "sh '$ROOT/scripts/copy-notices.sh' '$scratch/n' && [ \$(ls '$scratch/n' | wc -l) = 6 ]"
 if python3 -I "$ROOT/scripts/third-party-notices.py" --check >"$scratch/notices.txt" 2>&1; then ok "THIRD-PARTY-NOTICES matches Cargo.lock"
 else cat "$scratch/notices.txt"; bad "THIRD-PARTY-NOTICES is out of date"; fi
 
