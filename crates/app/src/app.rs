@@ -2627,6 +2627,13 @@ impl eframe::App for App {
 /// - `ONE_MK_APP_FILM=dir` saves every frame from `ONE_MK_APP_FILM_FROM`
 ///   for `ONE_MK_APP_FILM_FOR` seconds, each named by its time, then quits
 ///   (motion evidence: the intro, a drag, the Keys zoom).
+/// - Overlays: `ONE_MK_APP_MENU=swap|timer|key-more|navigator|natural|chooser`
+///   opens that popover (widgets::debug_open_menu); `ONE_MK_APP_REMOVE=name`
+///   asks whether to remove that computer; `ONE_MK_APP_TOAST=info` a plain
+///   toast; `ONE_MK_APP_PAIR_STATE=searching|hint|code|waiting|paired|ended`
+///   with `ONE_MK_APP_INVITE=link` (the invitation came) or
+///   `ONE_MK_APP_JOIN=text` (typed to join); `ONE_MK_APP_TIP=1` a tooltip held
+///   open; `ONE_MK_APP_PALETTE=query` the palette.
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
 #[cfg(any(debug_assertions, feature = "design-evidence"))]
 mod debug {
