@@ -4,7 +4,7 @@ members = ["crates/*"]
 default-members = ["crates/one-mk", "crates/tray", "crates/app", "crates/wallpaper-helper"]
 
 [workspace.package]
-version = "0.1.29"
+version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Samer Abu-Sleem <samer2373@users.noreply.github.com>"]
