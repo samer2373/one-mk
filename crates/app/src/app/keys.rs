@@ -270,7 +270,7 @@ mod gesture_tests {
     #[test]
     fn compact_setup_surface_is_scoped_to_keyboard() {
         for hover in [0.0, 0.5, 1.0] {
-            assert_eq!(setup_fill(false, hover, false), mix(pal().surface, pal().surface2_hover, hover));
+            assert_eq!(setup_fill(false, hover, false), mix(pal().surface, pal().surface2, hover));
             assert_eq!(setup_fill(true, hover, false), mix(pal().accent_soft, pal().pressed(pal().accent_soft, 0.4), hover));
             assert_ne!(setup_fill(false, hover, true), setup_fill(false, hover, false));
         }
@@ -513,7 +513,7 @@ fn setup_fill(on: bool, hover: f32, compact: bool) -> Color32 {
         // In the panel (on `surface`), a quiet fill; on the stage's floor,
         // a `surface` chip that lifts off it.
         (true, false) => mix(pal().surface2, pal().surface2_hover, hover),
-        (false, false) => mix(pal().surface, pal().surface2_hover, hover),
+        (false, false) => mix(pal().surface, pal().surface2, hover),
     }
 }
 
@@ -1582,6 +1582,11 @@ impl App {
         // "Test it" at the bottom when there is room, else after the rest.
         let th = self.keys.panel_heights.get("test").copied().unwrap_or(64.0);
         let ty = (y + PANEL_GAP).max(at.y + viewport - th);
+        // Pinned to the foot, "Test it" is the panel's footer: a hairline
+        // across the panel sets it apart from the list above.
+        if ty > y + PANEL_GAP + 24.0 {
+            widgets::hairline(ui.painter(), egui::Rangef::new(at.x, at.x + w), ty - PANEL_GAP);
+        }
         let measured = self.test_card(ui, pos2(at.x, ty), w, now);
         if (th - measured).abs() > 0.5 {
             self.keys.panel_heights.insert("test", measured);

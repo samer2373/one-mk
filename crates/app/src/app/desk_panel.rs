@@ -729,12 +729,16 @@ impl App {
         let q = summary.and_then(|s| s.quality());
         let ring = self.rtts.of(&peer.id).filter(|_| summary.is_some_and(|s| s.count >= rtt::MIN_SAMPLES));
         let graphed = ring.is_some();
-        let well = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), if graphed { 100.0 } else { 64.0 }));
+        // A wide panel (under the desk) has room for the graph beside the
+        // number, so the well stays one row there.
+        let inline = c.width() >= 480.0;
+        let well = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), if graphed && !inline { 100.0 } else { 64.0 }));
         widgets::well(ui.painter(), well);
         let c = well.shrink2(vec2(14.0, 0.0));
         let r = Rect::from_min_size(pos2(c.left(), well.top() + 14.0), vec2(c.width(), 36.0));
         let measure = self.latency.contains(&peer.id) || self.failed_measure.contains(&peer.id);
-        let room = r.width() - if measure { 32.0 } else { 0.0 };
+        let spark_w = if inline { (r.width() * 0.4).min(320.0) } else { 0.0 };
+        let room = r.width() - if measure { 32.0 } else { 0.0 } - if graphed && inline { spark_w + 16.0 } else { 0.0 };
         let p = ui.painter().clone();
         let mut x = r.left();
         match summary {
@@ -761,7 +765,12 @@ impl App {
                 }
             }
         }
-        let spark = Rect::from_min_max(pos2(c.left(), r.bottom() + 10.0), pos2(c.right(), well.bottom() - 12.0));
+        let spark = if inline {
+            let right = r.right() - if measure { 32.0 } else { 0.0 };
+            Rect::from_min_max(pos2(right - spark_w, r.top() + 4.0), pos2(right, r.bottom()))
+        } else {
+            Rect::from_min_max(pos2(c.left(), r.bottom() + 10.0), pos2(c.right(), well.bottom() - 12.0))
+        };
         if let Some(ring) = ring {
             sparkline(&p, spark, ring, self.rtt_now(), q);
         }
