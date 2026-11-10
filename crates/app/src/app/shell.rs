@@ -20,7 +20,7 @@ const STATUS_FROM: f32 = 1280.0;
 /// From this wide Search shows its word.
 const SEARCH_WORD_FROM: f32 = 1100.0;
 /// Where the bar's content starts on macOS, after the window buttons.
-pub(super) const MAC_INSET: f32 = 78.0;
+pub(super) const MAC_INSET: f32 = 96.0;
 const PAD_X: f32 = 20.0;
 const GAP: f32 = 18.0;
 const RIGHT_GAP: f32 = 10.0;
