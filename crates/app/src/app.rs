@@ -2557,7 +2557,16 @@ impl eframe::App for App {
         let mut body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
         // Broadcasting is said on every page (the desk says it in its band).
         if !matches!(self.tab, Tab::Desk | Tab::Arrange) {
-            body.min.y += self.page_banner(ui, body);
+            // Keys & mouse draws its own title row (handoff 5.5) from the
+            // top of the content: a banner goes above it, not under a title.
+            if self.tab == Tab::Keys {
+                body.min.y = content.top() + 12.0;
+            }
+            let banner = self.page_banner(ui, body);
+            body.min.y += banner;
+            if self.tab == Tab::Keys && banner == 0.0 {
+                body.min.y = content.top();
+            }
         }
         match self.tab {
             Tab::Files => {
@@ -2583,7 +2592,9 @@ impl eframe::App for App {
             _ => {}
         }
         let (title, sub) = self.page_title();
-        self.page_head(ui, head, &title, &sub);
+        if self.tab != Tab::Keys {
+            self.page_head(ui, head, &title, &sub);
+        }
         if with_cards {
             self.panel(ui, cards, now);
         }
@@ -2677,7 +2688,9 @@ impl eframe::App for App {
 ///   with "hold for another key" open, `ONE_MK_APP_KEY_CAPTURE=1` waiting
 ///   for a key, `ONE_MK_APP_KEY_PICK=query` with the list open);
 ///   `ONE_MK_APP_KEY_CHOOSE=esc` makes the opened key that, as a click
-///   would; `ONE_MK_APP_BUTTON=4` opens a mouse button; `ONE_MK_APP_KEY_TEST=
+///   would; `ONE_MK_APP_KEY_LATER=capslock` chooses that key at
+///   `ONE_MK_APP_KEY_AT` seconds (default 1.5), for films of the zoom glide;
+///   `ONE_MK_APP_BUTTON=4` opens a mouse button; `ONE_MK_APP_KEY_TEST=
 ///   58d0,58u85` types into the test box (code, down/up, ms).
 /// - `ONE_MK_APP_BROADCAST=1` turns broadcast on (or off), as the Desk's
 ///   switch does.
@@ -2900,6 +2913,15 @@ mod debug {
                 ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
                 ctx.memory_mut(|m| m.request_focus(Id::unique(("cap", app.keys.focus_key))));
             }
+        }
+        // ONE_MK_APP_KEY_LATER=capslock (at ONE_MK_APP_KEY_AT seconds, default 1.5):
+        // that key is chosen then, as a click would, so a film shows the zoom glide.
+        if app.tab == Tab::Keys
+            && let Some(code) = var("ONE_MK_APP_KEY_LATER").and_then(|k| one_mk_proto::keynames::parse_key(&k).ok())
+            && now > var("ONE_MK_APP_KEY_AT").and_then(|t| t.parse::<f64>().ok()).unwrap_or(1.5)
+            && once(&ctx, "key-later")
+        {
+            app.select_key(code as u16, None);
         }
         if app.tab == Tab::Keys && now > 1.0 && let Some(spec) = var("ONE_MK_APP_KEY_TEST") && once(&ctx, "key-test") {
             app.debug_type(&ctx, &spec);
