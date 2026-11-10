@@ -145,24 +145,28 @@ pub fn search(p: &Painter, c: Pos2, col: Color32) {
     p.line_segment([lens + egui::vec2(3.6, 3.6), lens + egui::vec2(7.0, 7.0)], Stroke::new(1.6, col));
 }
 
+/// The flat symbol on the brand's 64 grid, as the brand's flat symbol SVGs
+/// draw it (a test reads the files): the key and its top as (x, y, side,
+/// corner radius), and the pointer's path.
+const SYMBOL_KEY: [f32; 4] = [5.0, 5.0, 54.0, 15.0];
+const SYMBOL_TOP: [f32; 4] = [12.0, 8.0, 40.0, 11.0];
+const SYMBOL_POINTER: [(f32, f32); 7] = [(24.0, 17.0), (24.0, 39.0), (29.2, 34.0), (32.6, 42.0), (36.4, 40.4), (33.0, 32.6), (40.0, 32.6)];
+
 /// The oneMK symbol, flat (handoff section 2): a keycap with the pointer on
 /// its top, `size` points square from `min`, in the theme's logo colours.
-/// Built on the brand's 64 grid: the key 54 r15 at (5, 5), its top 40 r11
-/// at (12, 8), the pointer as the brand path.
 pub fn symbol(p: &Painter, min: Pos2, size: f32) {
     use egui::epaint::{Mesh, Vertex, WHITE_UV};
     let pal = crate::style::pal();
     let k = size / 64.0;
     let at = |x: f32, y: f32| pos2(min.x + x * k, min.y + y * k);
-    let rounded = |x: f32, y: f32, w: f32, r: f32| (Rect::from_min_max(at(x, y), at(x + w, y + w)), egui::CornerRadius::same((r * k).round() as u8));
-    let (key, kr) = rounded(5.0, 5.0, 54.0, 15.0);
+    let rounded = |[x, y, w, r]: [f32; 4]| (Rect::from_min_max(at(x, y), at(x + w, y + w)), egui::CornerRadius::same((r * k).round() as u8));
+    let (key, kr) = rounded(SYMBOL_KEY);
     p.rect_filled(key, kr, pal.logo_cap);
-    let (top, tr) = rounded(12.0, 8.0, 40.0, 11.0);
+    let (top, tr) = rounded(SYMBOL_TOP);
     p.rect_filled(top, tr, pal.logo_top);
-    // The pointer (M24 17 L24 39 L29.2 34 L32.6 42 L36.4 40.4 L33 32.6
-    // L40 32.6 Z) is not convex: five triangles, then its outline at a
+    // The pointer is not convex: five triangles, then its outline at a
     // hair's width so its edges are smoothed as the window's other shapes.
-    let pts = [at(24.0, 17.0), at(24.0, 39.0), at(29.2, 34.0), at(32.6, 42.0), at(36.4, 40.4), at(33.0, 32.6), at(40.0, 32.6)];
+    let pts = SYMBOL_POINTER.map(|(x, y)| at(x, y));
     let mut mesh = Mesh::default();
     for q in pts {
         mesh.vertices.push(Vertex { pos: q, uv: WHITE_UV, color: pal.logo_pointer });
@@ -172,4 +176,46 @@ pub fn symbol(p: &Painter, min: Pos2, size: f32) {
     }
     p.add(mesh);
     p.add(Shape::closed_line(pts.to_vec(), Stroke::new(0.5, pal.logo_pointer)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The window's symbol is the brand's flat symbol: the same grid and
+    /// path as the SVGs (copied to `crates/app/assets/brand/` by
+    /// scripts/make-icons.py), in the same colours for each theme.
+    #[test]
+    fn symbol_is_the_brand_files() {
+        let attr = |tag: &str, name: &str| -> String {
+            let at = tag.find(&format!(" {name}=\"")).unwrap_or_else(|| panic!("{name} in {tag}")) + name.len() + 3;
+            tag[at..].split('"').next().expect("value").to_owned()
+        };
+        let num = |tag: &str, name: &str| -> f32 { attr(tag, name).parse().expect("number") };
+        let hex = |c: Color32| format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b());
+        for (svg, p) in [
+            (include_str!("../assets/brand/onemk-symbol-flat-on-light.svg"), crate::style::Palette::light()),
+            (include_str!("../assets/brand/onemk-symbol-flat-on-dark.svg"), crate::style::Palette::dark()),
+        ] {
+            let rects: Vec<&str> = svg.split("<rect").skip(1).map(|t| t.split('>').next().expect("tag")).collect();
+            assert_eq!(rects.len(), 2, "{svg}");
+            for (tag, want, colour) in [(rects[0], SYMBOL_KEY, p.logo_cap), (rects[1], SYMBOL_TOP, p.logo_top)] {
+                assert_eq!(num(tag, "width"), num(tag, "height"));
+                assert_eq!([num(tag, "x"), num(tag, "y"), num(tag, "width"), num(tag, "rx")], want, "{tag}");
+                assert_eq!(attr(tag, "fill"), hex(colour), "{tag}");
+            }
+            let path = svg.split("<path").nth(1).expect("path");
+            let points: Vec<(f32, f32)> = attr(path, "d")
+                .trim_end_matches('Z')
+                .split(['M', 'L'])
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    let (x, y) = s.trim().split_once(' ').expect("x y");
+                    (x.parse().expect("x"), y.parse().expect("y"))
+                })
+                .collect();
+            assert_eq!(points, SYMBOL_POINTER.to_vec());
+            assert_eq!(attr(path, "fill"), hex(p.logo_pointer));
+        }
+    }
 }

@@ -453,7 +453,7 @@ const CAP: Finish = Finish { albedo: crate::style::KEY_CAP, gloss: 18.0, spec: 0
 const CAP_MOD: Finish = Finish { albedo: crate::style::KEY_CAP_MOD, gloss: 18.0, spec: 0.08 };
 
 /// A legend to print on a key: where, how big, which colour, and whether
-/// it is the key's new job (printed on its front, in Volt).
+/// it is the key's new job (printed on its front, in cobalt).
 struct Legend {
     at: Pos2,
     size: f32,
@@ -1044,7 +1044,7 @@ impl ModelHit {
 impl ModelView {
     /// `m` on the desk, filling `rect` and framed in `room`, turned by
     /// `yaw` and seen from `cam_yaw`/`pitch`; the part named `chosen` is
-    /// tinted Volt, and the camera goes in on the part `focus` (or stays out
+    /// tinted cobalt, and the camera goes in on the part `focus` (or stays out
     /// on the whole mouse when `None`), easing there by `glide`. The last
     /// one when nothing changed; true while the camera is still moving.
     #[allow(clippy::too_many_arguments)]

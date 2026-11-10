@@ -881,7 +881,7 @@ fn draw_card(
             let beat =
                 if nudging { 0.5 - 0.5 * ((now - v.phase_at) * std::f64::consts::TAU / 1.1).cos() as f32 } else { 0.0 };
             let c = pos2(inner.left() + 4.0, fy);
-            // Waiting is a state, not an action: ink, never Volt.
+            // Waiting is a state, not an action: ink, never cobalt.
             p.circle_filled(c, 7.0, pal().ink2.gamma_multiply(alpha * k * 0.16 * beat));
             p.circle_filled(c, 3.5, wink(pal().ink2));
             let text = if v.covered || v.settings.is_none() {

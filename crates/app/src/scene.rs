@@ -1730,7 +1730,7 @@ impl Scene {
         }
 
         // The edges toward online neighbours: a faint line at rest, so the
-        // edges can be learned; Volt only while the pointer is about to
+        // edges can be learned; cobalt only while the pointer is about to
         // cross, crossing, or has just come through. They run along the
         // monitors at that side of the wall, not the gaps between them.
         let ends = if wall { panels(&d.screens, pl, GLASS).fold([1.0f32, 1.0, 0.0, 0.0], |[a, b, c, e], [u0, w0, u1, w1]| [a.min(u0), b.min(w0), c.max(u1), e.max(w1)]) } else { glass };

@@ -239,7 +239,7 @@ impl Palette {
             shadow_ink: ink,
             logo_cap: rgb(0x16171A),
             logo_top: rgb(0x34363C),
-            logo_pointer: rgb(0x7E97FF),
+            logo_pointer: rgb(0xFFFFFF),
             hover: rgba(0x16171A, 0.05),
             ink_hover: mix(ink2, ink, 0.55),
             accent_hover: mix(accent, black, 0.06),
@@ -830,24 +830,33 @@ mod tests {
         (a.max(b) + 0.05) / (a.min(b) + 0.05)
     }
 
-    /// The tokens exactly as the handoff's `tokens.json` has them.
+    /// Every colour token of `docs/brand/tokens.json` (the brand's copy of
+    /// the handoff's tokens) is the palette's field of the same name, in both
+    /// themes: the file and the window cannot drift apart.
     #[test]
     fn palettes_carry_the_design_tokens() {
-        let (l, d) = (Palette::light(), Palette::dark());
-        for (p, tokens) in [
-            (l, [("bg", 0xF4F3F0), ("surface", 0xFFFFFF), ("surface2", 0xEFEEEA), ("ink", 0x16171A), ("ink2", 0x6B6D73), ("ink3", 0x8E9096), ("accent", 0x2F54EB), ("accent_soft", 0xE9EDFF), ("accent_text", 0x2443C9), ("ok", 0x1F9D63), ("warn", 0xC27A0E), ("warn_soft", 0xFBF2E2), ("danger", 0xC0392B), ("seg_on", 0xFFFFFF), ("switch_off", 0xD9D7D1), ("focus", 0x2F54EB)]),
-            (d, [("bg", 0x111214), ("surface", 0x1A1B1F), ("surface2", 0x25262B), ("ink", 0xEDEDEB), ("ink2", 0x9A9CA3), ("ink3", 0x75777E), ("accent", 0x4D6DFF), ("accent_soft", 0x1D2445), ("accent_text", 0x8EA4FF), ("ok", 0x3CC985), ("warn", 0xE9A23B), ("warn_soft", 0x2A2216), ("danger", 0xF0675A), ("seg_on", 0x34353B), ("switch_off", 0x3A3B41), ("focus", 0x7E97FF)]),
-        ] {
+        let tokens: serde_json::Value = serde_json::from_str(include_str!("../../../docs/brand/tokens.json")).expect("tokens.json");
+        let parse = |v: &str| -> Color32 {
+            if let Some(hex) = v.strip_prefix('#') {
+                return rgb(u32::from_str_radix(hex, 16).expect("hex"));
+            }
+            let inner = v.strip_prefix("rgba(").and_then(|r| r.strip_suffix(')')).expect("rgba");
+            let n: Vec<f32> = inner.split(',').map(|x| x.trim().parse().expect("number")).collect();
+            Color32::from_rgba_unmultiplied(n[0] as u8, n[1] as u8, n[2] as u8, (n[3] * 255.0).round() as u8)
+        };
+        let mut checked = 0;
+        for p in [Palette::light(), Palette::dark()] {
+            let theme = if p.theme == Theme::Light { "light" } else { "dark" };
             let colours = p.colours();
-            for (name, hex) in tokens {
-                let got = colours.iter().find(|(n, _)| *n == name).map(|(_, c)| *c);
-                assert_eq!(got, Some(rgb(hex)), "{:?} {name}", p.theme);
+            for (key, value) in tokens["themes"][theme].as_object().expect("theme") {
+                let Some(value) = value.as_str() else { continue }; // the shadow is a list, drawn by shadow()
+                let snake: String = key.chars().flat_map(|c| if c.is_ascii_uppercase() { vec!['_', c.to_ascii_lowercase()] } else { vec![c] }).collect();
+                let got = colours.iter().find(|(n, _)| *n == snake).map(|(_, c)| *c);
+                assert_eq!(got, Some(parse(value)), "{theme} {key}");
+                checked += 1;
             }
         }
-        assert_eq!(l.line, Color32::from_rgba_unmultiplied(22, 23, 26, 20));
-        assert_eq!(d.line2, Color32::from_rgba_unmultiplied(255, 255, 255, 31));
-        assert_eq!(l.floor, Color32::from_rgba_unmultiplied(22, 23, 26, 33));
-        assert_eq!(d.floor, Color32::from_black_alpha(140));
+        assert!(checked >= 40, "only {checked} tokens checked");
     }
 
     /// Both themes are complete: every colour set, the opaque ones opaque,
