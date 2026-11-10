@@ -372,7 +372,9 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
     } else {
         p.text(row.left_center(), Align2::LEFT_CENTER, &shown, font, col);
     }
-    let ic = pos2(row.right() - right - 11.0, row.center().y);
+    // The "i" follows the label (16 across), on the label's own line.
+    let label_y = if row.height() >= 44.0 { row.center().y - 8.0 } else { row.center().y };
+    let ic = pos2(row.left() + text_width(ui, &shown, regular(T_BODY)) + 18.0, label_y);
     let ir = Rect::from_center_size(ic, vec2(MIN_TARGET, MIN_TARGET));
     let r = ui.interact(ir, id.with("info"), sense(ui, Sense::click()));
     let hover = tween(ui.ctx(), id.with("info-hover"), f32::from(r.hovered()), 0.1, motion::out_cubic);
@@ -388,7 +390,7 @@ pub fn label_help(ui: &mut Ui, row: Rect, id: Id, label: &str, key: &str, enable
     if r.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    let pop = egui::Popup::menu(&r).width(300.0).align(egui::RectAlign::BOTTOM_END);
+    let pop = egui::Popup::menu(&r).width(300.0).align(egui::RectAlign::BOTTOM_START);
     // Development aid: ONE_MK_APP_HELP=<key> keeps that explanation open.
     #[cfg(any(debug_assertions, feature = "design-evidence"))]
     let pop = if std::env::var("ONE_MK_APP_HELP").is_ok_and(|v| v == key) { pop.open(true) } else { pop };
@@ -839,8 +841,20 @@ pub fn mono_text(p: &Painter, pos: Pos2, align: Align2, text: &str, size: f32, c
     rect
 }
 
+/// How tall `para_code` sets `text` `width` wide (nothing is drawn).
+pub fn para_code_h(ui: &Ui, width: f32, text: &str, font: FontId) -> f32 {
+    code_galley(ui, width, text, font, pal().ink).size().y
+}
+
 /// Wrapped text where `like this` is a command, set in mono; returns its height.
 pub fn para_code(ui: &Ui, pos: Pos2, width: f32, text: &str, font: FontId, col: Color32) -> f32 {
+    let g = code_galley(ui, width, text, font, col);
+    let h = g.size().y;
+    ui.painter().galley(pos, g, col);
+    h
+}
+
+fn code_galley(ui: &Ui, width: f32, text: &str, font: FontId, col: Color32) -> std::sync::Arc<egui::Galley> {
     let size = font.size;
     let mut job = egui::text::LayoutJob { wrap: egui::text::TextWrapping { max_width: width, ..Default::default() }, ..Default::default() };
     for (k, part) in text.split('`').enumerate() {
@@ -852,10 +866,7 @@ pub fn para_code(ui: &Ui, pos: Pos2, width: f32, text: &str, font: FontId, col: 
             push_piece(&mut job, piece, fmt.clone());
         }
     }
-    let g = ui.painter().layout_job(job);
-    let h = g.size().y;
-    ui.painter().galley(pos, g, col);
-    h
+    ui.painter().layout_job(job)
 }
 
 /// Wrapped text; returns its height.

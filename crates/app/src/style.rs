@@ -534,6 +534,12 @@ pub const fn black(alpha: u8) -> Color32 {
     Color32::from_black_alpha(alpha)
 }
 
+/// What a sheet dims the window behind it with: black at 20 % on the light
+/// theme, 50 % on the dark one (handoff section 5.8).
+pub fn scrim() -> Color32 {
+    black(if pal().theme == Theme::Dark { 128 } else { 51 })
+}
+
 /// White at `alpha`: light on pictures (screens, wallpapers), the same in both themes.
 pub fn white(alpha: u8) -> Color32 {
     Color32::from_white_alpha(alpha)

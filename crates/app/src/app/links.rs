@@ -6,7 +6,8 @@ use super::*;
 use crate::rtt::{self, Quality, Ring, Summary};
 
 const ROW_GRAPH_H: f32 = 22.0;
-pub(super) const ROW_H: f32 = 34.0;
+/// A computer's row in Health's Connections card.
+pub(super) const ROW_H: f32 = 52.0;
 
 /// The colour for a state: calm grey while it is smooth, amber when not.
 /// The word beside it says the same, so colour is never the only signal.
@@ -85,57 +86,48 @@ impl App {
         }
     }
 
-    /// The Health tab's list of computers, one compact row each, in a box
-    /// from `y`; returns its height. Nothing is drawn (and 0 returned)
-    /// with no computers paired.
-    pub(super) fn latency_rows(&self, ui: &Ui, x: f32, y: f32, w: f32) -> f32 {
-        let Some(s) = self.running().filter(|s| !s.peers.is_empty()) else { return 0.0 };
+    /// One computer's row in Health's Connections card, in `row`: a status
+    /// mark (● answering well, ◆ stalls or slow, ○ offline), its name, the
+    /// last couple of minutes as a line when there is room, and the round
+    /// trip in mono with what it says.
+    pub(super) fn connection_row(&self, ui: &Ui, peer: &PeerStatus, row: Rect) {
         let p = ui.painter();
-        let head = 36.0;
-        let h = head + ROW_H * s.peers.len() as f32 + 8.0;
-        let boxr = Rect::from_min_size(pos2(x, y), vec2(w, h));
-        p.rect(boxr, CornerRadius::same(10), pal().surface, Stroke::new(1.0, pal().line), StrokeKind::Inside);
-        p.text(pos2(x + 16.0, y + 20.0), Align2::LEFT_CENTER, "Connection to each computer", semibold(T_BODY), pal().ink);
-        let sub = format!("last {}", rtt::span_words());
-        p.text(pos2(x + w - 16.0, y + 20.0), Align2::RIGHT_CENTER, &sub, regular(T_META), pal().ink2);
-        a11y_text(ui, Id::unique("latency-head"), Rect::from_min_size(boxr.min, vec2(w, head)), Role::Heading, "Connection to each computer", None);
-        let now = self.rtt_now();
-        // Narrow: the graph goes first, the numbers and the word stay.
-        let graph_w = if w >= 520.0 { 110.0 } else { 0.0 };
-        let word_w = 84.0;
-        let num_w = 52.0;
-        for (k, peer) in s.peers.iter().enumerate() {
-            let row = Rect::from_min_size(pos2(x + 8.0, y + head + ROW_H * k as f32), vec2(w - 16.0, ROW_H));
-            if k > 0 {
-                p.hline(row.x_range().shrink(8.0), row.top() - 0.5, Stroke::new(1.0, pal().line));
-            }
-            let mid = row.center().y;
-            let word_right = row.right() - 8.0;
-            let num_right = word_right - word_w - 8.0;
-            let (words, summary) = (self.latency_words(peer), self.summary_of(&peer.id).filter(|_| peer.online));
-            let name_w = row.width() - 16.0 - word_w - num_w - graph_w - if graph_w > 0.0 { 16.0 } else { 8.0 };
-            let name = fit(p, &peer.name, &regular(T_BODY), name_w);
-            p.text(pos2(row.left() + 8.0, mid), Align2::LEFT_CENTER, &name, regular(T_BODY), pal().ink);
-            if name != peer.name {
-                ui.interact(Rect::from_min_size(pos2(row.left() + 8.0, row.top()), vec2(name_w, ROW_H)), Id::unique(("latency-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
-            }
-            if !peer.online {
-                p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, "offline", regular(T_META), pal().ink2);
-            } else {
-                let q = summary.and_then(|s| s.quality());
-                let waiting = "No samples yet";
-                let word = q.map_or(waiting, Quality::word);
-                p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, word, regular(T_META), if q.is_some() { tone(q) } else { pal().ink2 });
-                if let Some(s) = summary {
-                    p.text(pos2(num_right, mid), Align2::RIGHT_CENTER, rtt::ms(s.now_us), mono(T_META), pal().ink);
-                }
-                if let (true, Some(ring), Some(s)) = (graph_w > 0.0, self.rtts.of(&peer.id), summary.filter(|s| s.count >= rtt::MIN_SAMPLES)) {
-                    let g = Rect::from_min_size(pos2(num_right - num_w - 8.0 - graph_w, mid - ROW_GRAPH_H / 2.0), vec2(graph_w, ROW_GRAPH_H));
-                    sparkline(p, g, ring, now, s.quality());
-                }
-            }
-            a11y_text(ui, Id::unique(("latency-row", &peer.id)), row, Role::ListItem, &words, None);
+        let mid = row.center().y;
+        let (words, summary) = (self.latency_words(peer), self.summary_of(&peer.id).filter(|_| peer.online));
+        let quality = summary.and_then(|s| s.quality());
+        let mark = if !peer.online {
+            widgets::Mark::Off
+        } else if matches!(quality, Some(Quality::Stalls | Quality::Slow)) {
+            widgets::Mark::Warn
+        } else {
+            widgets::Mark::Ok
+        };
+        widgets::status_mark(p, pos2(row.left() + 4.0, mid), 8.0, mark);
+        // The value at the right: "4 ms", "38 ms · some stalls", or a word.
+        let (value, mono_value) = match (peer.online, summary) {
+            (false, _) => ("Offline".to_owned(), false),
+            (true, Some(s)) => match quality {
+                Some(q) if q != Quality::Smooth => (format!("{} · {}", rtt::ms(s.now_us), q.word().to_lowercase()), true),
+                _ => (rtt::ms(s.now_us), true),
+            },
+            (true, None) => ("No samples yet".to_owned(), false),
+        };
+        let font = if mono_value { mono(T_BODY) } else { regular(T_BODY) };
+        let ink = if mono_value { pal().ink } else { pal().ink2 };
+        let vw = text_width(ui, &value, font.clone());
+        p.text(pos2(row.right(), mid), Align2::RIGHT_CENTER, &value, font, ink);
+        // The line, when the row has room for it beside the name.
+        let graph_w = if row.width() >= 440.0 { 96.0 } else { 0.0 };
+        let name_room = row.width() - 26.0 - vw - 12.0 - if graph_w > 0.0 { graph_w + 12.0 } else { 0.0 };
+        let name = fit(p, &peer.name, &regular(T_BODY), name_room.max(40.0));
+        p.text(pos2(row.left() + 22.0, mid), Align2::LEFT_CENTER, &name, regular(T_BODY), pal().ink);
+        if name != peer.name {
+            ui.interact(Rect::from_min_size(pos2(row.left() + 22.0, row.top()), vec2(name_room.max(40.0), row.height())), Id::unique(("latency-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
         }
-        h
+        if let (true, Some(ring), Some(s)) = (graph_w > 0.0, self.rtts.of(&peer.id), summary.filter(|s| s.count >= rtt::MIN_SAMPLES)) {
+            let g = Rect::from_min_size(pos2(row.right() - vw - 12.0 - graph_w, mid - ROW_GRAPH_H / 2.0), vec2(graph_w, ROW_GRAPH_H));
+            sparkline(p, g, ring, self.rtt_now(), s.quality());
+        }
+        a11y_text(ui, Id::unique(("latency-row", &peer.id)), row, Role::ListItem, &words, None);
     }
 }
