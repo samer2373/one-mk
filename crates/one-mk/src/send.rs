@@ -192,7 +192,20 @@ impl Attempt<'_> {
         );
         let id = reports.borrow().id;
         let ticker = tokio::spawn(show_progress(progress.clone(), start, reports.clone()));
-        let results = transfer::send_files_as(&conn, files, progress.clone(), id).await;
+        let results = tokio::select! {
+            results = transfer::send_files_as(&conn, files, progress.clone(), id) => results,
+            // Ctrl+C: close with a reason, or the receiver only learns it
+            // when the link times out ("connection lost: timed out").
+            _ = tokio::signal::ctrl_c() => {
+                ticker.abort();
+                reports.send_modify(|u| u.finished = true);
+                let _ = reporter.await;
+                conn.close(0u32.into(), b"the sender cancelled");
+                node.shutdown(CLOSE_WAIT).await;
+                if std::io::IsTerminal::is_terminal(&std::io::stderr()) { eprint!("\r\x1b[2K"); }
+                bail!("cancelled; what arrived is kept, send again to resume");
+            }
+        };
         ticker.abort();
         // One task tells the daemon, in order, so nothing can arrive after the end.
         reports.send_modify(|u| u.finished = true);
