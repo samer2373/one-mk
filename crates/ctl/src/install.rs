@@ -208,11 +208,42 @@ fn app_entry_path(data: &Path) -> PathBuf {
 /// user service or a LaunchAgent does; an autostart entry or a Windows
 /// startup entry only starts it at the next login).
 pub fn starts_service_now() -> bool {
-    if cfg!(target_os = "macos") { true } else if cfg!(target_os = "linux") { systemd_available() } else { false }
+    if cfg!(target_os = "macos") {
+        true
+    } else if cfg!(target_os = "linux") {
+        crate::xdg::config_home().is_ok_and(|config| systemd_for(&config))
+    } else {
+        false
+    }
 }
 
 fn systemd_available() -> bool {
     ok("systemctl", &["--user", "show-environment"])
+}
+
+/// Whether the start-at-login entry for this config folder is a systemd
+/// user service. The user's systemd is one per account and reads units only
+/// from its own search path, whatever `$XDG_CONFIG_HOME` says here: for a
+/// unit written anywhere else (a test run with a throwaway config folder),
+/// `systemctl --user enable --now one-mk.service` would enable and start the
+/// account's real one-mk instead, and uninstall would stop it. Such a folder
+/// gets an autostart entry, which only that folder's session ever reads.
+fn systemd_for(config: &Path) -> bool {
+    systemd_available() && systemd_search_path().is_some_and(|dirs| unit_dir_searched(&dirs, &unit_path(config)))
+}
+
+/// systemd's own unit search path (`UnitPath`, space separated).
+fn systemd_search_path() -> Option<String> {
+    let out = Command::new("systemctl").args(["--user", "show", "--property=UnitPath"]).output().ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    out.status.success().then(|| text.trim().trim_start_matches("UnitPath=").to_owned())
+}
+
+/// Whether `unit`'s folder is one of `search_path`'s folders.
+fn unit_dir_searched(search_path: &str, unit: &Path) -> bool {
+    let Some(dir) = unit.parent() else { return false };
+    let same = |a: &Path, b: &Path| a == b || std::fs::canonicalize(a).is_ok_and(|a| std::fs::canonicalize(b).is_ok_and(|b| a == b));
+    search_path.split_whitespace().any(|d| same(Path::new(d), dir))
 }
 
 /// Quotes one word for a systemd `ExecStart=` or desktop `Exec=` line.
@@ -285,7 +316,7 @@ fn install_linux(l: &Launch) -> Result<String> {
     // Before the service starts: the daemon registers its app id at startup.
     let app = app_entry_path(&data);
     write(&app, &(desktop_entry("one-mk", &l.exe, &l.args()).replace("X-GNOME-Autostart-enabled=true\n", "") + "NoDisplay=true\n"))?;
-    if systemd_available() {
+    if systemd_for(&config) {
         let unit = unit_path(&config);
         write(&unit, &systemd_unit(l))?;
         let _ = remove(&desktop_path(&config)); // never start twice
@@ -318,11 +349,13 @@ fn uninstall_linux() -> Result<bool> {
     let unit = unit_path(&config);
     let mut did = false;
     if unit.exists() {
-        if systemd_available() {
+        // Only the unit systemd reads is the one it would disable.
+        let systemd = systemd_for(&config);
+        if systemd {
             ok("systemctl", &["--user", "disable", "--now", "one-mk.service"]);
         }
         did |= remove(&unit)?;
-        if systemd_available() {
+        if systemd {
             ok("systemctl", &["--user", "daemon-reload"]);
         }
     }
@@ -502,6 +535,25 @@ fn windows_run_owned(value: &str, folder: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn systemd_is_used_only_for_a_unit_folder_it_reads() {
+        let real = "/home/u/.config/systemd/user.control /run/user/1000/systemd/transient /home/u/.config/systemd/user /etc/systemd/user /usr/lib/systemd/user";
+        assert!(unit_dir_searched(real, &unit_path(Path::new("/home/u/.config"))));
+        // A throwaway config folder: systemd would act on the real unit instead.
+        assert!(!unit_dir_searched(real, &unit_path(Path::new("/tmp/omk-test/x/c"))));
+        assert!(!unit_dir_searched("", &unit_path(Path::new("/home/u/.config"))));
+        // The same folder through a link (a symlinked home) still counts.
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("c");
+        std::fs::create_dir_all(config.join("systemd/user")).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&config, dir.path().join("link")).unwrap();
+            let search = format!("/etc/systemd/user {}", config.join("systemd/user").display());
+            assert!(unit_dir_searched(&search, &unit_path(&dir.path().join("link"))));
+        }
+    }
 
     fn launch(home: Option<&str>) -> Launch {
         Launch { exe: "/opt/my apps/one-mk".into(), tray: None, home: home.map(PathBuf::from), start_now: true }
