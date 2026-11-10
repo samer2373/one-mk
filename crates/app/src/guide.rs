@@ -1588,14 +1588,10 @@ mod debug {
             }
             let ours = *name == LIST_NAME;
             let icon = Rect::from_center_size(pos2(x0 + 22.0, cy), vec2(24.0, 24.0));
-            p.rect_filled(
-                icon,
-                CornerRadius::same(6),
-                if ours { MAC_OURS } else { ink2.gamma_multiply(0.5) },
-            );
+            // Ours is the app icon: the light key on a cobalt tile.
+            p.rect_filled(icon, CornerRadius::same(6), if ours { MAC_OURS } else { ink2.gamma_multiply(0.5) });
             if ours {
-                p.circle_filled(icon.center() - vec2(4.0, 0.0), 3.0, Palette::dark().accent);
-                p.circle_filled(icon.center() + vec2(4.0, 0.0), 3.0, SCREEN_INK);
+                crate::icons::symbol_in(p, icon.min + vec2(3.0, 3.0), 18.0, &Palette::dark());
             }
             p.text(pos2(x0 + 44.0, cy), Align2::LEFT_CENTER, *name, regular(T_BODY), ink);
             let on = !ours || granted;

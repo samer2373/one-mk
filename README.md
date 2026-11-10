@@ -9,7 +9,10 @@
 appears on the next computer, with your keyboard, your clipboard and your files following it. Linux,
 Windows and macOS; no server, no IP addresses, no certificates to copy. Pairing takes about a minute.
 
-![oneMK's window: two computers on a 3D desk, with the live connection graph](docs/screens/desk.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screens/desk-dark.png">
+  <img src="docs/screens/desk-light.png" alt="oneMK's window: two computers on a 3D desk, with the chosen one's live connection and actions in a panel beside it">
+</picture>
 
 > **Honest status.** oneMK is young. It has been verified end to end on real hardware on **Linux with
 > GNOME on Wayland** only. The Windows, macOS, KDE, X11 and wlroots backends are built and
@@ -102,14 +105,15 @@ button in the window.
 
 ## The window
 
-`one-mk-app` shows your computers standing on a 3D desk, as they are arranged, with frosted glass panels
-over it. Drag a computer to where it sits; watch the pointer cross the desk when you move to another
+`one-mk-app` shows your computers standing on a 3D desk, as they are arranged, with the chosen one in a
+panel beside it. Drag a computer to where it sits; watch the pointer cross the desk when you move to another
 computer; click a computer to see a live round-trip graph; drop files on a computer to send them. It is
-optional (it only talks to the running `one-mk`), and closing it changes nothing. Tabs: **Desk**
-(Computers and Arrange), **Wallpaper**, **Clipboard & files**, **Keys & mouse**, **Health** and
-**Settings**; `Ctrl+K` opens a command palette. More in [WINDOW.md](docs/WINDOW.md).
+optional (it only talks to the running `one-mk`), and closing it changes nothing. The pages are tabs along
+the top: **Desk**, **Arrange**, **Wallpaper**, **Clipboard & files**, **Keys & mouse**, **Health** and
+**Settings**; `Ctrl+K` (`⌘K` on a Mac) opens a command palette. It comes in a light and a dark look and
+follows your system's by default (Settings → General → Appearance). More in [WINDOW.md](docs/WINDOW.md).
 
-| Arrange: monitors as a wall | Keys & mouse: a 3D keyboard and mouse |
+| Arrange: the screens' edges, to the pixel | Keys & mouse: a 3D keyboard and mouse |
 |---|---|
 | ![Arrange view](docs/screens/arrange.png) | ![The 3D keyboard with changed keys marked](docs/screens/keys.png) |
 

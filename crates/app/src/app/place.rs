@@ -887,7 +887,14 @@ impl App {
         if ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(true)))) {
             wifi.refresh();
         }
-        let network = wifi.state();
+        #[allow(unused_mut)]
+        let mut network = wifi.state();
+        // Development aid: ONE_MK_APP_SSID=name stands in for the Wi-Fi
+        // network, so screenshots never show the real one.
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        if let Ok(ssid) = std::env::var("ONE_MK_APP_SSID") {
+            network.ssids = vec![ssid];
+        }
         let current = status.layout.profile.clone();
         let mut names = status.layout.profiles.clone();
         // The open profile first, so its options sit in view.

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Regenerates the window screenshots used by README.md and docs/WINDOW.md
-# (docs/screens/{desk,arrange,files,wallpaper,keys,health,settings}.png).
+# (docs/screens/desk-{light,dark}.png, the README's pair, and
+# {arrange,files,wallpaper,keys,health,settings}.png in the light theme).
 # Everything is private: its own X server (Xvfb on a free display, never the
 # real session), two paired `--backend null` daemons in throwaway homes with
 # no discovery, and a throwaway HOME/XDG_*. When user namespaces are allowed
@@ -60,7 +61,7 @@ shot() { # name after-seconds [env...]
     local name=$1 after=$2; shift 2
     for _ in 1 2 3; do
         rm -f "$W/$name.ppm"
-        env "$@" ONE_MK_APP_SIZE=1180x780 ONE_MK_APP_SHOT="$W/$name.ppm" ONE_MK_APP_SHOT_AFTER="$after" timeout 40 "$APP" --home "$W/a" >"$W/app-$name.log" 2>&1
+        env ONE_MK_APP_THEME=light ONE_MK_APP_SSID="Home Wi-Fi" "$@" ONE_MK_APP_SIZE=1280x800 ONE_MK_APP_SHOT="$W/$name.ppm" ONE_MK_APP_SHOT_AFTER="$after" timeout 40 "$APP" --home "$W/a" >"$W/app-$name.log" 2>&1
         [ -s "$W/$name.ppm" ] && break
     done
     # 256 colours by libimagequant, dithered so the desk's gradients don't band.
@@ -71,10 +72,28 @@ i.quantize(256, method=Image.Quantize.LIBIMAGEQUANT, dither=Image.Dither.FLOYDST
     echo "$OUT/$name.png"
 }
 UPDATED='{"check":true,"install_automatically":false,"available":null,"error":null,"can_update":false,"needs_password":false,"move_to_applications":false,"rollback_available":false,"advice":""}'
-shot desk 10 ONE_MK_APP_SELECT="Studio PC"
+# The connection graph gains a reading a second: give it half a minute.
+shot desk-light 30 ONE_MK_APP_SELECT="Studio PC"
+shot desk-dark 30 ONE_MK_APP_SELECT="Studio PC" ONE_MK_APP_THEME=dark
 shot arrange 4 ONE_MK_APP_TAB=arrange ONE_MK_APP_SELECT="Studio PC"
 shot files 4 ONE_MK_APP_TAB=files
-shot wallpaper 4 ONE_MK_APP_TAB=wallpaper
+# Wallpaper playing needs a video player on each computer: a status file
+# (debug builds) stands in for the daemon, with a drawn picture as the poster.
+python3 -I -c "
+from PIL import Image
+w, h = 1920, 1080
+top, mid, low = (44, 40, 92), (196, 112, 148), (236, 176, 128)
+rows = []
+for y in range(h):
+    t = y / (h - 1)
+    a, b, k = (top, mid, t / 0.55) if t < 0.55 else (mid, low, (t - 0.55) / 0.45)
+    rows.append(tuple(int(a[i] + (b[i] - a[i]) * k) for i in range(3)))
+im = Image.new('RGB', (1, h))
+im.putdata(rows)
+im.resize((w, h)).save('$W/poster.png')"
+WALL='{"plan": {"hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "title": "Dunes at dusk.mp4", "media": {"width": 3840, "height": 2160, "duration_ms": 10000, "frame_rate": 30}, "canvas": {"monitors": [{"computer": "abcd-ef01", "name": "Home-PC · 1", "rect": {"x": 0, "y": 0, "width": 2560, "height": 1440}, "local": {"x": 0, "y": 0, "width": 2560, "height": 1440}, "scale": 1.0, "online": true}, {"computer": "abcd-ef01", "name": "Home-PC · 2", "rect": {"x": 2560, "y": 180, "width": 1920, "height": 1080}, "local": {"x": 2560, "y": 180, "width": 1920, "height": 1080}, "scale": 1.0, "online": true}, {"computer": "1111-2222", "name": "Studio PC · 1", "rect": {"x": -1920, "y": 180, "width": 1920, "height": 1080}, "local": {"x": 0, "y": 0, "width": 1920, "height": 1080}, "scale": 1.0, "online": true}]}, "start_ms": 1, "fit": "fill", "computers": ["abcd-ef01", "1111-2222"], "pause_on_battery": true, "paused": false, "picture": false}, "message": "Playing on 3 monitors on 2 computers", "available": true, "poster": "'"$W"'/poster.png", "computers": {"abcd-ef01": {"state": "ready"}, "1111-2222": {"state": "ready"}}}'
+printf 'ok\nname\tHome-PC\nid\tabcd-ef01\nport\t24800\npeer\t1111-2222\tleft\t1\t1\tauto\tStudio PC\nlink\t1111-2222\t1200\t0\t900\nwallpaper\t%s\n' "$WALL" >"$W/wall.status"
+shot wallpaper 4 ONE_MK_APP_TAB=wallpaper ONE_MK_APP_STATUS="$W/wall.status"
 shot keys 4 ONE_MK_APP_TAB=keys
 shot health 9 ONE_MK_APP_TAB=health
 shot settings 4 ONE_MK_APP_TAB=settings ONE_MK_APP_UPDATE_STATUS="$UPDATED"

@@ -2634,6 +2634,8 @@ impl eframe::App for App {
 ///   with `ONE_MK_APP_INVITE=link` (the invitation came) or
 ///   `ONE_MK_APP_JOIN=text` (typed to join); `ONE_MK_APP_TIP=1` a tooltip held
 ///   open; `ONE_MK_APP_PALETTE=query` the palette.
+/// - `ONE_MK_APP_SSID=name` stands in for the Wi-Fi network on Arrange
+///   (screenshots must not show the real one).
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
 #[cfg(any(debug_assertions, feature = "design-evidence"))]
 mod debug {

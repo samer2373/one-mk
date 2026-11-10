@@ -113,11 +113,9 @@ pub(super) fn latency_word(q: Option<Quality>) -> String {
 /// The pointer (handoff's symbol, its path on the 64 grid) `h` high with
 /// its tip at `tip`: where the pointer is now.
 pub(super) fn pointer_mark(p: &Painter, tip: Pos2, h: f32, col: Color32) {
-    // M24 17 L24 39 L29.2 34 L32.6 42 L36.4 40.4 L33 32.6 L40 32.6 Z,
-    // 25 units high, in triangles (it is not convex).
+    // The logo's pointer path, 25 units high, in triangles (it is not convex).
     let k = h / 25.0;
-    let at = |x: f32, y: f32| pos2(tip.x + (x - 24.0) * k, tip.y + (y - 17.0) * k);
-    let pts = [at(24.0, 17.0), at(24.0, 39.0), at(29.2, 34.0), at(32.6, 42.0), at(36.4, 40.4), at(33.0, 32.6), at(40.0, 32.6)];
+    let pts = icons::SYMBOL_POINTER.map(|(x, y)| pos2(tip.x + (x - 24.0) * k, tip.y + (y - 17.0) * k));
     let mut m = egui::Mesh::default();
     for q in pts {
         m.colored_vertex(q, col);

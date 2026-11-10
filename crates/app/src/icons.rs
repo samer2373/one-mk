@@ -150,13 +150,18 @@ pub fn search(p: &Painter, c: Pos2, col: Color32) {
 /// corner radius), and the pointer's path.
 const SYMBOL_KEY: [f32; 4] = [5.0, 5.0, 54.0, 15.0];
 const SYMBOL_TOP: [f32; 4] = [12.0, 8.0, 40.0, 11.0];
-const SYMBOL_POINTER: [(f32, f32); 7] = [(24.0, 17.0), (24.0, 39.0), (29.2, 34.0), (32.6, 42.0), (36.4, 40.4), (33.0, 32.6), (40.0, 32.6)];
+pub(crate) const SYMBOL_POINTER: [(f32, f32); 7] = [(24.0, 17.0), (24.0, 39.0), (29.2, 34.0), (32.6, 42.0), (36.4, 40.4), (33.0, 32.6), (40.0, 32.6)];
 
 /// The oneMK symbol, flat (handoff section 2): a keycap with the pointer on
 /// its top, `size` points square from `min`, in the theme's logo colours.
 pub fn symbol(p: &Painter, min: Pos2, size: f32) {
+    symbol_in(p, min, size, &crate::style::pal());
+}
+
+/// The flat symbol in the logo colours of `pal` (the dark theme's: the
+/// light key with its cobalt pointer, as on the app icon's tile).
+pub fn symbol_in(p: &Painter, min: Pos2, size: f32, pal: &crate::style::Palette) {
     use egui::epaint::{Mesh, Vertex, WHITE_UV};
-    let pal = crate::style::pal();
     let k = size / 64.0;
     let at = |x: f32, y: f32| pos2(min.x + x * k, min.y + y * k);
     let rounded = |[x, y, w, r]: [f32; 4]| (Rect::from_min_max(at(x, y), at(x + w, y + w)), egui::CornerRadius::same((r * k).round() as u8));

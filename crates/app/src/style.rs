@@ -515,8 +515,8 @@ pub const MAC_BLUE: Color32 = rgb(0x0A84FF);
 /// The desktop behind the guide's mock windows, and its two wallpapers.
 pub const MAC_DESK: Color32 = rgb(0x080A0D);
 pub const MAC_WALLS: [[Color32; 2]; 2] = [[rgb(0x2B3A55), rgb(0x6B5B7A)], [rgb(0x24444A), rgb(0x4E5F7A)]];
-/// Our own app's row in the mock's list.
-pub const MAC_OURS: Color32 = rgb(0x13171C);
+/// Our own app's icon in the mock's list: the app icon's cobalt tile.
+pub const MAC_OURS: Color32 = rgb(0x2F54EB);
 
 /// A colour worked out by code (shading, a model's vertex colours), not
 /// one written down.

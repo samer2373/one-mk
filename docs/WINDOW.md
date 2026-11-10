@@ -14,7 +14,16 @@ page or runs any action; `Ctrl+1` Desk, `Ctrl+2` Arrange, `Ctrl+3` Wallpaper, `C
 mouse, `Ctrl+6` Health and `Ctrl+7` (or `Ctrl+,`) Settings jump to pages, in the order of the top bar's tabs (each tab's
 tooltip shows its key). The window respects the system's reduced-motion setting.
 
-![The Desk: two computers on a 3D desk, with the connection graph](screens/desk.png)
+The pages are text tabs in a bar along the top, with the status line, **Search** (the palette) and the
+one main button (Pair a computer, Start oneMK, Take back…) at its right. The window has a light and a dark
+look: **Appearance** in Settings → General (or "Appearance: Light/Dark/System" in the palette) picks one,
+and System, the default, follows the system's setting as it changes; switching cross-fades. Colour is
+never the only sign: every status has a shape too (● online, ◆ needs you, ○ off, ■ error). Narrower
+than 1000 points (the smallest window is 820 × 540) the tabs shorten to Files and Keys, the main button
+reads Pair, the Desk's panel moves under the desk and its toolbar stands at the desk's left.
+
+![The Desk in the light look: two computers on a 3D desk, the chosen one in the panel](screens/desk-light.png)
+![The same in the dark look](screens/desk-dark.png)
 
 ## Desk
 
@@ -35,13 +44,14 @@ The **Desk** tab (your computers) and the **Arrange** tab.
   sends nothing extra and runs no timer for it. The window asks once a second, only while a
   graph is on screen, redraws a steady graph only when it changes, and keeps 120 readings per
   computer in memory, nothing on disk.
-- **Arrange.** Every computer's real monitors as a monitor wall; drag a computer next to one
-  of your monitors and it snaps there, crossing only where the screens touch (the placement
+- **Arrange.** A flat plan of every computer's real monitors, the edges that touch drawn in
+  the accent; drag a computer next to one of your monitors (or move it with the arrow keys, or
+  type its exact X, Y) and it snaps there, crossing only where the screens touch (the placement
   syncs to the other computer). Choose a side to let it cross anywhere along that side again.
   Save, use and delete layout profiles, and let one switch in by itself on a Wi-Fi network.
   See [ARRANGING.md](ARRANGING.md).
 
-![Arrange: monitors as a wall, drag a computer to snap it](screens/arrange.png)
+![Arrange: the screens' edges as a plan, where each computer sits, and the layouts](screens/arrange.png)
 
 ## Wallpaper
 
