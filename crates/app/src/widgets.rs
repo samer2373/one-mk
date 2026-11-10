@@ -794,27 +794,6 @@ pub fn paint_row(p: &Painter, row: Rect, label: &str, caption: Option<&str>, val
     }
 }
 
-/// A clipboard (a board, its clip, two lines of text) and an arrow
-/// beside it: going out (`send`) or coming in.
-pub fn draw_clip(p: &Painter, rect: Rect, col: Color32, send: bool) {
-    let c = rect.center();
-    let st = Stroke::new(1.4, col);
-    let body = Rect::from_min_size(pos2(c.x - 8.5, c.y - 6.0), vec2(10.0, 13.0));
-    p.rect_stroke(body, CornerRadius::same(2), st, StrokeKind::Middle);
-    let clip = Rect::from_center_size(pos2(body.center().x, body.top()), vec2(5.0, 3.0));
-    p.rect_filled(clip, CornerRadius::same(1), col);
-    for k in [0.0, 3.0] {
-        p.line_segment([pos2(body.left() + 2.5, c.y + k), pos2(body.right() - 2.5, c.y + k)], Stroke::new(1.0, col));
-    }
-    // The arrow points away from the board, or at it.
-    let (a, b, y) = (body.right() + 2.0, body.right() + 8.5, c.y - 1.0);
-    let (from, to) = if send { (a, b) } else { (b, a) };
-    let dir = if send { 1.0 } else { -1.0 };
-    p.line_segment([pos2(from, y), pos2(to, y)], st);
-    p.line_segment([pos2(to, y), pos2(to - 2.8 * dir, y - 2.8)], st);
-    p.line_segment([pos2(to, y), pos2(to - 2.8 * dir, y + 2.8)], st);
-}
-
 /// Three dots in a row: more choices.
 pub fn draw_dots(p: &Painter, rect: Rect, col: Color32) {
     for k in [-1.0, 0.0, 1.0] {

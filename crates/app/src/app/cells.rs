@@ -191,68 +191,6 @@ impl App {
         self.link.broadcast(on);
     }
 
-    /// This computer: start at login, the pointer kept here, broadcast and
-    /// locking every screen. Until another computer is paired (or while
-    /// oneMK is off) only Start at login means anything, so only it shows;
-    /// broadcast shows while a computer is connected (or it is on).
-    pub(super) fn controls(&mut self, ui: &mut Ui, c: Rect) {
-        // This computer's own switches; what acts on every computer at
-        // once sits in the page's title row.
-        let p = ui.painter().clone();
-        // Beside this computer's own card (chosen, or nothing paired yet),
-        // the name is already there: say what these are instead.
-        let beside_me = self.running().is_some_and(|s| s.peers.is_empty()) || self.selected_id().as_deref() == Some("me");
-        p.text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, if beside_me { "Startup & files" } else { "This computer" }, semibold(T_TITLE), pal().ink);
-        if !beside_me {
-            // Off, the name isn't known yet: what it runs, at least, so the
-            // card keeps its shape.
-            let sub = self.running().map_or_else(|| os_name(me_os()).to_owned(), |s| format!("{} · {}", s.name, os_name(me_os())));
-            p.text(pos2(c.left(), c.top() + 32.0), Align2::LEFT_CENTER, fit(&p, &sub, &regular(T_BODY), c.width()), regular(T_BODY), pal().ink3);
-        }
-        let row_h = 40.0;
-        let top = c.top() + if beside_me { 30.0 } else { 50.0 };
-        let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
-        let on = self.autostart.unwrap_or(false);
-        let busy = self.busy.iter().any(|j| matches!(j, Job::Autostart(_)));
-        let r = switch_help(ui, row(0), Id::unique("autostart"), "Start at login", "autostart", on, self.autostart.is_some() && !busy);
-        if self.autostart.is_none() {
-            r.on_hover_text("Checking…");
-        } else if r.clicked() {
-            // Shown at once; the link reports what really happened.
-            self.busy.push(Job::Autostart(!on));
-            self.autostart = Some(!on);
-            self.link.set_autostart(!on);
-        }
-        let mut next = 1;
-        if self.running().is_some_and(|s| !s.peers.is_empty()) {
-            let locked = self.pointer_locked();
-            let r = switch_help(ui, row(next), Id::unique("lock-pointer"), "Keep the pointer here", "lock-pointer", locked, true);
-            if r.clicked() {
-                self.pending_lock = Some((!locked, self.now));
-                self.busy.push(Job::LockPointer(!locked));
-                self.link.lock_pointer(!locked);
-            }
-            r.on_hover_text("Edges lead nowhere while this is on.");
-            next += 1;
-        }
-        if self.running().is_some() {
-            let r1 = row(next);
-            p.text(r1.left_center(), Align2::LEFT_CENTER, "Received files", regular(T_BODY), pal().ink);
-            let label = "Open";
-            let bw = button_width(ui, label) - 4.0;
-            let b = Rect::from_min_size(pos2(r1.right() - bw, r1.center().y - 14.0), vec2(bw, 28.0));
-            let busy = self.busy.contains(&Job::Open);
-            if button(ui, b, Id::unique("open-dl-desk"), label, Look::Quiet, !busy, Some("Open received files folder")).clicked() {
-                self.busy.push(Job::Open);
-                self.link.open_downloads();
-            }
-            next += 1;
-        }
-        for k in 1..next {
-            p.hline(c.x_range(), top + row_h * k as f32, Stroke::new(1.0, pal().line));
-        }
-    }
-
     /// Gaming mode: a label and three choices (in Settings).
     pub(super) fn gaming_row(&mut self, ui: &mut Ui, g: Rect) {
         let word = "Gaming mode";
@@ -310,48 +248,6 @@ impl App {
     /// Light, Dark, or the system's: shown at once, kept in `settings.toml`.
     pub(super) fn set_appearance(&mut self, appearance: crate::style::Appearance) {
         self.set_pref("appearance", &["appearance", appearance.key()], |p| p.appearance = appearance);
-    }
-
-    /// Under the inspector: move the mouse and keyboard there (or back),
-    /// and its clipboard.
-    pub(super) fn quick_actions(&mut self, ui: &mut Ui, c: Rect, y: f32, peer: Option<&PeerStatus>) {
-        let Some(s) = self.running().cloned() else { return };
-        let away = s.controlling.is_some() || s.controlled_by.is_some();
-        let switch_job = match peer {
-            Some(p) if p.online && s.controlling.as_ref() != Some(&p.name) => Some((Job::Switch { to: p.id.clone(), name: p.name.clone() }, "Switch to it", format!("Move the mouse and keyboard to {}", p.name))),
-            None if away => Some((Job::Switch { to: "here".into(), name: s.name.clone() }, "Switch back here", "Bring the mouse and keyboard back to this computer".to_owned())),
-            _ => None,
-        };
-        if let Some((job, label, name)) = switch_job {
-            let bw = button_width(ui, label) - 4.0;
-            let r = Rect::from_min_size(pos2(c.left(), y), vec2(bw, 28.0));
-            let busy = self.busy.contains(&job);
-            if button(ui, r, Id::unique(("quick-switch", peer.map(|p| p.id.clone()))), label, Look::Quiet, !busy, Some(&name)).clicked() {
-                self.busy.push(job.clone());
-                if let Job::Switch { to, name } = job {
-                    self.link.switch(&to, &name);
-                }
-            }
-        }
-        let Some(p) = peer.filter(|p| p.online) else { return };
-        // The clipboard: two small buttons, named on hover and for screen readers.
-        let mut x = c.right() - 28.0;
-        for send in [false, true] {
-            let r = Rect::from_min_size(pos2(x, y), vec2(28.0, 28.0));
-            x -= 32.0;
-            let job = Job::Clip { send, id: p.id.clone(), name: p.name.clone() };
-            let busy = self.busy.contains(&job);
-            let name = if send { format!("Send this clipboard to {}", p.name) } else { format!("Get {}'s clipboard", p.name) };
-            if widgets::icon_button(ui, r, Id::unique(("quick-clip", send, &p.id)), &name, !busy, |pp, rr, col| widgets::draw_clip(pp, rr, col, send)).clicked() {
-                self.busy.push(job.clone());
-                self.link.clip(send, &p.id, &p.name);
-            }
-        }
-        let label = "Clipboard";
-        let lw = text_width(ui, label, regular(T_META));
-        if x + 28.0 - 8.0 - lw > c.left() + 110.0 {
-            ui.painter().text(pos2(x + 28.0 - 6.0, y + 14.0), Align2::RIGHT_CENTER, label, regular(T_META), pal().ink2);
-        }
     }
 
     /// The Files tab's first cell: how to send, then transfers as they run.

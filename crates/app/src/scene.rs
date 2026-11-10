@@ -780,7 +780,7 @@ fn quad_colors(painter: &Painter, pts: [Pos2; 4], cols: [Color32; 4], edge: Opti
 /// The wallpaper for a computer with these two colours, made once and kept:
 /// a deep gradient between them, soft blooms of light and colour, and one
 /// slow wave of light across it, in the manner of a desktop picture.
-fn wallpaper(ctx: &egui::Context, wall: [u32; 2]) -> egui::TextureHandle {
+pub(crate) fn wallpaper(ctx: &egui::Context, wall: [u32; 2]) -> egui::TextureHandle {
     let id = egui::Id::unique(("wallpaper", wall));
     if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
         return t;

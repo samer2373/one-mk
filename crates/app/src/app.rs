@@ -11,6 +11,7 @@ mod pages;
 mod place;
 mod shell;
 mod desk_cards;
+mod desk_panel;
 mod typing;
 mod updates;
 mod settings_controls;
@@ -201,10 +202,6 @@ impl ToastAct {
 /// out and the new one rises in.
 #[derive(Clone, PartialEq, Debug)]
 enum Cell {
-    Head(String, String),
-    Inspector(Option<String>),
-    /// This computer's switches.
-    Controls,
     Arrange(Option<String>),
     LineUp(Option<String>),
     Profiles,
@@ -220,8 +217,10 @@ pub struct App {
     glass: Glass,
     /// Light or dark, following Settings → Appearance (and the system).
     themer: crate::style::Themer,
-    /// A computer has been dragged into place: the drag hint goes.
-    dragged_once: bool,
+    /// The Desk's panel and toolbar (desk_panel.rs).
+    desk_ui: desk_panel::DeskUi,
+    /// Where the Desk fits its computers this frame (handoff 5.1's scale).
+    desk_stage: Option<Rect>,
     /// What was behind the glass last frame, and whether the desk moved.
     backdrop_was: u64,
     scene_moving: bool,
@@ -452,17 +451,6 @@ fn title_row(ui: &Ui, c: Rect, name: &str, room: f32) {
     }
 }
 
-/// A key on the left and its value on the right, centred on `y`.
-fn info_row(ui: &Ui, c: Rect, y: f32, key: &str, val: &str, mono_val: bool, alpha: f32) {
-    let p = ui.painter();
-    p.text(pos2(c.left(), y), Align2::LEFT_CENTER, key, regular(T_BODY), pal().ink2);
-    let font = if mono_val { mono(T_META) } else { regular(T_BODY) };
-    let val = fit(p, val, &font, c.width() - text_width(ui, key, regular(T_BODY)) - 12.0);
-    p.text(pos2(c.right(), y), Align2::RIGHT_CENTER, &val, font, pal().ink.gamma_multiply(alpha));
-    let r = Rect::from_min_max(pos2(c.left(), y - 10.0), pos2(c.right(), y + 10.0));
-    a11y_text(ui, Id::unique(("row", key)), r, Role::Label, &format!("{key}: {val}"), None);
-}
-
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, home: Option<PathBuf>, size: [f32; 2]) -> anyhow::Result<Self> {
         crate::style::install(&cc.egui_ctx);
@@ -501,8 +489,8 @@ impl App {
         Ok(Self {
             glass,
             themer: crate::style::Themer::default(),
-            // Dragged once, or the hint already shown in full once: no hint.
-            dragged_once: link.dir.join(".window-dragged").exists() || link.dir.join(".window-hinted").exists(),
+            desk_ui: desk_panel::DeskUi::default(),
+            desk_stage: None,
             backdrop_was: 0,
             scene_moving: false,
             status_seen: 0,
@@ -1461,10 +1449,6 @@ impl App {
                 d.pop.go(1.0, now, 0.16, motion::out_cubic);
                 let id = d.id.clone();
                 self.drag_side = None;
-                if !self.dragged_once {
-                    self.dragged_once = true;
-                    let _ = one_mk_ctl::private::write(&self.drag_hint_file(), b"");
-                }
                 // Snapped: it glides from where it was let go to its place.
                 match landing {
                     scene::Landing::Beside(side, o) => self.choose_place(&id, side, Some(o), false),
@@ -1537,7 +1521,8 @@ impl App {
         self.scene.empty_slot = false;
         let moving = self.scene.step(now, dragging);
         self.scene_moving = moving;
-        self.scene.fit = Some(rect);
+        // On the Desk the computers fit the handoff's box; elsewhere the area.
+        self.scene.fit = Some(self.desk_stage.filter(|_| self.tab == Tab::Desk).unwrap_or(rect));
         let painter = ui.painter_at(all);
         self.scene.paint(&painter, all);
         if moving || self.drag.is_some() {
@@ -1734,23 +1719,13 @@ impl App {
             _ => [0.0, w * 0.34, w * 0.66, w],
         };
         let cell = |a: usize, b: usize| Rect::from_min_max(pos2(rect.left() + x[a] + PAD, rect.top() + PAD), pos2(rect.left() + x[b] - PAD, rect.bottom() - PAD));
-        let (t, s) = self.headline_text();
         match self.tab {
-            // Off, there is nothing to inspect: the message takes the room.
-            Tab::Desk if self.off() => vec![(Cell::Head(t, s), cell(0, 2)), (Cell::Controls, cell(2, 3))],
-            // A small window has room for one card: the chosen computer's
-            // (this computer's switches show when it is the one chosen).
-            Tab::Desk if self.running().is_some_and(|status| status.peers.is_empty()) && w < 760.0 => vec![(Cell::Inspector(None), cell(0, 2)), (Cell::Controls, cell(2, 3))],
-            Tab::Desk if w < 760.0 => match self.selected_id() {
-                Some(id) if id != "me" => vec![(Cell::Inspector(Some(id)), cell(0, 3))],
-                _ => vec![(Cell::Inspector(None), cell(0, 1)), (Cell::Controls, cell(1, 3))],
-            },
-            Tab::Desk => vec![(Cell::Inspector(self.selected_id()), cell(0, 2)), (Cell::Controls, cell(2, 3))],
+            // The Desk has a panel of its own (desk_panel.rs).
             Tab::Arrange => {
                 let sel = self.selected_id().filter(|id| id != "me");
                 vec![(Cell::Arrange(sel.clone()), cell(0, 1)), (Cell::LineUp(sel), cell(1, 2)), (Cell::Profiles, cell(2, 3))]
             }
-            Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files => vec![],
+            Tab::Desk | Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files => vec![],
         }
     }
 
@@ -1898,27 +1873,8 @@ impl App {
         }
     }
 
-    fn draw_cell(&mut self, ui: &mut Ui, cell: &Cell, r: Rect, now: f64) {
+    fn draw_cell(&mut self, ui: &mut Ui, cell: &Cell, r: Rect, _now: f64) {
         match cell {
-            Cell::Head(title, sub) => {
-                let th = para(ui, r.left_top(), r.width(), title, semibold(T_TITLE), pal().ink);
-                let sh = para(ui, r.left_top() + vec2(0.0, th + 6.0), r.width(), sub, regular(T_BODY), pal().ink2);
-                let at = Rect::from_min_size(r.min, vec2(r.width(), th + sh + 6.0));
-                a11y_text(ui, Id::unique("headline"), at, Role::Status, &format!("{title}. {sub}"), Some(Live::Polite));
-                // Off: the way to turn it on, in the card that says so.
-                if self.off() && self.status.is_some() {
-                    let busy = self.busy.contains(&Job::Start);
-                    let label = if busy { "Starting…" } else { "Start oneMK" };
-                    let bw = button_width(ui, "Start oneMK") + 8.0;
-                    let b = Rect::from_min_size(pos2(r.left(), at.bottom() + 16.0), vec2(bw, 36.0));
-                    if button(ui, b, Id::unique("start-in-card"), label, Look::Primary, !busy && !self.sheet_open(), Some("Start oneMK on this computer")).clicked() {
-                        self.busy.push(Job::Start);
-                        self.link.start();
-                    }
-                }
-            }
-            Cell::Inspector(sel) => self.peer_card(ui, r, sel.clone(), now),
-            Cell::Controls => self.controls(ui, r),
             Cell::Arrange(sel) => self.arrange_cell(ui, r, sel.clone()),
             Cell::LineUp(sel) => self.line_up_cell(ui, r, sel.clone()),
             Cell::Profiles => self.profiles_cell(ui, r),
@@ -2423,11 +2379,7 @@ impl App {
 /// Cells whose card fits what they hold (the others fill their column).
 fn cell_key(c: &Cell) -> Option<&'static str> {
     match c {
-        Cell::Controls => Some("controls"),
-        Cell::Head(..) => Some("head"),
         // Arrange's three cards share one height (a row of equals).
-        Cell::Inspector(None) => Some("me"),
-        Cell::Inspector(Some(_)) => Some("peer"),
         Cell::LineUp(_) => Some("lineup"),
         _ => None,
     }
@@ -2480,9 +2432,14 @@ impl eframe::App for App {
         let f = shell::frame(full);
         let content = f.content;
         let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
-        let with_cards = !matches!(self.tab, Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files);
+        // The Desk: the desk left of (or above) its panel (desk_panel.rs).
+        let desk_lay = (self.tab == Tab::Desk).then(|| desk_panel::desk_layout(full, f.bar.bottom()));
+        let with_cards = !matches!(self.tab, Tab::Desk | Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files);
         let cards = Rect::from_min_max(pos2(content.left(), content.bottom() - if with_cards { self.panel_h() } else { 0.0 }), content.max);
-        let desk = Rect::from_min_max(pos2(content.left(), head.bottom()), pos2(content.right(), if with_cards { cards.top() - M } else { content.bottom() }));
+        let desk = match &desk_lay {
+            Some(l) => l.scene,
+            None => Rect::from_min_max(pos2(content.left(), head.bottom()), pos2(content.right(), if with_cards { cards.top() - M } else { content.bottom() })),
+        };
         // Files let go over a page without the desk: ask where they go.
         if !self.tab.desk() && self.tab != Tab::Wallpaper {
             let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
@@ -2510,16 +2467,24 @@ impl eframe::App for App {
         // the transfer where a small window puts it at the top.
         let mut frame = scene;
         let mut compact = false;
-        if self.tab.desk() && self.tab != Tab::Files {
+        let mut tools = None;
+        if self.tab == Tab::Desk {
+            // The banner on top, the toolbar under it, the hint along the
+            // foot; the computers fit the handoff's box in what is left.
+            let band = tween(ui.ctx(), Id::unique("desk-band"), self.band_h(ui, scene.width() - 2.0 * desk_panel::EDGE), motion::space(0.22), motion::out_cubic);
+            let (free, row) = self.desk_room(scene, band);
+            tools = row;
+            frame = free;
+            self.desk_stage = Some(desk_panel::desk_stage(scene, free));
+            // Too little room for monitors anyone could read: named chips.
+            compact = (scene.height() < COMPACT_BELOW || frame.height() < 100.0) && self.running().is_some_and(|s| !s.peers.is_empty());
+        } else if self.tab.desk() && self.tab != Tab::Files {
             // A band at the desk's top holds the banner, the toast and (in a
             // small window) the transfer; the desk is framed below it and
             // above what floats along its bottom, never under either. The
             // band eases open so the desk glides rather than jumps.
             let band = tween(ui.ctx(), Id::unique("desk-band"), self.band_h(ui, scene.width()), motion::space(0.22), motion::out_cubic);
-            // The view switch and toolbar row is never drawn over: the
-            // monitors start below it (the camera adds its 12-point inset).
-            frame.min.y += band + if self.desk_views_shown() { desk_cards::DESK_VIEWS_H } else { 0.0 };
-            frame.max.y -= self.desk_foot_h(scene.width());
+            frame.min.y += band;
             // Too little room left for monitors anyone could read: the
             // computers as a row of named chips instead.
             // On Clipboard & files the desk is only where files go: in a
@@ -2535,11 +2500,21 @@ impl eframe::App for App {
             let over = egui::LayerId::new(egui::Order::Middle, Id::unique("chrome-layer"));
             let mut top = ui.new_child(UiBuilder::new().layer_id(over).max_rect(full).id_salt("chrome"));
             self.top_bar(&mut top, f.bar, now);
-            self.desk_actions(&mut top, head.translate(vec2(0.0, shell::HEAD_H)));
+            if let Some(row) = tools {
+                self.desk_toolbar(&mut top, row, full.width() < desk_panel::STACK_BELOW);
+            }
         }
         if self.tab.desk() && self.tab != Tab::Files {
             if compact {
                 self.desk_chips(ui, frame);
+            } else if self.tab == Tab::Desk {
+                self.desk(ui, frame, full, now);
+                // oneMK off: the desk steps back to 40 % (the ground laid
+                // over it at 60 %, so no face shows through another).
+                let k = tween(ui.ctx(), Id::unique("desk-off-dim"), if self.off() { 0.6 } else { 0.0 }, motion::fade(0.2), motion::out_cubic);
+                if k > 0.0 {
+                    ui.painter().rect_filled(scene, 0.0, pal().bg.gamma_multiply(k));
+                }
             } else {
                 self.desk(ui, frame, full, now);
             }
@@ -2552,7 +2527,15 @@ impl eframe::App for App {
         }
         if self.tab.desk() && self.tab != Tab::Files {
             let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
-            self.desk_overlay(ui, scene, hovering);
+            if self.tab == Tab::Desk {
+                // Chips can't be dragged: the hint is for the 3D desk.
+                if !compact {
+                    self.desk_hint(ui, scene);
+                }
+                self.desk_overlay(ui, Rect::from_min_max(scene.min + vec2(desk_panel::EDGE, desk_panel::EDGE), scene.max - vec2(desk_panel::EDGE, 8.0)), hovering);
+            } else {
+                self.desk_overlay(ui, scene, hovering);
+            }
         }
         let mut body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
         // Broadcasting is said on every page (the desk says it in its band).
@@ -2582,10 +2565,16 @@ impl eframe::App for App {
             }
             _ => {}
         }
-        let (title, sub) = self.page_title();
-        self.page_head(ui, head, &title, &sub);
+        // The Desk has no title row: the desk starts under the bar.
+        if self.tab != Tab::Desk {
+            let (title, sub) = self.page_title();
+            self.page_head(ui, head, &title, &sub);
+        }
         if with_cards {
             self.panel(ui, cards, now);
+        }
+        if let Some(l) = &desk_lay {
+            self.desk_panel(ui, l.panel, now);
         }
         if let Some(card) = card {
             self.suggestion_banner(ui, card);
@@ -2593,8 +2582,9 @@ impl eframe::App for App {
         widgets::set_locked(ui.ctx(), false);
         // The sheet sits over the panel, leaving the desk room to show
         // what is being paired.
-        self.sheet(ui, content, now);
-        self.toast_view(ui, content, now);
+        // On the Desk, under the computers, clear of the panel at the side.
+        self.sheet(ui, desk_lay.as_ref().filter(|l| !l.stacked).map_or(content, |l| Rect::from_min_max(l.scene.min, pos2(l.scene.right(), content.bottom()))), now);
+        self.toast_view(ui, desk_lay.as_ref().map_or(content, |l| l.scene.shrink2(vec2(desk_panel::EDGE, 0.0))), now);
         self.palette(ui.ctx(), now);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         crate::chrome::paint_fake_buttons(&ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("fake-window-buttons"))));
@@ -2679,6 +2669,8 @@ impl eframe::App for App {
 ///   `ONE_MK_APP_KEY_CHOOSE=esc` makes the opened key that, as a click
 ///   would; `ONE_MK_APP_BUTTON=4` opens a mouse button; `ONE_MK_APP_KEY_TEST=
 ///   58d0,58u85` types into the test box (code, down/up, ms).
+/// - `ONE_MK_APP_COMPUTERS_MENU=1` opens the Desk's Choose computer menu
+///   (5 computers or more);
 /// - `ONE_MK_APP_BROADCAST=1` turns broadcast on (or off), as the Desk's
 ///   switch does.
 /// - `ONE_MK_APP_THEME=light|dark|system` paints with that theme whatever
