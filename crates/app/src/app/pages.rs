@@ -200,7 +200,7 @@ impl App {
         }
     }
 
-    fn recheck(&mut self) {
+    pub(super) fn recheck(&mut self) {
         self.busy.push(Job::Doctor);
         self.link.doctor();
     }

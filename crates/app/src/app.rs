@@ -305,6 +305,9 @@ pub struct App {
     /// A fix just copied (its row), and when, to say so.
     copied: Option<(usize, f64)>,
     pending_lock: Option<(bool, f64)>,
+    /// What the last checks were made against: running, and which computers
+    /// were online (a change runs them again).
+    health_basis: Option<(bool, Vec<String>)>,
     /// Settings → Appearance as chosen here, kept until `settings.toml`
     /// says the same (or for the whole session if it can't be saved).
     appearance_choice: crate::style::AppearanceChoice,
@@ -524,6 +527,7 @@ impl App {
             doctor: None,
             copied: None,
             pending_lock: None,
+            health_basis: None,
             appearance_choice: Default::default(),
             pending_broadcast: None,
             keys: keys::KeysUi::new(),
@@ -660,6 +664,21 @@ impl App {
                     let online: Vec<String> = self.running().map_or(vec![], |s| s.peers.iter().filter(|p| p.online).map(|p| p.id.clone()).collect());
                     self.latency.retain(|id| online.contains(id));
                     self.failed_measure.retain(|id| online.contains(id));
+                    // oneMK started or stopped, or a computer came or went:
+                    // checks made before say nothing now, so they run again
+                    // (Health and the top bar's "check Health" tell the truth).
+                    let mut basis = online;
+                    basis.sort();
+                    let basis = (self.running().is_some(), basis);
+                    // (While a check runs, the change waits for the next status.)
+                    if self.health_basis.as_ref() != Some(&basis) {
+                        if self.doctor.is_none() || self.health_basis.is_none() {
+                            self.health_basis = Some(basis);
+                        } else if !self.busy.contains(&Job::Doctor) {
+                            self.recheck();
+                            self.health_basis = Some(basis);
+                        }
+                    }
                     self.sync_scene();
                 }
                 // At the moment it was taken, not the frame that got to it.
