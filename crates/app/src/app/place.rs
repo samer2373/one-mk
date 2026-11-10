@@ -375,10 +375,12 @@ impl App {
         }
         if let Some((verb, n)) = act {
             if verb == "delete" {
-                self.profile_open = None;
+                // Deleting can't be undone: the sheet asks first (sheet_act does it).
+                self.deleting_profile = Some((n, self.now));
+            } else {
+                self.busy.push(Job::Profile { verb, name: n.clone() });
+                self.link.profile(verb, &n);
             }
-            self.busy.push(Job::Profile { verb, name: n.clone() });
-            self.link.profile(verb, &n);
         }
         if let Some((n, ssid)) = auto {
             self.busy.push(Job::ProfileAuto { name: n.clone(), ssid: ssid.clone() });

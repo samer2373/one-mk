@@ -11,7 +11,7 @@ mod pages;
 mod place;
 mod shell;
 mod desk_cards;
-mod typing;
+mod settings_page;
 mod updates;
 mod settings_controls;
 mod palette;
@@ -138,6 +138,8 @@ enum Act {
     Retry,
     Send(String),
     Forget(String, String),
+    /// Delete this saved layout (after the sheet asked).
+    DeleteProfile(String),
 }
 
 /// Everything the sheet shows, so it can be drawn again while it leaves.
@@ -155,6 +157,9 @@ struct SheetView {
     appear: f64,
     /// Changes when the step changes, to move focus into it again.
     key: String,
+    /// A confirmation: centred in the window over a dimmed ground (the
+    /// scrim), where the pairing sheet sits low to leave the desk its room.
+    modal: bool,
 }
 
 struct Toast {
@@ -253,6 +258,13 @@ pub struct App {
     pending_drop: Option<(Vec<PathBuf>, f64)>,
     /// A computer (id, name) the sheet is asking whether to remove, and since when.
     removing: Option<(String, String, f64)>,
+    /// A saved layout the sheet is asking whether to delete, and since when.
+    deleting_profile: Option<(String, f64)>,
+    /// Settings: the category showing, and the row the palette took us to.
+    settings_cat: settings_page::Cat,
+    settings_jump: Option<settings_page::Jump>,
+    /// Health: the list of passed checks is open.
+    health_passed_open: bool,
     /// The sheet as last drawn, and when it started to leave.
     sheet_was: Option<(SheetView, f64)>,
     sheet_top: Option<f32>,
@@ -528,6 +540,10 @@ impl App {
             pairing: None,
             pending_drop: None,
             removing: None,
+            deleting_profile: None,
+            settings_cat: settings_page::Cat::General,
+            settings_jump: None,
+            health_passed_open: false,
             sheet_was: None,
             sheet_top: None,
             sheet_key: String::new(),
@@ -1157,7 +1173,7 @@ impl App {
     }
 
     fn sheet_open(&self) -> bool {
-        self.pairing.is_some() || self.pending_drop.is_some() || self.removing.is_some()
+        self.pairing.is_some() || self.pending_drop.is_some() || self.removing.is_some() || self.deleting_profile.is_some()
     }
 }
 
@@ -1593,6 +1609,8 @@ impl App {
         let name = TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1).to_owned();
         let sub = match (self.tab, self.status.as_ref()) {
             (_, None) => String::new(),
+            (Tab::Settings, _) => "Changes save right away.".to_owned(),
+            (Tab::Health, Some(Some(_))) => self.health_sub(),
             (_, Some(None)) => "oneMK is off".to_owned(),
             (Tab::Desk | Tab::Arrange, Some(Some(s))) => match s.peers.len() {
                 0 => "nothing paired yet".to_owned(),
@@ -2002,6 +2020,7 @@ impl App {
                 focus: 1,
                 appear: *at,
                 key: "drop".into(),
+                modal: false,
             });
         }
         if let Some((id, name, at)) = &self.removing {
@@ -2014,6 +2033,22 @@ impl App {
                 focus: 0,
                 appear: *at,
                 key: "remove".into(),
+                modal: false,
+            });
+        }
+        if let Some((name, at)) = &self.deleting_profile {
+            // Deleting a saved layout can't be undone: ask first. Cancel is
+            // where the keyboard starts, never the button that deletes.
+            return Some(SheetView {
+                title: format!("Delete the layout “{name}”?"),
+                sub: "It is removed from your saved layouts. The computers on the desk stay as they are now.".into(),
+                code: None,
+                check: None,
+                buttons: vec![("Cancel".into(), Look::Quiet, Act::Close), ("Delete".into(), Look::Primary, Act::DeleteProfile(name.clone()))],
+                focus: 0,
+                appear: *at,
+                key: "delete-profile".into(),
+                modal: true,
             });
         }
         let pair = self.pairing.as_ref()?;
@@ -2071,7 +2106,7 @@ impl App {
         };
         let check = matches!(pair.step, Step::Paired { .. }).then_some(pair.since);
         let key = format!("{:?}", std::mem::discriminant(&pair.step));
-        Some(SheetView { title, sub, code, check, buttons, focus, appear: pair.opened + motion::space(0.4) as f64, key })
+        Some(SheetView { title, sub, code, check, buttons, focus, appear: pair.opened + motion::space(0.4) as f64, key, modal: false })
     }
 
     fn sheet(&mut self, ui: &mut Ui, desk: Rect, now: f64) {
@@ -2098,10 +2133,14 @@ impl App {
         if leaving.is_none() && self.keys_on_sheet(ui) {
             return;
         }
-        let widest = view.buttons.iter().map(|(label, _, _)| button_width(ui, label) + 36.0).fold(440.0f32, f32::max);
+        // A confirmation breathes more (24); the pairing sheet keeps its 18.
+        let pad = if view.modal { 24.0 } else { 18.0 };
+        let widest = view.buttons.iter().map(|(label, _, _)| button_width(ui, label) + 2.0 * pad).fold(440.0f32, f32::max);
+        // A confirmation is centred in the whole window; the others sit in the page.
+        let desk = if view.modal { ui.ctx().content_rect() } else { desk };
         let width = widest.min(desk.width() - 40.0);
-        let x = desk.center().x - width / 2.0 + 18.0;
-        let inner = width - 36.0;
+        let x = desk.center().x - width / 2.0 + pad;
+        let inner = width - 2.0 * pad;
         let sub_g = {
             let mut job = egui::text::LayoutJob::simple(view.sub.clone(), regular(T_BODY), pal().ink2, inner);
             job.sections[0].format.line_height = Some((T_BODY * LEADING).round());
@@ -2123,8 +2162,12 @@ impl App {
         let title_g = ui.painter().layout(view.title.clone(), semibold(T_TITLE), pal().ink, inner - if view.check.is_some() { 26.0 } else { 0.0 });
         let title_h = title_g.size().y.max(22.0);
         let alternatives = leaving.is_none() && self.pairing.as_ref().is_some_and(|pair| matches!(pair.step, Step::Searching { .. } | Step::Hint));
-        let height = 18.0 + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { 18.0 + btn_h } else { 0.0 } + 18.0 + if alternatives { 212.0 } else { 0.0 };
-        let rect = Rect::from_min_size(pos2(x - 18.0, desk.bottom() - height - 20.0), vec2(width, height));
+        let height = pad + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { pad + btn_h } else { 0.0 } + pad + if alternatives { 212.0 } else { 0.0 };
+        let rect = if view.modal {
+            Rect::from_center_size(desk.center(), vec2(width, height))
+        } else {
+            Rect::from_min_size(pos2(x - pad, desk.bottom() - height - 20.0), vec2(width, height))
+        };
         self.sheet_top = Some(rect.top());
 
         // In: rises 16 points and grows from 98%; out: fades and drops 8.
@@ -2142,6 +2185,16 @@ impl App {
         if o < 1.0 || dy > 0.0 {
             ui.ctx().request_repaint();
         }
+        // A confirmation dims the window behind it (light: black 20 %, dark:
+        // 50 %) and catches the clicks there: one is a "no".
+        let mut scrim_clicked = false;
+        if view.modal {
+            let full = ui.ctx().content_rect();
+            let scrim = egui::LayerId::new(egui::Order::Foreground, Id::unique("sheet-scrim"));
+            let dim = ui.new_child(UiBuilder::new().layer_id(scrim).max_rect(full));
+            dim.painter().rect_filled(full, 0.0, crate::style::scrim().gamma_multiply(o));
+            scrim_clicked = leaving.is_none() && dim.interact(full, Id::unique("sheet-scrim-hit"), Sense::click()).clicked();
+        }
         let layer = egui::LayerId::new(egui::Order::Foreground, Id::unique("sheet-layer"));
         let c = rect.center();
         ui.ctx().set_transform_layer(layer, egui::emath::TSTransform::new(c.to_vec2() * (1.0 - s) + vec2(0.0, dy), s));
@@ -2153,10 +2206,13 @@ impl App {
         // The sheet is modal: what is behind it doesn't get its clicks.
         child.interact(rect, Id::unique("sheet-body"), Sense::CLICK | Sense::DRAG);
         let p = child.painter().clone();
-        p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: pal().shadow(115) }.as_shape(rect, CornerRadius::same(R_PANEL)));
-        p.rect(rect, CornerRadius::same(R_PANEL), pal().surface, Stroke::new(1.0, pal().line2), StrokeKind::Inside);
-        p.hline(rect.x_range().shrink(f32::from(R_PANEL)), rect.top() + 1.0, Stroke::new(1.0, pal().glass_edge));
-        let mut y = rect.top() + 18.0;
+        let radius = if view.modal { 16 } else { R_PANEL };
+        p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: pal().shadow(115) }.as_shape(rect, CornerRadius::same(radius)));
+        p.rect(rect, CornerRadius::same(radius), pal().surface, Stroke::new(1.0, pal().line2), StrokeKind::Inside);
+        if !view.modal {
+            p.hline(rect.x_range().shrink(f32::from(R_PANEL)), rect.top() + 1.0, Stroke::new(1.0, pal().glass_edge));
+        }
+        let mut y = rect.top() + pad;
         let mut tx = x;
         if let Some(t0) = view.check {
             // A tick drawn in, then it holds.
@@ -2194,9 +2250,9 @@ impl App {
         if view.buttons.is_empty() {
             return;
         }
-        y += 18.0;
+        y += pad;
         let mut clicked = None;
-        let mut bx = rect.right() - 18.0 - widths.iter().sum::<f32>() - 8.0 * widths.len().saturating_sub(1) as f32;
+        let mut bx = rect.right() - pad - widths.iter().sum::<f32>() - 8.0 * widths.len().saturating_sub(1) as f32;
         for (k, ((label, look, act), w)) in view.buttons.iter().zip(&widths).enumerate() {
             let r = if row {
                 let r = Rect::from_min_size(pos2(bx, y), vec2(*w, 34.0));
@@ -2219,6 +2275,9 @@ impl App {
             if resp.clicked() {
                 clicked = Some(act.clone());
             }
+        }
+        if scrim_clicked && clicked.is_none() {
+            clicked = Some(Act::Close);
         }
         if let Some(act) = clicked {
             self.sheet_act(act, now);
@@ -2247,6 +2306,13 @@ impl App {
                 self.pairing = None;
                 self.pending_drop = None;
                 self.removing = None;
+                self.deleting_profile = None;
+            }
+            Act::DeleteProfile(name) => {
+                self.deleting_profile = None;
+                self.profile_open = None;
+                self.busy.push(Job::Profile { verb: "delete", name: name.clone() });
+                self.link.profile("delete", &name);
             }
             Act::Forget(id, name) => {
                 self.removing = None;
@@ -2630,6 +2696,7 @@ impl eframe::App for App {
         {
             debug::tab_press(_ctx, raw_input);
             debug::point_at(_ctx, raw_input);
+            debug::press_enter(_ctx, raw_input);
         }
         // Nothing here is under a pointer that has gone elsewhere: no
         // tooltip or highlight is left standing over the window.
@@ -2722,6 +2789,25 @@ mod debug {
             && let Ok(status) = serde_json::from_str(&status)
         {
             app.update_ui.status = Some(status);
+        }
+        // ONE_MK_APP_SETTINGS=edges|power|games|shortcuts|commands|typing|pointer|general:
+        // Settings opens on that category. ONE_MK_APP_HEALTH_PASSED=1: the
+        // passed checks of Health are open. ONE_MK_APP_DELETE_PROFILE=name:
+        // the sheet that asks whether to delete that layout is up.
+        if let Some(slug) = var("ONE_MK_APP_SETTINGS")
+            && once(&ctx, "settings-cat")
+            && let Some(cat) = settings_page::Cat::from_slug(&slug)
+        {
+            app.settings_cat = cat;
+        }
+        if var("ONE_MK_APP_HEALTH_PASSED").is_some() && once(&ctx, "health-passed") {
+            app.health_passed_open = true;
+        }
+        if let Some(name) = var("ONE_MK_APP_DELETE_PROFILE")
+            && now > 0.5
+            && once(&ctx, "delete-profile")
+        {
+            app.deleting_profile = Some((name, now));
         }
         // ONE_MK_APP_MINIMIZE=1: minimised two seconds in (idle measurements).
         if var("ONE_MK_APP_MINIMIZE").is_some() && now > 2.0 && once(&ctx, "minimize") {
@@ -2955,6 +3041,16 @@ mod debug {
         ctx.data_mut(|d| d.insert_temp(id, (done + 1, now)));
     }
 
+    /// `ONE_MK_APP_PALETTE_ENTER=secs`: that many seconds in, presses Return
+    /// once (a real key event): with `ONE_MK_APP_PALETTE=query` it chooses
+    /// the first result, as the person would.
+    pub fn press_enter(ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(at) = var("ONE_MK_APP_PALETTE_ENTER").and_then(|v| v.parse::<f64>().ok()) else { return };
+        if raw.time.unwrap_or(0.0) >= at && once(ctx, "palette-enter") {
+            raw.events.push(egui::Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        }
+    }
+
     /// `ONE_MK_APP_POINT_AT=<control name>` (with `ONE_MK_APP_TARGETS`):
     /// from 1.5 s the pointer rests on that control (hover);
     /// `ONE_MK_APP_PRESS=1` also holds the button down on it (pressed).
@@ -2974,6 +3070,12 @@ mod debug {
         if var("ONE_MK_APP_PRESS").is_some() && !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) && raw.time.unwrap_or(0.0) > 1.8 {
             raw.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
             ctx.data_mut(|d| d.insert_temp(id, true));
+        }
+        // `ONE_MK_APP_PRESS=click`: let go 0.3 s later, a whole click.
+        let released = Id::unique("point-at-released");
+        if var("ONE_MK_APP_PRESS").is_some_and(|v| v == "click") && raw.time.unwrap_or(0.0) > 2.1 && !ctx.data(|d| d.get_temp::<bool>(released).unwrap_or(false)) {
+            raw.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            ctx.data_mut(|d| d.insert_temp(released, true));
         }
     }
 
