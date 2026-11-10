@@ -27,11 +27,7 @@ def brand(*p):
 
 
 app = os.path.join(ROOT, "crates", "app", "assets")
-# The sidebar lockup, at 2x of its 26 px display height.
-lock = brand("logo", "png", "onemk-lockup-horizontal-reversed.png")
-h = 52
-write(lock.resize((round(lock.width * h / lock.height), h), Image.LANCZOS), os.path.join(app, "lockup.rgba"))
-# The window icon.
+# The window icon. (The top bar's logo is drawn, not loaded: icons::symbol.)
 write(brand("app-icon", "windows-linux", "hicolor", "256x256", "apps", os.listdir(os.path.join(BRAND, "app-icon", "windows-linux", "hicolor", "256x256", "apps"))[0]), os.path.join(app, "icon-256.rgba"))
 
 tray = os.path.join(ROOT, "crates", "tray", "assets")

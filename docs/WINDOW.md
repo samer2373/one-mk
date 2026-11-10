@@ -3,21 +3,22 @@
 `one-mk-app` is the window: your computers standing on a 3D desk, as they are arranged.
 Open it from the apps menu, from the tray ("Open oneMK…", or a left click on Linux), or by
 running `one-mk-app`. It is optional: it only talks to the running `one-mk`, so closing it
-changes nothing (closing the window does **not** stop sharing; `one-mk stop` or the
-**Stop** control does), and it costs nothing when it is not open. It must sit in the same
+changes nothing (closing the window does **not** stop sharing; `one-mk stop`, **Stop** in
+Settings, the palette or the tray does), and it costs nothing when it is not open. It must sit in the same
 folder as `one-mk`. The first time it opens it sets oneMK up (starts at login, adds the file
 manager's "Send to" entries) and says so.
 
 Every change goes through the same `one-mk` commands you would type, so the command line and
 the window always agree. `Ctrl+K` (Cmd+K on a Mac) opens a command palette that goes to any
-page or runs any action; `Ctrl+1` Desk, `Ctrl+2` Wallpaper, `Ctrl+3` Clipboard & files, `Ctrl+4` Keys & mouse, `Ctrl+5` Health
-and `Ctrl+,` Settings jump to pages (the sidebar shows each page's key). The window respects the system's reduced-motion setting.
+page or runs any action; `Ctrl+1` Desk, `Ctrl+2` Arrange, `Ctrl+3` Wallpaper, `Ctrl+4` Clipboard & files, `Ctrl+5` Keys &
+mouse, `Ctrl+6` Health and `Ctrl+7` (or `Ctrl+,`) Settings jump to pages, in the order of the top bar's tabs (each tab's
+tooltip shows its key). The window respects the system's reduced-motion setting.
 
 ![The Desk: two computers on a 3D desk, with the connection graph](screens/desk.png)
 
 ## Desk
 
-Two views, **Computers** and **Arrange**.
+The **Desk** tab (your computers) and the **Arrange** tab.
 
 - **Computers.** Drag a computer to the side it is really on (right-click it for above or
   below); the change applies at once, on both computers. Click one to measure the connection
