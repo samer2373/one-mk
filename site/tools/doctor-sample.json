@@ -1,0 +1,14 @@
+{"checks":[
+{"id":"daemon","title":"Program","status":"pass","detail":"one-mk is running on Studio PC (listening on UDP 24900).","visible":true},
+{"id":"config","title":"Settings","status":"pass","detail":"Found at ~/.config/one-mk.","visible":true},
+{"id":"identity","title":"Identity","status":"pass","detail":"This computer has its identity (key and certificate).","visible":true},
+{"id":"pairing","title":"Paired computers","status":"pass","detail":"Paired with 2 computers.","visible":true},
+{"id":"port","title":"Port","status":"pass","detail":"UDP port 24900 is open, held by one-mk itself.","visible":true},
+{"id":"mdns","title":"Discovery","status":"pass","detail":"Discovery works: this computer's own announcement came back over the network.","visible":true},
+{"id":"firewall","title":"Firewall","status":"pass","detail":"The firewall allows UDP 24900 and mDNS.","visible":true},
+{"id":"input","title":"Permissions","status":"pass","detail":"The desktop offers the needed portals and you already allowed one-mk.","visible":true},
+{"id":"hotkeys","title":"Keyboard shortcuts","status":"pass","detail":"The desktop offers global shortcuts (the GlobalShortcuts portal).","visible":true},
+{"id":"link","title":"Connection","status":"pass","detail":"Answers come back fast: MacBook Air 3 ms, Gaming PC 3 ms.","visible":true},
+{"id":"updates","title":"Updates","status":"pass","detail":"oneMK 1.0.0 is the latest release.","visible":true},
+{"id":"drag","title":"File edge drops","status":"skip","detail":"Not available on Wayland: send files with Send to or one-mk send.","visible":true}
+]}
