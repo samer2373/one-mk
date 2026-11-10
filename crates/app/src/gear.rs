@@ -287,17 +287,30 @@ impl Orbit {
     }
 }
 
-/// Light: the screens behind the desk (cool, from above and behind), a
-/// warm lamp in front and to the right, and a little bounce from the desk.
+/// Light: a cool key light from above and behind (the screens), a soft
+/// warm-white fill in front and to the right, a little bounce from the
+/// desk, and a cool rim where a surface turns away. How strong each is
+/// comes from the theme (`gear_*`): the pale light-theme objects take a
+/// gentler key and more ambient, so they read as ceramic, not chalk.
 struct Lighting {
     eye: P3,
     rim: f32,
+    ambient: f32,
+    key: f32,
+    fill: f32,
+}
+
+impl Lighting {
+    fn new(eye: P3, rim: f32) -> Lighting {
+        let p = pal();
+        Lighting { eye, rim: rim * p.gear_rim, ambient: p.gear_ambient, key: p.gear_key, fill: p.gear_fill }
+    }
 }
 
 const KEY_DIR: P3 = p3(-0.22, 0.86, -0.46);
-const KEY_COL: [f32; 3] = [0.78, 0.86, 1.0];
+const KEY_COL: [f32; 3] = [0.86, 0.92, 1.0];
 const LAMP_DIR: P3 = p3(0.62, 0.52, 0.58);
-const LAMP_COL: [f32; 3] = [1.0, 0.74, 0.46];
+const LAMP_COL: [f32; 3] = [1.0, 0.95, 0.89];
 
 /// A surface: its colour, how glossy it is and how strong the highlight.
 #[derive(Clone, Copy, Debug)]
@@ -317,11 +330,11 @@ impl Lighting {
         let v = (self.eye - p).norm();
         let mut out = [0.0f32; 3];
         let alb = [a.r(), a.g(), a.b()];
-        let amb = 0.09 + 0.05 * n.y.max(0.0);
+        let amb = self.ambient + 0.05 * n.y.max(0.0);
         for (i, o) in out.iter_mut().enumerate() {
             *o = alb[i] * amb;
         }
-        for (dir, col, k) in [(KEY_DIR.norm(), KEY_COL, 1.05), (LAMP_DIR.norm(), LAMP_COL, 0.42)] {
+        for (dir, col, k) in [(KEY_DIR.norm(), KEY_COL, self.key), (LAMP_DIR.norm(), LAMP_COL, self.fill)] {
             let lam = n.dot(dir).max(0.0);
             let h = (dir + v).norm();
             let sp = n.dot(h).max(0.0).powf(f.gloss) * f.spec * if lam > 0.0 { 1.0 } else { 0.0 };
@@ -436,7 +449,7 @@ pub const U: f32 = 19.05;
 
 /// A key to draw: where it is in key units (y down the board), its legend,
 /// what it does now when that differs, and whether it is a modifier
-/// (drawn in the warmer grey).
+/// (drawn in the theme's modifier colour).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cap {
     pub x: f32,
@@ -448,9 +461,18 @@ pub struct Cap {
     pub modifier: bool,
 }
 
-const CASE: Finish = Finish { albedo: crate::style::KEY_CASE, gloss: 40.0, spec: 0.22 };
-const CAP: Finish = Finish { albedo: crate::style::KEY_CAP, gloss: 18.0, spec: 0.08 };
-const CAP_MOD: Finish = Finish { albedo: crate::style::KEY_CAP_MOD, gloss: 18.0, spec: 0.08 };
+/// The case: bead-blasted aluminium, its edges catching the light (a
+/// tight sheen); its top plate matte, so the dark theme's reads obsidian,
+/// not a grey glare; the caps: PBT with a satin top.
+fn case() -> Finish {
+    Finish { albedo: pal().key_case, gloss: 40.0, spec: 0.18 }
+}
+fn plate() -> Finish {
+    Finish { albedo: pal().key_plate, gloss: 30.0, spec: 0.05 }
+}
+fn cap_finish(modifier: bool) -> Finish {
+    Finish { albedo: if modifier { pal().key_cap_mod } else { pal().key_cap }, gloss: 22.0, spec: 0.05 }
+}
 
 /// A legend to print on a key: where, how big, which colour, and whether
 /// it is the key's new job (printed on its front, in cobalt).
@@ -530,8 +552,8 @@ pub struct Keyboard {
     flat: bool,
     returning: bool,
     built_for: (Rect, Vec<Cap>, View, Option<usize>),
-    /// The floor it was built on: a new theme builds it again.
-    floor: Color32,
+    /// The palette it was built with: a new theme builds it again.
+    palette: crate::style::Palette,
     /// Where the camera is headed, and whether it was still moving when this
     /// was built.
     target: Cam,
@@ -563,7 +585,7 @@ impl Keyboard {
             }
         }
         let target = Self::aim(rect, caps, View::default(), None);
-        *slot = Some(Keyboard { #[cfg(test)] case_bounds: rect, flat: true, returning: false, built_for: (rect, caps.to_vec(), View::default(), None), floor: pal().floor, target, moving: false, mesh: Arc::new(Mesh::default()), tops, legends });
+        *slot = Some(Keyboard { #[cfg(test)] case_bounds: rect, flat: true, returning: false, built_for: (rect, caps.to_vec(), View::default(), None), palette: pal(), target, moving: false, mesh: Arc::new(Mesh::default()), tops, legends });
     }
 
     /// The keyboard for `caps` filling `rect`, turned by `view`, and zoomed
@@ -571,7 +593,7 @@ impl Keyboard {
     /// nothing changed, else built anew. The camera eases there by `glide`;
     /// true while it is still moving, so the caller keeps drawing.
     pub fn get(slot: &mut Option<Keyboard>, rect: Rect, caps: &[Cap], view: View, focus: Option<usize>, glide: &mut Glide, dt: f32) -> bool {
-        let same = slot.as_ref().filter(|k| !k.flat && k.built_for.0 == rect && k.built_for.1 == caps && k.built_for.2 == view && k.built_for.3 == focus && k.floor == pal().floor);
+        let same = slot.as_ref().filter(|k| !k.flat && k.built_for.0 == rect && k.built_for.1 == caps && k.built_for.2 == view && k.built_for.3 == focus && k.palette == pal());
         let mut step = None;
         if let Some(k) = same {
             let s = glide.step(k.target, dt, false);
@@ -640,21 +662,24 @@ impl Keyboard {
         let (w, d) = (cols * U, rows * U);
         let margin = 9.0;
         let (x0, z0) = (-w / 2.0, -d / 2.0);
-        let lit = Lighting { eye: cam.eye, rim: 0.12 };
+        let lit = Lighting::new(cam.eye, 0.12);
         let mut m = Mesh::default();
-        // The floor under it is the page's (a soft ellipse of the theme's
-        // `floor`, drawn by the page); the board brings only its shadow.
+        // The ground under it is the page's (a soft pool of light, drawn by
+        // the page); the board brings its shadow: a broad soft one, and a
+        // tight dark line where the case meets the ground.
         let (hw, hd) = (w / 2.0 + margin, d / 2.0 + margin);
-        let shadow = rring(0.0, 6.0, hw + 6.0, hd + 6.0, 14.0, -15.9);
-        soft_blob(&mut m, &cam, &shadow, p3(0.0, -15.9, 6.0), 16.0, 150);
+        let broad = rring(0.0, 4.0, hw + 2.0, hd + 2.0, 14.0, -15.9);
+        soft_blob(&mut m, &cam, &broad, p3(0.0, -15.9, 4.0), 18.0, pal().occlusion);
+        let tight = rring(0.0, 1.0, hw - 0.5, hd - 0.5, 10.0, -15.9);
+        soft_blob(&mut m, &cam, &tight, p3(0.0, -15.9, 1.0), 4.5, pal().contact);
         // The case: a low slab with rounded corners and a bevelled top edge.
         let mut t = Tris::default();
         let bottom = rring(0.0, 0.0, hw - 1.5, hd - 1.5, 9.0, -16.0);
         let side_top = rring(0.0, 0.0, hw, hd, 10.0, -2.0);
         let top = rring(0.0, 0.0, hw - 2.0, hd - 2.0, 8.0, 0.0);
-        walls(&mut t, &cam, &lit, CASE, &bottom, &side_top, p3(0.0, 0.0, 0.0));
-        walls(&mut t, &cam, &lit, CASE, &side_top, &top, p3(0.0, 0.0, 0.0));
-        fan(&mut t, &cam, &lit, Finish { albedo: crate::style::KEY_PLATE, ..CASE }, &top, p3(0.0, 0.0, 0.0), p3(0.0, 1.0, 0.0));
+        walls(&mut t, &cam, &lit, case(), &bottom, &side_top, p3(0.0, 0.0, 0.0));
+        walls(&mut t, &cam, &lit, case(), &side_top, &top, p3(0.0, 0.0, 0.0));
+        fan(&mut t, &cam, &lit, plate(), &top, p3(0.0, 0.0, 0.0), p3(0.0, 1.0, 0.0));
         t.into_mesh(&mut m);
         // Keys, back to front, each with its legend on top.
         let mut order: Vec<usize> = (0..caps.len()).collect();
@@ -666,7 +691,7 @@ impl Keyboard {
             let k = &caps[i];
             let cx = x0 + (k.x + k.w / 2.0) * U;
             let cz = z0 + (k.y + k.h / 2.0) * U;
-            let finish = if k.modifier { CAP_MOD } else { CAP };
+            let finish = cap_finish(k.modifier);
             let row = (k.y.max(0.0) as usize).min(4) as f32;
             let top = cap(&mut keys, &cam, &lit, finish, cx, cz, k.w * U, k.h * U, 1.0, 7.6 - row * 0.25);
             tops[i] = top.iter().map(|p| cam.pt(*p)).collect();
@@ -685,7 +710,7 @@ impl Keyboard {
             legends.push(Legend { at, size, text: k.label.clone(), to: k.to.is_some(), modifier: k.modifier, max_w });
         }
         keys.into_mesh(&mut m);
-        Keyboard { #[cfg(test)] case_bounds: Rect::from_points(&Self::case_corners(caps).iter().map(|point| cam.pt(*point)).collect::<Vec<_>>()), flat: false, returning: false, built_for: (rect, caps.to_vec(), view, focus), floor: pal().floor, target, moving, mesh: Arc::new(m), tops, legends }
+        Keyboard { #[cfg(test)] case_bounds: Rect::from_points(&Self::case_corners(caps).iter().map(|point| cam.pt(*point)).collect::<Vec<_>>()), flat: false, returning: false, built_for: (rect, caps.to_vec(), view, focus), palette: pal(), target, moving, mesh: Arc::new(m), tops, legends }
     }
 
     /// Draws the kept mesh, then what changes from frame to frame: the
@@ -707,17 +732,18 @@ impl Keyboard {
             fill(i, crate::style::black(90));
         }
         if let Some(i) = hovered.filter(|i| Some(*i) != chosen) {
-            fill(i, crate::style::white(18));
+            fill(i, pal().key_hover);
         }
         for l in self.legends.iter().filter(|legend| !legend.text.is_empty()) {
-            // On the dark caps the legends are light, in both themes; drawn
-            // flat (on the theme's own key fill), they take the theme's ink.
+            // The legends are printed for the theme's caps (graphite on the
+            // pale ones, light on the dark ones); drawn flat (on the theme's
+            // own key fill), they take the theme's ink.
             let col = match (self.flat, l.to, l.modifier) {
                 (true, true, _) => pal().accent_text,
                 (true, false, _) => pal().ink,
-                (false, true, _) => crate::style::KEY_LEGEND_CHANGED,
-                (false, false, true) => crate::style::KEY_LEGEND_MOD,
-                (false, false, false) => crate::style::KEY_LEGEND,
+                (false, true, _) => pal().key_legend_changed,
+                (false, false, true) => pal().key_legend_mod,
+                (false, false, false) => pal().key_legend,
             };
             let base_font = |size| font(size, l.to);
             let (text, chosen_font) = if self.flat {
@@ -852,13 +878,14 @@ fn fan(t: &mut Tris, cam: &Cam, lit: &Lighting, f: Finish, ring: &[P3], c: P3, n
     }
 }
 
-/// The desk under an object: walnut where the light falls, the room beyond.
+/// The ground under an object: a soft pool of light where the lamp falls,
+/// fading to the page's own ground.
 fn desk(m: &mut Mesh, cam: &Cam, c: P3, rx: f32, rz: f32) {
     const NX: usize = 24;
     const NZ: usize = 16;
     let base = m.vertices.len() as u32;
-    // Lit wood fading to nothing, so it sits on whatever is behind.
-    let shade = |k: f32| pal().floor.gamma_multiply(k);
+    // Lit ground fading to nothing, so it sits on whatever is behind.
+    let shade = |k: f32| pal().stage_pool.gamma_multiply(k);
     for j in 0..=NZ {
         for i in 0..=NX {
             let (u, w) = (i as f32 / NX as f32 * 2.0 - 1.0, j as f32 / NZ as f32 * 2.0 - 1.0);
@@ -887,10 +914,11 @@ fn fade_to_edges(m: &mut Mesh, from: usize, rect: Rect, feather: f32) {
     }
 }
 
-/// A soft shadow following an outline on the desk.
-fn soft_blob(m: &mut Mesh, cam: &Cam, ring: &[P3], c: P3, feather: f32, alpha: u8) {
+/// A soft shadow of `col` following an outline on the desk, fading out
+/// over `feather` millimetres (a little toward the viewer: the key light
+/// is behind).
+fn soft_blob(m: &mut Mesh, cam: &Cam, ring: &[P3], c: P3, feather: f32, col: Color32) {
     let b = m.vertices.len() as u32;
-    let col = pal().shadow(alpha);
     m.colored_vertex(cam.pt(c), col);
     let n = ring.len() as u32;
     for p in ring {
@@ -1015,10 +1043,22 @@ impl Model {
     }
 }
 
+/// The theme's material for a part of the mouse model: the shell, the two
+/// main buttons, the wheel, and the side buttons and grip.
+fn mouse_material(part: &str) -> Color32 {
+    let p = pal();
+    match part {
+        "left" | "right" => p.mouse_button,
+        "wheel" => p.mouse_wheel,
+        "Material.001" | "forward" | "back" => p.mouse_trim,
+        _ => p.mouse_shell,
+    }
+}
+
 /// A built model view: the lit mesh, and each part's outline and the
 /// point its label line goes to.
 pub struct ModelView {
-    built_for: (Rect, Rect, Option<String>, [u32; 3], Option<String>, Color32),
+    built_for: (Rect, Rect, Option<String>, [u32; 3], Option<String>, crate::style::Palette),
     /// Where the camera is headed, and whether it was still moving when this
     /// was built.
     target: Cam,
@@ -1049,7 +1089,7 @@ impl ModelView {
     /// one when nothing changed; true while the camera is still moving.
     #[allow(clippy::too_many_arguments)]
     pub fn get(slot: &mut Option<ModelView>, m: &Model, rect: Rect, room: Rect, yaw: f32, cam_yaw: f32, pitch: f32, chosen: Option<&str>, focus: Option<&str>, glide: &mut Glide, dt: f32) -> bool {
-        let key = (rect, room, chosen.map(str::to_owned), [yaw.to_bits(), cam_yaw.to_bits(), pitch.to_bits()], focus.map(str::to_owned), pal().floor);
+        let key = (rect, room, chosen.map(str::to_owned), [yaw.to_bits(), cam_yaw.to_bits(), pitch.to_bits()], focus.map(str::to_owned), pal());
         let same = slot.as_ref().filter(|v| v.built_for == key);
         let mut step = None;
         if let Some(v) = same {
@@ -1090,7 +1130,7 @@ impl ModelView {
             };
             (target, glide.step(target, dt, resized))
         });
-        let lit = Lighting { eye: cam.eye, rim: 0.26 };
+        let lit = Lighting::new(cam.eye, 0.26);
         let mut mesh = Mesh::default();
         desk(&mut mesh, &cam, p3(mid.x, 0.0, mid.z), (hi.x - lo.x) * 1.6, (hi.z - lo.z) * 1.0);
         fade_to_edges(&mut mesh, 0, room, 48.0);
@@ -1100,12 +1140,17 @@ impl ModelView {
                 p3(mid.x + a.cos() * (hi.x - lo.x) * 0.46, 0.0, mid.z + a.sin() * (hi.z - lo.z) * 0.46)
             })
             .collect();
-        soft_blob(&mut mesh, &cam, &foot, p3(mid.x, 0.0, mid.z), 14.0, 170);
+        soft_blob(&mut mesh, &cam, &foot, p3(mid.x, 0.0, mid.z), 22.0, pal().occlusion);
+        let contact: Vec<P3> = foot.iter().map(|p| p3(mid.x + (p.x - mid.x) * 0.84, 0.0, mid.z + (p.z - mid.z) * 0.84)).collect();
+        soft_blob(&mut mesh, &cam, &contact, p3(mid.x, 0.0, mid.z), 6.0, pal().contact);
         let mut t = Tris::default();
         let mut parts = Vec::with_capacity(m.parts.len());
         for part in &m.parts {
-            let f = Finish { albedo: crate::style::MOUSE_SHELL, gloss: part.gloss.max(2.0), spec: part.spec };
-            let tint = |c: Color32| if chosen == Some(part.name.as_str()) { lerp_col(c, pal().accent, 0.55) } else { c };
+            // The model's own colours are one per part: each takes the
+            // theme's material for what it is instead.
+            let own = mouse_material(&part.name);
+            let f = Finish { albedo: own, gloss: part.gloss.max(2.0), spec: part.spec };
+            let shown = if chosen == Some(part.name.as_str()) { lerp_col(own, pal().accent, 0.55) } else { own };
             // The buttons sit on the shell (named Material.…).
             t.bias = if part.name.starts_with("Material") { 0.0 } else { 0.6 };
             let mut tris = Vec::new();
@@ -1114,7 +1159,7 @@ impl ModelView {
                 let i = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
                 let v = i.map(|k| part.pos[k].yaw(yaw));
                 let n = i.map(|k| part.nrm[k].yaw(yaw));
-                t.add_coloured(&cam, &lit, f, v, n, i.map(|k| tint(part.col[k])));
+                t.add_coloured(&cam, &lit, f, v, n, [shown; 3]);
                 let c = (v[0] + v[1] + v[2]) * (1.0 / 3.0);
                 if (n[0] + n[1] + n[2]).dot(cam.eye - c) > 0.0 {
                     tris.push(v.map(|p| cam.pt(p)));
@@ -1139,7 +1184,7 @@ impl ModelView {
             for t in &h.tris {
                 let i = m.vertices.len() as u32;
                 for q in t {
-                    m.colored_vertex(*q, crate::style::white(22));
+                    m.colored_vertex(*q, pal().key_hover);
                 }
                 m.add_triangle(i, i + 1, i + 2);
             }
@@ -1159,6 +1204,36 @@ mod tests {
     use super::*;
 
     const MOUSE: &[u8] = include_bytes!("../assets/gear/mouse.omkm");
+
+    /// Legends keep 4.5:1 on their lit caps in both themes, from every
+    /// angle the board is seen from (the satin top's highlight included),
+    /// and a changed key's legend too.
+    #[test]
+    fn legends_read_on_their_lit_caps_in_both_themes() {
+        let contrast = |a: Color32, b: Color32| {
+            let l = |c: Color32| {
+                let f = |x: u8| { let v = f32::from(x) / 255.0; if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) } };
+                0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
+            };
+            let (x, y) = (l(a), l(b));
+            (x.max(y) + 0.05) / (x.min(y) + 0.05)
+        };
+        for palette in [crate::style::Palette::light(), crate::style::Palette::dark()] {
+            crate::style::set_palette(palette, None);
+            for (yaw, pitch) in [(-0.02, 1.32), (-0.72, 1.02), (0.68, 1.02), (-0.72, 1.62), (0.68, 1.62), (-0.02, 1.62), (-0.02, 1.02)] {
+                let eye = Cam::new(p3(0.0, 0.0, 0.0), yaw, pitch, 2000.0, 1.0, Pos2::ZERO).eye;
+                let lit = Lighting::new(eye, 0.12);
+                // The dish tilts the top a little either way.
+                for n in [p3(0.0, 1.0, 0.0), p3(0.0, 1.0, 0.08).norm(), p3(0.0, 1.0, -0.08).norm(), p3(0.05, 1.0, 0.0).norm()] {
+                    for (modifier, legend) in [(false, palette.key_legend), (true, palette.key_legend_mod), (false, palette.key_legend_changed), (true, palette.key_legend_changed)] {
+                        let top = lit.shade(cap_finish(modifier), p3(0.0, 7.6, 0.0), n);
+                        let c = contrast(legend, top);
+                        assert!(c >= 4.5, "{:?} at {yaw}/{pitch}: {legend:?} on {top:?}: {c:.2}:1", palette.theme);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn adaptive_legends_prefer_full_names_then_readable_short_names() {
