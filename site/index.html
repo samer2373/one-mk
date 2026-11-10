@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>oneMK: one mouse and keyboard for all your computers</title>
+<meta name="description" content="Free, open-source keyboard, mouse, clipboard and file sharing for Linux, macOS and Windows. Push the pointer off one screen and it lands on the next computer. Pair with a six-digit code; no server, no account.">
+<meta name="author" content="Bigfoot Technology">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F4F3F0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111214" media="(prefers-color-scheme: dark)">
+<link rel="canonical" href="https://samer2373.github.io/one-mk/">
+<link rel="icon" href="favicon.ico" sizes="48x48">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="oneMK">
+<meta property="og:title" content="oneMK: one mouse and keyboard for all your computers">
+<meta property="og:description" content="Push the pointer off one screen and it lands on the next computer, with your keyboard, clipboard and files. Free and open source for Linux, macOS and Windows.">
+<meta property="og:url" content="https://samer2373.github.io/one-mk/">
+<meta property="og:image" content="https://samer2373.github.io/one-mk/assets/img/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A 3D desk with a laptop and two monitors sharing one keyboard and mouse, and the oneMK name.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="oneMK: one mouse and keyboard for all your computers">
+<meta name="twitter:description" content="Free, open-source keyboard, mouse, clipboard and file sharing for Linux, macOS and Windows.">
+<meta name="twitter:image" content="https://samer2373.github.io/one-mk/assets/img/og.png">
+<script>
+/* The theme before first paint: a saved choice, else the system's. */
+(function(){var t;try{t=localStorage.getItem("omk-theme")}catch(e){}
+if(t!=="light"&&t!=="dark")t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";
+var d=document.documentElement;d.dataset.theme=t;d.classList.add("js");
+/* From disk, Chrome refuses font files (each file is its own origin): use inlined copies. */
+var h=document.head,l=function(a){var e=document.createElement("link");for(var k in a)e.setAttribute(k,a[k]);h.appendChild(e);};
+if(location.protocol==="file:")l({rel:"stylesheet",href:"css/fonts-file.css"});
+else{l({rel:"manifest",href:"site.webmanifest"});["Inter-SemiBold","Inter-Regular"].forEach(function(f){l({rel:"preload",href:"assets/fonts/"+f+".woff2",as:"font",type:"font/woff2",crossorigin:""});});}})();
+</script>
+<link rel="stylesheet" href="css/site.css">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"oneMK","applicationCategory":"UtilitiesApplication",
+"operatingSystem":"Linux, macOS, Windows","softwareVersion":"1.0.0","license":["https://opensource.org/license/mit","https://www.apache.org/licenses/LICENSE-2.0"],
+"description":"One mouse and keyboard for all your computers: push the pointer off the edge of one screen and it appears on the next computer, with your keyboard, clipboard and files following it.",
+"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},
+"downloadUrl":"https://github.com/samer2373/one-mk/releases/latest","codeRepository":"https://github.com/samer2373/one-mk",
+"image":"https://samer2373.github.io/one-mk/assets/img/og.png","url":"https://samer2373.github.io/one-mk/",
+"author":{"@type":"Organization","name":"Bigfoot Technology","url":"https://bigfootjo.com/","logo":"https://samer2373.github.io/one-mk/assets/brand/bigfoot/bigfoot-mark-512.png"},
+"publisher":{"@type":"Organization","name":"Bigfoot Technology","url":"https://bigfootjo.com/","logo":"https://samer2373.github.io/one-mk/assets/brand/bigfoot/bigfoot-mark-512.png"}}
+</script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="wm" viewBox="0 -79 428 105"><path fill="currentColor" d="M39.6 1.6Q28.6 1.6 20.4 -2.2Q12.2 -5.9 7.6 -12.8Q3 -19.6 3 -28.5Q3 -37.6 7.6 -44.4Q12.2 -51.2 20.4 -55Q28.6 -58.8 39.6 -58.8Q50.5 -58.8 58.8 -55Q67 -51.2 71.6 -44.4Q76.2 -37.6 76.2 -28.5Q76.2 -19.6 71.6 -12.8Q67 -5.9 58.8 -2.2Q50.5 1.6 39.6 1.6ZM39.6 -13.5Q44.6 -13.5 48.2 -15.3Q51.7 -17.1 53.6 -20.5Q55.5 -23.9 55.5 -28.5Q55.5 -33.3 53.6 -36.7Q51.7 -40 48.2 -41.8Q44.6 -43.6 39.6 -43.6Q34.6 -43.6 31 -41.8Q27.4 -40 25.5 -36.7Q23.6 -33.3 23.6 -28.6Q23.6 -23.9 25.5 -20.5Q27.4 -17.1 31 -15.3Q34.6 -13.5 39.6 -13.5ZM78.1 -57.1H98.6L102.3 -34.3V0H81.9V-37.4ZM123.3 -58.8Q131.5 -58.8 137.3 -55.5Q143.1 -52.2 146.2 -46.2Q149.2 -40.2 149.2 -32V0H128.8V-29Q128.8 -35.4 125.6 -38.8Q122.3 -42.2 116.2 -42.2Q112 -42.2 108.8 -40.4Q105.7 -38.6 104 -35.3Q102.3 -32 102.3 -27.5L96 -30.8Q97.2 -39.9 101.1 -46.2Q105 -52.4 110.7 -55.6Q116.4 -58.8 123.3 -58.8ZM189.2 1.6Q178.8 1.6 170.7 -2.2Q162.5 -6 157.8 -12.9Q153.1 -19.7 153.1 -28.8Q153.1 -37.7 157.6 -44.5Q162.1 -51.2 169.9 -55Q177.8 -58.8 187.7 -58.8Q198 -58.8 205.2 -54.4Q212.5 -49.9 216.4 -41.8Q220.4 -33.7 220.4 -22.7H169.6V-35H208.9L202.2 -30.7Q201.8 -35.1 200 -38.2Q198.2 -41.2 195.2 -42.8Q192.3 -44.4 188.2 -44.4Q183.7 -44.4 180.5 -42.6Q177.3 -40.8 175.5 -37.7Q173.7 -34.5 173.7 -30.3Q173.7 -24.9 176.1 -21.2Q178.6 -17.4 183.3 -15.4Q188.1 -13.4 195 -13.4Q201.3 -13.4 207.6 -15.1Q213.8 -16.7 218.9 -19.7V-6.7Q213 -2.7 205.4 -0.6Q197.9 1.6 189.2 1.6ZM336.1 -75V0H316.4V-67.6L320.8 -67.1L291.8 0H270.8L241.7 -66.9L246.2 -67.4V0H226.5V-75H258.5L285.4 -10.6H277.4L304.1 -75ZM346.1 0V-75H366.7V-16.5L361.2 -20.8L403.7 -75H425.6L364.8 0ZM381.9 -35.8 397.1 -48.4 426.6 0H403.1Z"/></symbol>
+  <symbol id="key" viewBox="0 0 64 64"><rect x="5" y="5" width="54" height="54" rx="15" fill="var(--logo-cap)"/><rect x="12" y="8" width="40" height="40" rx="11" fill="var(--logo-top)"/><path d="M24 17L24 39L29.2 34L32.6 42L36.4 40.4L33 32.6L40 32.6Z" fill="var(--logo-pointer)"/></symbol>
+  <symbol id="i-github" viewBox="0 0 24 24"><path fill="currentColor" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.4-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.5 1.5M17.2 17.2l1.5 1.5M5.3 18.7l1.5-1.5M17.2 6.8l1.5-1.5"/></g></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M20 14.6A8.2 8.2 0 0 1 9.4 4a8.3 8.3 0 1 0 10.6 10.6Z"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 4v12m-5-5 5 5 5-5M5 20h14"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></g></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 5v14M5 12h14"/></symbol>
+</svg>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="bar" data-bar>
+  <div class="bar__in wrap">
+    <a class="brand" href="#top" aria-label="oneMK, back to the top">
+      <svg class="brand__key" aria-hidden="true"><use href="#key"/></svg>
+      <svg class="brand__wm" aria-hidden="true"><use href="#wm"/></svg>
+    </a>
+    <a class="by bf-link" href="https://bigfootjo.com/" target="_blank" rel="noopener" aria-label="Bigfoot Technology (opens bigfootjo.com)"><img class="bf-tile" src="assets/brand/bigfoot/bigfoot-mark.svg" width="22" height="22" alt=""><span>by Bigfoot</span></a>
+    <nav class="bar__nav" aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#security">Security</a>
+      <a href="#platforms">Platforms</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="bar__end">
+      <a class="icon-btn" href="https://github.com/samer2373/one-mk" aria-label="oneMK on GitHub"><svg aria-hidden="true"><use href="#i-github"/></svg></a>
+      <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to dark theme"><svg class="t-light" aria-hidden="true"><use href="#i-moon"/></svg><svg class="t-dark" aria-hidden="true"><use href="#i-sun"/></svg></button>
+      <a class="btn btn--primary btn--sm" href="#install">Download</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<section class="hero" id="top" aria-labelledby="hero-title">
+  <div class="hero__copy wrap">
+    <h1 id="hero-title" class="hero__title"><span>One mouse. One keyboard.</span> <span>Every computer.</span></h1>
+    <p class="hero__lede">Push the pointer off the edge of one screen and it lands on the next computer. Your keyboard, clipboard and files follow it. Free and open source, for Linux, macOS and Windows.</p>
+    <div class="hero__actions">
+      <a class="btn btn--primary btn--lg" data-download href="https://github.com/samer2373/one-mk/releases/latest"><svg aria-hidden="true"><use href="#i-down"/></svg><span data-download-label>Download oneMK</span></a>
+      <a class="btn btn--ghost btn--lg" href="https://github.com/samer2373/one-mk"><svg aria-hidden="true"><use href="#i-github"/></svg>View on GitHub</a>
+    </div>
+    <p class="hero__meta"><span data-download-note>Version 1.0.0</span> · MIT or Apache-2.0 · <a href="#install">Other downloads</a></p>
+  </div>
+
+  <div class="stage" data-stage>
+    <div class="stage__frame">
+      <div class="stage__poster">
+        <img class="t-light" src="assets/img/poster-light.webp" srcset="assets/img/poster-light.webp 1600w, assets/img/poster-light@2x.webp 3200w" sizes="100vw" width="1600" height="760" alt="A desk with a MacBook Air, the Studio PC monitor and the Gaming PC monitor, with one keyboard and one mouse in front of them." loading="lazy" decoding="async">
+        <img class="t-dark" src="assets/img/poster-dark.webp" srcset="assets/img/poster-dark.webp 1600w, assets/img/poster-dark@2x.webp 3200w" sizes="100vw" width="1600" height="760" alt="A desk with a MacBook Air, the Studio PC monitor and the Gaming PC monitor, with one keyboard and one mouse in front of them." loading="lazy" decoding="async">
+      </div>
+      <canvas class="stage__canvas" data-desk aria-hidden="true"></canvas>
+      <ol class="stage__labels" data-labels aria-hidden="true"></ol>
+    </div>
+    <div class="stage__controls wrap" role="group" aria-label="Move the pointer to a computer">
+      <button type="button" class="chip" data-go="0" aria-pressed="false"><i class="dot"></i>MacBook Air</button>
+      <button type="button" class="chip" data-go="1" aria-pressed="true"><i class="dot"></i>Studio PC</button>
+      <button type="button" class="chip" data-go="2" aria-pressed="false"><i class="dot"></i>Gaming PC</button>
+      <p class="stage__hint" data-stage-hint>Move your mouse across the desk.</p>
+    </div>
+  </div>
+</section>
+
+<section class="facts" aria-label="At a glance">
+  <ul class="facts__track" data-marquee>
+    <li>Pair with a six-digit code</li>
+    <li>Mutual TLS 1.3 over QUIC</li>
+    <li>No server, no account</li>
+    <li>Text, rich text and images on the clipboard</li>
+    <li>Resumable file sending</li>
+    <li>Screen edges lined up to the pixel</li>
+    <li>Ed25519-signed updates</li>
+    <li>Light and dark</li>
+    <li>MIT or Apache-2.0</li>
+  </ul>
+</section>
+
+<section class="how" id="how" aria-labelledby="how-title">
+  <div class="wrap">
+    <h2 id="how-title" class="h2">Set up in about a minute.</h2>
+    <p class="lede">Install oneMK on each computer. The window walks you through the rest; the same steps work from a terminal.</p>
+  </div>
+  <div class="how__grid wrap">
+    <ol class="how__steps" data-steps>
+      <li class="step" data-step="0">
+        <h3>Pair with six digits</h3>
+        <p>Choose <b>Pair</b> on both computers. Each shows the same six-digit code; confirm it on both and they trust each other from then on. No IP addresses, no certificates to copy.</p>
+        <p class="step__cmd"><code>one-mk pair</code></p>
+        <div class="step__pic"><!--img crops/pair "The pairing sheet in oneMK showing the code 726 480 with the buttons They don’t match and Codes match, pair." sizes="(min-width: 1024px) 0px, 92vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/pair-light-800.avif 800w, assets/img/crops/pair-light-960.avif 960w" sizes="(min-width: 1024px) 0px, 92vw"><source type="image/webp" srcset="assets/img/crops/pair-light-800.webp 800w, assets/img/crops/pair-light-960.webp 960w" sizes="(min-width: 1024px) 0px, 92vw"><img src="assets/img/crops/pair-light.png" width="960" height="600" alt="The pairing sheet in oneMK showing the code 726 480 with the buttons They don’t match and Codes match, pair." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/pair-dark-800.avif 800w, assets/img/crops/pair-dark-960.avif 960w" sizes="(min-width: 1024px) 0px, 92vw"><source type="image/webp" srcset="assets/img/crops/pair-dark-800.webp 800w, assets/img/crops/pair-dark-960.webp 960w" sizes="(min-width: 1024px) 0px, 92vw"><img src="assets/img/crops/pair-dark.png" width="960" height="600" alt="The pairing sheet in oneMK showing the code 726 480 with the buttons They don’t match and Codes match, pair." loading="lazy" decoding="async"></picture><!--/img--></div>
+      </li>
+      <li class="step" data-step="1">
+        <h3>Arrange your screens</h3>
+        <p>Drag each computer to where it really stands. Leave it anywhere along a side, or line the edges up to the pixel so the pointer crosses only where the screens touch.</p>
+        <p class="step__cmd"><code>one-mk layout "MacBook Air" left</code></p>
+        <div class="step__pic"><!--img crops/arrange-plan "The Arrange page: a flat plan of five monitors on three computers, with MacBook Air selected on the left." sizes="(min-width: 1024px) 0px, 92vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/arrange-plan-light-800.avif 800w, assets/img/crops/arrange-plan-light-850.avif 850w, assets/img/crops/arrange-plan-light-1700.avif 1700w" sizes="(min-width: 1024px) 0px, 92vw"><source type="image/webp" srcset="assets/img/crops/arrange-plan-light-800.webp 800w, assets/img/crops/arrange-plan-light-850.webp 850w, assets/img/crops/arrange-plan-light-1700.webp 1700w" sizes="(min-width: 1024px) 0px, 92vw"><img src="assets/img/crops/arrange-plan-light.png" width="1700" height="720" alt="The Arrange page: a flat plan of five monitors on three computers, with MacBook Air selected on the left." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/arrange-plan-dark-800.avif 800w, assets/img/crops/arrange-plan-dark-850.avif 850w, assets/img/crops/arrange-plan-dark-1700.avif 1700w" sizes="(min-width: 1024px) 0px, 92vw"><source type="image/webp" srcset="assets/img/crops/arrange-plan-dark-800.webp 800w, assets/img/crops/arrange-plan-dark-850.webp 850w, assets/img/crops/arrange-plan-dark-1700.webp 1700w" sizes="(min-width: 1024px) 0px, 92vw"><img src="assets/img/crops/arrange-plan-dark.png" width="1700" height="720" alt="The Arrange page: a flat plan of five monitors on three computers, with MacBook Air selected on the left." loading="lazy" decoding="async"></picture><!--/img--></div>
+      </li>
+      <li class="step" data-step="2">
+        <h3>Push past the edge</h3>
+        <p>The pointer leaves one screen and appears on the next computer at the same height. <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>H</kbd> brings it home, and <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>Esc</kbd> always does.</p>
+        <div class="step__pic"><!--img shots/desk "The oneMK Desk: a 3D desk with a MacBook Air, the Studio PC’s two monitors and the Gaming PC’s two monitors, and a panel for the MacBook Air with its 4 ms response time." sizes="(min-width: 1024px) 0px, 92vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/shots/desk-light-960.avif 960w, assets/img/shots/desk-light-1440.avif 1440w, assets/img/shots/desk-light-2880.avif 2880w" sizes="(min-width: 1024px) 0px, 92vw"><source type="image/webp" srcset="assets/img/shots/desk-light-960.webp 960w, assets/img/shots/desk-light-1440.webp 1440w, assets/img/shots/desk-light-2880.webp 2880w" sizes="(min-width: 1024px) 0px, 92vw"><img src="assets/img/shots/desk-light.png" width="2880" height="1800" alt="The oneMK Desk: a 3D desk with a MacBook Air, the Studio PC’s two monitors and the Gaming PC’s two monitors, and a panel for the MacBook Air with its 4 ms response time." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/shots/desk-dark-960.avif 960w, assets/img/shots/desk-dark-1440.avif 1440w, assets/img/shots/desk-dark-2880.avif 2880w" sizes="(min-width: 1024px) 0px, 92vw"><source type="image/webp" srcset="assets/img/shots/desk-dark-960.webp 960w, assets/img/shots/desk-dark-1440.webp 1440w, assets/img/shots/desk-dark-2880.webp 2880w" sizes="(min-width: 1024px) 0px, 92vw"><img src="assets/img/shots/desk-dark.png" width="2880" height="1800" alt="The oneMK Desk: a 3D desk with a MacBook Air, the Studio PC’s two monitors and the Gaming PC’s two monitors, and a panel for the MacBook Air with its 4 ms response time." loading="lazy" decoding="async"></picture><!--/img--></div>
+      </li>
+      <li class="step" data-step="3">
+        <h3>Everything follows</h3>
+        <p>Your keyboard types where the pointer is. Copy on one computer and paste on another: text, rich text and pictures. Drop files on a computer to send them.</p>
+        <p class="step__cmd"><code>one-mk send photos/ --to "MacBook Air"</code></p>
+        <div class="step__pic"><!--img crops/files-desk "Clipboard and files: a small 3D desk to drop files on, and switches for sharing text, rich text and images." sizes="(min-width: 1024px) 0px, 92vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/files-desk-light-800.avif 800w, assets/img/crops/files-desk-light-1180.avif 1180w, assets/img/crops/files-desk-light-2360.avif 2360w" sizes="(min-width: 1024px) 0px, 92vw"><source type="image/webp" srcset="assets/img/crops/files-desk-light-800.webp 800w, assets/img/crops/files-desk-light-1180.webp 1180w, assets/img/crops/files-desk-light-2360.webp 2360w" sizes="(min-width: 1024px) 0px, 92vw"><img src="assets/img/crops/files-desk-light.png" width="2360" height="930" alt="Clipboard and files: a small 3D desk to drop files on, and switches for sharing text, rich text and images." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/files-desk-dark-800.avif 800w, assets/img/crops/files-desk-dark-1180.avif 1180w, assets/img/crops/files-desk-dark-2360.avif 2360w" sizes="(min-width: 1024px) 0px, 92vw"><source type="image/webp" srcset="assets/img/crops/files-desk-dark-800.webp 800w, assets/img/crops/files-desk-dark-1180.webp 1180w, assets/img/crops/files-desk-dark-2360.webp 2360w" sizes="(min-width: 1024px) 0px, 92vw"><img src="assets/img/crops/files-desk-dark.png" width="2360" height="930" alt="Clipboard and files: a small 3D desk to drop files on, and switches for sharing text, rich text and images." loading="lazy" decoding="async"></picture><!--/img--></div>
+      </li>
+    </ol>
+    <div class="how__view" aria-hidden="true">
+      <div class="how__sticky">
+        <div class="window" data-view>
+          <div class="window__pane is-on" data-pane="0"><!--img crops/pair "" sizes="(min-width: 1024px) 50vw, 0px"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/pair-light-800.avif 800w, assets/img/crops/pair-light-960.avif 960w" sizes="(min-width: 1024px) 50vw, 0px"><source type="image/webp" srcset="assets/img/crops/pair-light-800.webp 800w, assets/img/crops/pair-light-960.webp 960w" sizes="(min-width: 1024px) 50vw, 0px"><img src="assets/img/crops/pair-light.png" width="960" height="600" alt="" loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/pair-dark-800.avif 800w, assets/img/crops/pair-dark-960.avif 960w" sizes="(min-width: 1024px) 50vw, 0px"><source type="image/webp" srcset="assets/img/crops/pair-dark-800.webp 800w, assets/img/crops/pair-dark-960.webp 960w" sizes="(min-width: 1024px) 50vw, 0px"><img src="assets/img/crops/pair-dark.png" width="960" height="600" alt="" loading="lazy" decoding="async"></picture><!--/img--></div>
+          <div class="window__pane" data-pane="1"><!--img crops/arrange-plan "" sizes="(min-width: 1024px) 50vw, 0px"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/arrange-plan-light-800.avif 800w, assets/img/crops/arrange-plan-light-850.avif 850w, assets/img/crops/arrange-plan-light-1700.avif 1700w" sizes="(min-width: 1024px) 50vw, 0px"><source type="image/webp" srcset="assets/img/crops/arrange-plan-light-800.webp 800w, assets/img/crops/arrange-plan-light-850.webp 850w, assets/img/crops/arrange-plan-light-1700.webp 1700w" sizes="(min-width: 1024px) 50vw, 0px"><img src="assets/img/crops/arrange-plan-light.png" width="1700" height="720" alt="" loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/arrange-plan-dark-800.avif 800w, assets/img/crops/arrange-plan-dark-850.avif 850w, assets/img/crops/arrange-plan-dark-1700.avif 1700w" sizes="(min-width: 1024px) 50vw, 0px"><source type="image/webp" srcset="assets/img/crops/arrange-plan-dark-800.webp 800w, assets/img/crops/arrange-plan-dark-850.webp 850w, assets/img/crops/arrange-plan-dark-1700.webp 1700w" sizes="(min-width: 1024px) 50vw, 0px"><img src="assets/img/crops/arrange-plan-dark.png" width="1700" height="720" alt="" loading="lazy" decoding="async"></picture><!--/img--></div>
+          <div class="window__pane" data-pane="2"><!--img shots/desk "" sizes="(min-width: 1024px) 50vw, 0px"--><picture class="t-light"><source type="image/avif" srcset="assets/img/shots/desk-light-960.avif 960w, assets/img/shots/desk-light-1440.avif 1440w, assets/img/shots/desk-light-2880.avif 2880w" sizes="(min-width: 1024px) 50vw, 0px"><source type="image/webp" srcset="assets/img/shots/desk-light-960.webp 960w, assets/img/shots/desk-light-1440.webp 1440w, assets/img/shots/desk-light-2880.webp 2880w" sizes="(min-width: 1024px) 50vw, 0px"><img src="assets/img/shots/desk-light.png" width="2880" height="1800" alt="" loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/shots/desk-dark-960.avif 960w, assets/img/shots/desk-dark-1440.avif 1440w, assets/img/shots/desk-dark-2880.avif 2880w" sizes="(min-width: 1024px) 50vw, 0px"><source type="image/webp" srcset="assets/img/shots/desk-dark-960.webp 960w, assets/img/shots/desk-dark-1440.webp 1440w, assets/img/shots/desk-dark-2880.webp 2880w" sizes="(min-width: 1024px) 50vw, 0px"><img src="assets/img/shots/desk-dark.png" width="2880" height="1800" alt="" loading="lazy" decoding="async"></picture><!--/img--></div>
+          <div class="window__pane" data-pane="3"><!--img crops/files-desk "" sizes="(min-width: 1024px) 50vw, 0px"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/files-desk-light-800.avif 800w, assets/img/crops/files-desk-light-1180.avif 1180w, assets/img/crops/files-desk-light-2360.avif 2360w" sizes="(min-width: 1024px) 50vw, 0px"><source type="image/webp" srcset="assets/img/crops/files-desk-light-800.webp 800w, assets/img/crops/files-desk-light-1180.webp 1180w, assets/img/crops/files-desk-light-2360.webp 2360w" sizes="(min-width: 1024px) 50vw, 0px"><img src="assets/img/crops/files-desk-light.png" width="2360" height="930" alt="" loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/files-desk-dark-800.avif 800w, assets/img/crops/files-desk-dark-1180.avif 1180w, assets/img/crops/files-desk-dark-2360.avif 2360w" sizes="(min-width: 1024px) 50vw, 0px"><source type="image/webp" srcset="assets/img/crops/files-desk-dark-800.webp 800w, assets/img/crops/files-desk-dark-1180.webp 1180w, assets/img/crops/files-desk-dark-2360.webp 2360w" sizes="(min-width: 1024px) 50vw, 0px"><img src="assets/img/crops/files-desk-dark.png" width="2360" height="930" alt="" loading="lazy" decoding="async"></picture><!--/img--></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="features" id="features" aria-labelledby="features-title">
+  <div class="wrap">
+    <h2 id="features-title" class="h2">Every computer, one desk.</h2>
+    <p class="lede">The parts you would expect from one computer with many screens, and a window that shows you what is going on.</p>
+  </div>
+  <div class="bento wrap">
+    <article class="tile tile--wide tile--arrange">
+      <div class="tile__text">
+        <h3>Screens lined up to the pixel</h3>
+        <p>Drag screens on a flat plan, nudge them with the arrow keys or type an exact X and Y. Several computers can share one side, and layouts can switch by themselves when you join a Wi-Fi network.</p>
+      </div>
+      <div class="tile__pic"><!--img crops/arrange-plan "The Arrange plan with five monitors on three computers." sizes="(min-width: 1024px) 760px, 92vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/arrange-plan-light-800.avif 800w, assets/img/crops/arrange-plan-light-850.avif 850w, assets/img/crops/arrange-plan-light-1700.avif 1700w" sizes="(min-width: 1024px) 760px, 92vw"><source type="image/webp" srcset="assets/img/crops/arrange-plan-light-800.webp 800w, assets/img/crops/arrange-plan-light-850.webp 850w, assets/img/crops/arrange-plan-light-1700.webp 1700w" sizes="(min-width: 1024px) 760px, 92vw"><img src="assets/img/crops/arrange-plan-light.png" width="1700" height="720" alt="The Arrange plan with five monitors on three computers." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/arrange-plan-dark-800.avif 800w, assets/img/crops/arrange-plan-dark-850.avif 850w, assets/img/crops/arrange-plan-dark-1700.avif 1700w" sizes="(min-width: 1024px) 760px, 92vw"><source type="image/webp" srcset="assets/img/crops/arrange-plan-dark-800.webp 800w, assets/img/crops/arrange-plan-dark-850.webp 850w, assets/img/crops/arrange-plan-dark-1700.webp 1700w" sizes="(min-width: 1024px) 760px, 92vw"><img src="assets/img/crops/arrange-plan-dark.png" width="1700" height="720" alt="The Arrange plan with five monitors on three computers." loading="lazy" decoding="async"></picture><!--/img--></div>
+    </article>
+    <article class="tile tile--clip">
+      <div class="tile__text">
+        <h3>Copy here, paste there</h3>
+        <p>Text, rich text and images follow the pointer, up to 25 MB by default and 256 MB if you raise it. Copies a password manager marks as sensitive stay where they are.</p>
+      </div>
+      <div class="clipdemo" aria-hidden="true">
+        <div class="clipdemo__card"><span class="clipdemo__from">Copied on MacBook Air</span><span class="clipdemo__body">Meeting moved to 3:30, room 4B.</span></div>
+        <div class="clipdemo__arrow"><svg><use href="#i-arrow"/></svg></div>
+        <div class="clipdemo__card clipdemo__card--to"><span class="clipdemo__from">Pasted on Studio PC</span><span class="clipdemo__body">Meeting moved to 3:30, room 4B.<i class="caret"></i></span></div>
+      </div>
+    </article>
+    <article class="tile tile--files">
+      <div class="tile__text">
+        <h3>Files that arrive whole</h3>
+        <p>Drop files on a computer in the window, use <b>Send to</b> in your file manager, or <code>one-mk send</code>. Transfers resume after a dropped connection, are checked with BLAKE3 and land in <code>Downloads/one-mk</code>.</p>
+      </div>
+      <div class="tile__pic tile__pic--bleed"><!--img crops/files-desk "The Clipboard and files page with its small 3D desk for dropping files." sizes="(min-width: 1024px) 420px, 92vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/files-desk-light-800.avif 800w, assets/img/crops/files-desk-light-1180.avif 1180w, assets/img/crops/files-desk-light-2360.avif 2360w" sizes="(min-width: 1024px) 420px, 92vw"><source type="image/webp" srcset="assets/img/crops/files-desk-light-800.webp 800w, assets/img/crops/files-desk-light-1180.webp 1180w, assets/img/crops/files-desk-light-2360.webp 2360w" sizes="(min-width: 1024px) 420px, 92vw"><img src="assets/img/crops/files-desk-light.png" width="2360" height="930" alt="The Clipboard and files page with its small 3D desk for dropping files." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/files-desk-dark-800.avif 800w, assets/img/crops/files-desk-dark-1180.avif 1180w, assets/img/crops/files-desk-dark-2360.avif 2360w" sizes="(min-width: 1024px) 420px, 92vw"><source type="image/webp" srcset="assets/img/crops/files-desk-dark-800.webp 800w, assets/img/crops/files-desk-dark-1180.webp 1180w, assets/img/crops/files-desk-dark-2360.webp 2360w" sizes="(min-width: 1024px) 420px, 92vw"><img src="assets/img/crops/files-desk-dark.png" width="2360" height="930" alt="The Clipboard and files page with its small 3D desk for dropping files." loading="lazy" decoding="async"></picture><!--/img--></div>
+    </article>
+    <article class="tile tile--wall">
+      <div class="tile__text">
+        <h3>One wallpaper across every screen</h3>
+        <p>A picture or a video, sliced across all your monitors on all your computers as if they were one wide display. Stable for video on Linux X11 and for pictures on GNOME; elsewhere it is <span class="tag">Experimental</span></p>
+      </div>
+      <div class="tile__pic"><!--img crops/wallpaper-plan "The Wallpaper page: one dusk landscape sliced across five monitors, playing on three computers." sizes="(min-width: 1024px) 620px, 92vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/wallpaper-plan-light-800.avif 800w, assets/img/crops/wallpaper-plan-light-1190.avif 1190w, assets/img/crops/wallpaper-plan-light-2380.avif 2380w" sizes="(min-width: 1024px) 620px, 92vw"><source type="image/webp" srcset="assets/img/crops/wallpaper-plan-light-800.webp 800w, assets/img/crops/wallpaper-plan-light-1190.webp 1190w, assets/img/crops/wallpaper-plan-light-2380.webp 2380w" sizes="(min-width: 1024px) 620px, 92vw"><img src="assets/img/crops/wallpaper-plan-light.png" width="2380" height="800" alt="The Wallpaper page: one dusk landscape sliced across five monitors, playing on three computers." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/wallpaper-plan-dark-800.avif 800w, assets/img/crops/wallpaper-plan-dark-1190.avif 1190w, assets/img/crops/wallpaper-plan-dark-2380.avif 2380w" sizes="(min-width: 1024px) 620px, 92vw"><source type="image/webp" srcset="assets/img/crops/wallpaper-plan-dark-800.webp 800w, assets/img/crops/wallpaper-plan-dark-1190.webp 1190w, assets/img/crops/wallpaper-plan-dark-2380.webp 2380w" sizes="(min-width: 1024px) 620px, 92vw"><img src="assets/img/crops/wallpaper-plan-dark.png" width="2380" height="800" alt="The Wallpaper page: one dusk landscape sliced across five monitors, playing on three computers." loading="lazy" decoding="async"></picture><!--/img--></div>
+    </article>
+    <article class="tile tile--health">
+      <div class="tile__text">
+        <h3>Health that explains itself</h3>
+        <p>Health checks the program, the port, discovery, the firewall and permissions, and names the problem and the fix in plain words. It only reads; it never changes your settings.</p>
+      </div>
+      <div class="tile__pic tile__pic--bleed"><!--img crops/health "The Health page: Checks pass, both connections answering in 3 to 4 ms, and the list of passed checks." sizes="(min-width: 1024px) 560px, 92vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/health-light-800.avif 800w, assets/img/crops/health-light-1200.avif 1200w, assets/img/crops/health-light-2400.avif 2400w" sizes="(min-width: 1024px) 560px, 92vw"><source type="image/webp" srcset="assets/img/crops/health-light-800.webp 800w, assets/img/crops/health-light-1200.webp 1200w, assets/img/crops/health-light-2400.webp 2400w" sizes="(min-width: 1024px) 560px, 92vw"><img src="assets/img/crops/health-light.png" width="2400" height="1100" alt="The Health page: Checks pass, both connections answering in 3 to 4 ms, and the list of passed checks." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/health-dark-800.avif 800w, assets/img/crops/health-dark-1200.avif 1200w, assets/img/crops/health-dark-2400.avif 2400w" sizes="(min-width: 1024px) 560px, 92vw"><source type="image/webp" srcset="assets/img/crops/health-dark-800.webp 800w, assets/img/crops/health-dark-1200.webp 1200w, assets/img/crops/health-dark-2400.webp 2400w" sizes="(min-width: 1024px) 560px, 92vw"><img src="assets/img/crops/health-dark.png" width="2400" height="1100" alt="The Health page: Checks pass, both connections answering in 3 to 4 ms, and the list of passed checks." loading="lazy" decoding="async"></picture><!--/img--></div>
+    </article>
+    <article class="tile tile--palette">
+      <div class="tile__text">
+        <h3>Everything is a search away</h3>
+        <p><kbd>Ctrl</kbd> <kbd>K</kbd> (<kbd>⌘</kbd> <kbd>K</kbd> on a Mac) opens a palette that goes to any page, setting or computer.</p>
+      </div>
+      <div class="tile__pic"><!--img crops/palette "The command palette with sw typed, offering Switch to MacBook Air, Switch to Gaming PC and the Ctrl and Cmd setting." sizes="(min-width: 1024px) 420px, 92vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/palette-light-800.avif 800w, assets/img/crops/palette-light-1320.avif 1320w" sizes="(min-width: 1024px) 420px, 92vw"><source type="image/webp" srcset="assets/img/crops/palette-light-800.webp 800w, assets/img/crops/palette-light-1320.webp 1320w" sizes="(min-width: 1024px) 420px, 92vw"><img src="assets/img/crops/palette-light.png" width="1320" height="630" alt="The command palette with sw typed, offering Switch to MacBook Air, Switch to Gaming PC and the Ctrl and Cmd setting." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/palette-dark-800.avif 800w, assets/img/crops/palette-dark-1320.avif 1320w" sizes="(min-width: 1024px) 420px, 92vw"><source type="image/webp" srcset="assets/img/crops/palette-dark-800.webp 800w, assets/img/crops/palette-dark-1320.webp 1320w" sizes="(min-width: 1024px) 420px, 92vw"><img src="assets/img/crops/palette-dark.png" width="1320" height="630" alt="The command palette with sw typed, offering Switch to MacBook Air, Switch to Gaming PC and the Ctrl and Cmd setting." loading="lazy" decoding="async"></picture><!--/img--></div>
+    </article>
+    <article class="tile tile--keys">
+      <div class="tile__text">
+        <h3>Shortcuts that stay out of the way</h3>
+        <ul class="keys">
+          <li><span><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>1</kbd>…<kbd>9</kbd></span>Jump to a computer</li>
+          <li><span><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>H</kbd></span>Back to this one</li>
+          <li><span><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>P</kbd></span>Keep the pointer here</li>
+          <li><span><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>B</kbd></span>Type on every computer</li>
+        </ul>
+        <p class="small">Ctrl and Cmd swap between a Mac and a PC by default. On Windows the jump and broadcast shortcuts add Shift.</p>
+      </div>
+    </article>
+    <article class="tile tile--themes">
+      <div class="tile__text">
+        <h3>Light and dark</h3>
+        <p>The window follows your computer’s appearance and cross-fades when it changes. So does this page.</p>
+      </div>
+      <div class="split" aria-hidden="true">
+        <div class="split__half split__half--light"><!--img-fixed crops/keys-board light "" sizes="(min-width: 1024px) 420px, 92vw"--><picture><source type="image/avif" srcset="assets/img/crops/keys-board-light-800.avif 800w, assets/img/crops/keys-board-light-1010.avif 1010w, assets/img/crops/keys-board-light-2020.avif 2020w" sizes="(min-width: 1024px) 420px, 92vw"><source type="image/webp" srcset="assets/img/crops/keys-board-light-800.webp 800w, assets/img/crops/keys-board-light-1010.webp 1010w, assets/img/crops/keys-board-light-2020.webp 2020w" sizes="(min-width: 1024px) 420px, 92vw"><img src="assets/img/crops/keys-board-light.png" width="2020" height="920" alt="" loading="lazy" decoding="async"></picture><!--/img--></div>
+        <div class="split__half split__half--dark"><!--img-fixed crops/keys-board dark "" sizes="(min-width: 1024px) 420px, 92vw"--><picture><source type="image/avif" srcset="assets/img/crops/keys-board-dark-800.avif 800w, assets/img/crops/keys-board-dark-1010.avif 1010w, assets/img/crops/keys-board-dark-2020.avif 2020w" sizes="(min-width: 1024px) 420px, 92vw"><source type="image/webp" srcset="assets/img/crops/keys-board-dark-800.webp 800w, assets/img/crops/keys-board-dark-1010.webp 1010w, assets/img/crops/keys-board-dark-2020.webp 2020w" sizes="(min-width: 1024px) 420px, 92vw"><img src="assets/img/crops/keys-board-dark.png" width="2020" height="920" alt="" loading="lazy" decoding="async"></picture><!--/img--></div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<section class="remap" id="keys" aria-labelledby="keys-title">
+  <div class="remap__grid wrap">
+    <div class="remap__copy">
+      <h2 id="keys-title" class="h2">Change a key. Watch it change.</h2>
+      <p class="lede">Keys &amp; mouse draws your keyboard and mouse in 3D. Click a key, choose what it should do, and every changed key is marked on the drawing.</p>
+      <div class="presets" role="group" aria-label="Try a quick setup">
+        <button type="button" class="chip" data-remap="caps" aria-pressed="true">Caps Lock as Esc</button>
+        <button type="button" class="chip" data-remap="altsuper" aria-pressed="false">Swap Alt and Super</button>
+        <button type="button" class="chip" data-remap="ctrlcmd" aria-pressed="false">Swap Ctrl and Cmd</button>
+        <button type="button" class="chip" data-remap="hjkl" aria-pressed="false">Arrows on Alt + HJKL</button>
+      </div>
+      <ul class="ticks">
+        <li>Tap and hold, chords, sequences and layers, with a 200 ms hold by default.</li>
+        <li>Rules for every computer, or only for Macs, one computer or one app.</li>
+        <li>Mouse buttons, pointer speed and scrolling, per computer.</li>
+        <li>Rules change what is sent to other computers; your own typing stays as it is.</li>
+      </ul>
+      <p class="small">Rules for one particular keyboard or mouse work on Linux X11 only. Typing the letters printed on your keys toward Windows and Mac computers is <span class="tag">Experimental</span></p>
+    </div>
+    <div class="remap__view">
+      <div class="remap__stage" data-keys-stage>
+        <div class="remap__poster"><!--img crops/keys-board "The 3D keyboard in Keys &amp; mouse with Caps Lock changed to Esc and marked in blue." sizes="(min-width: 1024px) 640px, 92vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/crops/keys-board-light-800.avif 800w, assets/img/crops/keys-board-light-1010.avif 1010w, assets/img/crops/keys-board-light-2020.avif 2020w" sizes="(min-width: 1024px) 640px, 92vw"><source type="image/webp" srcset="assets/img/crops/keys-board-light-800.webp 800w, assets/img/crops/keys-board-light-1010.webp 1010w, assets/img/crops/keys-board-light-2020.webp 2020w" sizes="(min-width: 1024px) 640px, 92vw"><img src="assets/img/crops/keys-board-light.png" width="2020" height="920" alt="The 3D keyboard in Keys &amp; mouse with Caps Lock changed to Esc and marked in blue." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/crops/keys-board-dark-800.avif 800w, assets/img/crops/keys-board-dark-1010.avif 1010w, assets/img/crops/keys-board-dark-2020.avif 2020w" sizes="(min-width: 1024px) 640px, 92vw"><source type="image/webp" srcset="assets/img/crops/keys-board-dark-800.webp 800w, assets/img/crops/keys-board-dark-1010.webp 1010w, assets/img/crops/keys-board-dark-2020.webp 2020w" sizes="(min-width: 1024px) 640px, 92vw"><img src="assets/img/crops/keys-board-dark.png" width="2020" height="920" alt="The 3D keyboard in Keys &amp; mouse with Caps Lock changed to Esc and marked in blue." loading="lazy" decoding="async"></picture><!--/img--></div>
+        <canvas class="stage__canvas" data-keys aria-hidden="true"></canvas>
+      </div>
+      <p class="remap__status" data-remap-status aria-live="polite">Caps Lock sends Esc.</p>
+    </div>
+  </div>
+</section>
+
+<section class="gallery" id="tour" aria-labelledby="tour-title">
+  <div class="wrap">
+    <h2 id="tour-title" class="h2">The whole window, page by page.</h2>
+    <p class="lede">Seven pages in a bar along the top, the same in light and dark. These are real screenshots of oneMK 1.0.0.</p>
+  </div>
+  <div class="gallery__body wrap">
+    <div class="tabs" role="tablist" aria-label="Pages of the oneMK window" data-tabs>
+      <button role="tab" id="t-desk" aria-controls="p-desk" aria-selected="true">Desk</button>
+      <button role="tab" id="t-arrange" aria-controls="p-arrange" aria-selected="false" tabindex="-1">Arrange</button>
+      <button role="tab" id="t-wallpaper" aria-controls="p-wallpaper" aria-selected="false" tabindex="-1">Wallpaper</button>
+      <button role="tab" id="t-files" aria-controls="p-files" aria-selected="false" tabindex="-1">Clipboard &amp; files</button>
+      <button role="tab" id="t-keys" aria-controls="p-keys" aria-selected="false" tabindex="-1">Keys &amp; mouse</button>
+      <button role="tab" id="t-health" aria-controls="p-health" aria-selected="false" tabindex="-1">Health</button>
+      <button role="tab" id="t-settings" aria-controls="p-settings" aria-selected="false" tabindex="-1">Settings</button>
+    </div>
+    <div class="device">
+      <div class="device__bar" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div role="tabpanel" id="p-desk" aria-labelledby="t-desk" class="device__panel">
+        <!--img shots/desk "The Desk page: three computers and five monitors on a 3D desk, with MacBook Air selected and its 4 ms response time." sizes="(min-width: 1320px) 1240px, 94vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/shots/desk-light-960.avif 960w, assets/img/shots/desk-light-1440.avif 1440w, assets/img/shots/desk-light-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/desk-light-960.webp 960w, assets/img/shots/desk-light-1440.webp 1440w, assets/img/shots/desk-light-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/desk-light.png" width="2880" height="1800" alt="The Desk page: three computers and five monitors on a 3D desk, with MacBook Air selected and its 4 ms response time." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/shots/desk-dark-960.avif 960w, assets/img/shots/desk-dark-1440.avif 1440w, assets/img/shots/desk-dark-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/desk-dark-960.webp 960w, assets/img/shots/desk-dark-1440.webp 1440w, assets/img/shots/desk-dark-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/desk-dark.png" width="2880" height="1800" alt="The Desk page: three computers and five monitors on a 3D desk, with MacBook Air selected and its 4 ms response time." loading="lazy" decoding="async"></picture><!--/img-->
+        <p class="device__cap">Desk: every computer where it stands. Choose one to switch to it, send it files or fetch its clipboard.</p>
+      </div>
+      <div role="tabpanel" id="p-arrange" aria-labelledby="t-arrange" class="device__panel" hidden>
+        <!--img shots/arrange "The Arrange page: the screens as a flat plan, where each computer sits, and the exact position of the MacBook Air." sizes="(min-width: 1320px) 1240px, 94vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/shots/arrange-light-960.avif 960w, assets/img/shots/arrange-light-1440.avif 1440w, assets/img/shots/arrange-light-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/arrange-light-960.webp 960w, assets/img/shots/arrange-light-1440.webp 1440w, assets/img/shots/arrange-light-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/arrange-light.png" width="2880" height="1800" alt="The Arrange page: the screens as a flat plan, where each computer sits, and the exact position of the MacBook Air." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/shots/arrange-dark-960.avif 960w, assets/img/shots/arrange-dark-1440.avif 1440w, assets/img/shots/arrange-dark-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/arrange-dark-960.webp 960w, assets/img/shots/arrange-dark-1440.webp 1440w, assets/img/shots/arrange-dark-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/arrange-dark.png" width="2880" height="1800" alt="The Arrange page: the screens as a flat plan, where each computer sits, and the exact position of the MacBook Air." loading="lazy" decoding="async"></picture><!--/img-->
+        <p class="device__cap">Arrange: screen edges to the pixel, saved layouts, and layouts that follow your Wi-Fi network.</p>
+      </div>
+      <div role="tabpanel" id="p-wallpaper" aria-labelledby="t-wallpaper" class="device__panel" hidden>
+        <!--img shots/wallpaper "The Wallpaper page: a dusk landscape across five monitors on three computers, with Fill, Fit and Stretch." sizes="(min-width: 1320px) 1240px, 94vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/shots/wallpaper-light-960.avif 960w, assets/img/shots/wallpaper-light-1440.avif 1440w, assets/img/shots/wallpaper-light-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/wallpaper-light-960.webp 960w, assets/img/shots/wallpaper-light-1440.webp 1440w, assets/img/shots/wallpaper-light-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/wallpaper-light.png" width="2880" height="1800" alt="The Wallpaper page: a dusk landscape across five monitors on three computers, with Fill, Fit and Stretch." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/shots/wallpaper-dark-960.avif 960w, assets/img/shots/wallpaper-dark-1440.avif 1440w, assets/img/shots/wallpaper-dark-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/wallpaper-dark-960.webp 960w, assets/img/shots/wallpaper-dark-1440.webp 1440w, assets/img/shots/wallpaper-dark-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/wallpaper-dark.png" width="2880" height="1800" alt="The Wallpaper page: a dusk landscape across five monitors on three computers, with Fill, Fit and Stretch." loading="lazy" decoding="async"></picture><!--/img-->
+        <p class="device__cap">Wallpaper: one picture or video across every screen. Experimental outside Linux X11 and GNOME pictures.</p>
+      </div>
+      <div role="tabpanel" id="p-files" aria-labelledby="t-files" class="device__panel" hidden>
+        <!--img shots/files "The Clipboard and files page: send files to MacBook Air or Gaming PC, a small 3D desk to drop files on, and clipboard switches." sizes="(min-width: 1320px) 1240px, 94vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/shots/files-light-960.avif 960w, assets/img/shots/files-light-1440.avif 1440w, assets/img/shots/files-light-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/files-light-960.webp 960w, assets/img/shots/files-light-1440.webp 1440w, assets/img/shots/files-light-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/files-light.png" width="2880" height="1800" alt="The Clipboard and files page: send files to MacBook Air or Gaming PC, a small 3D desk to drop files on, and clipboard switches." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/shots/files-dark-960.avif 960w, assets/img/shots/files-dark-1440.avif 1440w, assets/img/shots/files-dark-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/files-dark-960.webp 960w, assets/img/shots/files-dark-1440.webp 1440w, assets/img/shots/files-dark-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/files-dark.png" width="2880" height="1800" alt="The Clipboard and files page: send files to MacBook Air or Gaming PC, a small 3D desk to drop files on, and clipboard switches." loading="lazy" decoding="async"></picture><!--/img-->
+        <p class="device__cap">Clipboard &amp; files: what is shared, how large it may be, and a desk to drop files on.</p>
+      </div>
+      <div role="tabpanel" id="p-keys" aria-labelledby="t-keys" class="device__panel" hidden>
+        <!--img shots/keys-caps "The Keys and mouse page: the 3D keyboard with Caps Lock chosen, and its panel showing it sends Esc when tapped and held." sizes="(min-width: 1320px) 1240px, 94vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/shots/keys-caps-light-960.avif 960w, assets/img/shots/keys-caps-light-1440.avif 1440w, assets/img/shots/keys-caps-light-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/keys-caps-light-960.webp 960w, assets/img/shots/keys-caps-light-1440.webp 1440w, assets/img/shots/keys-caps-light-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/keys-caps-light.png" width="2880" height="1800" alt="The Keys and mouse page: the 3D keyboard with Caps Lock chosen, and its panel showing it sends Esc when tapped and held." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/shots/keys-caps-dark-960.avif 960w, assets/img/shots/keys-caps-dark-1440.avif 1440w, assets/img/shots/keys-caps-dark-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/keys-caps-dark-960.webp 960w, assets/img/shots/keys-caps-dark-1440.webp 1440w, assets/img/shots/keys-caps-dark-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/keys-caps-dark.png" width="2880" height="1800" alt="The Keys and mouse page: the 3D keyboard with Caps Lock chosen, and its panel showing it sends Esc when tapped and held." loading="lazy" decoding="async"></picture><!--/img-->
+        <p class="device__cap">Keys &amp; mouse: Caps Lock turned into Esc, with the change listed under Changed keys.</p>
+      </div>
+      <div role="tabpanel" id="p-health" aria-labelledby="t-health" class="device__panel" hidden>
+        <!--img shots/health "The Health page: Checks pass, connection times for MacBook Air and Gaming PC, and eleven passed checks." sizes="(min-width: 1320px) 1240px, 94vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/shots/health-light-960.avif 960w, assets/img/shots/health-light-1440.avif 1440w, assets/img/shots/health-light-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/health-light-960.webp 960w, assets/img/shots/health-light-1440.webp 1440w, assets/img/shots/health-light-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/health-light.png" width="2880" height="1800" alt="The Health page: Checks pass, connection times for MacBook Air and Gaming PC, and eleven passed checks." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/shots/health-dark-960.avif 960w, assets/img/shots/health-dark-1440.avif 1440w, assets/img/shots/health-dark-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/health-dark-960.webp 960w, assets/img/shots/health-dark-1440.webp 1440w, assets/img/shots/health-dark-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/health-dark.png" width="2880" height="1800" alt="The Health page: Checks pass, connection times for MacBook Air and Gaming PC, and eleven passed checks." loading="lazy" decoding="async"></picture><!--/img-->
+        <p class="device__cap">Health: one line saying whether all is well, then each check in plain words.</p>
+      </div>
+      <div role="tabpanel" id="p-settings" aria-labelledby="t-settings" class="device__panel" hidden>
+        <!--img shots/settings "The Settings page on General: appearance, start at login, and updates set to check and ask before installing." sizes="(min-width: 1320px) 1240px, 94vw"--><picture class="t-light"><source type="image/avif" srcset="assets/img/shots/settings-light-960.avif 960w, assets/img/shots/settings-light-1440.avif 1440w, assets/img/shots/settings-light-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/settings-light-960.webp 960w, assets/img/shots/settings-light-1440.webp 1440w, assets/img/shots/settings-light-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/settings-light.png" width="2880" height="1800" alt="The Settings page on General: appearance, start at login, and updates set to check and ask before installing." loading="lazy" decoding="async"></picture><picture class="t-dark"><source type="image/avif" srcset="assets/img/shots/settings-dark-960.avif 960w, assets/img/shots/settings-dark-1440.avif 1440w, assets/img/shots/settings-dark-2880.avif 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><source type="image/webp" srcset="assets/img/shots/settings-dark-960.webp 960w, assets/img/shots/settings-dark-1440.webp 1440w, assets/img/shots/settings-dark-2880.webp 2880w" sizes="(min-width: 1320px) 1240px, 94vw"><img src="assets/img/shots/settings-dark.png" width="2880" height="1800" alt="The Settings page on General: appearance, start at login, and updates set to check and ask before installing." loading="lazy" decoding="async"></picture><!--/img-->
+        <p class="device__cap">Settings: one category at a time. Updates check and ask; nothing installs in the background.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="security" id="security" aria-labelledby="security-title">
+  <div class="wrap security__grid">
+    <div class="security__head">
+      <h2 id="security-title" class="h2">Your computers talk to each other. No one else.</h2>
+      <p class="lede">There is no server and no account. Paired computers connect directly on your network, and every connection is encrypted and checked.</p>
+      <a class="link" href="https://github.com/samer2373/one-mk/blob/main/docs/SECURITY-MODEL.md">Read the security model <svg aria-hidden="true"><use href="#i-arrow"/></svg></a>
+    </div>
+    <div class="code" aria-hidden="true">
+      <div class="code__side"><span class="code__who">Studio PC</span><span class="code__digits">726 480</span></div>
+      <div class="code__side"><span class="code__who">Office Laptop</span><span class="code__digits">726 480</span></div>
+      <span class="code__note">Same code on both screens: confirm on both.</span>
+    </div>
+    <dl class="security__list">
+      <div><dt>A code you compare</dt><dd>Pairing uses a commit-then-reveal six-digit code, like pairing a Bluetooth headset. You check that both screens show the same digits and confirm on both.</dd></div>
+      <div><dt>Mutual TLS 1.3 over QUIC</dt><dd>Each computer has its own key and certificate. Both sides check the other’s fingerprint on every connection, and only paired computers get in.</dd></div>
+      <div><dt>Signed updates that ask first</dt><dd>Every release lists its files with sizes and SHA-256 sums in an Ed25519-signed list. oneMK checks it, refuses downgrades, and asks before installing.</dd></div>
+      <div><dt>One port, one check a day</dt><dd>oneMK listens on UDP port 24900 and uses mDNS to find your computers. Outside your network it asks GitHub once a day whether there is an update, and you can switch that off.</dd></div>
+    </dl>
+    <p class="security__honest">oneMK has not had an outside security review yet. The security model says plainly what it protects and what it does not, and <a href="https://github.com/samer2373/one-mk/blob/main/SECURITY.md">SECURITY.md</a> says how to report a problem.</p>
+  </div>
+</section>
+
+<section class="platforms" id="platforms" aria-labelledby="platforms-title">
+  <div class="wrap">
+    <h2 id="platforms-title" class="h2">Where it runs, honestly.</h2>
+    <p class="lede">oneMK is young. Everything below is built and tested on every change, but only one setup has been used end to end on real hardware so far.</p>
+  </div>
+  <div class="wrap platforms__grid">
+    <article class="plat plat--ok">
+      <h3><i class="mark mark--ok" aria-hidden="true"></i>Verified on real hardware</h3>
+      <ul>
+        <li><b>Linux, GNOME on Wayland</b><span>GNOME 45 or later; used on GNOME 50. Pairing, crossing, keyboard and mouse, clipboard, files and the window.</span></li>
+      </ul>
+    </article>
+    <article class="plat plat--exp">
+      <h3><i class="mark mark--exp" aria-hidden="true"></i>Experimental</h3>
+      <ul>
+        <li><b>Linux, KDE Plasma 6.1+</b><span>The same portal code as GNOME.</span></li>
+        <li><b>Linux, wlroots</b><span>Sway, Hyprland, labwc, river, Wayfire.</span></li>
+        <li><b>Linux, X11</b><span>Tested against a virtual X server.</span></li>
+        <li><b>macOS 11 or later</b><span>Apple silicon and Intel. Asks for Accessibility and Input Monitoring.</span></li>
+        <li><b>Windows 10 and 11</b><span>64-bit, installs per user. Not at the sign-in screen or UAC prompts.</span></li>
+      </ul>
+    </article>
+    <article class="plat plat--no">
+      <h3><i class="mark mark--no" aria-hidden="true"></i>Not available yet</h3>
+      <ul>
+        <li>File drops at a screen edge on Wayland (send files instead)</li>
+        <li>Rules for one particular keyboard on Wayland</li>
+        <li>Taking a computer back with its own mouse on Wayland</li>
+        <li>Typing letters toward Linux computers</li>
+        <li>Turning pointer acceleration off</li>
+        <li>Desktop notifications on Windows</li>
+      </ul>
+    </article>
+  </div>
+</section>
+
+<section class="install" id="install" aria-labelledby="install-title">
+  <div class="wrap install__grid">
+    <div class="install__head">
+      <h2 id="install-title" class="h2">Install it on each computer.</h2>
+      <p class="lede">The first launch sets up start at login and tells you what it did. Then pair from the window, or run <code>one-mk pair</code> on both.</p>
+    </div>
+    <div class="install__body">
+      <div class="tabs tabs--os" role="tablist" aria-label="Operating system" data-tabs data-os-tabs>
+        <button role="tab" id="t-linux" aria-controls="p-linux" aria-selected="true" data-os="linux">Linux</button>
+        <button role="tab" id="t-mac" aria-controls="p-mac" aria-selected="false" tabindex="-1" data-os="mac">macOS</button>
+        <button role="tab" id="t-win" aria-controls="p-win" aria-selected="false" tabindex="-1" data-os="windows">Windows</button>
+      </div>
+      <div role="tabpanel" id="p-linux" aria-labelledby="t-linux" class="os">
+        <p>One line installs the programs into <code>~/.local/bin</code> and checks what it downloads. Running it again upgrades in place.</p>
+        <div class="cmd"><pre><code>curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh</code></pre><button type="button" class="cmd__copy" data-copy aria-label="Copy the install command"><svg aria-hidden="true"><use href="#i-copy"/></svg></button></div>
+        <p>Or download a package for x86_64:</p>
+        <ul class="dl">
+          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-unknown-linux-gnu.deb"><b>Debian and Ubuntu</b><span>one-mk-x86_64-unknown-linux-gnu.deb</span></a></li>
+          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-unknown-linux-gnu.AppImage"><b>AppImage</b><span>one-mk-x86_64-unknown-linux-gnu.AppImage</span></a></li>
+          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-unknown-linux-gnu.tar.gz"><b>Archive</b><span>one-mk-x86_64-unknown-linux-gnu.tar.gz</span></a></li>
+        </ul>
+        <div class="cmd"><pre><code>sudo apt install ./one-mk-x86_64-unknown-linux-gnu.deb</code></pre><button type="button" class="cmd__copy" data-copy aria-label="Copy the apt command"><svg aria-hidden="true"><use href="#i-copy"/></svg></button></div>
+        <p class="small">On GNOME and KDE on Wayland the desktop asks your permission to share input; GNOME 50 asks again each time oneMK starts.</p>
+      </div>
+      <div role="tabpanel" id="p-mac" aria-labelledby="t-mac" class="os" hidden>
+        <p>Open the disk image and drag oneMK onto Applications. Releases are signed with a Developer ID and notarized.</p>
+        <ul class="dl">
+          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-aarch64-apple-darwin.dmg"><b>Apple silicon</b><span>one-mk-aarch64-apple-darwin.dmg</span></a></li>
+          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-apple-darwin.dmg"><b>Intel</b><span>one-mk-x86_64-apple-darwin.dmg</span></a></li>
+        </ul>
+        <p>Or install from a terminal; it puts oneMK in Applications and opens it:</p>
+        <div class="cmd"><pre><code>curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh</code></pre><button type="button" class="cmd__copy" data-copy aria-label="Copy the install command"><svg aria-hidden="true"><use href="#i-copy"/></svg></button></div>
+        <p class="small">oneMK asks for Accessibility and Input Monitoring in System Settings, and shows you where to find them.</p>
+      </div>
+      <div role="tabpanel" id="p-win" aria-labelledby="t-win" class="os" hidden>
+        <p>Run the installer. It installs for your user only, so it needs no administrator rights.</p>
+        <ul class="dl">
+          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-pc-windows-msvc-setup.exe"><b>Installer</b><span>one-mk-x86_64-pc-windows-msvc-setup.exe</span></a></li>
+          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-pc-windows-msvc.zip"><b>Programs only</b><span>one-mk-x86_64-pc-windows-msvc.zip</span></a></li>
+        </ul>
+        <p class="small">The installer is not code-signed yet, so SmartScreen warns before it runs. Windows 10 and 11, 64-bit.</p>
+      </div>
+      <p class="install__more">Every file, with <code>SHA256SUMS</code> and the signed list, is on the <a href="https://github.com/samer2373/one-mk/releases/latest">latest release</a>. To build from source you need stable Rust; see the <a href="https://github.com/samer2373/one-mk#readme">README</a>.</p>
+    </div>
+  </div>
+</section>
+
+<section class="faq" id="faq" aria-labelledby="faq-title">
+  <div class="wrap faq__grid">
+    <h2 id="faq-title" class="h2">Questions</h2>
+    <div class="faq__list">
+      <details>
+        <summary>Is oneMK free?</summary>
+        <p>Yes. It is open source under your choice of the MIT or Apache-2.0 licence, with no paid tier, no account and no sign-up.</p>
+      </details>
+      <details>
+        <summary>Do my computers need the internet?</summary>
+        <p>No. They need to be on the same network and able to reach each other: the firewall must allow UDP port 24900, and mDNS (UDP 5353) for finding each other. If discovery is blocked you can connect by address with <code>one-mk pair --connect</code>. The internet is only used for the daily update check, which you can switch off.</p>
+      </details>
+      <details>
+        <summary>What gets shared, exactly?</summary>
+        <p>The keyboard and mouse go to the computer the pointer is on. The clipboard shares text, rich text and images. Files are sent on purpose: drop them on a computer in the window, use Send to in your file manager, or run <code>one-mk send</code>. oneMK does not share screens.</p>
+      </details>
+      <details>
+        <summary>What if the pointer gets stuck on another computer?</summary>
+        <p><kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>H</kbd> brings it back, and <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>Esc</kbd> always does; no rule can change that one. Held keys are released when the pointer leaves, a computer disconnects, or nothing arrives for 750 ms. On Wayland, use the shortcut or <code>one-mk takeback</code> to take a computer back.</p>
+      </details>
+      <details>
+        <summary>Can I use it with a Mac and a Linux PC together?</summary>
+        <p>Yes, any mix of Linux, macOS and Windows can pair. Ctrl and Cmd swap between a Mac and a PC by default. macOS and Windows support is experimental: it is built and tested on every change but has not been run end to end on real hardware yet.</p>
+      </details>
+      <details>
+        <summary>Does it work at the Windows sign-in screen?</summary>
+        <p>No. oneMK runs as your user and not as a Windows service, so it cannot reach the lock screen, the sign-in screen or UAC prompts. That is a deliberate choice.</p>
+      </details>
+      <details>
+        <summary>How do updates work?</summary>
+        <p>By default oneMK checks for a new release once a day and asks before installing it. It verifies the Ed25519 signature and the file’s checksum first, and refuses older versions. You can also run <code>one-mk update</code>, or switch the check off in Settings.</p>
+      </details>
+      <details>
+        <summary>Can I drive it from a terminal?</summary>
+        <p>Everything the window does is a command: <code>one-mk pair</code>, <code>one-mk layout</code>, <code>one-mk send</code>, <code>one-mk switch</code>, <code>one-mk doctor</code> and more, listed in the <a href="https://github.com/samer2373/one-mk/blob/main/docs/COMMANDS.md">command reference</a>.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<section class="cta" aria-labelledby="cta-title">
+  <div class="wrap cta__in">
+    <svg class="cta__key" aria-hidden="true"><use href="#key"/></svg>
+    <h2 id="cta-title" class="cta__title">Put every computer on one desk.</h2>
+    <p class="lede">Free, open source, and set up in about a minute.</p>
+    <div class="hero__actions">
+      <a class="btn btn--primary btn--lg" data-download href="https://github.com/samer2373/one-mk/releases/latest"><svg aria-hidden="true"><use href="#i-down"/></svg><span data-download-label>Download oneMK</span></a>
+      <a class="btn btn--ghost btn--lg" href="https://github.com/samer2373/one-mk"><svg aria-hidden="true"><use href="#i-github"/></svg>Star on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<section class="maker" aria-labelledby="maker-title">
+  <div class="wrap">
+    <div class="maker__card">
+      <div class="maker__copy">
+        <a class="maker__tilelink bf-link" href="https://bigfootjo.com/" target="_blank" rel="noopener" aria-label="Bigfoot Technology (opens bigfootjo.com)"><img class="bf-tile maker__tile" src="assets/brand/bigfoot/bigfoot-mark.svg" width="88" height="88" alt=""></a>
+        <h2 id="maker-title" class="maker__title"><a class="bf-link bf-text" href="https://bigfootjo.com/" target="_blank" rel="noopener" aria-label="Built by Bigfoot Technology (opens bigfootjo.com)">Built by Bigfoot Technology</a></h2>
+        <p class="maker__line">Big software. Bigger footprint.</p>
+        <p class="maker__text">oneMK is made by <a class="bf-link bf-text" href="https://bigfootjo.com/" target="_blank" rel="noopener" aria-label="Bigfoot Technology (opens bigfootjo.com)">Bigfoot Technology</a>, a software studio in Amman, Jordan, that builds mobile apps, web platforms, AI tools and cloud systems.</p>
+        <a class="btn btn--ghost maker__btn bf-link" href="https://bigfootjo.com/" target="_blank" rel="noopener" aria-label="Visit bigfootjo.com: Bigfoot Technology (opens bigfootjo.com)">Visit bigfootjo.com <svg aria-hidden="true"><use href="#i-arrow"/></svg></a>
+      </div>
+      <div class="maker__art" data-tilt aria-hidden="true">
+        <div class="maker__figure"><img src="assets/brand/bigfoot/bigfoot-icon.svg" width="587" height="690" alt="" loading="lazy" decoding="async"></div>
+        <span class="maker__floor"></span>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot__grid">
+    <div class="foot__brand">
+      <a class="brand" href="#top" aria-label="oneMK, back to the top"><svg class="brand__key" aria-hidden="true"><use href="#key"/></svg><svg class="brand__wm" aria-hidden="true"><use href="#wm"/></svg></a>
+      <p>One mouse and keyboard for all your computers. Version 1.0.0.</p>
+      <p class="small">This page sets no cookies and makes no requests to anyone else.</p>
+      <a class="madeby bf-link" href="https://bigfootjo.com/" target="_blank" rel="noopener" aria-label="Made by Bigfoot Technology (opens bigfootjo.com)"><img class="bf-tile" src="assets/brand/bigfoot/bigfoot-mark.svg" width="32" height="32" alt=""><span>Made by <b>Bigfoot Technology</b></span></a>
+    </div>
+    <nav class="foot__links" aria-label="Project">
+      <h2>Project</h2>
+      <a href="https://github.com/samer2373/one-mk">Source on GitHub</a>
+      <a href="https://github.com/samer2373/one-mk/releases/latest">Releases</a>
+      <a href="https://github.com/samer2373/one-mk/tree/main/docs">Documentation</a>
+      <a href="https://github.com/samer2373/one-mk/blob/main/docs/COMMANDS.md">Command reference</a>
+    </nav>
+    <nav class="foot__links" aria-label="Trust">
+      <h2>Trust</h2>
+      <a href="https://github.com/samer2373/one-mk/blob/main/docs/SECURITY-MODEL.md">Security model</a>
+      <a href="https://github.com/samer2373/one-mk/blob/main/SECURITY.md">Security policy</a>
+      <a href="https://github.com/samer2373/one-mk/blob/main/LICENSE-MIT">MIT licence</a>
+      <a href="https://github.com/samer2373/one-mk/blob/main/LICENSE-APACHE">Apache-2.0 licence</a>
+    </nav>
+    <div class="foot__credits">
+      <h2>Credits</h2>
+      <p>The 3D mouse is “<a href="https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40">Logitech G502 x lightspeed</a>” by Okopchi, <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>, changed for oneMK: logo and feet left out, normals smoothed, shell split into its buttons and recoloured. Logitech and G502 are trademarks of their owner; oneMK is not affiliated with or endorsed by Logitech.</p>
+      <p>Type: Inter, JetBrains Mono and Unbounded, under the SIL Open Font License (<a href="assets/fonts/OFL-Inter.txt">Inter</a>, <a href="assets/fonts/OFL-JetBrainsMono.txt">JetBrains Mono</a>, <a href="assets/fonts/OFL-Unbounded.txt">Unbounded</a>). 3D by <a href="vendor/three-LICENSE.txt">three.js</a> (MIT).</p>
+    </div>
+  </div>
+  <div class="foot__mark wrap" aria-hidden="true"><svg><use href="#wm"/></svg></div>
+</footer>
+
+<script src="js/site.js" defer></script>
+</body>
+</html>

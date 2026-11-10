@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- Renders the hero's still posters (see render-posters.mjs). Not linked from the site. -->
+<html lang="en"><head><meta charset="utf-8"><title>poster</title>
+<link rel="stylesheet" href="../css/site.css">
+<style>html,body{background:transparent!important;margin:0}canvas{width:1600px;height:760px;display:block}</style></head>
+<body><canvas id="c"></canvas>
+<script src="../vendor/three.min.js"></script><script src="../js/mouse-mesh.js"></script><script src="../js/desk.js"></script>
+<script>
+var theme = new URLSearchParams(location.search).get("theme") || "light";
+Promise.all([document.fonts.load("500 40px 'JetBrains Mono'"), document.fonts.load("500 20px Inter"), document.fonts.load("600 20px Inter")]).then(function () {
+  var d = OMKDesk.create(document.getElementById("c"), { mode: "hero", theme: theme, still: true });
+  d.still({ screen: 1, lines: [["Flight lands 18:40"], ["git push origin main", "Release notes: done"], ["gg, one more round?"]] });
+  setTimeout(function () { d.still({ screen: 1 }); document.title = "ready"; }, 300);
+});
+</script></body></html>
