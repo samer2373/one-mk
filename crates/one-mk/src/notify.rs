@@ -8,7 +8,8 @@
 //!   the session D-Bus (zbus is already linked for the input portals), with
 //!   a "Show in folder" action that opens the file manager on the file
 //!   (`org.freedesktop.FileManager1`, falling back to `xdg-open`). If there
-//!   is no notification service on the bus, `notify-send` is tried.
+//!   is no notification service on the bus, `notify-send` is tried (a plain
+//!   notification there: no button, nothing that waits).
 //! - macOS: `osascript` (`display notification`). That API has no buttons,
 //!   so there is no "Show in folder" there.
 //! - Windows: not done yet (see the TODO below); the transfer still
@@ -366,36 +367,28 @@ mod sys {
     }
 
     /// Without a notification service on the bus (or a different bus setup),
-    /// libnotify's tool may still reach one. `--action` needs libnotify 0.8;
-    /// older ones fail on the unknown option and we send it without.
+    /// libnotify's tool may still reach one. A plain notification, without
+    /// "Show in folder": `notify-send --wait` never exits when it can't reach
+    /// a notification service (libnotify 0.8), and Ubuntu's AppArmor profile
+    /// for it refuses every signal, so each received transfer left one
+    /// process behind that neither oneMK nor the user could stop. This path
+    /// runs only after our own D-Bus connection failed, which is exactly
+    /// when that happens.
     async fn via_notify_send(n: &FilesReceived) -> anyhow::Result<()> {
-        let run = |action: bool| {
-            let mut c = Command::new("notify-send");
-            c.arg("--app-name=one-mk").arg("--icon=folder-download");
-            if action {
-                c.arg("--action=show=Show in folder").arg("--wait");
-            }
-            c.arg("--").arg(n.title()).arg(escape_markup(&n.body()));
-            c.stdin(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
-            c
-        };
-        let out = tokio::time::timeout(ACTION_WAIT, run(true).output()).await;
-        match out {
-            Ok(Ok(o)) if o.status.success() => {
-                if String::from_utf8_lossy(&o.stdout).trim() == "show" {
-                    let path = n.reveal();
-                    let folder = if path.is_dir() { path } else { path.parent().map(Path::to_path_buf).unwrap_or(path) };
-                    let _ = Command::new("xdg-open").arg(folder).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
-                }
-                Ok(())
-            }
-            Ok(Ok(_)) => {
-                run(false).status().await?;
-                Ok(())
-            }
-            Ok(Err(e)) => Err(e.into()),
-            Err(_) => Ok(()), // nobody clicked; the child is killed on drop
-        }
+        let status = Command::new("notify-send")
+            .args(notify_send_args(n))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await?;
+        anyhow::ensure!(status.success(), "notify-send: {status}");
+        Ok(())
+    }
+
+    /// What `notify-send` is run with: nothing that makes it wait.
+    pub(super) fn notify_send_args(n: &FilesReceived) -> Vec<String> {
+        vec!["--app-name=one-mk".into(), "--icon=folder-download".into(), "--".into(), n.title(), escape_markup(&n.body())]
     }
 }
 
@@ -493,6 +486,17 @@ mod tests {
             bytes,
             folder: PathBuf::from("/home/u/Downloads/one-mk"),
         }
+    }
+
+    /// `notify-send --wait` can outlive oneMK for good (see `via_notify_send`).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn the_notify_send_fallback_never_waits() {
+        let args = sys::notify_send_args(&got("desk", &["a <b>.txt"], 10));
+        assert!(!args.iter().any(|a| a.starts_with("--wait") || a.starts_with("--action")), "{args:?}");
+        assert_eq!(args[..3], ["--app-name=one-mk", "--icon=folder-download", "--"]);
+        assert_eq!(args[3], "a <b>.txt received from desk");
+        assert!(args[4].starts_with("10 B saved to"), "{args:?}");
     }
 
     #[test]
