@@ -7,6 +7,7 @@ mod cells;
 mod clipboard_history;
 mod keys;
 mod links;
+mod page_ui;
 mod pages;
 mod place;
 mod shell;
@@ -35,12 +36,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
-const PANEL_H: f32 = 196.0;
 /// Below this height (plus 22 pt for each other computer) the desk shows
 /// its computers as named chips: monitors any smaller can't carry names.
 const COMPACT_BELOW: f32 = 128.0;
-/// Inner padding of the panel's cells.
-const PAD: f32 = 20.0;
 const GHOST: &str = "\u{0}pairing";
 
 fn truncated_name_target(focused: Option<usize>, hovered: Option<usize>, truncated: &std::collections::HashSet<usize>) -> Option<(usize, bool)> {
@@ -72,10 +70,10 @@ const TABS: [(Tab, &str, &str); 7] = [
 ];
 
 impl Tab {
-    /// Tabs that show the desk of computers (where they can be dragged
-    /// into place).
+    /// Tabs that take files let go over them themselves: the Desk (on a
+    /// computer) and Clipboard & files (its own drop area).
     fn desk(self) -> bool {
-        matches!(self, Tab::Desk | Tab::Files | Tab::Arrange)
+        matches!(self, Tab::Desk | Tab::Files)
     }
     /// Tabs that mean something while oneMK is off.
     fn when_off(self) -> bool {
@@ -198,21 +196,6 @@ impl ToastAct {
     }
 }
 
-/// What a cell of the panel shows. When it changes, the old one fades
-/// out and the new one rises in.
-#[derive(Clone, PartialEq, Debug)]
-enum Cell {
-    Arrange(Option<String>),
-    LineUp(Option<String>),
-    Profiles,
-}
-
-struct Slot {
-    cell: Option<(Cell, Rect)>,
-    was: Option<(Cell, Rect)>,
-    at: f64,
-}
-
 pub struct App {
     glass: Glass,
     /// Light or dark, following Settings → Appearance (and the system).
@@ -276,9 +259,6 @@ pub struct App {
     notice: desk_cards::NoticeHold,
     /// Whether the window had the focus last frame (see `pointer_away`).
     was_focused: bool,
-    /// How tall each short cell's contents were last drawn (cards are
-    /// sized to them, not stretched to the tallest).
-    cell_h: HashMap<&'static str, f32>,
     pending_swap: HashMap<String, String>,
     /// A computer that should hop (not slide) to its new place.
     hop: Option<String>,
@@ -289,7 +269,6 @@ pub struct App {
     busy: Vec<Job>,
     /// The computer the panel describes (an id, or "me").
     selected: Option<String>,
-    slots: [Slot; 4],
     /// Whether the files were moving over the window (so the pointer
     /// position is real, not left over from before the drag).
     drop_pos_fresh: bool,
@@ -421,36 +400,6 @@ fn separate_crowded_slots(places: &mut HashMap<String, (scene::V3, f32)>, widths
 
 // ---------- the panel's painted rows ----------
 
-/// Status by shape, not colour: a filled dot when connected, a ring when
-/// not, no dot for this computer. Returns the width it took.
-fn chip(ui: &Ui, c: Rect, label: &str, dot: Option<bool>) -> f32 {
-    let p = ui.painter();
-    let mid = c.top() + 10.0;
-    let tw = text_width(ui, label, regular(T_META));
-    p.text(pos2(c.right(), mid), Align2::RIGHT_CENTER, label, regular(T_META), pal().ink2);
-    let at = pos2(c.right() - tw - 9.0, mid);
-    match dot {
-        Some(true) => {
-            widgets::status_mark(p, at, 7.0, widgets::Mark::Ok);
-        }
-        Some(false) => {
-            widgets::status_mark(p, at, 7.0, widgets::Mark::Off);
-        }
-        None => {}
-    }
-    tw + if dot.is_some() { 22.0 } else { 10.0 }
-}
-
-/// A computer's name on the inspector's first row, shortened to fit.
-fn title_row(ui: &Ui, c: Rect, name: &str, room: f32) {
-    let font = semibold(T_TITLE);
-    let text = fit(ui.painter(), name, &font, c.width() - room);
-    ui.painter().text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, &text, font, pal().ink);
-    if text != name {
-        ui.interact(Rect::from_min_size(c.min, vec2(c.width() - room, 20.0)), Id::unique(("title", name)), Sense::hover()).on_hover_text(name);
-    }
-}
-
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, home: Option<PathBuf>, size: [f32; 2]) -> anyhow::Result<Self> {
         crate::style::install(&cc.egui_ctx);
@@ -483,7 +432,6 @@ impl App {
         if let Some(z) = std::env::var("ONE_MK_APP_ZOOM").ok().and_then(|z| z.parse::<f32>().ok()) {
             cc.egui_ctx.set_zoom_factor(z);
         }
-        let slot = || Slot { cell: None, was: None, at: f64::NEG_INFINITY };
         let glass = Glass::default();
         widgets::set_glass(&cc.egui_ctx, glass.clone());
         Ok(Self {
@@ -530,14 +478,12 @@ impl App {
             apart: HashSet::new(),
             notice: desk_cards::NoticeHold::default(),
             was_focused: true,
-            cell_h: HashMap::new(),
             pending_swap: HashMap::new(),
             hop: None,
             just_paired: None,
             active: "me".into(),
             busy: vec![],
             selected: None,
-            slots: [slot(), slot(), slot(), slot()],
             drop_pos_fresh: false,
             arrowed: false,
             arrow_down: false,
@@ -1437,11 +1383,11 @@ impl App {
             {
                 let i = *i;
                 let side = self.side_at(i);
-                // Where the screens touch, or (in Arrange, let go apart on
-                // purpose) exactly there; never apart by accident.
+                // Where the screens touch, or beside the nearest edge of
+                // ours; never apart by accident.
                 let theirs = &self.scene.devices[i].screens;
                 let landing = match place.as_ref().filter(|_| !theirs.is_empty()) {
-                    Some(pl) => scene::landing(&pl.mine, &Desktop::new(theirs.clone()), (side, pl.now.1), self.tab == Tab::Arrange),
+                    Some(pl) => scene::landing(&pl.mine, &Desktop::new(theirs.clone()), (side, pl.now.1), false),
                     None => scene::Landing::Along(side),
                 };
                 let d = &mut self.scene.devices[i];
@@ -1579,7 +1525,7 @@ impl App {
         let sub = match (self.tab, self.status.as_ref()) {
             (_, None) => String::new(),
             (_, Some(None)) => "oneMK is off".to_owned(),
-            (Tab::Desk | Tab::Arrange, Some(Some(s))) => match s.peers.len() {
+            (Tab::Desk, Some(Some(s))) => match s.peers.len() {
                 0 => "nothing paired yet".to_owned(),
                 n => format!("{} of {n} connected", s.peers.iter().filter(|p| p.online).count()),
             },
@@ -1708,176 +1654,6 @@ impl App {
                 (format!("{} is {}", p.name, on_your(side)), format!("Move the pointer off the {} edge to cross over.{away}", edge_word(side)))
             }
             _ => (format!("Connected to {} computers", online.len()), format!("Move the pointer off an edge to cross over. Drag computers to match your desk.{away}")),
-        }
-    }
-
-    /// What each cell of the panel shows in this state, and where.
-    fn cells(&self, rect: Rect) -> Vec<(Cell, Rect)> {
-        let w = rect.width();
-        let x = match self.tab {
-            Tab::Arrange => [0.0, w * 0.3, w * 0.6, w],
-            _ => [0.0, w * 0.34, w * 0.66, w],
-        };
-        let cell = |a: usize, b: usize| Rect::from_min_max(pos2(rect.left() + x[a] + PAD, rect.top() + PAD), pos2(rect.left() + x[b] - PAD, rect.bottom() - PAD));
-        match self.tab {
-            // The Desk has a panel of its own (desk_panel.rs).
-            Tab::Arrange => {
-                let sel = self.selected_id().filter(|id| id != "me");
-                vec![(Cell::Arrange(sel.clone()), cell(0, 1)), (Cell::LineUp(sel), cell(1, 2)), (Cell::Profiles, cell(2, 3))]
-            }
-            Tab::Desk | Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files => vec![],
-        }
-    }
-
-    fn panel(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
-        if self.tab == Tab::Files {
-            self.files_panel(ui, rect);
-            return;
-        }
-        if self.tab == Tab::Arrange && rect.width() < 760.0 {
-            self.layout_stacked(ui, rect, now);
-            return;
-        }
-        let cells = self.cells(rect);
-        // Each cell on a glass card of its own, the window's gap between.
-        for (cell, c) in &cells {
-            let mut card = Rect::from_min_max(c.min - vec2(PAD - M / 2.0, PAD), c.max + vec2(PAD - M / 2.0, PAD));
-            // A short cell's card ends a padding under what it holds.
-            if let Some(h) = cell_key(cell).and_then(|k| self.cell_h.get(k)).filter(|_| self.tab != Tab::Arrange) {
-                card.max.y = card.max.y.min(c.top() + h + PAD + 2.0);
-            }
-            if card.left() < rect.left() + M {
-                card.min.x = rect.left();
-            }
-            if card.right() > rect.right() - M {
-                card.max.x = rect.right();
-            }
-            card.min.y = card.min.y.max(rect.top());
-            card.max.y = card.max.y.min(rect.bottom());
-            // Persistent content: a flat quiet group (no gradient, no
-            // shadow); only what floats is raised.
-            widgets::group(ui, card, R_PANEL);
-        }
-        let opening = self.scene.opening(now);
-        for k in 0..self.slots.len() {
-            let next = cells.get(k).cloned();
-            let slot = &mut self.slots[k];
-            if slot.cell.as_ref().map(|c| &c.0) != next.as_ref().map(|c| &c.0) {
-                let was = std::mem::replace(&mut slot.cell, next);
-                // On first sight nothing fades out; the panel just rises in.
-                slot.was = if opening { None } else { was };
-                slot.at = now;
-            } else if let (Some(c), Some(n)) = (&mut slot.cell, next) {
-                c.1 = n.1;
-            }
-        }
-        let out = motion::fade(0.09) as f64;
-        // Under a sheet the panel steps back.
-        let dim = tween(ui.ctx(), Id::unique("panel-dim"), if self.sheet_open() { 0.3 } else { 1.0 }, motion::fade(0.2), motion::out_cubic);
-        for k in 0..self.slots.len() {
-            let (at, was, cell) = (self.slots[k].at, self.slots[k].was.clone(), self.slots[k].cell.clone());
-            let t = now - at;
-            if let Some((c, r)) = was.filter(|_| t < out) {
-                ui.ctx().request_repaint();
-                let mut child = ui.new_child(UiBuilder::new().max_rect(r).id_salt(("was", k)));
-                child.set_clip_rect(rect);
-                child.disable();
-                child.set_opacity((1.0 - (t / out) as f32) * dim);
-                self.draw_cell(&mut child, &c, r, now);
-                continue;
-            }
-            let Some((c, r)) = cell else { continue };
-            // Staggered arrivals are movement too: with reduced motion the
-            // cells fade in together, at once.
-            let stagger = |secs: f32| f64::from(motion::space(secs));
-            let delay = if opening && at < 1.0 { stagger(0.25 + 0.04 * k as f32) } else if self.slots[k].was.is_some() { out + stagger(0.03 * k as f32) } else { 0.0 };
-            let e = motion::progress(now, at + delay, motion::fade(if opening { 0.2 } else { 0.18 }), motion::out_cubic);
-            if e < 1.0 {
-                ui.ctx().request_repaint();
-            }
-            let r2 = r.translate(vec2(0.0, motion::space(4.0) * (1.0 - e)));
-            let mut child = ui.new_child(UiBuilder::new().max_rect(r2).id_salt(("cell", k)));
-            child.set_clip_rect(rect);
-            child.set_opacity(e * dim);
-            let layer = child.layer_id();
-            let start = ui.ctx().graphics(|g| g.get(layer).map_or(0, |l| l.all_entries().len()));
-            self.draw_cell(&mut child, &c, r2, now);
-            // What it really took (its shapes' extent), for its card next frame.
-            if let Some(key) = cell_key(&c) {
-                let bottom = ui.ctx().graphics(|g| g.get(layer).map_or(r2.top(), |l| l.all_entries().skip(start).map(|e| e.shape.visual_bounding_rect()).filter(|b| b.is_finite()).fold(r2.top(), |m, b| m.max(b.bottom()))));
-                let h = (bottom - r2.top()).clamp(0.0, r2.height());
-                if (self.cell_h.get(key).copied().unwrap_or(f32::MAX) - h).abs() > 0.5 && e >= 1.0 {
-                    self.cell_h.insert(key, h);
-                    ui.ctx().request_repaint();
-                }
-            }
-        }
-    }
-
-    /// Arrange in a narrow window: its three cards behind one tab row
-    /// (Position, Exact place, Profiles), each shown full width and full
-    /// height, so every one is a click away and nothing is shortened or cut.
-    fn layout_stacked(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
-        let sel = self.selected_id().filter(|id| id != "me");
-        let key = Id::unique("arrange-tab");
-        #[allow(unused_mut)]
-        let mut chosen = ui.ctx().data(|d| d.get_temp::<usize>(key)).unwrap_or(0);
-        #[cfg(any(debug_assertions, feature = "design-evidence"))]
-        if let Some(k) = std::env::var("ONE_MK_APP_LAYOUT_TAB").ok().and_then(|v| v.parse::<usize>().ok()) {
-            chosen = k.min(2);
-        }
-        // An open profile's options belong to Profiles: show that tab.
-        if self.profile_scroll {
-            chosen = 2;
-        }
-        let height_key = Id::unique(("layout-position-height", &sel, rect.width().to_bits()));
-        let panel_height = if chosen == 0 { ui.ctx().data(|data| data.get_temp::<f32>(height_key)).unwrap_or(232.0).min(rect.height()) } else { rect.height() };
-        let rect = Rect::from_min_size(rect.min, vec2(rect.width(), panel_height));
-        widgets::group(ui, rect, R_PANEL);
-        let inner = rect.shrink(PAD);
-        let labels = ["Position", "Exact place", "Profiles"];
-        let track = Rect::from_min_size(inner.min, vec2(inner.width().min(420.0), 30.0));
-        let pills = Pills {
-            id: Id::unique("arrange-tabs"),
-            track,
-            cells: Pills::even(track, 3, 2.0),
-            labels: &labels,
-            names: labels.iter().map(|l| format!("Arrange: {l}")).collect(),
-            chosen: Some(chosen),
-            enabled: vec![true; 3],
-            role: Role::Tab,
-            font: T_BODY,
-        };
-        if let Some(k) = pills.show(ui, self.arrowed) {
-            chosen = k;
-        }
-        ui.ctx().data_mut(|d| d.insert_temp(key, chosen));
-        let body = Rect::from_min_max(pos2(inner.left(), track.bottom() + 16.0), inner.max);
-        let cell = match chosen {
-            0 => Cell::Arrange(sel),
-            1 => Cell::LineUp(sel),
-            _ => Cell::Profiles,
-        };
-        let mut child = ui.new_child(UiBuilder::new().max_rect(body).id_salt(("arrange-tab-body", chosen)));
-        child.set_clip_rect(body.expand(4.0).intersect(ui.clip_rect()));
-        let layer = child.layer_id();
-        let start = ui.ctx().graphics(|graphics| graphics.get(layer).map_or(0, |list| list.all_entries().len()));
-        self.draw_cell(&mut child, &cell, body, now);
-        if chosen == 0 {
-            let bottom = ui.ctx().graphics(|graphics| graphics.get(layer).map_or(body.top(), |list| list.all_entries().skip(start).map(|entry| entry.shape.visual_bounding_rect()).filter(|bounds| bounds.is_finite()).fold(body.top(), |bottom, bounds| bottom.max(bounds.bottom()))));
-            let measured = (bottom + PAD - rect.top()).max(120.0);
-            if (measured - panel_height).abs() > 0.5 {
-                ui.ctx().data_mut(|data| data.insert_temp(height_key, measured));
-                ui.ctx().request_repaint();
-            }
-        }
-    }
-
-    fn draw_cell(&mut self, ui: &mut Ui, cell: &Cell, r: Rect, _now: f64) {
-        match cell {
-            Cell::Arrange(sel) => self.arrange_cell(ui, r, sel.clone()),
-            Cell::LineUp(sel) => self.line_up_cell(ui, r, sel.clone()),
-            Cell::Profiles => self.profiles_cell(ui, r),
         }
     }
 
@@ -2376,15 +2152,6 @@ impl App {
 }
 
 /// The sheet grows from 98% as it arrives.
-/// Cells whose card fits what they hold (the others fill their column).
-fn cell_key(c: &Cell) -> Option<&'static str> {
-    match c {
-        // Arrange's three cards share one height (a row of equals).
-        Cell::LineUp(_) => Some("lineup"),
-        _ => None,
-    }
-}
-
 fn lerp_scale(t: f32) -> f32 {
     if motion::reduced() { 1.0 } else { 0.98 + 0.02 * t }
 }
@@ -2434,12 +2201,7 @@ impl eframe::App for App {
         let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
         // The Desk: the desk left of (or above) its panel (desk_panel.rs).
         let desk_lay = (self.tab == Tab::Desk).then(|| desk_panel::desk_layout(full, f.bar.bottom()));
-        let with_cards = !matches!(self.tab, Tab::Desk | Tab::Health | Tab::Settings | Tab::Keys | Tab::Wallpaper | Tab::Files);
-        let cards = Rect::from_min_max(pos2(content.left(), content.bottom() - if with_cards { self.panel_h() } else { 0.0 }), content.max);
-        let desk = match &desk_lay {
-            Some(l) => l.scene,
-            None => Rect::from_min_max(pos2(content.left(), head.bottom()), pos2(content.right(), if with_cards { cards.top() - M } else { content.bottom() })),
-        };
+        let desk = desk_lay.as_ref().map_or(content, |l| l.scene);
         // Files let go over a page without the desk: ask where they go.
         if !self.tab.desk() && self.tab != Tab::Wallpaper {
             let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
@@ -2460,9 +2222,7 @@ impl eframe::App for App {
             child
         };
         self.refresh_notice(ui, now);
-        // Layout learning's question has a strip of its own under the desk.
-        let card = self.suggestion_card(ui, desk);
-        let scene = card.as_ref().map_or(desk, |c| Rect::from_min_max(desk.min, pos2(desk.right(), c.rect.top() - 6.0)));
+        let scene = desk;
         // The computers are framed below a banner over the desk, and below
         // the transfer where a small window puts it at the top.
         let mut frame = scene;
@@ -2478,19 +2238,6 @@ impl eframe::App for App {
             self.desk_stage = Some(desk_panel::desk_stage(scene, free));
             // Too little room for monitors anyone could read: named chips.
             compact = (scene.height() < COMPACT_BELOW || frame.height() < 100.0) && self.running().is_some_and(|s| !s.peers.is_empty());
-        } else if self.tab.desk() && self.tab != Tab::Files {
-            // A band at the desk's top holds the banner, the toast and (in a
-            // small window) the transfer; the desk is framed below it and
-            // above what floats along its bottom, never under either. The
-            // band eases open so the desk glides rather than jumps.
-            let band = tween(ui.ctx(), Id::unique("desk-band"), self.band_h(ui, scene.width()), motion::space(0.22), motion::out_cubic);
-            frame.min.y += band;
-            // Too little room left for monitors anyone could read: the
-            // computers as a row of named chips instead.
-            // On Clipboard & files the desk is only where files go: in a
-            // narrow window, chips (drop targets with names) always.
-            let files_narrow = self.tab == Tab::Files && scene.width() < 780.0;
-            compact = (frame.height() < COMPACT_BELOW || files_narrow) && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Arrange | Tab::Files);
         }
         // The top bar and the toolbar are made before the desk, so Tab meets
         // them first (the pages, the bar's right side, the toolbar left to
@@ -2504,10 +2251,10 @@ impl eframe::App for App {
                 self.desk_toolbar(&mut top, row, full.width() < desk_panel::STACK_BELOW);
             }
         }
-        if self.tab.desk() && self.tab != Tab::Files {
+        if self.tab == Tab::Desk {
             if compact {
                 self.desk_chips(ui, frame);
-            } else if self.tab == Tab::Desk {
+            } else {
                 self.desk(ui, frame, full, now);
                 // oneMK off: the desk steps back to 40 % (the ground laid
                 // over it at 60 %, so no face shows through another).
@@ -2515,8 +2262,6 @@ impl eframe::App for App {
                 if k > 0.0 {
                     ui.painter().rect_filled(scene, 0.0, pal().bg.gamma_multiply(k));
                 }
-            } else {
-                self.desk(ui, frame, full, now);
             }
         }
         // Behind the glass changed: blur again (else each panel keeps its blur).
@@ -2525,21 +2270,21 @@ impl eframe::App for App {
             self.backdrop_was = sig;
             self.glass.changed();
         }
-        if self.tab.desk() && self.tab != Tab::Files {
+        if self.tab == Tab::Desk {
             let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
-            if self.tab == Tab::Desk {
-                // Chips can't be dragged: the hint is for the 3D desk.
-                if !compact {
-                    self.desk_hint(ui, scene);
-                }
-                self.desk_overlay(ui, Rect::from_min_max(scene.min + vec2(desk_panel::EDGE, desk_panel::EDGE), scene.max - vec2(desk_panel::EDGE, 8.0)), hovering);
-            } else {
-                self.desk_overlay(ui, scene, hovering);
+            // Chips can't be dragged: the hint is for the 3D desk.
+            if !compact {
+                self.desk_hint(ui, scene);
             }
+            self.desk_overlay(ui, Rect::from_min_max(scene.min + vec2(desk_panel::EDGE, desk_panel::EDGE), scene.max - vec2(desk_panel::EDGE, 8.0)), hovering);
         }
         let mut body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
+        // These pages draw their own title: their content starts at the top.
+        if shell::own_head(self.tab) {
+            body.min.y = content.top();
+        }
         // Broadcasting is said on every page (the desk says it in its band).
-        if !matches!(self.tab, Tab::Desk | Tab::Arrange) {
+        if self.tab != Tab::Desk {
             // Keys & mouse draws its own title row (handoff 5.5) from the
             // top of the content: a banner goes above it, not under a title.
             if self.tab == Tab::Keys {
@@ -2555,6 +2300,10 @@ impl eframe::App for App {
             Tab::Files => {
                 let mut child = page(ui, body, "files");
                 self.files_panel(&mut child, body);
+            }
+            Tab::Arrange => {
+                let mut child = page(ui, body, "arrange");
+                self.arrange_page(&mut child, body);
             }
             Tab::Wallpaper => {
                 let mut child = page(ui, body, "wallpaper");
@@ -2574,19 +2323,12 @@ impl eframe::App for App {
             }
             _ => {}
         }
-        // The Desk and Keys draw their own head (or none): the page starts under the bar.
-        if self.tab != Tab::Desk && self.tab != Tab::Keys {
+        if !shell::own_head(self.tab) {
             let (title, sub) = self.page_title();
             self.page_head(ui, head, &title, &sub);
         }
-        if with_cards {
-            self.panel(ui, cards, now);
-        }
         if let Some(l) = &desk_lay {
             self.desk_panel(ui, l.panel, now);
-        }
-        if let Some(card) = card {
-            self.suggestion_banner(ui, card);
         }
         widgets::set_locked(ui.ctx(), false);
         // The sheet sits over the panel, leaving the desk room to show

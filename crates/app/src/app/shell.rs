@@ -44,6 +44,13 @@ pub(super) const NAV: [(Tab, &str); 7] = [
     (Tab::Settings, "7"),
 ];
 
+/// Whether a page draws its own title (22, 600, with its sentence under
+/// it) in place of the compact title row: the pages of cards, and Keys &
+/// mouse's header row. The Desk has no title: its panel says it.
+pub(super) fn own_head(tab: Tab) -> bool {
+    matches!(tab, Tab::Desk | Tab::Arrange | Tab::Wallpaper | Tab::Files | Tab::Keys)
+}
+
 /// The shortcut's modifier as this system writes it.
 pub(super) fn cmd() -> &'static str {
     if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" }
