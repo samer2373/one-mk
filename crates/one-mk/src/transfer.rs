@@ -1344,14 +1344,18 @@ pub async fn send_files_kind(
     let n = files.len();
     let queue = Arc::new(Mutex::new(files.into_iter().enumerate().collect::<VecDeque<_>>()));
     let results = Arc::new(Mutex::new(Vec::with_capacity(n)));
+    // Why no stream could be opened, if none could: the other computer may have
+    // closed the connection already ("not paired") before the first stream.
+    let unopened = Arc::new(Mutex::new(None::<String>));
     let mut workers = tokio::task::JoinSet::new();
     for _ in 0..STREAMS.min(n) {
-        let (conn, queue, results, progress) = (conn.clone(), queue.clone(), results.clone(), progress.clone());
+        let (conn, queue, results, progress, unopened) = (conn.clone(), queue.clone(), results.clone(), progress.clone(), unopened.clone());
         workers.spawn(async move {
             let (mut send, mut recv) = match open_stream(&conn, kind).await {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::debug!("opening a file stream: {e:#}");
+                    unopened.lock().expect("poisoned").get_or_insert_with(|| format!("{e:#}"));
                     return;
                 }
             };
@@ -1373,11 +1377,23 @@ pub async fn send_files_kind(
     }
     while workers.join_next().await.is_some() {}
     let mut results = std::mem::take(&mut *results.lock().expect("poisoned"));
+    let lost = unopened_outcome(unopened.lock().expect("poisoned").as_deref());
     for (i, file) in queue.lock().expect("poisoned").drain(..) {
-        results.push((i, file, Outcome::Failed("connection lost".into())));
+        results.push((i, file, Outcome::Failed(lost.clone())));
     }
     results.sort_by_key(|(i, ..)| *i);
     results.into_iter().map(|(_, f, o)| (f, o)).collect()
+}
+
+/// What the files that never got a stream are told: the other computer's own
+/// reason when it closed the connection as "not paired" (whether that reached
+/// us while opening a stream or later, the message must not depend on timing),
+/// else the plain "connection lost".
+fn unopened_outcome(why: Option<&str>) -> String {
+    match why {
+        Some(why) if why.contains("closed by peer: not paired") => NOT_PAIRED.into(),
+        _ => "connection lost".into(),
+    }
 }
 
 /// What a send says when the other computer has removed this one from its
@@ -2234,6 +2250,14 @@ mod tests {
         server.abort();
         let _ = fs::remove_dir_all(&src);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn files_that_never_got_a_stream_still_hear_not_paired() {
+        // The close can land before the first stream opens or after it: the same words.
+        assert_eq!(unopened_outcome(Some("connection lost: closed by peer: not paired (code 1)")), NOT_PAIRED);
+        assert_eq!(unopened_outcome(Some("connection lost: timed out")), "connection lost");
+        assert_eq!(unopened_outcome(None), "connection lost");
     }
 
     #[test]
