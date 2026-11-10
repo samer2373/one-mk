@@ -106,6 +106,10 @@ pub struct Status {
     /// Paired computers (ids) that refused this one because they no longer
     /// trust it: it was forgotten there.
     pub removed: Vec<String>,
+    /// Computers that keep trying to connect but never get in (one this
+    /// computer doesn't trust, or attempts that break off during the
+    /// handshake), each said as advice for a person. Never trusted for it.
+    pub unrecognised: Vec<String>,
     /// `one-mk lock-pointer` is on: edges lead nowhere.
     pub pointer_locked: bool,
     /// This computer's screen is locked (as far as the OS tells).
@@ -447,6 +451,9 @@ impl Status {
         for id in &self.removed {
             out += &format!("removed\t{}\n", id.replace(['\t', '\n', '\r'], " "));
         }
+        for note in &self.unrecognised {
+            out += &format!("unrecognised\t{}\n", note.replace(['\t', '\n', '\r'], " "));
+        }
         // Monitors go on lines of their own, after the peers they belong
         // to: older readers skip lines they don't know.
         let screen = |who: &str, r: &Rect| format!("screen\t{who}\t{}\t{}\t{}\t{}\n", r.x, r.y, r.w, r.h);
@@ -573,6 +580,7 @@ impl Status {
                 ["controlled_by", v] => s.controlled_by = Some(v.into()),
                 ["broadcast", v] => s.broadcast.push(v.into()),
                 ["removed", v] => s.removed.push(v.into()),
+                ["unrecognised", v] => s.unrecognised.push(v.into()),
                 ["broadcast_hotkey", v] => s.broadcast_hotkey = v.into(),
                 ["pointer_locked", v] => s.pointer_locked = v == "1",
                 ["screen_locked", v] => s.screen_locked = v == "1",
@@ -727,6 +735,9 @@ impl Status {
         for p in self.peers.iter().filter(|p| !p.online && self.removed_us(&p.id)) {
             out += &format!("{}\n", removed_hint(&p.name, &p.id));
         }
+        for note in &self.unrecognised {
+            out += &format!("{note}\n");
+        }
         for t in &self.transfers {
             out += &format!("{}\n", t.render());
         }
@@ -831,6 +842,9 @@ mod tests {
         // A computer that forgot this one: said as such, with what to do,
         // and an older reader just skips the line.
         let peer = PeerStatus { id: "3333-4444".into(), name: "desk".into(), side: Side::Left, os: 0, online: false, swap: "auto".into(), screens: vec![] };
+        let unrecognised = Status { unrecognised: vec!["A computer this one doesn't recognise keeps trying to connect".into()], ..Status::default() };
+        assert_eq!(Status::decode(&unrecognised.encode()), Some(unrecognised.clone()));
+        assert!(unrecognised.render().contains("doesn't recognise keeps trying"), "{}", unrecognised.render());
         let removed = Status { peers: vec![peer], removed: vec!["3333-4444".into()], ..Status::default() };
         assert_eq!(Status::decode(&removed.encode()), Some(removed.clone()));
         let text = removed.render();

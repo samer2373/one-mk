@@ -77,6 +77,13 @@ fn describe(data: &ClipData) -> String {
     }
 }
 
+/// `size` and the `limit` it is over, as [`mb`] says them, in bytes when
+/// they would read the same ("25.0 MB, limit 25.0 MB").
+pub fn over(size: usize, limit: usize) -> (String, String) {
+    let (a, b) = (mb(size), mb(limit));
+    if a == b { (format!("{size} bytes"), format!("{limit} bytes")) } else { (a, b) }
+}
+
 /// "12 B", "3 KB", "1.9 MB": binary units, like the size limit.
 pub fn mb(bytes: usize) -> String {
     if bytes >= 1 << 20 {
@@ -86,6 +93,17 @@ pub fn mb(bytes: usize) -> String {
     } else {
         format!("{bytes} B")
     }
+}
+
+/// A peer controlling us.
+struct Session {
+    /// Resolved with the peer's address when it leaves.
+    leave: oneshot::Sender<SocketAddr>,
+    id: u64,
+    /// Our clipboard's digest when it took control (`None` until read;
+    /// `Some(None)`: it was empty). A change since then is a copy made
+    /// here during the visit.
+    baseline: Option<Option<Digest>>,
 }
 
 #[derive(Default)]
@@ -98,7 +116,9 @@ struct State {
     /// Peers we are receiving a clipboard from.
     receiving: HashSet<Fingerprint>,
     /// Peers controlling us: resolved with their address when they leave.
-    sessions: HashMap<Fingerprint, oneshot::Sender<SocketAddr>>,
+    sessions: HashMap<Fingerprint, Session>,
+    /// Numbers sessions, so a late baseline can't land on a newer session.
+    next_session: u64,
     /// Our bulk connection to each peer.
     bulk: HashMap<Fingerprint, quinn::Connection>,
 }
@@ -156,10 +176,19 @@ impl ClipSync {
     /// we can tell on `left` whether the user copied something here.
     pub fn entered(self: &Arc<Self>, fp: Fingerprint, name: &str) {
         let (tx, rx) = oneshot::channel();
-        self.state().sessions.insert(fp, tx); // replaces (and ends) any earlier session
+        let id = {
+            let mut s = self.state();
+            s.next_session += 1;
+            let id = s.next_session;
+            s.sessions.insert(fp, Session { leave: tx, id, baseline: None }); // replaces (and ends) any earlier session
+            id
+        };
         let (this, name) = (self.clone(), name.to_owned());
         tokio::spawn(async move {
             let baseline = this.cb.digest().await.ok().flatten();
+            if let Some(session) = this.state().sessions.get_mut(&fp).filter(|s| s.id == id) {
+                session.baseline = Some(baseline);
+            }
             if let Ok(addr) = rx.await {
                 this.spawn_push(fp, name, addr, baseline);
             }
@@ -168,8 +197,8 @@ impl ClipSync {
 
     /// `fp` (reachable at `addr`) stopped controlling us.
     pub fn left(&self, fp: Fingerprint, addr: SocketAddr) {
-        if let Some(tx) = self.state().sessions.remove(&fp) {
-            let _ = tx.send(addr);
+        if let Some(session) = self.state().sessions.remove(&fp) {
+            let _ = session.leave.send(addr);
         }
     }
 
@@ -231,8 +260,9 @@ impl ClipSync {
                 }
             }
             Ok(Read::TooLarge { digest, size }) => {
-                tracing::warn!(peer = %name, "clipboard is too large to share ({}, limit {}); skipped \
-                    (raise the limit with `one-mk clipboard --max-mb`)", mb(size), mb(self.cb.filter().max_bytes()));
+                let (size, limit) = over(size, self.cb.filter().max_bytes());
+                tracing::warn!(peer = %name, "clipboard is too large to share ({size}, limit {limit}); skipped \
+                    (raise the limit with `one-mk clipboard --max-mb`)");
                 self.state().known.insert(fp, digest);
             }
             Ok(Read::Concealed(digest) | Read::Sensitive { digest, .. }) => {
@@ -290,11 +320,10 @@ impl ClipSync {
         let (digest, data, concealed) = match self.cb.read_explicit(Vec::new()).await.context("reading the clipboard")? {
             Read::Changed { digest, data } => (digest, data, false),
             Read::Sensitive { digest, data } => (digest, data, true),
-            Read::TooLarge { size, .. } => bail!(
-                "your clipboard is {}, over the limit of {}; raise it with `one-mk clipboard --max-mb N`",
-                mb(size),
-                mb(self.cb.filter().max_bytes())
-            ),
+            Read::TooLarge { size, .. } => {
+                let (size, limit) = over(size, self.cb.filter().max_bytes());
+                bail!("your clipboard is {size}, over the limit of {limit}; raise it with `one-mk clipboard --max-mb N`")
+            }
             Read::Empty | Read::Unchanged(_) | Read::Concealed(_) => bail!(
                 "your clipboard is empty, or holds only formats that are switched off (see `one-mk clipboard`)"
             ),
@@ -349,19 +378,23 @@ impl ClipSync {
                     anyhow::anyhow!("it did not answer: it may be running an older one-mk, or not sharing its clipboard ({error:#})")
                 }
             })?;
-            self.read_snapshot(fp, &self.peer_name(fp), &header, &mut recv).await
+            self.read_snapshot(fp, &self.peer_name(fp), &header, &mut recv, false).await
         })
         .await
         .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out")))?;
         match got {
             Received::Stored { bytes, what } => Ok(Moved { bytes, what, ack: Some(ClipAck::Stored) }),
+            Received::KeptNewer => bail!("a newer copy was made here meanwhile; it was kept"),
             Received::Nothing => bail!("its clipboard is empty, or it does not share it (`one-mk clipboard` there)"),
             Received::FormatsOff => bail!("what it has is switched off here (see `one-mk clipboard`)"),
-            Received::TooLarge(size) => bail!(
-                "its clipboard is {}, over the limit of {} here; raise it with `one-mk clipboard --max-mb N`",
-                mb(size),
-                mb(self.cb.filter().max_bytes())
-            ),
+            Received::TooLarge { size, limit, display: false } => {
+                let (size, limit) = over(size, limit);
+                bail!("its clipboard is {size}, over the limit of {limit} here; raise it with `one-mk clipboard --max-mb N`")
+            }
+            Received::TooLarge { size, limit, display: true } => {
+                let (size, limit) = over(size, limit);
+                bail!("its clipboard is {size}, more than this computer's clipboard can hold ({limit} at most on X11)")
+            }
         }
     }
 
@@ -406,10 +439,13 @@ impl ClipSync {
             self.answer_pull(name, send).await?;
             return Ok(None);
         }
-        let (ack, stored) = match self.read_snapshot(fp, name, &header, recv).await? {
+        let (ack, stored) = match self.read_snapshot(fp, name, &header, recv, true).await? {
             Received::Stored { bytes, .. } => (Some(ClipAck::Stored), Some(bytes)),
+            // Superseded rather than refused: sending it again would not
+            // help, and ours goes to it when it leaves.
+            Received::KeptNewer => (Some(ClipAck::Stored), None),
             Received::FormatsOff => (Some(ClipAck::FormatsOff), None),
-            Received::TooLarge(_) => (Some(ClipAck::TooLarge), None),
+            Received::TooLarge { .. } => (Some(ClipAck::TooLarge), None),
             Received::Nothing => (None, None),
         };
         // Tell the sender what became of it; it may have stopped listening, which is fine.
@@ -447,7 +483,12 @@ impl ClipSync {
 
     /// Reads the payloads `header` announces and puts what the settings
     /// allow on the clipboard, remembering that `fp` has it.
-    async fn read_snapshot(&self, fp: Fingerprint, name: &str, header: &ClipHeader, recv: &mut quinn::RecvStream) -> anyhow::Result<Received> {
+    ///
+    /// `pushed`: `fp` sent it unasked. If `fp` controls us and something was
+    /// copied here since it took control, that copy is newer than what it
+    /// pushes (copied before it crossed, and maybe still arriving: a large
+    /// one takes seconds), so ours is kept and goes to `fp` when it leaves.
+    async fn read_snapshot(&self, fp: Fingerprint, name: &str, header: &ClipHeader, recv: &mut quinn::RecvStream, pushed: bool) -> anyhow::Result<Received> {
         let filter = self.cb.filter();
         let wanted = |f: ClipFormat| match f {
             ClipFormat::Text => filter.text,
@@ -465,9 +506,21 @@ impl ClipSync {
         }
         let max = filter.max_bytes();
         if allowed > max as u64 {
-            tracing::warn!("peer sent a {} clipboard (limit {}); ignored", mb(allowed as usize), mb(max));
+            let (size, limit) = over(allowed as usize, max);
+            tracing::warn!("peer sent a {size} clipboard (limit {limit}); ignored");
             let _ = recv.stop(0u32.into());
-            return Ok(Received::TooLarge(allowed as usize));
+            return Ok(Received::TooLarge { size: allowed as usize, limit: max, display: false });
+        }
+        // More than this computer's clipboard can hand over to a program
+        // that pastes (X11): refused, not set unpasteable.
+        if let Some(limit) = self.cb.write_limit()
+            && let Some(&(_, largest)) = header.items.iter().filter(|(f, _)| wanted(*f)).max_by_key(|(_, n)| *n)
+            && largest as usize > limit
+        {
+            let (size, limit_text) = over(largest as usize, limit);
+            tracing::warn!("peer sent a {size} clipboard, more than this computer's X11 clipboard can hand over ({limit_text} at most); ignored");
+            let _ = recv.stop(0u32.into());
+            return Ok(Received::TooLarge { size: largest as usize, limit, display: true });
         }
         let last = header.items.iter().rposition(|(f, _)| wanted(*f)).expect("allowed > 0");
         let mut data = ClipData::default();
@@ -488,11 +541,26 @@ impl ClipSync {
         if data.has_no_content() {
             return Ok(Received::Nothing);
         }
+        if pushed && self.copied_during_visit(fp).await {
+            tracing::debug!(peer = %name, "something was copied here since it took control; kept that newer copy");
+            return Ok(Received::KeptNewer);
+        }
         let (bytes, what) = (data.len(), describe(&data));
         // Sensitive content the sender chose to send: on the clipboard, but never in the history.
         let digest = if header.concealed { self.cb.write_concealed(data).await? } else { self.cb.write_from(data, name.into(), true).await? };
-        self.state().known.insert(fp, digest);
+        let mut s = self.state();
+        s.known.insert(fp, digest);
+        // What it sent is no copy made here.
+        if let Some(session) = s.sessions.get_mut(&fp).filter(|session| session.baseline.is_some()) {
+            session.baseline = Some(Some(digest));
+        }
         Ok(Received::Stored { bytes, what })
+    }
+
+    /// Whether `fp` controls us and our clipboard changed since it took control.
+    async fn copied_during_visit(&self, fp: Fingerprint) -> bool {
+        let Some(baseline) = self.state().sessions.get(&fp).and_then(|session| session.baseline) else { return false };
+        self.cb.digest().await.is_ok_and(|now| now != baseline)
     }
 
     fn peer_name(&self, fp: Fingerprint) -> String {
@@ -506,11 +574,15 @@ impl ClipSync {
 /// What came of a snapshot read off a stream.
 enum Received {
     Stored { bytes: usize, what: String },
+    /// Not applied: something newer was copied here (see `read_snapshot`).
+    KeptNewer,
     /// An empty snapshot.
     Nothing,
     /// Every format in it is switched off.
     FormatsOff,
-    TooLarge(usize),
+    /// Over `limit`: the size limit, or (`display`) what the platform's
+    /// clipboard can hold ([`Clipboard::write_limit`]).
+    TooLarge { size: usize, limit: usize, display: bool },
 }
 
 /// A snapshot as one header and the payloads, then the end of the stream.
@@ -570,6 +642,72 @@ mod tests {
         b.settings(ClipSettings::default());
         a.clip.push_once(b.fp(), "b", b.addr(), None).await;
         eventually("retry accepted", || b.mem.text().as_deref() == Some("unchanged clipboard")).await;
+    }
+
+    /// A copies, crosses to B, and the user copies on B at once: A's push,
+    /// still arriving, must not replace that newer copy, which goes back to
+    /// A when it leaves (found by the multi-device rig: both ended up with
+    /// the older copy).
+    #[tokio::test]
+    async fn a_push_never_replaces_a_newer_copy_made_during_the_visit() {
+        let (a, b) = (Pc::new(), Pc::new());
+        a.serve();
+        b.serve();
+        text(&b.mem, "on b before the visit");
+        b.clip.entered(a.fp(), "a");
+        eventually("baseline read", || b.clip.state().sessions.get(&a.fp()).is_some_and(|s| s.baseline.is_some())).await;
+        text(&b.mem, "newer, copied on b during the visit");
+        text(&a.mem, "older, copied on a before crossing");
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert_eq!(b.mem.text().as_deref(), Some("newer, copied on b during the visit"));
+        b.clip.left(a.fp(), a.addr());
+        eventually("newer copy back on a", || a.mem.text().as_deref() == Some("newer, copied on b during the visit")).await;
+
+        // Without a copy during the visit the push lands as before.
+        text(&a.mem, "copied on a, then crossing");
+        b.clip.entered(a.fp(), "a");
+        eventually("baseline read", || b.clip.state().sessions.get(&a.fp()).is_some_and(|s| s.baseline.is_some())).await;
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert_eq!(b.mem.text().as_deref(), Some("copied on a, then crossing"));
+        let writes = a.mem.writes();
+        b.clip.left(a.fp(), a.addr());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(a.mem.writes(), writes, "nothing new to send back");
+    }
+
+    /// A receiver whose clipboard can hold less than the size limit (X11:
+    /// one request, 16 MB) refuses a larger copy and says so, rather than
+    /// setting a clipboard that every paste then fails on.
+    #[tokio::test]
+    async fn a_copy_too_large_for_the_receivers_clipboard_is_refused_not_set() {
+        let a = Pc::new();
+        let (cb, mem) = Clipboard::memory();
+        let cb = cb.with_write_limit(1000);
+        let node = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let b = Pc { clip: ClipSync::new(cb, node.clone()), node, mem };
+        b.serve();
+        text(&b.mem, "kept");
+        text(&a.mem, &"x".repeat(1001));
+        let moved = a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
+        assert_eq!(moved.ack, Some(ClipAck::TooLarge));
+        assert_eq!(b.mem.text().as_deref(), Some("kept"));
+        assert_eq!(b.mem.writes(), 0);
+        text(&a.mem, &"x".repeat(1000));
+        assert_eq!(a.clip.send_now(b.fp(), b.addr(), false).await.unwrap().ack, Some(ClipAck::Stored));
+        assert_eq!(b.mem.text().map(|t| t.len()), Some(1000));
+        // Fetched the other way, it says why.
+        let (c, d) = (Pc::new(), b);
+        c.serve();
+        c.settings(ClipSettings { allow_pull: true, ..Default::default() });
+        text(&c.mem, &"y".repeat(2000));
+        let error = d.clip.pull(c.fp(), c.addr()).await.unwrap_err();
+        assert!(format!("{error:#}").contains("2 KB, more than this computer's clipboard can hold (1000 B at most on X11)"), "{error:#}");
+    }
+
+    #[test]
+    fn sizes_over_a_limit_never_read_the_same() {
+        assert_eq!(over(26_214_401, 25 << 20), ("26214401 bytes".into(), "26214400 bytes".into()));
+        assert_eq!(over(30 << 20, 25 << 20), ("30.0 MB".into(), "25.0 MB".into()));
     }
 
     #[tokio::test]

@@ -150,7 +150,7 @@ fn clip_request(
         let text = match moved {
             Ok(m) => match m.ack {
                 Some(ClipAck::FormatsOff) => format!("error {name} has {} switched off, so it ignored your clipboard (see `one-mk clipboard` there)\n", m.what),
-                Some(ClipAck::TooLarge) => format!("error your clipboard ({}) is over {name}'s size limit, so it ignored it\n", size(&m)),
+                Some(ClipAck::TooLarge) => format!("error your clipboard ({}) is over {name}'s size limit (or more than its X11 clipboard can hold), so it ignored it\n", size(&m)),
                 // name, what and size.
                 _ => format!("ok\n{name}\n{}\n{}\n", m.what, size(&m)),
             },

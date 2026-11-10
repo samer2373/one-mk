@@ -68,6 +68,18 @@ const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
 const DIAL_INTERVAL: Duration = Duration::from_secs(2);
 const DIAL_MAX: Duration = Duration::from_secs(30);
 const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
+/// The wait before dialing again a computer that closed our only link to it
+/// as a duplicate: it says it has a better one, which is either about to
+/// reach us or a link to an earlier run of this program (killed, crashed or
+/// restarted at once) that it holds until its idle timeout (4 s). Dialing
+/// again at once would only be refused again, hundreds of times a second.
+const DUPLICATE_RETRY: Duration = Duration::from_secs(1);
+/// How many refused unknown computers are remembered, and for how long.
+const UNRECOGNISED_KEPT: usize = 16;
+const UNRECOGNISED_FOR: Duration = Duration::from_secs(30 * 60);
+/// Incoming handshakes from one address that broke off this often (in
+/// [`UNRECOGNISED_FOR`]) are worth telling the person about.
+const ABORTED_HANDSHAKES_NOTED: u32 = 3;
 /// A paired computer that refused this one (it forgot us) is tried again
 /// only this often, or when something here changes (`Request::Reload`:
 /// a pairing, a forget), or it is discovered after this.
@@ -232,6 +244,9 @@ enum AppEvent {
     DialDone(SocketAddr, Option<String>),
     /// A paired computer refused this one as not paired: it forgot us.
     Removed(Fingerprint),
+    /// A computer this one does not trust connected (or answered where a
+    /// paired one used to be) and was refused.
+    Unrecognised(Fingerprint, std::net::IpAddr),
     /// The networks this computer is on changed (only watched while some
     /// layout profile switches by itself).
     Network(NetworkId),
@@ -642,6 +657,10 @@ struct App {
     /// Paired computers that refused this one because they forgot it, and
     /// when they last said so (see [`REMOVED_RETRY`]).
     removed: HashMap<Fingerprint, Instant>,
+    /// Computers this one doesn't trust that it refused lately: where from,
+    /// how often, when last (see [`App::unrecognised_notes`]). Never trusted
+    /// because of this; at most [`UNRECOGNISED_KEPT`] of them.
+    unrecognised: HashMap<Fingerprint, (std::net::IpAddr, u32, Instant)>,
     services: Services,
     /// Peers whose first time controlling this machine (this run) has been
     /// announced with how to take control back.
@@ -807,6 +826,7 @@ pub async fn serve(
         dialing: HashSet::new(),
         dial_logged: HashMap::new(),
         removed: HashMap::new(),
+        unrecognised: HashMap::new(),
         services,
         announced: HashSet::new(),
         focus,
@@ -1072,7 +1092,9 @@ async fn establish(
     let device = TrustStore::load(dir).ok().and_then(|t| t.get(&peer.fingerprint).map(|d| d.name.clone()));
     let Some(device_name) = device else {
         tracing::info!(peer = %peer.fingerprint.short(), "rejecting unpaired device");
+        let ip = peer.conn.remote_address().ip().to_canonical();
         peer.conn.close(1u32.into(), b"not paired");
+        let _ = tx.send(AppEvent::Unrecognised(peer.fingerprint, ip));
         return;
     };
     let addr = peer.conn.remote_address();
@@ -1124,6 +1146,12 @@ async fn establish(
         }
         Err(e) => tracing::warn!(%addr, "handshake failed: {e:#}"),
     }
+}
+
+/// The peer closed this link because it keeps a better one between the two
+/// computers (`on_connected`).
+fn closed_as_duplicate(conn: &quinn::Connection) -> bool {
+    matches!(conn.close_reason(), Some(quinn::ConnectionError::ApplicationClosed(close)) if &close.reason[..] == b"duplicate")
 }
 
 /// The peer closed the connection because it doesn't trust this computer
@@ -2076,6 +2104,14 @@ impl App {
                     self.removed.insert(fp, Instant::now());
                 }
             }
+            AppEvent::Unrecognised(fp, ip) => {
+                let now = Instant::now();
+                self.unrecognised.retain(|_, (.., at)| now.duration_since(*at) < UNRECOGNISED_FOR);
+                if self.unrecognised.len() < UNRECOGNISED_KEPT || self.unrecognised.contains_key(&fp) {
+                    let seen = self.unrecognised.entry(fp).or_insert((ip, 0, now));
+                    *seen = (ip, seen.1.saturating_add(1), now);
+                }
+            }
             AppEvent::Network(net) => self.on_network(&net),
             AppEvent::FocusMoved => {
                 self.check_focus_soon();
@@ -2101,6 +2137,7 @@ impl App {
         }
         // It trusts us again (paired anew).
         self.removed.remove(&fp);
+        self.node.clear_failed_handshakes(link.conn.remote_address().ip());
         // Both sides may dial, at several addresses. Both keep the same
         // connection: the one with the lowest rank.
         if let Some(existing) = self.peers.get(&fp) {
@@ -2199,7 +2236,14 @@ impl App {
                 let shown = if shown.is_empty() { sanitize_name(&peer.name) } else { shown };
                 if self.trust.is_trusted(&fp) { println!("{shown} disconnected; reconnecting automatically."); }
                 else { println!("{shown} disconnected (no longer paired)."); }
-                self.redial_soon();
+                if closed_as_duplicate(&peer.conn) {
+                    tracing::debug!(peer = %shown, "it keeps another link to this computer; dialing again in a moment");
+                    // (Not later than a dial already due for another computer.)
+                    let at = Instant::now() + DUPLICATE_RETRY;
+                    self.dial_at = Some(self.dial_at.map_or(at, |due| due.min(at)));
+                } else {
+                    self.redial_soon();
+                }
                 if let Some(clip) = &self.services.clip {
                     clip.forget(fp);
                 }
@@ -2781,6 +2825,56 @@ impl App {
         stop
     }
 
+    /// What to tell the person about computers that keep trying to connect
+    /// but never get in: one this computer doesn't trust (forgotten here, or
+    /// reset with a new identity), or one whose every attempt breaks off
+    /// during the secure handshake (it gave up: its answers don't reach it,
+    /// or it doesn't recognise this computer). Only advice: none of them is
+    /// ever trusted because of this. Named after the paired computer last
+    /// seen at that address, when there is one and it is offline.
+    fn unrecognised_notes(&self) -> Vec<String> {
+        let paired_at = |ip: std::net::IpAddr| self.trust.devices().iter().find(|d| {
+            d.fingerprint().is_some_and(|fp| !self.peers.contains_key(&fp))
+                && d.addrs.iter().filter_map(|a| a.parse::<SocketAddr>().ok()).any(|a| a.ip().to_canonical() == ip)
+        });
+        let online_at: HashSet<std::net::IpAddr> = self.peers.values().map(|p| p.conn.remote_address().ip().to_canonical()).collect();
+        let mut notes = Vec::new();
+        let mut seen: Vec<_> = self.unrecognised.iter()
+            .filter(|(fp, (.., at))| !self.trust.is_trusted(fp) && at.elapsed() < UNRECOGNISED_FOR).collect();
+        seen.sort_by_key(|(_, (.., at))| std::cmp::Reverse(*at));
+        for (fp, (ip, times, _)) in seen.into_iter().take(3) {
+            let tries = if *times == 1 { "tried to connect".to_owned() } else { format!("keeps trying to connect ({times} times)") };
+            notes.push(match paired_at(*ip) {
+                Some(d) => format!(
+                    "Something at {ip}, where {name} was, {tries} as a computer this one doesn't recognise (id {id}), so it was refused. \
+                     {name} was probably reset or reinstalled. It is not trusted: if it is {name}, pair the two again \
+                     (`one-mk forget {arg}` here first, then `one-mk pair` on both).",
+                    name = self.trust.display(d), arg = self.trust.arg(d), id = fp.short()),
+                None => format!(
+                    "A computer this one doesn't recognise (id {id}, at {ip}) {tries}, so it was refused: it still has this computer paired, \
+                     but this one doesn't (it was forgotten here, or this computer was reset). It is not trusted: if it is yours, \
+                     pair the two again with `one-mk pair` on both; if not, ignore it.", id = fp.short()),
+            });
+        }
+        let mut aborted: Vec<_> = self.node.failed_handshakes().into_iter()
+            .filter(|(ip, n, _)| *n >= ABORTED_HANDSHAKES_NOTED && !online_at.contains(ip)).collect();
+        aborted.sort_by_key(|(_, _, ago)| *ago);
+        for (ip, times, _) in aborted.into_iter().take(3) {
+            notes.push(match paired_at(ip) {
+                Some(d) => format!(
+                    "{name} at {ip} keeps trying to connect ({times} times), but each attempt breaks off during the secure handshake, \
+                     so it shows as offline. Either this computer's answers don't reach it (a firewall or VPN on either computer, \
+                     or this computer answering from another address), or it no longer recognises this computer. \
+                     Run `one-mk doctor` on {name}; if it was reset or forgot this computer, pair the two again.",
+                    name = self.trust.display(d)),
+                None => format!(
+                    "A computer at {ip} keeps trying to connect ({times} times), but each attempt breaks off during the secure handshake. \
+                     If it is one of yours, run `one-mk doctor` on it; if it was reset or forgot this computer, pair the two again."),
+            });
+        }
+        notes
+    }
+
     fn status(&self) -> Status {
         let id = self.node.identity();
         let profiles = Profiles::load(&self.dir).unwrap_or_default();
@@ -2824,6 +2918,7 @@ impl App {
             peers: peers.collect(),
             removed: self.trust.devices().iter().filter_map(|d| d.fingerprint()).filter(|fp| self.removed.contains_key(fp) && !self.peers.contains_key(fp))
                 .map(|fp| fp.short()).collect(),
+            unrecognised: self.unrecognised_notes(),
             screens: self.local.as_ref().map_or_else(Vec::new, |d| d.screens.clone()),
             offsets: offsets.collect(),
             links: links.collect(),
@@ -3574,6 +3669,103 @@ mod tests {
         b.await.unwrap().unwrap();
         let _ = std::fs::remove_dir_all(da);
         let _ = std::fs::remove_dir_all(db);
+    }
+
+    /// B keeps a link to an earlier run of A (A was killed and started again
+    /// within B's idle timeout), so it closes every new link from A as a
+    /// duplicate. A must not dial again at once each time: the rig saw a
+    /// thousand handshakes and log lines in five seconds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_link_refused_as_duplicate_is_not_redialed_in_a_tight_loop() {
+        let (da, db) = (temp_dir("dup-a"), temp_dir("dup-b"));
+        let ib = Arc::new(Identity::load_or_create(&db).unwrap());
+        trust(&da, &ib, Side::Right);
+        let pb = free_port();
+        let mut t = TrustStore::load(&da).unwrap();
+        t.get_mut(&ib.fingerprint).unwrap().addrs = vec![format!("127.0.0.1:{pb}")];
+        t.save().unwrap();
+        // B: completes each link's handshake, then says it has a better one.
+        let node = Node::bind(ib.clone(), format!("127.0.0.1:{pb}").parse().unwrap()).unwrap();
+        let refused = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (n, b_refused) = (node.clone(), refused.clone());
+        tokio::spawn(async move {
+            while let Some(Ok(peer)) = n.accept().await {
+                let (n, b_refused) = (n.clone(), b_refused.clone());
+                tokio::spawn(async move {
+                    let Ok((StreamKind::Control, send, recv)) = peer.accept_stream().await else { return };
+                    let conn = peer.conn.clone();
+                    if let Ok(link) = crate::link::handshake(peer, (send, recv), n.identity(), vec![Rect::new(0, 0, 800, 600)], "a").await {
+                        b_refused.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        // As a daemon does (`on_connected`), once A has the link too.
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        conn.close(2u32.into(), b"duplicate");
+                        drop(link);
+                    }
+                });
+            }
+        });
+        let (ba, _ha) = one_mk_input::null(Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]));
+        let (stop, stop_rx) = watch::channel(false);
+        let opts = Options {
+            backend: one_mk_input::Kind::Null,
+            port: free_port(),
+            connect: vec![],
+            discovery: false,
+            clipboard: None,
+            downloads: da.join("downloads"),
+            start_locked: false,
+            power: Some(one_mk_input::fake_power().0),
+        };
+        let a = tokio::spawn(serve(da.clone(), opts, ba, async move {
+            let mut rx = stop_rx;
+            let _ = rx.wait_for(|s| *s).await;
+        }));
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let n = refused.load(std::sync::atomic::Ordering::SeqCst);
+        assert!((1..=6).contains(&n), "A connected {n} times in 3 s although B refused each link as a duplicate");
+        stop.send(true).unwrap();
+        a.await.unwrap().unwrap();
+        node.close();
+        let _ = std::fs::remove_dir_all(da);
+        let _ = std::fs::remove_dir_all(db);
+    }
+
+    /// A computer A doesn't trust keeps dialing it (A forgot it, or it was
+    /// reset): A refuses it every time, trusts nothing, and its status says
+    /// who is knocking and what to do instead of showing nothing at all.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unrecognised_computer_that_keeps_trying_is_named_but_never_trusted() {
+        let da = temp_dir("knock-a");
+        let port = free_port();
+        let (ba, _ha) = one_mk_input::null(Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]));
+        let (stop, stop_rx) = watch::channel(false);
+        let opts = Options {
+            backend: one_mk_input::Kind::Null, port, connect: vec![], discovery: false, clipboard: None,
+            downloads: da.join("downloads"), start_locked: false, power: Some(one_mk_input::fake_power().0),
+        };
+        let a = tokio::spawn(serve(da.clone(), opts, ba, async move {
+            let mut rx = stop_rx;
+            let _ = rx.wait_for(|s| *s).await;
+        }));
+        let stranger = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let mut notes = Vec::new();
+        for _ in 0..100 {
+            if let Ok(peer) = stranger.connect(format!("127.0.0.1:{port}").parse().unwrap()).await {
+                let _ = peer.conn.closed().await;
+            }
+            if let Ok(Some(text)) = control::request(&da, Request::Status).await {
+                notes = Status::decode(&text).unwrap().unrecognised;
+                if notes.first().is_some_and(|n| n.contains("2 times")) { break; }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let id = stranger.identity().fingerprint.short();
+        assert!(notes.len() == 1 && notes[0].contains(&id) && notes[0].contains("doesn't recognise") && notes[0].contains("pair the two again"), "{notes:?}");
+        assert!(TrustStore::load(&da).unwrap().devices().is_empty(), "never trusted by itself");
+        stop.send(true).unwrap();
+        a.await.unwrap().unwrap();
+        stranger.close();
+        let _ = std::fs::remove_dir_all(da);
     }
 
     /// Two linked daemons on loopback (B to the right of A).

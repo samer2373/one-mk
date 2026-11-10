@@ -144,8 +144,13 @@ impl Link {
                     },
                 }
             }
-            // Ends the datagram task below, which reports `Closed`.
-            ctl_conn.close(0u32.into(), b"control stream ended");
+            // Ends the datagram task below, which reports `Closed`. Not if
+            // the connection is closed already: closing it again would
+            // replace the peer's reason ("duplicate", "forgotten", a time-
+            // out), which says what to do next, with "closed here".
+            if ctl_conn.close_reason().is_none() {
+                ctl_conn.close(0u32.into(), b"control stream ended");
+            }
         });
         let task_conn = conn.clone();
         tokio::spawn(async move {

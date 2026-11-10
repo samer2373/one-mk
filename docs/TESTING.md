@@ -91,3 +91,15 @@ one-mk bench --peer "<other computer's name>"
 ```
 
 once wired if possible and once on Wi-Fi, and once while a large `one-mk send` is running.
+
+## 4. For developers: many computers on one Linux machine
+
+`scripts/reliability-soak.sh [MINUTES] [COMPUTERS]` (default 30 minutes, 5) pairs that many oneMK
+daemons in a full mesh on loopback and then keeps killing, restarting and stalling them while it sends
+files, moves the clipboard (with Xvfb and xclip installed), changes layouts and runs `status` and
+`doctor`. It samples memory, open files, threads and CPU of every daemon every 10 s, and fails on an
+operation that failed, an `ERROR` or panic in a daemon's log, or growth on the two daemons that never
+restart. Everything runs in a private network namespace with throwaway settings folders and the null
+input backend, so it never touches this computer's own oneMK, desktop or network. It needs
+`unshare` with unprivileged user namespaces. It does not cover real Wi-Fi drops, sleep and wake, other
+systems or real input backends: use the checklist above for those.
