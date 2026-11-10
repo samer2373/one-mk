@@ -24,8 +24,10 @@ toml = "1.1.8"
 
 # The permission guide's window finder (macos_windows.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
 objc2 = "0.6.5"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSError"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSError", "NSBundle"] }
+objc2-user-notifications = "0.3.2"
 objc2-core-location = { version = "0.3.2", default-features = false, features = ["std", "CLLocationManager", "CLLocationManagerDelegate"] }
 objc2-core-wlan = { version = "0.3.2", default-features = false, features = ["std", "CWInterface", "CWWiFiClient", "CoreWLANTypes"] }
 objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CFRunLoop", "CFArray", "CFCGTypes", "CFDictionary", "CFNumber", "CFString"] }

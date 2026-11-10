@@ -10,8 +10,10 @@
 //!   (`org.freedesktop.FileManager1`, falling back to `xdg-open`). If there
 //!   is no notification service on the bus, `notify-send` is tried (a plain
 //!   notification there: no button, nothing that waits).
-//! - macOS: `osascript` (`display notification`). That API has no buttons,
-//!   so there is no "Show in folder" there.
+//! - macOS: from the oneMK app (its name and icon), through
+//!   `UNUserNotificationCenter` in a short-lived start of the app itself;
+//!   `osascript` (always Script Editor's icon) only outside a bundle. No
+//!   buttons there, so no "Show in folder"; a click opens oneMK.
 //! - Windows: not done yet (see the TODO below); the transfer still
 //!   prints its "Received ..." line.
 //!
@@ -394,7 +396,15 @@ mod sys {
 
 #[cfg(target_os = "macos")]
 mod sys {
+    //! From the oneMK app (its name and icon) and not Script Editor: macOS only accepts that from a
+    //! process that Launch Services started as the app, which the daemon and the command line are not,
+    //! so the app is started for the purpose (`one-mk-app --post-notification`, which shows it and
+    //! ends; `one_mk_ctl::notification`). Outside an app bundle (a development build), or if that
+    //! cannot be started, it is `osascript`, as before. Notifications switched off for oneMK in System
+    //! Settings are respected: nothing is shown, and the callers already print the same words.
+    //! There are no buttons (no "Show in folder"); a click opens oneMK.
     use super::*;
+    use one_mk_ctl::notification::{bundle_of, open_args};
     use std::process::Stdio;
 
     pub async fn failure(title: &str, body: &str) {
@@ -409,12 +419,29 @@ mod sys {
         notify(body, title).await;
     }
 
-    /// Title and body go in as arguments, never into the script text.
     pub async fn show(n: FilesReceived) {
         notify(&n.body(), &n.title()).await;
     }
 
     async fn notify(body: &str, title: &str) {
+        if let Some(app) = std::env::current_exe().ok().as_deref().and_then(bundle_of) {
+            let started = tokio::process::Command::new("open")
+                .args(open_args(&app, title, body))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+            match started {
+                Ok(status) if status.success() => return,
+                other => tracing::debug!("could not start {} for a notification: {other:?}; using osascript", app.display()),
+            }
+        }
+        script(body, title).await;
+    }
+
+    /// Title and body go in as arguments, never into the script text.
+    async fn script(body: &str, title: &str) {
         let res = tokio::process::Command::new("osascript")
             .args([
                 "-e",
