@@ -652,7 +652,8 @@ impl App {
                     if let Some(st) = &s { self.guide.on_status(&st.input, now); }
                     self.status = Some(s);
                     if self.tab == Tab::Files && (changed || self.clipboard_history.is_none()) { self.link.history(); }
-                    let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).collect());
+                    // Names in any script: computers', and saved layouts'.
+                    let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).chain(st.layout.profiles.iter().cloned()).collect());
                     self.fonts.cover(&self.ctx, names.iter().map(String::as_str));
                     // A measurement belongs to one connection: once that
                     // computer goes offline (or oneMK stops) it means nothing.
@@ -2602,6 +2603,12 @@ impl eframe::App for App {
             debug::press_enter(_ctx, raw_input);
             debug::plan_drag(_ctx, raw_input);
             debug::plan_keys(self, _ctx, raw_input);
+        }
+        // Text typed or pasted in any script shows in its own letters (a
+        // layout named in Chinese), not as boxes.
+        let typed: Vec<&str> = raw_input.events.iter().filter_map(|e| match e { egui::Event::Text(t) | egui::Event::Paste(t) => Some(t.as_str()), egui::Event::Ime(egui::ImeEvent::Commit(t) | egui::ImeEvent::Preedit { text: t, .. }) => Some(t.as_str()), _ => None }).collect();
+        if !typed.is_empty() {
+            self.fonts.cover(_ctx, typed.into_iter());
         }
         // Nothing here is under a pointer that has gone elsewhere: no
         // tooltip or highlight is left standing over the window.
