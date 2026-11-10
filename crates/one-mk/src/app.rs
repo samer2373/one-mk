@@ -2213,7 +2213,9 @@ impl App {
                 else { println!("{shown} disconnected (no longer paired)."); }
                 if closed_as_duplicate(&peer.conn) {
                     tracing::debug!(peer = %shown, "it keeps another link to this computer; dialing again in a moment");
-                    self.dial_at = Some(Instant::now() + DUPLICATE_RETRY);
+                    // (Not later than a dial already due for another computer.)
+                    let at = Instant::now() + DUPLICATE_RETRY;
+                    self.dial_at = Some(self.dial_at.map_or(at, |due| due.min(at)));
                 } else {
                     self.redial_soon();
                 }
