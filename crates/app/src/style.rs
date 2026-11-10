@@ -294,7 +294,7 @@ impl Palette {
             key_legend: rgb(0x2B2D33),
             key_legend_mod: rgb(0x3A3E47),
             key_legend_changed: rgb(0x2443C9),
-            key_hover: rgba(0x16171A, 0.07),
+            key_hover: rgba(0x16171A, 0.10),
             mouse_shell: rgb(0xE2E1DD),
             mouse_button: rgb(0xEFEEEB),
             mouse_wheel: rgb(0x34363D),
