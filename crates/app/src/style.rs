@@ -546,13 +546,30 @@ pub fn white(alpha: u8) -> Color32 {
 }
 
 
-/// Corners: panels, things inside them, small controls.
-pub const R_PANEL: u8 = 20;
+/// Corners: things inside panels, small controls.
 pub const R_INNER: u8 = 12;
 /// A card (a group of rows).
 pub const R_GROUP: u8 = 14;
 /// The gap round and between panels.
 pub const M: f32 = 12.0;
+
+// ---- Overlays (handoff 5.8): the sheet, the palette, popovers and menus.
+
+/// A sheet's and the command palette's corner.
+pub const R_SHEET: u8 = 16;
+/// A sheet's padding, its narrowest width, and the room it keeps from the
+/// window's edges.
+pub const SHEET_PAD: f32 = 24.0;
+pub const SHEET_MIN_W: f32 = 440.0;
+pub const SHEET_MARGIN: f32 = 16.0;
+/// A popover's, a menu's and a tooltip's corner, and a menu row's height.
+pub const R_POPOVER: u8 = 10;
+pub const MENU_ROW: f32 = 30.0;
+/// A menu row with a second line under its title.
+pub const MENU_ROW_TALL: f32 = 44.0;
+/// The command palette's widest, and its rows.
+pub const PALETTE_W: f32 = 620.0;
+pub const PALETTE_ROW: f32 = 40.0;
 
 // ---- Type: Inter for words, JetBrains Mono for every number, unit,
 // shortcut, key name and command, Unbounded only in the wordmark. The scale
@@ -645,9 +662,12 @@ pub fn apply_visuals(ctx: &egui::Context) {
         v.code_bg_color = p.surface2;
         v.window_stroke = Stroke::new(1.0, p.line2);
         v.window_shadow.color = p.shadow(90);
-        v.popup_shadow.color = p.shadow(70);
+        // Popovers, menus and tooltips (handoff 5.8): `surface`, a 1-point
+        // `line2`, corner 10, and a soft shadow straight below (not egui's
+        // offset one), so they read as lifted over a panel of the same fill.
+        v.popup_shadow = egui::epaint::Shadow { offset: [0, 6], blur: 20, spread: 0, color: p.shadow(46) };
         v.window_corner_radius = CornerRadius::same(12);
-        v.menu_corner_radius = CornerRadius::same(10);
+        v.menu_corner_radius = CornerRadius::same(R_POPOVER);
         v.selection.bg_fill = p.accent_soft;
         v.selection.stroke = Stroke::new(1.0, p.accent_text);
         v.hyperlink_color = p.accent_text;
@@ -675,6 +695,23 @@ pub fn apply_visuals(ctx: &egui::Context) {
         style.spacing.scroll.bar_width = 6.0;
         // A list with more below shows its handle even at rest.
         style.spacing.scroll.dormant_handle_opacity = 0.6;
+        // egui's own text (tooltips, the few labels in menus) in the type
+        // scale: Inter 13 for words, 12 for small print, Mono for code.
+        style.text_styles = [
+            (egui::TextStyle::Body, regular(T_BODY)),
+            (egui::TextStyle::Button, medium(T_BODY)),
+            (egui::TextStyle::Small, regular(T_META)),
+            (egui::TextStyle::Monospace, mono(T_META)),
+            (egui::TextStyle::Heading, semibold(T_TITLE)),
+        ]
+        .into();
+        style.spacing.tooltip_width = 320.0;
+        // Menu rows draw their own hover; egui's buttons inside a popover
+        // (and its text fields) get the same corner as the rows.
+        let w = &mut style.visuals.widgets;
+        for s in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+            s.corner_radius = CornerRadius::same(6);
+        }
     });
 }
 

@@ -1178,37 +1178,16 @@ impl App {
         egui::Popup::menu(&resp).width(260.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
             let mut opts = vec![Scope::All, Scope::Os(os::MACOS), Scope::Os(os::WINDOWS), Scope::Os(os::LINUX)];
             opts.extend(peers.iter().map(|p| Scope::Peer(p.name.clone())));
-            let heading = |ui: &mut Ui, text: &str| {
-                let (r, _) = ui.allocate_exact_size(vec2(260.0, 22.0), Sense::hover());
-                ui.painter().text(r.left_center() + vec2(8.0, 2.0), Align2::LEFT_CENTER, text, regular(T_META), pal().ink2);
-                a11y_text(ui, Id::unique(("keys-scope-heading", text)), r, Role::Heading, text, None);
-            };
+            let heading = |ui: &mut Ui, text: &str| widgets::menu_heading(ui, 260.0, text);
             // A choice: a check when it is the one in force, a second line
             // in small type if given.
             let mut item = |ui: &mut Ui, s: &Scope, title: &str, sub: Option<&str>| {
-                let (r, resp) = ui.allocate_exact_size(vec2(260.0, if sub.is_some() { 42.0 } else { 28.0 }), Sense::click());
-                // The painter of the area it is in: a list that scrolls clips it.
-                let p = ui.painter().clone();
-                let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
-                p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, pal().hover, hover));
-                widgets::focus_ring(ui, &resp, r, 6);
-                let on = *s == current;
-                let mid = if sub.is_some() { r.top() + 14.0 } else { r.center().y };
-                if on {
-                    widgets::draw_check(&p, pos2(r.left() + 16.0, mid), 10.0, pal().ink, 1.0);
-                }
-                let text = fit(&p, title, &regular(T_BODY), r.width() - 40.0);
-                p.text(pos2(r.left() + 30.0, mid), Align2::LEFT_CENTER, &text, regular(T_BODY), if on { pal().ink } else { pal().ink_hover });
-                if let Some(sub) = sub {
-                    let sub = fit(&p, sub, &regular(T_META), r.width() - 40.0);
-                    p.text(pos2(r.left() + 30.0, r.top() + 31.0), Align2::LEFT_CENTER, &sub, regular(T_META), pal().ink2);
-                }
                 let name = match sub {
                     Some(sub) => format!("For: {title}, {sub}"),
                     None => format!("For: {title}"),
                 };
-                widgets::a11y(&resp, Role::MenuItemRadio, &name, Some(on));
-                if resp.clicked() {
+                let row = widgets::MenuItem { title, sub, chosen: Some(*s == current), mark: None, name: &name, enabled: true };
+                if widgets::menu_item(ui, 260.0, row).clicked() {
                     chosen = Some(s.clone());
                     ui.close();
                 }
@@ -1468,13 +1447,12 @@ impl App {
         let mut selected = None;
         let facts = self.facts();
         let specs = self.prefs.input.specs(&facts);
+        widgets::debug_open_menu(ui, &response, "navigator");
         egui::Popup::menu(&response).width(320.0).show(|ui| {
-            ui.spacing_mut().interact_size.y = 24.0;
-            let search = ui.add(egui::TextEdit::singleline(&mut self.keys.navigator_query).hint_text("Search keys").desired_width(f32::INFINITY));
-            ui.ctx().accesskit_node_builder(search.id, |node| {
-                node.set_label("Search keys");
-                node.set_value(self.keys.navigator_query.clone());
-            });
+            // The search: the window's own field (38 is a page's; 32 here).
+            let (field, _) = ui.allocate_exact_size(vec2(320.0, 32.0), Sense::hover());
+            let search = widgets::field(ui, field, Id::unique("keyboard-navigator-search"), &mut self.keys.navigator_query, "Search keys", "Search keys", true, false);
+            ui.add_space(4.0);
             if response.clicked() { search.request_focus(); }
             let enter = search.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
             let query = self.keys.navigator_query.trim().to_lowercase();
@@ -1488,7 +1466,7 @@ impl App {
                     first_match.get_or_insert(cap.code);
                     let changed = specs.iter().any(|(spec, _)| spec.layer.is_none() && !spec.from.has_mods() && spec.from.key == cap.code);
                     let label = if changed { format!("{name} · Changed") } else { name };
-                    if ui.selectable_label(self.keys.selected == Some(cap.code), label).clicked() {
+                    if widgets::menu_item(ui, 308.0, widgets::MenuItem::choice(&label, &label, self.keys.selected == Some(cap.code))).clicked() {
                         selected = Some(cap.code);
                         ui.close();
                     }
@@ -1502,11 +1480,11 @@ impl App {
                 let hidden_keypad_match = !self.keys.keypad && tune::keyboard(true, mac()).iter().any(|cap| {
                     key_matches_query(cap.code, &query)
                 });
-                ui.label(if hidden_keypad_match {
-                    "No matching keys. Show the keypad to find this key."
-                } else {
-                    "No matching keys"
-                });
+                let text = if hidden_keypad_match { "No matching keys. Show the keypad to find this key." } else { "No matching keys" };
+                let g = ui.painter().layout(text.to_owned(), regular(T_BODY), pal().ink2, 300.0);
+                let (r, _) = ui.allocate_exact_size(vec2(320.0, g.size().y + 16.0), Sense::hover());
+                ui.painter().galley(r.left_top() + vec2(10.0, 8.0), g, pal().ink2);
+                a11y_text(ui, Id::unique("keyboard-navigator-none"), r, Role::Label, text, None);
             }
         });
         if let Some(code) = selected { self.select_key(code, None); }
@@ -1820,15 +1798,10 @@ impl App {
         let own_rule = own.clone();
         let menu = widgets::icon_button(ui, more, Id::unique("key-act-more"), &format!("More for {name}: no output, reset"), !busy, widgets::draw_dots);
         let mut pick = None;
+        widgets::debug_open_menu(ui, &menu, "key-more");
         egui::Popup::menu(&menu).width(220.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
             let mut item = |ui: &mut Ui, k: usize, text: &str, full: String| {
-                let (r, resp) = ui.allocate_exact_size(vec2(220.0, 30.0), widgets::sense(ui, Sense::click()));
-                let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
-                ui.painter().rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, pal().hover, hover));
-                widgets::focus_ring(ui, &resp, r, 6);
-                ui.painter().text(pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, text, regular(T_BODY), pal().ink);
-                widgets::a11y(&resp, Role::MenuItem, &full, None);
-                if resp.clicked() && !busy {
+                if widgets::menu_item(ui, 220.0, widgets::MenuItem::command(text, &full)).clicked() && !busy {
                     pick = Some(k);
                     ui.close();
                 }
@@ -2784,18 +2757,10 @@ impl App {
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
+        widgets::debug_open_menu(ui, &resp, "natural");
         egui::Popup::menu(&resp).width(240.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
             for (k, label) in nat.iter().enumerate() {
-                let (rr, item) = ui.allocate_exact_size(vec2(240.0, 30.0), widgets::sense(ui, Sense::click()));
-                let hover = tween(ui.ctx(), item.id.with("hover"), f32::from(item.hovered()), 0.1, motion::out_cubic);
-                ui.painter().rect_filled(rr, CornerRadius::same(6), mix(Color32::TRANSPARENT, pal().hover, hover));
-                widgets::focus_ring(ui, &item, rr, 6);
-                if k == at_nat {
-                    widgets::draw_check(ui.painter(), pos2(rr.left() + 14.0, rr.center().y), 10.0, pal().ink, 1.0);
-                }
-                ui.painter().text(pos2(rr.left() + 28.0, rr.center().y), Align2::LEFT_CENTER, *label, regular(T_BODY), pal().ink);
-                widgets::a11y(&item, Role::MenuItemRadio, names[k], Some(k == at_nat));
-                if item.clicked() {
+                if widgets::menu_item(ui, 240.0, widgets::MenuItem::choice(label, names[k], k == at_nat)).clicked() {
                     if k != at_nat {
                         change = Some(ScrollChange::Natural(nat_values[k]));
                     }

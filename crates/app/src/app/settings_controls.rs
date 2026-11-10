@@ -1,5 +1,15 @@
 use super::*;
 
+/// A row of pairing's other ways in: a button or a field.
+const PAIR_ROW: f32 = 32.0;
+const PAIR_ADDRESS: &str = "Address: a computer name or IP, with its pairing port after a colon.";
+
+/// How tall `pairing_controls` is `width` wide: four rows and the note
+/// under them (one line, or two in a narrow sheet).
+pub(super) fn pairing_controls_h(ui: &Ui, width: f32) -> f32 {
+    4.0 * PAIR_ROW + 8.0 + 12.0 + 2.0 * 8.0 + 2.0 + page_ui::text_h(ui, PAIR_ADDRESS, width, regular(T_META))
+}
+
 pub(super) fn number(text: &str, max: u32) -> Result<u32, String> {
     text.trim().parse::<u32>().ok().filter(|value| *value <= max).ok_or_else(|| format!("Enter a whole number from 0 to {max}."))
 }
@@ -44,37 +54,42 @@ pub(super) fn recorded(events: &[egui::Event], jump: bool) -> Option<Result<Stri
 }
 
 impl App {
+    /// Pairing's other ways in, under "Looking for another computer": an
+    /// invitation link to share, a link to join, an address to connect to.
+    /// Rows of 32 (handoff 5.8's sheet), `pairing_controls_h` tall.
     pub(super) fn pairing_controls(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
         let link_id = Id::unique("invitation-link");
         let link = ui.ctx().data(|data| data.get_temp::<String>(link_id));
-        let invite = Rect::from_min_size(rect.min, vec2(166.0, 28.0));
+        let invite = Rect::from_min_size(rect.min, vec2(button_width(ui, "Invite with a link").min(rect.width()), PAIR_ROW));
         let mut method = None;
         if button(ui, invite, Id::unique("pair-invite"), "Invite with a link", Look::Quiet, link.is_none(), None).clicked() { method = Some(crate::pairing::Method::Invite); }
-        let mut top = rect.top() + 36.0;
+        let mut top = rect.top() + PAIR_ROW + 8.0;
         if let Some(link) = link {
             let mut shown = link.clone();
-            let field = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width() - 64.0, 28.0));
+            let bw = button_width(ui, "Copy");
+            let field = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width() - bw - 8.0, PAIR_ROW));
             widgets::field(ui, field, Id::unique("pair-invitation"), &mut shown, "", "Private invitation link", false, true);
-            let copy = Rect::from_min_size(pos2(rect.right() - 58.0, top), vec2(58.0, 28.0));
+            let copy = Rect::from_min_size(pos2(rect.right() - bw, top), vec2(bw, PAIR_ROW));
             if button(ui, copy, Id::unique("pair-copy-invite"), "Copy", Look::Quiet, true, None).clicked() { ui.ctx().copy_text(link); }
         } else {
-            para(ui, pos2(rect.left(), top), rect.width(), "Share the private link only with the person pairing.", regular(T_META), pal().ink2);
+            para(ui, pos2(rect.left(), top + 8.0), rect.width(), "Share the private link only with the person pairing.", regular(T_META), pal().ink2);
         }
-        top += 40.0;
+        top += PAIR_ROW + 12.0;
+        let bw = button_width(ui, "Connect");
         for (key, label, hint) in [("join-link", "Join", "Join with a link"), ("connect-address", "Connect", "Connect by address")] {
             let mut value = self.drafts.get(key).cloned().unwrap_or_default();
-            let field = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width() - 80.0, 28.0));
+            let field = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width() - bw - 8.0, PAIR_ROW));
             let response = widgets::field(ui, field, Id::unique(key), &mut value, hint, hint, true, false);
             self.drafts.insert(key.into(), value.clone());
-            let action = Rect::from_min_size(pos2(rect.right() - 74.0, top), vec2(74.0, 28.0));
+            let action = Rect::from_min_size(pos2(rect.right() - bw, top), vec2(bw, PAIR_ROW));
             if (button(ui, action, Id::unique((key, "go")), label, Look::Primary, !value.trim().is_empty(), Some(hint)).clicked()
                 || (response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)))) && !value.trim().is_empty() {
                 method = Some(if key == "join-link" { crate::pairing::Method::Join(value) } else { crate::pairing::Method::Connect(value) });
                 self.drafts.remove(key);
             }
-            top += 38.0;
+            top += PAIR_ROW + 8.0;
         }
-        para(ui, pos2(rect.left(), top), rect.width(), "Address: a computer name or IP, with its pairing port after a colon.", regular(T_META), pal().ink2);
+        para(ui, pos2(rect.left(), top + 2.0), rect.width(), PAIR_ADDRESS, regular(T_META), pal().ink2);
         if let Some(method) = method {
             ui.ctx().data_mut(|data| data.remove::<String>(link_id));
             let port = self.running().map_or(one_mk_proto::DEFAULT_PORT, |status| status.port);
@@ -265,20 +280,10 @@ pub(super) fn chooser(ui: &mut Ui, r: Rect, id: Id, shown: &str, name: &str, opt
     let c = pos2(r.right() - 14.0, r.center().y);
     p.add(egui::Shape::line(vec![c + vec2(-3.5, -1.5), c + vec2(0.0, 2.0), c + vec2(3.5, -1.5)], Stroke::new(1.5, pal().ink2)));
     let mut picked = None;
+    widgets::debug_open_menu(ui, &resp, "chooser");
     egui::Popup::menu(&resp).width(220.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
         for (value, title) in options {
-            let (row, item) = ui.allocate_exact_size(vec2(220.0, 28.0), Sense::click());
-            let hover = tween(ui.ctx(), item.id.with("hover"), f32::from(item.hovered()), 0.1, motion::out_cubic);
-            let p = ui.painter().clone();
-            p.rect_filled(row, CornerRadius::same(6), if item.is_pointer_button_down_on() { widgets::pressed(pal().surface2, 1.0) } else { mix(Color32::TRANSPARENT, pal().surface2, hover) });
-            widgets::focus_ring(ui, &item, row, 6);
-            let on = value == current;
-            if on {
-                widgets::draw_check(&p, pos2(row.left() + 16.0, row.center().y), 10.0, pal().ink, 1.0);
-            }
-            p.text(pos2(row.left() + 30.0, row.center().y), Align2::LEFT_CENTER, fit(&p, title, &regular(T_BODY), row.width() - 40.0), regular(T_BODY), if on { pal().ink } else { pal().ink_hover });
-            item.widget_info(|| egui::WidgetInfo::selected(Role::MenuItemRadio, true, on, title));
-            if item.clicked() {
+            if widgets::menu_item(ui, 220.0, widgets::MenuItem::choice(title, title, value == current)).clicked() {
                 picked = Some(value.clone());
                 ui.close();
             }

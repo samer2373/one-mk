@@ -517,15 +517,11 @@ impl App {
                     let name = name.strip_suffix(".local").unwrap_or(name);
                     let label = computer_menu_label(name, id, *online, chosen, here, value);
                     let (title, detail) = label.split_once('\n').unwrap();
-                    let mut text = egui::text::LayoutJob::default();
-                    text.append(&format!("    {title}"), 0.0, egui::TextFormat { font_id: regular(T_BODY), color: pal().ink, ..Default::default() });
-                    text.append(&format!("\n    {detail}"), 0.0, egui::TextFormat { font_id: regular(T_META), color: pal().ink2, ..Default::default() });
-                    let row = egui::Button::new(text).wrap().min_size(vec2(ui.available_width(), 44.0));
-                    let row = if chosen { row.fill(pal().surface2_hover) } else { row };
-                    let response = ui.add(row);
-                    widgets::a11y(&response, Role::Button, &label, None);
-                    widgets::status_mark(ui.painter(), response.rect.left_top() + vec2(10.0, 12.0), 7.0, if *online { widgets::Mark::Ok } else { widgets::Mark::Off });
-                    if response.clicked() {
+                    // ✓ the one chosen, ● connected (○ not), the name, and
+                    // under it its state, latency and whether the pointer is there.
+                    let mark = if *online { widgets::Mark::Ok } else { widgets::Mark::Off };
+                    let item = widgets::MenuItem { title, sub: Some(detail), chosen: Some(chosen), mark: Some(mark), name: &label, enabled: true };
+                    if widgets::menu_item(ui, 300.0, item).clicked() {
                         selected = Some(id.clone());
                         ui.close();
                     }

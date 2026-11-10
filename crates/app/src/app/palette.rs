@@ -222,7 +222,8 @@ impl App {
         if fade < 1.0 {
             ctx.request_repaint();
         }
-        ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("palette-dim"))).rect_filled(screen, 0.0, pal().shadow((140.0 * fade) as u8));
+        // The same dimming as behind a sheet (light: black 20 %, dark: 50 %).
+        ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("palette-dim"))).rect_filled(screen, 0.0, crate::style::scrim().gamma_multiply(fade));
 
         let q = self.palette.query.trim().to_owned();
         let mut found: Vec<(Entry, Vec<std::ops::Range<usize>>)> = self.palette_entries().into_iter().filter_map(|e| {
@@ -264,22 +265,13 @@ impl App {
         }
 
         // Rows: a heading where the group changes, then the entries.
-        const ROW: f32 = 40.0;
+        const ROW: f32 = PALETTE_ROW;
         const HEAD: f32 = 26.0;
-        const MAX_H: f32 = 380.0;
-        let mut rows: Vec<(Option<&'static str>, usize)> = vec![];
-        let mut last = "";
-        for (k, (e, _)) in found.iter().enumerate() {
-            if e.group != last {
-                rows.push((Some(e.group), k));
-                last = e.group;
-            }
-            rows.push((None, k));
-        }
-        let list_h: f32 = rows.iter().map(|(h, _)| if h.is_some() { HEAD } else { ROW }).sum::<f32>().min(MAX_H).max(if n == 0 { 64.0 } else { 0.0 });
-        let w = (screen.width() - 80.0).min(620.0);
-        let h = 56.0 + list_h + 8.0 + 40.0;
-        let rect = Rect::from_min_size(pos2(screen.center().x - w / 2.0, screen.top() + (screen.height() * 0.16).max(60.0) + 6.0 * (1.0 - fade)), vec2(w, h));
+        let groups: Vec<&'static str> = found.iter().map(|(e, _)| e.group).collect();
+        let rows = palette_rows(&groups);
+        let lay = palette_layout(screen, &rows);
+        let list_h = lay.list_h;
+        let rect = lay.rect.translate(vec2(0.0, 6.0 * (1.0 - fade)));
         let clicked_out = ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !rect.contains(p)));
         if clicked_out && now - self.palette.opened > 0.1 {
             self.palette.open = false;
@@ -288,7 +280,7 @@ impl App {
         let mut run = None;
         egui::Area::new(Id::unique("palette")).order(egui::Order::Tooltip).fixed_pos(rect.min).show(ctx, |ui| {
             let (r, _) = ui.allocate_exact_size(rect.size(), Sense::hover());
-            for s in widgets::glass_shapes_as(ui.ctx(), Id::unique("palette-glass").value(), r, 18.0, widgets::PALETTE_GLASS) {
+            for s in widgets::glass_shapes_as(ui.ctx(), Id::unique("palette-glass").value(), r, f32::from(R_SHEET), widgets::PALETTE_GLASS) {
                 ui.painter().add(s);
             }
             let p = ui.painter().clone();
@@ -328,23 +320,22 @@ impl App {
                     if resp.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
                         self.palette.sel = *k;
                     }
-                    // Tabbed onto, a row is the chosen one (its lift and Volt
-                    // tile are the focus look), and its ring shows.
+                    // Tabbed onto, a row is the chosen one (its fill and
+                    // accent tile are the focus look), and its ring shows.
                     if resp.gained_focus() {
                         self.palette.sel = *k;
                     }
                     widgets::focus_ring(ui, &resp, row, 10);
                     let chosen = self.palette.sel == *k;
                     if chosen {
-                        // The chosen row: a quiet lift, as a system list does; its icon
-                        // tile carries the Volt.
-                        ui.painter().rect(row, CornerRadius::same(10), pal().accent_soft, Stroke::new(1.0, pal().line), StrokeKind::Inside);
+                        // The chosen row: `accent_soft`; its icon tile in the accent.
+                        ui.painter().rect_filled(row, CornerRadius::same(10), pal().accent_soft);
                         if down || up {
                             ui.scroll_to_rect(rr, None);
                         }
                     }
                     let ic = Rect::from_center_size(pos2(row.left() + 22.0, row.center().y), vec2(26.0, 26.0));
-                    ui.painter().rect_filled(ic, CornerRadius::same(7), if chosen { pal().accent } else { pal().hover });
+                    ui.painter().rect_filled(ic, CornerRadius::same(7), if chosen { pal().accent } else { pal().surface2 });
                     let icon = match e.act {
                         Act::Tab(Tab::Files) => Icon::Clipboard,
                         Act::Tab(Tab::Keys) => Icon::Keys,
@@ -363,7 +354,7 @@ impl App {
                         Act::Update => Icon::Update,
                         Act::Received => Icon::Clipboard,
                     };
-                    icons::draw(ui.painter(), icon, ic.shrink(5.5), if chosen { pal().on_accent } else { pal().ink });
+                    icons::draw(ui.painter(), icon, ic.shrink(5.5), if chosen { pal().on_accent } else { pal().ink2 });
                     // The title with what was typed lit up.
                     let mut job = egui::text::LayoutJob::default();
                     let mut at = 0;
@@ -375,17 +366,20 @@ impl App {
                         }
                         // Only the typed characters stand out: in full ink and
                         // semibold, the rest of the title a step quieter.
-                        job.append(&e.title[at..range.start], 0.0, egui::TextFormat::simple(regular(14.0), pal().ink_hover));
-                        job.append(&e.title[range.clone()], 0.0, egui::TextFormat::simple(semibold(14.0), pal().ink));
+                        job.append(&e.title[at..range.start], 0.0, egui::TextFormat::simple(regular(T_BODY), pal().ink_hover));
+                        job.append(&e.title[range.clone()], 0.0, egui::TextFormat::simple(semibold(T_BODY), pal().ink));
                         at = range.end;
                     }
-                    job.append(&e.title[at..], 0.0, egui::TextFormat::simple(regular(14.0), pal().ink_hover));
+                    job.append(&e.title[at..], 0.0, egui::TextFormat::simple(regular(T_BODY), if lit.is_empty() { pal().ink } else { pal().ink_hover }));
                     let g = ui.painter().layout_job(job);
                     ui.painter().galley(pos2(ic.right() + 12.0, row.center().y - g.size().y / 2.0), g, pal().ink);
-                    if !e.hint.is_empty() {
-                        ui.painter().text(pos2(row.right() - 12.0, row.center().y), Align2::RIGHT_CENTER, &e.hint, regular(T_META), pal().ink3);
+                    // A shortcut in a mono key chip; other hints in `ink3`.
+                    if !e.hint.is_empty() && matches!(e.act, Act::Tab(_)) && e.group == "Go to" {
+                        widgets::kbd(ui.painter(), pos2(row.right() - 10.0, row.center().y), Align2::RIGHT_CENTER, &e.hint);
+                    } else if !e.hint.is_empty() {
+                        ui.painter().text(pos2(row.right() - 12.0, row.center().y), Align2::RIGHT_CENTER, &e.hint, regular(T_META), if chosen { pal().accent_text } else { pal().ink3 });
                     } else if chosen {
-                        ui.painter().text(pos2(row.right() - 12.0, row.center().y), Align2::RIGHT_CENTER, "↵", regular(T_BODY), pal().ink2);
+                        widgets::kbd(ui.painter(), pos2(row.right() - 10.0, row.center().y), Align2::RIGHT_CENTER, "↵");
                     }
                     widgets::a11y(&resp, Role::Button, &e.title, Some(chosen));
                     if resp.clicked() {
@@ -397,6 +391,7 @@ impl App {
             let foot = Rect::from_min_max(pos2(r.left(), r.bottom() - 40.0), r.max);
             p.hline(foot.x_range(), foot.top() + 0.5, Stroke::new(1.0, pal().line));
             p.text(pos2(foot.left() + 16.0, foot.center().y), Align2::LEFT_CENTER, "oneMK", regular(T_META), pal().ink3);
+            // Close, Move and Open: each word in `ink3`, its key in a mono chip.
             let mut x = foot.right() - 16.0;
             for (word, key) in [("Close", "esc"), ("Move", "↑↓"), ("Open", "↵")] {
                 let kr = widgets::kbd(&p, pos2(x, foot.center().y), Align2::RIGHT_CENTER, key);
@@ -411,9 +406,74 @@ impl App {
     }
 }
 
+/// The list's rows: a heading where the group changes (`Some(group)`),
+/// then each entry by its index in `groups` (the results, in order).
+fn palette_rows(groups: &[&'static str]) -> Vec<(Option<&'static str>, usize)> {
+    let mut rows = vec![];
+    let mut last = "";
+    for (k, g) in groups.iter().enumerate() {
+        if *g != last {
+            rows.push((Some(*g), k));
+            last = g;
+        }
+        rows.push((None, k));
+    }
+    rows
+}
+
+/// Where the palette goes in `screen` (handoff 5.8): at most 620 wide, 40
+/// from the sides, a sixth of the way down; the search (56), the list (40 a
+/// row, 26 a heading, up to 380, then it scrolls; room for "Nothing found"
+/// when empty) and the footer of key hints (40).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PaletteLayout {
+    rect: Rect,
+    list_h: f32,
+}
+
+fn palette_layout(screen: Rect, rows: &[(Option<&'static str>, usize)]) -> PaletteLayout {
+    const HEAD: f32 = 26.0;
+    const SEARCH: f32 = 56.0;
+    const FOOT: f32 = 40.0;
+    let top = screen.top() + (screen.height() * 0.16).max(60.0);
+    // Never taller than the window leaves below its top.
+    let max_list = (screen.bottom() - 16.0 - top - SEARCH - 8.0 - FOOT).clamp(PALETTE_ROW * 2.0, 380.0);
+    let list_h = if rows.is_empty() { 64.0 } else { rows.iter().map(|(h, _)| if h.is_some() { HEAD } else { PALETTE_ROW }).sum::<f32>().min(max_list) };
+    let w = (screen.width() - 80.0).min(PALETTE_W);
+    PaletteLayout { rect: Rect::from_min_size(pos2(screen.center().x - w / 2.0, top), vec2(w, SEARCH + list_h + 8.0 + FOOT)), list_h }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rows_head_each_group_once_and_keep_every_entry() {
+        let groups = ["Go to", "Go to", "Actions", "Settings", "Settings"];
+        let rows = palette_rows(&groups);
+        assert_eq!(rows.iter().filter(|(h, _)| h.is_some()).count(), 3);
+        let entries: Vec<usize> = rows.iter().filter(|(h, _)| h.is_none()).map(|(_, k)| *k).collect();
+        assert_eq!(entries, vec![0, 1, 2, 3, 4]);
+        assert_eq!(rows[0], (Some("Go to"), 0));
+        assert!(palette_rows(&[]).is_empty());
+    }
+
+    #[test]
+    fn the_palette_is_620_at_most_and_fits_a_small_window() {
+        let rows = palette_rows(&["Go to"; 30]);
+        let big = palette_layout(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0)), &rows);
+        assert_eq!(big.rect.width(), 620.0);
+        assert_eq!(big.list_h, 380.0, "a long list scrolls inside 380");
+        assert!((big.rect.center().x - 720.0).abs() < 0.01);
+        let small = palette_layout(Rect::from_min_size(Pos2::ZERO, vec2(820.0, 540.0)), &rows);
+        assert_eq!(small.rect.width(), 620.0);
+        assert!(small.rect.bottom() <= 540.0 - 16.0, "{:?}", small.rect);
+        // Rows are 40: the list shows whole rows of 40 plus the heading.
+        let few = palette_layout(Rect::from_min_size(Pos2::ZERO, vec2(1100.0, 720.0)), &palette_rows(&["Go to", "Go to"]));
+        assert_eq!(few.list_h, 26.0 + 2.0 * 40.0);
+        // Nothing found still leaves room to say so.
+        assert_eq!(palette_layout(Rect::from_min_size(Pos2::ZERO, vec2(820.0, 540.0)), &[]).list_h, 64.0);
+    }
 
     #[test]
     fn every_word_must_be_found_and_is_lit() {
