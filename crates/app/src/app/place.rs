@@ -140,6 +140,8 @@ const PLACE_BOUNDS: &str = "X and Y must be within -16777216 and 16777216 pixels
 /// How near an edge of ours a block let go on the plan snaps to it, in
 /// points of the plan.
 const PLAN_REACH: f64 = 10.0;
+/// A plan tile's corner.
+const TILE_R: u8 = 6;
 /// A field's height (the handoff's 38).
 const FIELD_H: f32 = 38.0;
 
@@ -471,14 +473,19 @@ impl App {
             return;
         };
         let mut card = page.wide(ui, "");
-        let inner_w = page.w - 48.0;
-        // Room around the screens to carry one into (a quarter of their
+        // The screens stand in a recessed well as wide as the card's rows,
+        // as tall as a third of the window allows (within reason).
+        let inner_w = page.w - 2.0 * page_ui::CARD_PAD - 32.0;
+        let tall = f64::from((ui.ctx().content_rect().height() * 0.34).clamp(180.0, 320.0));
+        // Room around the screens to carry one into (a fifth of their
         // height above and below, a little at the sides).
-        let room = one_mk_wallpaper::Rect { x: bounds.x - bounds.width * 0.06, y: bounds.y - bounds.height * 0.25, width: bounds.width * 1.12, height: bounds.height * 1.5 };
-        let frame = self.plan.as_ref().map_or_else(|| PlanFrame::fit(room, inner_w, 190.0), |d| d.frame);
+        let room = one_mk_wallpaper::Rect { x: bounds.x - bounds.width * 0.06, y: bounds.y - bounds.height * 0.2, width: bounds.width * 1.12, height: bounds.height * 1.4 };
+        let frame = self.plan.as_ref().map_or_else(|| PlanFrame::fit(room, inner_w, tall), |d| d.frame);
         let size = frame.size();
-        let area = card.row(ui, size.y + 12.0 + 40.0);
-        let top_left = pos2(area.center().x - size.x / 2.0, area.top() + 12.0);
+        let area = card.row(ui, 18.0 + size.y + 16.0 + 40.0);
+        let well = Rect::from_min_max(pos2(area.left(), area.top() + 18.0), pos2(area.right(), area.top() + 18.0 + size.y + 16.0));
+        preview::stage(ui.painter(), well, 12, 16.0);
+        let top_left = pos2((well.center().x - size.x / 2.0).round(), well.top() + 8.0);
         let mine = Desktop::new(status.screens.clone());
         let movable = |id: &str| -> Option<Desktop> {
             status.peers.iter().find(|p| p.id == id).filter(|p| !p.screens.is_empty() && !status.screens.is_empty()).map(|p| Desktop::new(p.screens.clone()))
@@ -486,7 +493,7 @@ impl App {
         let reach = PLAN_REACH / frame.scale;
         let (alt, shift, escape, enter) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift, i.key_pressed(Key::Escape), i.key_pressed(Key::Enter)));
         let apart = self.plan_free || alt;
-        let block = |r: one_mk_wallpaper::Rect| Rect::from_min_max(frame.screen(top_left, r.x, r.y), frame.screen(top_left, r.x + r.width, r.y + r.height)).shrink(1.5);
+        let block = |r: one_mk_wallpaper::Rect| Rect::from_min_max(frame.screen(top_left, r.x, r.y), frame.screen(top_left, r.x + r.width, r.y + r.height)).shrink(2.0);
 
         // Each block where it is drawn now: what the pointer and keys do.
         let mut responses = Vec::with_capacity(before.monitors.len());
@@ -550,7 +557,7 @@ impl App {
             }
             // It stays on the plan (above the line under it), not under the cards.
             if let Some(theirs) = movable(&d.id) {
-                let room = Rect::from_min_max(area.min + vec2(0.0, 4.0), area.max - vec2(0.0, 30.0));
+                let room = well.shrink(4.0);
                 d.at = keep_within(d.at, theirs.bounds(), frame.px(top_left, room.min), frame.px(top_left, room.max));
             }
             match movable(&d.id) {
@@ -587,26 +594,45 @@ impl App {
             let gy = tween(ui.ctx(), Id::unique(("plan-glide", &monitor.computer, 1)), o.1 as f32, secs, motion::out_cubic);
             glide.insert(monitor.computer.clone(), vec2((f64::from(gx - o.0 as f32) * frame.scale) as f32, (f64::from(gy - o.1 as f32) * frame.scale) as f32));
         }
-        let p = ui.painter_at(area.expand(2.0));
+        let p = ui.painter_at(area.expand(6.0));
         let mut named = std::collections::BTreeSet::new();
-        for (k, monitor) in canvas.monitors.iter().enumerate() {
+        // The carried computer's screens are painted last, over the others.
+        let mut order: Vec<usize> = (0..canvas.monitors.len()).collect();
+        order.sort_by_key(|k| carried.as_deref() == Some(canvas.monitors[*k].computer.as_str()));
+        for k in order {
+            let monitor = &canvas.monitors[k];
             let rect = block(monitor.rect).translate(glide.get(&monitor.computer).copied().unwrap_or_default());
             let Some(response) = responses.get(k) else { continue };
             let is_me = monitor.computer == status.id;
-            let chosen = Some(monitor.computer.as_str()) == selected || (selected == Some("me") && is_me) || carried.as_deref() == Some(monitor.computer.as_str());
-            let fill = if chosen { pal().accent_soft } else { mix(pal().surface2, pal().surface2_hover, f32::from(response.hovered())) };
-            let fill = if monitor.online { fill } else { fill.gamma_multiply(0.55) };
-            p.rect_filled(rect, CornerRadius::same(5), fill);
+            let lifted = carried.as_deref() == Some(monitor.computer.as_str());
+            let chosen = Some(monitor.computer.as_str()) == selected || (selected == Some("me") && is_me) || lifted;
+            let hover = tween(ui.ctx(), response.id.with("hover"), f32::from(response.hovered()), 0.12, motion::out_cubic);
+            let lift = tween(ui.ctx(), response.id.with("lift"), f32::from(lifted && self.plan.as_ref().is_some_and(|d| d.grab.is_some())), motion::fade(0.14), motion::out_cubic);
+            preview::tile(&p, rect, TILE_R, preview::TileState { chosen, hover, lift, online: monitor.online });
             let name = if is_me { status.name.clone() } else { status.peers.iter().find(|peer| peer.id == monitor.computer).map_or_else(|| monitor.name.clone(), |peer| peer.name.clone()) };
-            if named.insert(monitor.computer.clone()) {
-                let label = if monitor.online { name.clone() } else { format!("{name} · Offline") };
-                let colour = if chosen { pal().accent_text } else if monitor.online { pal().ink2 } else { pal().ink3 };
-                let shown = fit(&p, &label, &regular(T_META), rect.width() - 10.0);
-                if rect.width() > 36.0 && rect.height() > 18.0 {
-                    p.text(rect.center(), Align2::CENTER_CENTER, shown, regular(T_META), colour);
+            // The computer's name on its first screen; under it (room
+            // allowing) the screen's size, or that it is offline.
+            let first = named.insert(monitor.computer.clone());
+            let size_words = monitor.local.map(|l| format!("{} × {}", l.width.round(), l.height.round()));
+            let under = if !monitor.online { Some("Offline".to_owned()) } else { size_words };
+            let room = rect.width() - 12.0;
+            // A size is said whole or not at all; a name too long for the
+            // tile steps down a size before it is cut short.
+            let under = under.filter(|u| text_width(ui, u, mono(T_CHIP)) <= room);
+            let two_lines = rect.height() >= 40.0 && under.is_some();
+            let name_font = if text_width(ui, &name, medium(T_META)) <= room { medium(T_META) } else { medium(T_CHIP) };
+            let ink = if chosen { pal().accent_text } else if monitor.online { pal().ink } else { pal().ink2 };
+            if first && rect.width() > 30.0 && rect.height() > 18.0 {
+                let shown = fit(&p, &name, &name_font, room);
+                let y = if two_lines { rect.center().y - 7.0 } else { rect.center().y };
+                p.text(pos2(rect.center().x, y), Align2::CENTER_CENTER, shown, name_font, ink);
+                if let Some(under) = under.as_ref().filter(|_| two_lines) {
+                    p.text(pos2(rect.center().x, y + 15.0), Align2::CENTER_CENTER, under, mono(T_CHIP), if chosen { pal().accent_text } else { pal().ink3 });
                 }
+            } else if let Some(under) = under.as_ref().filter(|_| rect.height() > 18.0) {
+                p.text(rect.center(), Align2::CENTER_CENTER, under, mono(T_CHIP), pal().ink3);
             }
-            widgets::focus_ring(ui, response, rect, 5);
+            widgets::focus_ring(ui, response, rect, TILE_R);
             let can_move = !is_me && movable(&monitor.computer).is_some();
             let words = if can_move {
                 format!("{name}: drag it to place it, or use the arrow keys (Shift moves 10 pixels), Enter to place it, Esc to cancel")
@@ -632,12 +658,20 @@ impl App {
         {
             for s in &peer.screens {
                 let (x, y) = (f64::from(s.x + d.at.0), f64::from(s.y + d.at.1));
-                let r = Rect::from_min_max(frame.screen(top_left, x, y), frame.screen(top_left, x + f64::from(s.w), y + f64::from(s.h))).shrink(1.5);
-                p.rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, pal().line2), StrokeKind::Inside);
+                let r = Rect::from_min_max(frame.screen(top_left, x, y), frame.screen(top_left, x + f64::from(s.w), y + f64::from(s.h))).shrink(2.0);
+                let corners = vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+                p.extend(egui::Shape::dashed_line(&corners, Stroke::new(1.0, pal().accent.gamma_multiply(0.7)), 4.0, 3.0));
             }
         }
+        // Where the pointer crosses: the accent, on a soft glow, round at its ends.
         for (from, to) in touching_edges(&canvas) {
-            p.line_segment([frame.screen(top_left, from.0, from.1), frame.screen(top_left, to.0, to.1)], Stroke::new(2.0, pal().accent));
+            let (a, b) = (frame.screen(top_left, from.0, from.1), frame.screen(top_left, to.0, to.1));
+            let along = (b - a).normalized() * 2.0;
+            let (a, b) = (a + along, b - along);
+            p.line_segment([a, b], Stroke::new(7.0, pal().ring));
+            p.line_segment([a, b], Stroke::new(2.5, pal().accent));
+            p.circle_filled(a, 1.25, pal().accent);
+            p.circle_filled(b, 1.25, pal().accent);
         }
         a11y_text(ui, Id::unique("arrange-plan"), area, Role::Image, "Plan of every computer's screens; the edges where the pointer crosses are marked", None);
 

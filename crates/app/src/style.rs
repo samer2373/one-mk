@@ -473,9 +473,6 @@ pub const SCREEN_INK2: Color32 = rgb(0x9DA6B1);
 pub const SCREEN_INK_SUB: Color32 = rgb(0xC4CAD2);
 /// The plate the pairing code sits on, inside a screen.
 pub const SCREEN_PLATE: Color32 = rgb(0x0E1115);
-/// A screen with nothing on it, in the Wallpaper preview: a slate that reads
-/// as a blank display on the light page (near black would be a hole in it).
-pub const SCREEN_BLANK: Color32 = rgb(0x464B54);
 /// A screen's thin frame, and the pointer's outline on it.
 pub const SCREEN_EDGE: Color32 = rgb(0x30353E);
 pub const POINTER_EDGE: Color32 = rgb(0x111111);
@@ -799,6 +796,78 @@ impl Fallbacks {
         if added {
             ctx.set_fonts(fonts(&self.loaded));
         }
+    }
+}
+
+// ---- 2D previews of screens (the Arrange plan, the Wallpaper canvas) ----
+
+/// How the flat previews of screens are drawn in the active theme: the
+/// recessed ground they stand on, a plan tile's material and a monitor's
+/// bezel and blank glass. Worked out from the palette, so they follow it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PreviewLook {
+    /// The well the screens stand on, its rim and the dots of its grid.
+    pub stage: Color32,
+    pub stage_edge: Color32,
+    pub stage_dot: Color32,
+    /// A plan tile: its fill, top to bottom, its outline and the light
+    /// along its top edge.
+    pub tile_top: Color32,
+    pub tile_bottom: Color32,
+    pub tile_edge: Color32,
+    pub tile_edge_lit: Color32,
+    pub tile_hi: Color32,
+    /// The chosen tile's fill, top to bottom.
+    pub chosen_top: Color32,
+    pub chosen_bottom: Color32,
+    /// What a tile's or a monitor's shadow is made of.
+    pub shadow: Color32,
+    /// A monitor's bezel, top to bottom, its outer edge and the light
+    /// catching its top.
+    pub bezel_top: Color32,
+    pub bezel_bottom: Color32,
+    pub bezel_edge: Color32,
+    pub bezel_hi: Color32,
+    /// The glass of a screen with no picture, top to bottom, and the words on it.
+    pub blank_top: Color32,
+    pub blank_bottom: Color32,
+    pub blank_ink: Color32,
+    /// Behind a name laid over a picture, and the name.
+    pub label_back: Color32,
+    pub label_ink: Color32,
+    /// The glass's own sheen (over a picture or not) and its inner edge.
+    pub sheen: Color32,
+    pub glass_edge: Color32,
+}
+
+/// The previews' look for the active palette.
+pub fn preview_look() -> PreviewLook {
+    let p = pal();
+    let light = p.theme == Theme::Light;
+    let (graphite_top, graphite_bottom) = if light { (rgb(0x3A3D44), rgb(0x202226)) } else { (rgb(0x2B2D33), rgb(0x141518)) };
+    PreviewLook {
+        stage: if light { mix(p.bg, p.surface, 0.25) } else { mix(p.bg, black(255), 0.12) },
+        stage_edge: p.line,
+        stage_dot: if light { rgba(0x16171A, 0.10) } else { rgba(0xFFFFFF, 0.07) },
+        tile_top: if light { p.surface } else { mix(p.surface2, rgb(0xFFFFFF), 0.07) },
+        tile_bottom: if light { mix(p.surface, p.surface2, 0.85) } else { mix(p.surface2, p.surface, 0.35) },
+        tile_edge: if light { rgba(0x16171A, 0.16) } else { rgba(0x000000, 0.55) },
+        tile_edge_lit: if light { rgba(0x16171A, 0.32) } else { rgba(0xFFFFFF, 0.22) },
+        tile_hi: if light { rgba(0xFFFFFF, 0.9) } else { rgba(0xFFFFFF, 0.08) },
+        chosen_top: if light { mix(p.accent_soft, rgb(0xFFFFFF), 0.45) } else { mix(p.accent_soft, p.accent, 0.18) },
+        chosen_bottom: p.accent_soft,
+        shadow: if light { rgba(0x16171A, 0.10) } else { rgba(0x000000, 0.45) },
+        bezel_top: graphite_top,
+        bezel_bottom: graphite_bottom,
+        bezel_edge: if light { rgba(0x000000, 0.12) } else { rgba(0x000000, 0.7) },
+        bezel_hi: rgba(0xFFFFFF, if light { 0.16 } else { 0.10 }),
+        blank_top: if light { rgb(0xEDEEF2) } else { rgb(0x262A33) },
+        blank_bottom: if light { rgb(0xD5D8E0) } else { rgb(0x181B21) },
+        blank_ink: if light { rgb(0x4A5060) } else { rgb(0x8C929E) },
+        label_back: rgba(0x0C0D0F, 0.46),
+        label_ink: rgb(0xFFFFFF),
+        sheen: rgba(0xFFFFFF, if light { 0.10 } else { 0.05 }),
+        glass_edge: rgba(0x000000, 0.35),
     }
 }
 
