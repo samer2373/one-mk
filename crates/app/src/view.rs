@@ -465,11 +465,38 @@ pub struct Check {
     pub action: Option<String>,
 }
 
+/// An error from `one-mk` or the service as the window shows it: what
+/// happened, in its own words, without the steps meant for a terminal
+/// (commands, `settings.toml`). Only when nothing but such steps is left
+/// is it replaced by a pointer to the window's own options.
 pub fn window_issue(text: &str) -> String {
-    if text.contains("settings.toml") { "Check the options in Settings, then try again.".into() }
-    else if text.contains('`') || ["one-mk run", "one-mk install", "one-mk pair", "one-mk hooks", "one-mk edge", "one-mk send", "one-mk keymap", "one-mk clipboard", "one-mk hotkeys", "one-mk takeback", "one-mk gestures", "one-mk invite", "one-mk join", "one-mk doctor", "sudo ", "chmod "].iter().any(|command| text.contains(command)) {
-        "Review the options in this window, or restart oneMK and try again.".into()
-    } else { text.replace("one-mk", "oneMK") }
+    const COMMANDS: [&str; 16] = ["one-mk run", "one-mk install", "one-mk pair", "one-mk hooks", "one-mk edge", "one-mk send", "one-mk keymap", "one-mk clipboard", "one-mk hotkeys", "one-mk takeback", "one-mk gestures", "one-mk invite", "one-mk join", "one-mk doctor", "sudo ", "chmod "];
+    let terminal = |part: &str| part.contains('`') || part.contains("settings.toml") || COMMANDS.iter().any(|command| part.contains(command));
+    if text.contains("settings.toml") && (text.contains("Permission denied") || text.contains("Read-only file system")) {
+        return "oneMK isn't allowed to save its settings here (permission denied).".into();
+    }
+    // A step in brackets goes ("… (`one-mk clipboard` there)"), then each
+    // clause that is one ("…; on Mac run: one-mk clipboard --allow-fetch on").
+    let mut plain = text.to_owned();
+    while let Some(open) = plain.find(" (") {
+        let Some(close) = plain[open..].find(')').map(|c| open + c) else { break };
+        if !terminal(&plain[open..=close]) {
+            break;
+        }
+        plain.replace_range(open..=close, "");
+    }
+    let kept: Vec<&str> = plain.split("; ").map(str::trim).filter(|part| !part.is_empty() && !terminal(part)).collect();
+    if kept.is_empty() || (kept.len() == 1 && kept[0].len() < 12) {
+        return if text.contains("settings.toml") { "Check the options in Settings, then try again.".into() } else { "Review the options in this window, or restart oneMK and try again.".into() };
+    }
+    if kept.len() == 1 && kept[0] == text {
+        return text.replace("one-mk", "oneMK");
+    }
+    let mut said = kept.join("; ").trim_end_matches([':', ',', ' ']).to_owned();
+    if !said.ends_with(['.', '!', '?']) {
+        said.push('.');
+    }
+    said.replace("one-mk", "oneMK")
 }
 
 /// What `one-mk doctor --json` found, worst first, keeping its order
@@ -901,6 +928,18 @@ mod tests {
             let shown = window_issue(text);
             assert!(!shown.contains("one-mk ") && !shown.contains("settings.toml") && !shown.contains('`'), "{shown}");
         }
+    }
+
+    /// What went wrong is kept; only the terminal steps go.
+    #[test]
+    fn window_diagnostics_keep_the_reason() {
+        assert_eq!(window_issue("MacBook Air does not allow fetching its clipboard; on MacBook Air run: one-mk clipboard --allow-fetch on"), "MacBook Air does not allow fetching its clipboard.");
+        assert_eq!(window_issue("its clipboard is empty, or it does not share it (`one-mk clipboard` there)"), "its clipboard is empty, or it does not share it.");
+        assert_eq!(window_issue("saving /home/x/.config/one-mk/settings.toml: Permission denied (os error 13)"), "oneMK isn't allowed to save its settings here (permission denied).");
+        assert_eq!(window_issue("Studio PC is offline"), "Studio PC is offline");
+        assert_eq!(window_issue("Edit settings.toml"), "Check the options in Settings, then try again.");
+        assert_eq!(window_issue("Try `one-mk hotkeys`"), "Review the options in this window, or restart oneMK and try again.");
+        assert_eq!(window_issue("one-mk is busy (try again)"), "oneMK is busy (try again)");
     }
 
     #[test]
