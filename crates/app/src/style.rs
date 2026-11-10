@@ -307,8 +307,8 @@ impl Palette {
             card_shadow: 1.0,
 
             // ---- the 3D scenes: pale ceramic and aluminium on the paper ----
-            key_case: rgb(0xCBCAC6),
-            key_plate: rgb(0xBEBDB9),
+            key_case: rgb(0xDCDBD7),
+            key_plate: rgb(0xC9C8C4),
             key_cap: rgb(0xF7F6F3),
             key_cap_mod: rgb(0xD1D4D9),
             key_legend: rgb(0x2B2D33),
