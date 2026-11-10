@@ -1,4 +1,4 @@
-# Pairing invitations (3H)
+# Pairing invitations
 
 ## Use and approval
 

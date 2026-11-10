@@ -228,8 +228,10 @@ fn shortcut_upgrade_notice_is_once_and_piped_logs_have_no_ansi() {
     }
 }
 
-#[test]
-fn cli_pair_reloads_two_running_daemons_and_keeps_real_ports() {
+/// Two null daemons on loopback, paired with `one-mk pair` while running.
+struct Paired { home_a: tempfile::TempDir, home_b: tempfile::TempDir, port_a: u16, port_b: u16, _daemons: [Process; 2] }
+
+fn paired_daemons() -> Paired {
     use std::io::Write;
     let (home_a, home_b) = (private_home(), private_home());
     let bind_a = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -239,8 +241,8 @@ fn cli_pair_reloads_two_running_daemons_and_keeps_real_ports() {
     let args = |port| vec!["run".to_owned(), "--backend".into(), "null".into(), "--no-discovery".into(), "--no-notify".into(), "--no-clipboard".into(), "--port".into(), port];
     let daemon_a_args = args(port_a.to_string());
     let daemon_b_args = args(port_b.to_string());
-    let _daemon_a = process(home_a.path(), &daemon_a_args.iter().map(String::as_str).collect::<Vec<_>>(), false);
-    let _daemon_b = process(home_b.path(), &daemon_b_args.iter().map(String::as_str).collect::<Vec<_>>(), false);
+    let daemon_a = process(home_a.path(), &daemon_a_args.iter().map(String::as_str).collect::<Vec<_>>(), false);
+    let daemon_b = process(home_b.path(), &daemon_b_args.iter().map(String::as_str).collect::<Vec<_>>(), false);
     wait_until(|| daemon_status(home_a.path()).is_some() && daemon_status(home_b.path()).is_some());
     let mut pair_a = process(home_a.path(), &["pair", "--machine", "--no-discovery"], true);
     let events_a = lines(&mut pair_a);
@@ -254,9 +256,54 @@ fn cli_pair_reloads_two_running_daemons_and_keeps_real_ports() {
     pair_b.0.stdin.as_mut().unwrap().write_all(b"y\n").unwrap();
     event(&events_a, "paired");
     event(&events_b, "paired");
+    Paired { home_a, home_b, port_a, port_b, _daemons: [daemon_a, daemon_b] }
+}
+
+#[test]
+fn cli_pair_reloads_two_running_daemons_and_keeps_real_ports() {
+    let Paired { home_a, home_b, port_a, port_b, _daemons } = paired_daemons();
     for (home, port) in [(home_a.path(), port_b), (home_b.path(), port_a)] {
         let store = one_mk_net::TrustStore::load(home).unwrap();
         assert!(store.devices()[0].addrs.iter().any(|address| address.ends_with(&format!(":{port}"))), "wrong service port: {:?}", store.devices()[0].addrs);
     }
     wait_until(|| [home_a.path(), home_b.path()].iter().all(|home| daemon_status(home).is_some_and(|status| status.peers.len() == 1 && status.peers[0].online)));
+}
+
+/// Ctrl+C on `one-mk send` closes the link with a reason and says so,
+/// rather than dying and leaving the receiver to time out.
+#[cfg(unix)]
+#[test]
+fn ctrl_c_on_send_cancels_with_a_reason() {
+    use std::process::Stdio;
+    let Paired { home_a, home_b, _daemons, .. } = paired_daemons();
+    wait_until(|| daemon_status(home_a.path()).is_some_and(|status| status.peers.first().is_some_and(|p| p.online)));
+    let big = home_a.path().join("big.bin");
+    std::fs::File::create(&big).unwrap().set_len(4 << 30).unwrap(); // sparse: nothing to write here
+    let send = Command::new(env!("CARGO_BIN_EXE_one-mk"))
+        .env_clear().envs(minimal_env())
+        .env("HOME", home_a.path()).env("ONE_MK_HOME", home_a.path()).env("XDG_RUNTIME_DIR", home_a.path())
+        .args(["send", big.to_str().unwrap()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().unwrap();
+    wait_until(|| daemon_status(home_b.path()).is_some_and(|status| status.transfers.iter().any(|t| !t.sending && t.done > 0)));
+    assert!(Command::new("kill").args(["-INT", &send.id().to_string()]).status().unwrap().success());
+    let output = send.wait_with_output().unwrap();
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success() && said.contains("cancelled; what arrived is kept"), "{said}");
+}
+
+/// A command stopped while holding a lock (Ctrl+Z) never hangs the next
+/// one: it gives up after a bounded wait and says what is going on.
+#[test]
+fn a_held_lock_is_reported_not_waited_for_forever() {
+    let home = private_home();
+    for (lock, args) in [("settings.toml.lock", vec!["edge", "--dwell", "5"]), ("devices.toml.lock", vec!["forget", "nobody"]), ("profiles.toml.lock", vec!["profile", "delete", "work"])] {
+        let held = std::fs::File::create(home.path().join(lock)).unwrap();
+        held.try_lock().unwrap();
+        let start = std::time::Instant::now();
+        let output = run(home.path(), &args);
+        assert!(!output.status.success(), "{args:?} succeeded with {lock} held");
+        assert!(start.elapsed() < std::time::Duration::from_secs(30), "{args:?}: {:?}", start.elapsed());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("another one-mk command is holding the lock"), "{args:?}: {stderr}");
+        drop(held);
+    }
 }

@@ -16,10 +16,25 @@ impl Mode {
     pub fn for_native_safety(restorable: bool) -> Self { if restorable { Self::Native } else { Self::Overlay } }
 }
 
+/// Said when a Linux desktop keeps its wallpaper somewhere oneMK can't set.
+pub const UNSUPPORTED_DESKTOP: &str = "Picture wallpapers on Linux need GNOME (or Ubuntu's or Budgie's desktop, which use GNOME's wallpaper settings), or an experimental layer-shell desktop such as Sway. This desktop keeps its wallpaper elsewhere, so oneMK leaves it unchanged. Set the picture in this desktop's own settings instead.";
+
+/// Whether this Linux desktop draws its wallpaper from GNOME's settings
+/// (`org.gnome.desktop.background`): GNOME itself, and the desktops built
+/// on it that name it in `XDG_CURRENT_DESKTOP` (Ubuntu, Budgie) or use it
+/// unnamed (Unity, Pantheon). KDE, Xfce, Cinnamon, MATE, LXQt and the rest
+/// don't, whatever schemas happen to be installed.
+pub fn gnome_desktop() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| gnome_settings_desktop(&desktop))
+}
+
+pub fn gnome_settings_desktop(desktop: &str) -> bool {
+    desktop.split(':').any(|part| matches!(part.trim().to_ascii_lowercase().as_str(), "gnome" | "gnome-classic" | "gnome-flashback" | "unity" | "pantheon" | "budgie"))
+}
+
 pub fn available() -> bool {
     #[cfg(target_os = "linux")]
-    return (std::env::var_os("WAYLAND_DISPLAY").is_some() && crate::wayland::available().is_ok())
-        || std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop| desktop.to_ascii_lowercase().contains("gnome"));
+    return (std::env::var_os("WAYLAND_DISPLAY").is_some() && crate::wayland::available().is_ok()) || gnome_desktop();
     #[cfg(not(target_os = "linux"))]
     true
 }
@@ -60,12 +75,20 @@ fn run(command: &mut Command, timeout: Duration) -> Result<Vec<u8>> {
             }
         }
         if let Some(status) = job.0.try_wait()? && let (Some(output), Some(errors)) = (&output, &errors) {
-            ensure!(status.success(), "The picture helper failed: {}", String::from_utf8_lossy(errors).trim());
+            ensure!(status.success(), "{}", helper_error(&String::from_utf8_lossy(errors)));
             return Ok(output.clone());
         }
         ensure!(started.elapsed() < timeout, "The picture helper took too long");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// What a failed helper said, as one sentence for a person: its own
+/// message, without Rust's `Error:` prefix or the `Caused by:` chain of
+/// internals (decoder names, cache file names) under it.
+fn helper_error(errors: &str) -> String {
+    let message = errors.trim().strip_prefix("Error:").unwrap_or(errors).split("\n\nCaused by:").next().unwrap_or_default().trim();
+    if message.is_empty() { "The picture helper failed without saying why. Try again, or choose another picture.".into() } else { message.into() }
 }
 
 fn plan_arguments(command: &mut Command, plan: &Plan, computer: &str) -> Result<()> {
@@ -142,6 +165,26 @@ mod tests {
         let error = still(helper, Path::new("video"), &output, 2).unwrap_err();
         assert!(error.to_string().contains("first-frame still is not a picture"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn helper_errors_read_as_one_sentence_without_internals() {
+        let leaked = "Error: This picture cannot be opened. Try a PNG, JPEG or WebP picture.\n\nCaused by:\n    The file extension `.\"video\"` was not recognized as an image format\n";
+        assert_eq!(helper_error(leaked), "This picture cannot be opened. Try a PNG, JPEG or WebP picture.");
+        assert_eq!(helper_error("plain words\n"), "plain words");
+        assert!(helper_error("  \n").contains("without saying why"));
+        let error = run(Command::new("sh").args(["-c", &format!("printf '{}' >&2; exit 1", leaked.replace('\n', "\\n").replace('`', "\\`"))]), Duration::from_secs(2)).unwrap_err();
+        assert_eq!(error.to_string(), "This picture cannot be opened. Try a PNG, JPEG or WebP picture.");
+    }
+
+    #[test]
+    fn only_desktops_that_read_gnome_wallpaper_settings_get_native_pictures() {
+        for desktop in ["GNOME", "ubuntu:GNOME", "GNOME-Classic:GNOME", "Budgie:GNOME", "Unity", "Pantheon", "GNOME-Flashback:GNOME"] {
+            assert!(gnome_settings_desktop(desktop), "{desktop}");
+        }
+        for desktop in ["KDE", "XFCE", "X-Cinnamon", "MATE", "LXQt", "sway", "Hyprland", "COSMIC", "", "notgnome"] {
+            assert!(!gnome_settings_desktop(desktop), "{desktop}");
+        }
     }
 
     #[test]

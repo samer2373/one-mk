@@ -12,7 +12,7 @@ use one_mk_clipboard::{CEILING_BYTES, DEFAULT_MAX_BYTES, Filter};
 use one_mk_proto::{EdgeGuard, Modifier, Side};
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::fs::File;
+use std::str::FromStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -72,6 +72,10 @@ pub struct Settings {
     pub unknown: toml::Table,
     #[serde(skip)]
     pub shortcut_upgrade: bool,
+    /// What a lenient read left out of the file, and why (see
+    /// `settings_tolerant.rs`); empty when it was read in full.
+    #[serde(skip)]
+    pub problems: Vec<String>,
     #[serde(deserialize_with = "crate::wallpaper::lenient")]
     pub wallpaper: crate::wallpaper::WallpaperSettings,
     pub update: crate::update::Settings,
@@ -99,6 +103,66 @@ pub struct Settings {
     /// Broadcast to every connected computer (see `docs/BROADCAST.md`).
     pub broadcast: BroadcastSettings,
     pub typing: crate::typing::TypingSettings,
+    /// The window's own look (see `WindowSettings`); the service ignores it.
+    #[serde(skip_serializing_if = "WindowSettings::is_default")]
+    pub window: WindowSettings,
+}
+
+/// `[window]` in `settings.toml`: what only the window reads.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WindowSettings {
+    /// `system` (follow the computer's light or dark look), `light` or
+    /// `dark`. Kept as written: the window reads anything else as system.
+    pub appearance: String,
+}
+
+impl Default for WindowSettings {
+    fn default() -> Self {
+        WindowSettings { appearance: "system".into() }
+    }
+}
+
+impl WindowSettings {
+    pub fn is_default(&self) -> bool {
+        *self == WindowSettings::default()
+    }
+}
+
+/// The window's look: `one-mk appearance`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Appearance {
+    /// Follow the computer's own light or dark look (the default).
+    System,
+    /// Light, whatever the computer's look.
+    Light,
+    /// Dark, whatever the computer's look.
+    Dark,
+}
+
+impl fmt::Display for Appearance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Appearance::System => "system",
+            Appearance::Light => "light",
+            Appearance::Dark => "dark",
+        })
+    }
+}
+
+/// `one-mk appearance [system|light|dark]`: shows or sets the window's look.
+/// Only the window reads it, so the service needn't hear of it.
+pub fn appearance(dir: &Path, to: Option<Appearance>) -> Result<()> {
+    let Some(to) = to else {
+        println!("Appearance: {}", Settings::view(dir)?.window.appearance);
+        return Ok(());
+    };
+    Settings::update(dir, |s| {
+        s.window.appearance = to.to_string();
+        Ok(())
+    })?;
+    println!("Appearance: {to}. The window changes at once.");
+    Ok(())
 }
 
 impl Default for Settings {
@@ -106,10 +170,11 @@ impl Default for Settings {
         Self {
             unknown: toml::Table::new(),
             shortcut_upgrade: false,
+            problems: Vec::new(),
             wallpaper: Default::default(),
             update: Default::default(),
             drag: Default::default(),
-            settings_version: 2,
+            settings_version: 3,
             clipboard: ClipSettings::default(),
             notify_files: true,
             edge: EdgeSettings::default(),
@@ -122,6 +187,7 @@ impl Default for Settings {
             pointer: Default::default(),
             broadcast: Default::default(),
             typing: Default::default(),
+            window: Default::default(),
         }
     }
 }
@@ -294,6 +360,119 @@ pub struct EdgeSettings {
     /// suggests (or sets) where a computer is.
     #[serde(skip_serializing_if = "is_default")]
     pub learn: Learn,
+    /// How long a computer controlling this one may send no input before
+    /// this one lets go of it.
+    #[serde(skip_serializing_if = "is_default")]
+    pub idle_return: IdleReturn,
+}
+
+/// When a computer controlling this one, but sending no key, click, scroll
+/// or movement, is let go (`[edge] idle_return`, `one-mk edge
+/// --idle-return`). It exists so a session left running can't hold this
+/// computer forever (on Linux, this computer's own mouse and keyboard
+/// can't be told apart from injected input, so using them doesn't end
+/// it). Its pointer then goes home and its next movement enters again.
+/// Set on the computer being controlled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IdleReturn {
+    /// [`DEFAULT_IDLE_RETURN_S`].
+    #[default]
+    Default,
+    /// Never: control ends only when the other computer leaves, takes
+    /// back, goes silent, or the emergency chord is pressed.
+    Off,
+    /// After this many seconds.
+    After(u32),
+}
+
+/// Ten minutes: reading a page or pausing a video on the other computer
+/// does not end the visit, a session left behind still does.
+pub const DEFAULT_IDLE_RETURN_S: u32 = 600;
+pub const MIN_IDLE_RETURN_S: u32 = 10;
+pub const MAX_IDLE_RETURN_S: u32 = 86_400;
+
+impl IdleReturn {
+    /// How long, or `None` for never.
+    pub fn duration(self) -> Option<std::time::Duration> {
+        match self {
+            IdleReturn::Default => Some(std::time::Duration::from_secs(DEFAULT_IDLE_RETURN_S.into())),
+            IdleReturn::Off => None,
+            IdleReturn::After(s) => Some(std::time::Duration::from_secs(s.clamp(MIN_IDLE_RETURN_S, MAX_IDLE_RETURN_S).into())),
+        }
+    }
+
+    /// In words, for `one-mk edge`.
+    pub fn describe(self) -> String {
+        match self.duration() {
+            None => "A computer controlling this one keeps control however long it sends no input (`--idle-return`).".into(),
+            Some(d) => format!("A computer controlling this one lets go after {} without input (`--idle-return`).", words(d.as_secs())),
+        }
+    }
+}
+
+/// `600` as "10 minutes", `90` as "90 seconds".
+fn words(secs: u64) -> String {
+    let plural = |n: u64, unit: &str| format!("{n} {unit}{}", if n == 1 { "" } else { "s" });
+    match secs {
+        s if s % 3600 == 0 => plural(s / 3600, "hour"),
+        s if s % 60 == 0 => plural(s / 60, "minute"),
+        s => plural(s, "second"),
+    }
+}
+
+impl FromStr for IdleReturn {
+    type Err = String;
+    /// `off`, `default`, or a time: seconds, or with s, m or h.
+    fn from_str(s: &str) -> Result<Self, String> {
+        let t = s.trim().to_ascii_lowercase();
+        match t.as_str() {
+            "off" | "never" => return Ok(IdleReturn::Off),
+            "default" => return Ok(IdleReturn::Default),
+            _ => {}
+        }
+        let (number, unit) = match t.char_indices().find(|(_, c)| !c.is_ascii_digit()) {
+            Some((i, _)) => t.split_at(i),
+            None => (t.as_str(), "s"),
+        };
+        let scale = match unit.trim() {
+            "s" | "sec" | "secs" | "seconds" => 1,
+            "m" | "min" | "mins" | "minutes" => 60,
+            "h" | "hour" | "hours" => 3600,
+            _ => return Err(format!("expected a time such as 600, 10m or 1h, or off, not {s:?}")),
+        };
+        let secs = number.parse::<u32>().ok().and_then(|n| n.checked_mul(scale))
+            .ok_or_else(|| format!("expected a time such as 600, 10m or 1h, or off, not {s:?}"))?;
+        if !(MIN_IDLE_RETURN_S..=MAX_IDLE_RETURN_S).contains(&secs) {
+            return Err(format!("{s:?} is out of range: from {MIN_IDLE_RETURN_S} seconds to 24 hours, or off"));
+        }
+        Ok(IdleReturn::After(secs))
+    }
+}
+
+impl Serialize for IdleReturn {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            IdleReturn::Default => s.serialize_str("default"),
+            IdleReturn::Off => s.serialize_str("off"),
+            IdleReturn::After(n) => s.serialize_u32(*n),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for IdleReturn {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Secs(i64),
+            Text(String),
+        }
+        match Raw::deserialize(d)? {
+            // A hand edit out of range is brought within it.
+            Raw::Secs(n) => Ok(IdleReturn::After(n.clamp(MIN_IDLE_RETURN_S.into(), MAX_IDLE_RETURN_S.into()) as u32)),
+            Raw::Text(t) => t.parse().map_err(serde::de::Error::custom),
+        }
+    }
 }
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
@@ -521,22 +700,60 @@ fn path(dir: &Path) -> PathBuf {
     dir.join(FILE)
 }
 
+/// Creates the settings folder (and any missing parents) for this account
+/// alone. With the process umask a folder made here could end up
+/// group-writable (Ubuntu's default umask is 002), and a group-writable
+/// settings folder makes hooks and `run:` rules refuse to run.
+fn create_settings_dir(dir: &Path) -> Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir).with_context(|| format!("creating settings folder {}", dir.display()))
+}
+
 impl Settings {
     /// Reads `settings.toml`; a missing file means the defaults. A file that
     /// can't be read is an error, so the command line never overwrites a
     /// hand edit it didn't understand.
     pub fn load(dir: &Path) -> Result<Settings> {
+        Self::read(dir, false)
+    }
+
+    /// Like [`Settings::load`], but a section (or one input rule) that
+    /// can't be read is left out and listed in `problems`, with its line,
+    /// instead of failing the whole file. For readers only (the daemon,
+    /// `status`, `doctor`, listings): never save what this returns.
+    pub fn load_lenient(dir: &Path) -> Result<Settings> {
+        Self::read(dir, true)
+    }
+
+    /// [`Settings::load_lenient`] for a command that only shows settings:
+    /// what was left out goes to stderr.
+    pub fn view(dir: &Path) -> Result<Settings> {
+        let settings = Self::load_lenient(dir)?;
+        for problem in &settings.problems {
+            eprintln!("one-mk: {problem}");
+        }
+        Ok(settings)
+    }
+
+    fn read(dir: &Path, lenient: bool) -> Result<Settings> {
         let path = path(dir);
         match crate::hooks::read_settings(&path) {
             Ok((s, unsafe_reason)) => {
+                let (s, problems) = match lenient.then(|| crate::settings_tolerant::repair(&s)).flatten() {
+                    Some((repaired, problems)) => (repaired, problems),
+                    None => (s, Vec::new()),
+                };
                 let mut ignored = Vec::new();
                 let deserializer = toml::de::Deserializer::parse(&s).with_context(|| format!("reading {}", path.display()))?;
                 let mut settings: Settings = serde_ignored::deserialize(deserializer, |key| ignored.push((key.to_string(), ignored_components(&key))))
-                    .with_context(|| format!("reading {}", path.display()))?;
+                    .with_context(|| format!("reading {} (fix the line it names; nothing was changed)", path.display()))?;
                 let fields: toml::Value = toml::from_str(&s)?;
                 for (section, allowed) in [
                     ("wallpaper", &["version", "enabled", "grants"][..]),
-                    ("edge", &["corner", "dwell_ms", "modifier", "fullscreen_guard", "fullscreen_allow", "fullscreen_block", "left", "right", "top", "bottom", "wrap", "learn"][..]),
+                    ("edge", &["corner", "dwell_ms", "modifier", "fullscreen_guard", "fullscreen_allow", "fullscreen_block", "left", "right", "top", "bottom", "wrap", "learn", "idle_return"][..]),
                     ("input.autoscroll", &["enabled", "button", "speed", "dead_zone", "vertical_only", "scope", "app", "rule"][..]),
                 ] {
                     let mut value = Some(&fields);
@@ -563,7 +780,11 @@ impl Settings {
                     }
                 }
                 settings.unknown = unknown_settings(fields.as_table().expect("settings table"), known.as_table().expect("settings table"));
-                settings.shortcut_upgrade = fields.get("hotkeys").is_none_or(|keys| keys.get("broadcast").is_none() || keys.get("fetch_clipboard").is_none())
+                // An upgrade is a file an older one-mk saved (it carries
+                // `settings_version`, or a [hotkeys] table without the newer
+                // shortcuts); a hand-written file with neither is a new user's.
+                let saved_by_one_mk = fields.get("settings_version").is_some() || fields.get("hotkeys").is_some();
+                settings.shortcut_upgrade = (saved_by_one_mk && fields.get("hotkeys").is_none_or(|keys| keys.get("broadcast").is_none() || keys.get("fetch_clipboard").is_none()))
                     || dir.join(".wave5-shortcuts-pending").exists();
                 if fields.get("clipboard").and_then(|clipboard| clipboard.get("history_max")).is_none() {
                     settings.clipboard.history_notice = Some(dir.join(".clipboard-history-update-noticed"));
@@ -573,7 +794,15 @@ impl Settings {
                     settings.clipboard.fetch_migrated = true;
                     settings.clipboard.fetch_notice = Some(dir.join(".clipboard-fetch-update-noticed"));
                 }
-                settings.settings_version = 2;
+                settings.problems = problems;
+                // Until version 3 a `true` here was usually the default written
+                // out by whichever session saved first, not a choice. File edge
+                // drops are opt-in now: it is off until switched on again.
+                if settings.settings_version < 3 {
+                    settings.drag.enabled = false;
+                }
+                // Never lowered: a newer build wrote a newer one.
+                settings.settings_version = settings.settings_version.max(3);
                 settings.hooks.trust_permissions = crate::hooks::permissions_trusted(dir);
                 // Hooks and key actions (`run: ...`) both start programs.
                 if (settings.hooks.any() || settings.input.runs_commands()) && !settings.hooks.trust_permissions {
@@ -590,10 +819,18 @@ impl Settings {
     /// can't be read is reported and ignored, so a bad hand edit never
     /// stops one-mk.
     pub fn load_or_default(dir: &Path) -> Settings {
-        Self::load(dir).unwrap_or_else(|e| {
-            tracing::warn!("ignoring {}: {e:#}", path(dir).display());
-            Settings::default()
-        })
+        match Self::load_lenient(dir) {
+            Ok(settings) => {
+                for problem in &settings.problems {
+                    tracing::warn!("{problem}");
+                }
+                settings
+            }
+            Err(e) => {
+                tracing::warn!("ignoring {}: {e:#}", path(dir).display());
+                Settings::default()
+            }
+        }
     }
 
     /// Writes the settings to `settings.toml` through a file of its own that
@@ -602,7 +839,7 @@ impl Settings {
     /// this alone would lose a change made by someone else in between.
     pub fn save(&self, dir: &Path) -> Result<()> {
         static N: AtomicU32 = AtomicU32::new(0);
-        std::fs::create_dir_all(dir).with_context(|| format!("creating settings folder {}", dir.display()))?;
+        create_settings_dir(dir)?;
         let tmp = dir.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let write = || -> Result<()> {
             use std::io::Write;
@@ -617,6 +854,8 @@ impl Settings {
             let mut values: toml::Table = toml::from_str(&toml::to_string(self)?)?;
             merge_unknown(&mut values, &self.unknown);
             file.write_all(toml::to_string_pretty(&values)?.as_bytes()).with_context(|| format!("writing {}", tmp.display()))?;
+            // On disk before it replaces the old file: a crash leaves one or the other.
+            file.sync_all().with_context(|| format!("flushing {}", tmp.display()))?;
             drop(file);
             if self.shortcut_upgrade && !dir.join(".wave5-shortcuts-noticed").exists() {
                 let pending = dir.join(".wave5-shortcuts-pending");
@@ -634,7 +873,8 @@ impl Settings {
                 }
             }
             std::fs::rename(&tmp, path(dir)).with_context(|| format!("saving {}", path(dir).display()))?;
-            Ok(())
+            // And the folder, so the new name survives a crash too.
+            one_mk_net::sync_dir(dir)
         };
         write().inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
@@ -645,22 +885,34 @@ impl Settings {
     /// file next to `settings.toml`, so `one-mk edge` and `one-mk gaming`
     /// run at the same moment both land), loads what is there (a file that
     /// can't be read is an error, as with [`Settings::load`]), applies
-    /// `change` and saves. If `change` fails nothing is written.
+    /// `change` and saves. If `change` fails nothing is written. Waits at
+    /// most [`one_mk_net::COMMAND_LOCK_WAIT`] (a command stopped while
+    /// holding the lock must not hang every other one).
     pub fn update<R>(dir: &Path, change: impl FnOnce(&mut Settings) -> Result<R>) -> Result<R> {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating settings folder {}", dir.display()))?;
-        let lock_path = dir.join(LOCK_FILE);
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .with_context(|| format!("opening {}", lock_path.display()))?;
-        lock.lock().with_context(|| format!("locking {}", lock_path.display()))?;
-        // Unlocked when `lock` is dropped (also if this fails or panics).
+        Self::update_within(dir, one_mk_net::COMMAND_LOCK_WAIT, change)
+    }
+
+    /// [`Settings::update`], waiting at most `wait` for the lock: the
+    /// daemon passes [`one_mk_net::DAEMON_LOCK_WAIT`], as its event loop
+    /// must never hang on a stopped command.
+    pub fn update_within<R>(dir: &Path, wait: std::time::Duration, change: impl FnOnce(&mut Settings) -> Result<R>) -> Result<R> {
+        create_settings_dir(dir)?;
+        let _lock = one_mk_net::lock_file(&dir.join(LOCK_FILE), wait)?;
+        // Unlocked when `_lock` is dropped (also if this fails or panics).
         let mut settings = Settings::load(dir)?;
         let out = change(&mut settings)?;
         settings.save(dir)?;
         Ok(out)
+    }
+}
+
+/// A count from the command line (`--corner`, `--dwell`): a negative one
+/// is named as such, instead of being taken for a flag.
+fn whole_number(s: &str) -> Result<u32, String> {
+    match s.trim().parse::<i64>() {
+        Ok(n) if n < 0 => Err(format!("{n} is negative; say 0 or more (0 turns it off)")),
+        Ok(n) => u32::try_from(n).map_err(|_| format!("{n} is far too large")),
+        Err(_) => Err(format!("{s:?} is not a whole number")),
     }
 }
 
@@ -672,10 +924,10 @@ pub struct EdgeArgs {
     #[arg(long)]
     pub side: Option<Side>,
     /// Ignore crossings within this many pixels of a screen corner (0: off).
-    #[arg(long, value_name = "PX")]
+    #[arg(long, value_name = "PX", allow_hyphen_values = true, value_parser = whole_number)]
     pub corner: Option<u32>,
     /// The pointer must stay at the edge this long before it crosses (0: off).
-    #[arg(long, value_name = "MS")]
+    #[arg(long, value_name = "MS", allow_hyphen_values = true, value_parser = whole_number)]
     pub dwell: Option<u32>,
     /// Only cross while holding this key: none, shift, ctrl or alt.
     #[arg(long, value_name = "KEY")]
@@ -692,8 +944,9 @@ pub struct EdgeArgs {
     /// Remove a program from both lists (repeatable).
     #[arg(long, value_name = "APP")]
     pub fullscreen_forget: Vec<String>,
-    /// Turn every rule off (for one edge with --side); for every edge,
-    /// also --wrap and --learn go back to off and suggest.
+    /// With --side: drop that edge's own rules, so it follows the rules
+    /// for every edge again. Without: turn every rule off, and --wrap,
+    /// --learn and --idle-return go back to off, suggest and default.
     #[arg(long)]
     pub reset: bool,
     /// Where no computer sits, bring the pointer in at the opposite edge:
@@ -708,6 +961,12 @@ pub struct EdgeArgs {
     /// Hide the layout suggestion shown now (in `one-mk status` and the window).
     #[arg(long)]
     pub dismiss: bool,
+    /// While another computer controls this one but sends no input, let
+    /// it go after this long: seconds, or with s, m or h (10s to 24h);
+    /// off to never; default for 10 minutes. Its pointer then goes home
+    /// and its next movement enters this computer again.
+    #[arg(long, value_name = "TIME|off|default")]
+    pub idle_return: Option<IdleReturn>,
 }
 
 pub fn parse_on_off(s: &str) -> Result<bool, String> {
@@ -730,6 +989,7 @@ impl EdgeArgs {
             || !self.fullscreen_forget.is_empty()
             || self.wrap.is_some()
             || self.learn.is_some()
+            || self.idle_return.is_some()
     }
 
     /// Applies these options to `s`.
@@ -749,8 +1009,8 @@ impl EdgeArgs {
         if self.side.is_some() && lists {
             bail!("the fullscreen program lists are for every edge; leave out --side");
         }
-        if self.side.is_some() && (self.wrap.is_some() || self.learn.is_some()) {
-            bail!("--wrap and --learn are for every edge; leave out --side");
+        if self.side.is_some() && (self.wrap.is_some() || self.learn.is_some() || self.idle_return.is_some()) {
+            bail!("--wrap, --learn and --idle-return are for every edge; leave out --side");
         }
         let rules = match self.side {
             Some(side) => s.side_mut(side).get_or_insert_with(Rules::default),
@@ -798,13 +1058,16 @@ impl EdgeArgs {
         if let Some(learn) = self.learn {
             s.learn = learn;
         }
+        if let Some(idle) = self.idle_return {
+            s.idle_return = idle;
+        }
         Ok(())
     }
 }
 
 /// Asks a running daemon to apply the saved settings.
 pub(crate) async fn apply(dir: &Path) -> Result<()> {
-    if control::request(dir, Request::Reload).await?.is_some() {
+    if control::request(dir, Request::Reload).await.map_err(control::NotAnswering::saved)?.is_some() {
         println!("Applied right away.");
     } else {
         println!("one-mk is not running; this takes effect the next time it starts.");
@@ -822,12 +1085,13 @@ pub async fn edge(dir: &Path, args: EdgeArgs) -> Result<()> {
             println!("Edges: {d}.");
         }
         println!("{}", e.no_computer());
+        println!("{}", e.idle_return.describe());
     };
     if args.dismiss && !args.changes_anything() {
         return dismiss(dir).await;
     }
     if !args.changes_anything() {
-        let settings = Settings::load(dir)?;
+        let settings = Settings::view(dir)?;
         describe(&settings.edge);
         if settings.edge.guard(Side::Left).fullscreen && cfg!(target_os = "linux") {
             println!("{}", FULLSCREEN_LINUX);
@@ -893,7 +1157,7 @@ pub async fn lock_sync(dir: &Path, on: bool) -> Result<()> {
         Ok(())
     })?;
     if on {
-        println!("Lock sync is on: locking this computer locks the connected ones (if they run one-mk too).");
+        println!("Lock sync is on: locking this computer locks the connected ones that have lock sync on too (`one-mk lock-sync on` there).");
     } else {
         println!("Lock sync is off. (`one-mk lock-all` still locks every computer.)");
     }
@@ -1066,6 +1330,24 @@ draw_when_no_mouse = "auto"
         assert_eq!(explicit.clipboard.history_max, 12);
         assert!(explicit.clipboard.history_notice.is_none());
     }
+    /// "New default shortcuts" is for an upgrade (a file an older one-mk
+    /// saved), not for a new user who wrote a few lines by hand.
+    #[test]
+    fn the_shortcut_notice_is_for_upgrades_only() {
+        let dir = temp_dir("shortcut-upgrade");
+        std::fs::create_dir_all(&dir).unwrap();
+        let upgrade = |text: &str| {
+            std::fs::write(dir.join(FILE), text).unwrap();
+            Settings::load(&dir).unwrap().shortcut_upgrade
+        };
+        assert!(!upgrade("[edge]\ncorner = 5\n"), "hand-written, never saved by one-mk");
+        assert!(!upgrade("lock_sync = true\n"));
+        assert!(upgrade("settings_version = 2\n"), "saved by an older one-mk");
+        assert!(upgrade("lock_sync = true\n[hotkeys]\nhome = \"ctrl+alt+end\"\n"), "a hotkeys table from before the newer shortcuts");
+        assert!(!upgrade("[hotkeys]\nbroadcast = \"ctrl+alt+b\"\nfetch_clipboard = \"ctrl+alt+v\"\n"), "already has them");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `[broadcast]`: a file from before it gets 15 minutes; 0 means never;
     /// absurd values are capped at a day; a negative number makes the file
     /// unreadable like any other type error (the daemon then keeps its
@@ -1173,9 +1455,60 @@ draw_when_no_mouse = "auto"
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("one-mk-settings-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        d
+        crate::testdir::scratch_path(&format!("settings-{tag}"))
+    }
+
+    /// `[edge] idle_return`: ten minutes unless said, off, or a time from
+    /// 10 s to 24 h; the default isn't written, and a hand edit out of
+    /// range is brought within it.
+    #[test]
+    fn idle_return_parses_saves_and_bounds() {
+        use std::time::Duration;
+        assert_eq!(IdleReturn::default().duration(), Some(Duration::from_secs(600)));
+        assert_eq!("off".parse(), Ok(IdleReturn::Off));
+        assert_eq!(IdleReturn::Off.duration(), None);
+        assert_eq!("90".parse(), Ok(IdleReturn::After(90)));
+        assert_eq!("30m".parse(), Ok(IdleReturn::After(1800)));
+        assert_eq!("1h".parse(), Ok(IdleReturn::After(3600)));
+        assert_eq!("60s".parse(), Ok(IdleReturn::After(60)), "the old minute is still there");
+        assert_eq!("Default".parse(), Ok(IdleReturn::Default));
+        for bad in ["5", "25h", "soon", "-3", "", "99999999999"] {
+            assert!(bad.parse::<IdleReturn>().is_err(), "{bad:?}");
+        }
+        assert_eq!(IdleReturn::After(1800).describe(), "A computer controlling this one lets go after 30 minutes without input (`--idle-return`).");
+        assert!(IdleReturn::Off.describe().contains("keeps control"));
+
+        let mut s = EdgeSettings::default();
+        assert!(!toml::to_string(&s).unwrap().contains("idle_return"));
+        EdgeArgs { idle_return: Some(IdleReturn::Off), ..EdgeArgs::default() }.apply(&mut s).unwrap();
+        let saved = toml::to_string(&s).unwrap();
+        assert!(saved.contains("idle_return = \"off\""), "{saved}");
+        assert_eq!(toml::from_str::<EdgeSettings>(&saved).unwrap().idle_return, IdleReturn::Off);
+        EdgeArgs { idle_return: Some(IdleReturn::After(120)), ..EdgeArgs::default() }.apply(&mut s).unwrap();
+        assert_eq!(toml::from_str::<EdgeSettings>(&toml::to_string(&s).unwrap()).unwrap().idle_return, IdleReturn::After(120));
+        assert_eq!(toml::from_str::<EdgeSettings>("idle_return = 1").unwrap().idle_return.duration(), Some(Duration::from_secs(10)));
+        assert!(toml::from_str::<EdgeSettings>("idle_return = \"later\"").is_err());
+        assert!(EdgeArgs { side: Some(Side::Left), idle_return: Some(IdleReturn::Off), ..EdgeArgs::default() }.apply(&mut s).is_err());
+        EdgeArgs { reset: true, ..EdgeArgs::default() }.apply(&mut s).unwrap();
+        assert_eq!(s.idle_return, IdleReturn::Default);
+        let cli = <crate::Cli as clap::Parser>::try_parse_from(["one-mk", "edge", "--idle-return", "off"]);
+        assert!(cli.is_ok());
+        assert!(<crate::Cli as clap::Parser>::try_parse_from(["one-mk", "edge", "--idle-return", "2s"]).is_err());
+        // A newer build's settings version is kept, not downgraded.
+        let newer = std::env::temp_dir().join(format!("one-mk-newer-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&newer).unwrap();
+        std::fs::write(newer.join(FILE), "settings_version = 99\n").unwrap();
+        Settings::update(&newer, |s| { s.lock_sync = true; Ok(()) }).unwrap();
+        assert!(std::fs::read_to_string(newer.join(FILE)).unwrap().contains("settings_version = 99"));
+        let _ = std::fs::remove_dir_all(newer);
+        // A settings file with it set loads without "unknown setting".
+        let dir = std::env::temp_dir().join(format!("one-mk-idle-return-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[edge]\nidle_return = 900\n").unwrap();
+        let loaded = Settings::load(&dir).unwrap();
+        assert_eq!(loaded.edge.idle_return, IdleReturn::After(900));
+        assert!(loaded.unknown.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1307,6 +1640,47 @@ draw_when_no_mouse = "auto"
         std::fs::write(dir.join(FILE), "[edge]\nmodifier = \"hyper\"\ncorner = 99999\n").unwrap();
         let s = Settings::load_or_default(&dir);
         assert_eq!(s.edge.guard(Side::Left), EdgeGuard { corner: MAX_CORNER, ..EdgeGuard::default() });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The window's appearance is added to `settings.toml` only once chosen:
+    /// a file without it reads as System, and a default save doesn't write it.
+    #[test]
+    fn appearance_is_additive() {
+        let dir = temp_dir("appearance");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "settings_version = 3\nlock_sync = true\n").unwrap();
+        let s = Settings::load(&dir).unwrap();
+        assert_eq!(s.window.appearance, "system");
+        assert!(s.lock_sync);
+        Settings::default().save(&dir).unwrap();
+        assert!(!std::fs::read_to_string(dir.join(FILE)).unwrap().contains("[window]"));
+        appearance(&dir, Some(Appearance::Dark)).unwrap();
+        let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        assert!(text.contains("[window]\nappearance = \"dark\""), "{text}");
+        assert_eq!(Settings::load(&dir).unwrap().window.appearance, "dark");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The window saves its appearance itself (no `one-mk` needed): the
+    /// daemon reads that file with every other setting intact, and its own
+    /// next save keeps the window's choice.
+    #[test]
+    fn appearance_saved_by_the_window_is_read_and_kept() {
+        let dir = temp_dir("appearance-window");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "settings_version = 3\nlock_sync = true\ngaming = \"auto\"\n[edge.left]\ndwell_ms = 300\n").unwrap();
+        let before = Settings::load(&dir).unwrap();
+        one_mk_ctl::settings_file::set_window_appearance(&dir, "light").unwrap();
+        let s = Settings::load(&dir).unwrap();
+        assert_eq!(s.window.appearance, "light");
+        assert_eq!(Settings { window: before.window.clone(), ..s.clone() }, before);
+        Settings::update(&dir, |s| {
+            s.lock_sync = false;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(Settings::load(&dir).unwrap().window.appearance, "light");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1476,5 +1850,55 @@ draw_when_no_mouse = "auto"
         assert!(bad.is_err());
         assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), "clipboard = [");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// File edge drops are never on by default, and the default does not
+    /// depend on which session wrote the file. A file written by a version
+    /// that stored the old environment-derived default as a choice is reset
+    /// once; after that an explicit choice is kept.
+    #[test]
+    fn file_edge_drops_are_off_until_chosen() {
+        assert!(!Settings::default().drag.enabled);
+        assert_eq!(ClipSettings::MAX_MB_LIMIT, 256, "the window's limit (one_mk_app view::CLIP_MAX_MB) must match");
+        let dir = temp_dir("drag-default");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "settings_version = 2\n[drag]\nenabled = true\nzone_px = 20\n").unwrap();
+        let loaded = Settings::load(&dir).unwrap();
+        assert!(!loaded.drag.enabled, "a frozen default is not an opt-in");
+        assert_eq!(loaded.drag.zone_px, 20, "other choices are kept");
+        Settings::update(&dir, |s| { s.drag.enabled = true; Ok(()) }).unwrap();
+        assert!(Settings::load(&dir).unwrap().drag.enabled, "a later explicit choice is kept");
+        assert!(std::fs::read_to_string(dir.join(FILE)).unwrap().contains("settings_version = 3"));
+        // Saving something unrelated never writes a different value from the environment.
+        let other = temp_dir("drag-default-other");
+        Settings::update(&other, |s| { s.lock_sync = true; Ok(()) }).unwrap();
+        let written = std::fs::read_to_string(other.join(FILE)).unwrap();
+        assert!(toml::from_str::<toml::Value>(&written).unwrap()["drag"].get("enabled").is_none(), "no drag choice is written for one nobody made: {written}");
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(other);
+    }
+
+    /// Saving flushes the folder after the rename, so the new
+    /// `settings.toml` survives a power cut.
+    #[cfg(all(unix, debug_assertions))]
+    #[test]
+    fn saving_flushes_the_folder() {
+        let dir = std::env::temp_dir().join(format!("one-mk-durable-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        Settings::update(&dir, |s| { s.lock_sync = true; Ok(()) }).unwrap();
+        assert!(one_mk_net::was_synced(&dir));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_settings_folder_is_private_to_the_account() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("one-mk-private-dir-{}", std::process::id())).join("nested");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+        Settings::update(&dir, |_| Ok(())).unwrap();
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "settings folder must not be group/world accessible: {mode:o}");
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 }

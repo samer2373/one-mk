@@ -5,7 +5,7 @@
 //! to refresh (`AboutToShow`) every time the menu is opened: no polling.
 
 use crate::core::Ctx;
-use crate::icon::{self, IconState};
+use crate::icon::{self, Bar, IconState};
 use crate::model::{self, Entry, Snapshot};
 use ksni::menu::{CheckmarkItem, StandardItem, SubMenu};
 use ksni::{Icon, MenuItem, ToolTip, Tray, blocking::TrayMethods};
@@ -18,7 +18,7 @@ struct OneMk {
 
 /// ARGB32 in network byte order, as the specification wants it.
 fn pixmap(size: u32, state: IconState) -> Icon {
-    let data = icon::rgba(size, state).as_chunks::<4>().0.iter().flat_map(|p| [p[3], p[0], p[1], p[2]]).collect();
+    let data = icon::rgba(size, state, Bar::Dark).as_chunks::<4>().0.iter().flat_map(|p| [p[3], p[0], p[1], p[2]]).collect();
     Icon { width: size as i32, height: size as i32, data }
 }
 
@@ -51,8 +51,10 @@ impl Tray for OneMk {
         "one-mk".into()
     }
 
+    /// What a panel shows beside the icon (the id above stays as it is, so
+    /// a desktop keeps what it remembers about the icon).
     fn title(&self) -> String {
-        "one-mk".into()
+        "oneMK".into()
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
@@ -66,7 +68,7 @@ impl Tray for OneMk {
     }
 
     fn tool_tip(&self) -> ToolTip {
-        ToolTip { title: "one-mk".into(), description: self.snap.headline(), ..Default::default() }
+        ToolTip { title: "oneMK".into(), description: self.snap.headline(), ..Default::default() }
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {

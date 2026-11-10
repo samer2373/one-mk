@@ -27,15 +27,18 @@ mod history;
 fn readable_time(timestamp: u64) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
     let seconds = now.saturating_sub(timestamp);
-    if seconds < 60 { format!("{seconds} seconds ago") }
-    else if seconds < 3600 { format!("{} minutes ago", seconds / 60) }
-    else if seconds < 86400 { format!("{} hours ago", seconds / 3600) }
-    else { format!("{} days ago", seconds / 86400) }
+    let (count, unit) = if seconds < 60 { (seconds, "second") }
+        else if seconds < 3600 { (seconds / 60, "minute") }
+        else if seconds < 86400 { (seconds / 3600, "hour") }
+        else { (seconds / 86400, "day") };
+    format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" })
 }
 mod control;
 mod doctor;
 mod wallpaper;
 mod pointer_extension;
+#[cfg(test)]
+mod testdir;
 mod live_wallpaper;
 mod hooks;
 mod hotkeys;
@@ -56,6 +59,7 @@ mod profiles;
 mod send;
 mod drag;
 mod settings;
+mod settings_tolerant;
 mod steer;
 mod track;
 mod transfer;
@@ -85,6 +89,11 @@ use std::process::ExitCode;
 )]
 struct Cli {
     /// Where settings and keys live (default: your config folder).
+    ///
+    /// With another folder, pairing and forgetting leave your file manager's
+    /// "Send to" entries alone; received files still go to Downloads (see
+    /// `run --downloads`), and install, integrate, pointer-extension and
+    /// wallpaper still change this desktop when you run them.
     #[arg(long, env = "ONE_MK_HOME", global = true)]
     home: Option<PathBuf>,
     /// More detail: show full errors and debug logs (-vv for trace logs).
@@ -107,7 +116,7 @@ struct RunArgs {
     /// UDP port to listen on (default: 24900).
     #[arg(long)]
     port: Option<u16>,
-    /// Also try this address, e.g. 192.168.1.20:24800 (for networks that block discovery; repeatable).
+    /// Also try this address, e.g. 192.168.1.20:24900 (for networks that block discovery; repeatable).
     #[arg(long, value_name = "IP:PORT")]
     connect: Vec<SocketAddr>,
     /// Don't advertise or look for computers on the local network.
@@ -177,9 +186,9 @@ enum Cmd {
     Update(update::Options),
     /// Stop the sharing service for this settings folder before restarting it.
     Stop,
-    /// Show or configure file edge-drop zones (X11).
+    /// Show or switch on file edge drops (experimental; off by default; not on Wayland).
     Drag {
-        /// Enable file edge-drop zones on supported desktops.
+        /// Switch file edge drops on: dropping a file on the screen edge facing another computer sends it there with no confirmation. Experimental: X11, Windows and macOS only, and only X11 has been tried (with scripted drags).
         #[arg(long, conflicts_with = "off")]
         on: bool,
         /// Disable file edge-drop zones.
@@ -189,6 +198,15 @@ enum Cmd {
         #[arg(long, value_name = "PX", value_parser = clap::value_parser!(u16).range(1..=128))]
         zone: Option<u16>,
     },
+    /// Show, or with --clear delete, the unfinished received files kept so an interrupted send can resume.
+    Partials {
+        /// Delete them all now (any not being received right now). Files older than 7 days are deleted by themselves.
+        #[arg(long)]
+        clear: bool,
+        /// Where received files go, if one-mk is not running and you started it with `run --downloads` (default: Downloads/one-mk).
+        #[arg(long, value_name = "DIR")]
+        downloads: Option<PathBuf>,
+    },
     /// Send files or folders to a paired computer running `one-mk run`.
     Send {
         /// Files or folders to send.
@@ -197,7 +215,7 @@ enum Cmd {
         /// Name or id of the paired computer (needed if there are several).
         #[arg(long, value_name = "DEVICE")]
         to: Option<String>,
-        /// Also try this address, e.g. 192.168.1.20:24800 (for networks that block discovery; repeatable).
+        /// Also try this address, e.g. 192.168.1.20:24900 (for networks that block discovery; repeatable).
         #[arg(long, value_name = "IP:PORT")]
         connect: Vec<SocketAddr>,
         /// Also show a desktop notification if sending fails (the file manager's "Send to" entries use this).
@@ -217,10 +235,10 @@ enum Cmd {
         /// Share images.
         #[arg(long, value_name = "on|off")]
         image: Option<OnOff>,
-        /// Largest clipboard to send or accept, in MB (default 25).
+        /// Largest clipboard to send or accept, in MB (1 to 256, default 25).
         #[arg(long, value_name = "N")]
         max_mb: Option<u32>,
-        /// Skip what a password manager marked as sensitive (default on; not
+        /// Skip what a password manager marked as sensitive (default on; `clip-send` also refuses it unless --allow-sensitive; not
         /// detectable on every system yet, see the README).
         #[arg(long, value_name = "on|off")]
         skip_sensitive: Option<OnOff>,
@@ -233,6 +251,10 @@ enum Cmd {
         /// Name or id of the paired computer (needed if several are connected).
         #[arg(long, value_name = "DEVICE")]
         to: Option<String>,
+        /// Send the clipboard even if a password manager marked it sensitive (refused otherwise).
+        /// The other computer keeps it out of its history.
+        #[arg(long)]
+        allow_sensitive: bool,
     },
     /// Copy a paired computer's clipboard to this one now.
     ClipGet {
@@ -273,7 +295,8 @@ enum Cmd {
     Takeback,
     /// Start one-mk automatically when you log in.
     Install,
-    /// Stop starting one-mk automatically.
+    /// Stop starting one-mk automatically, turn the wallpaper off (your own
+    /// comes back) and remove oneMK's GNOME wallpaper extension.
     Uninstall,
     /// Add "Send to <computer>" to the file manager's menu (Nautilus, Nemo,
     /// Dolphin, Explorer, Finder); it follows the computers you pair or forget.
@@ -282,9 +305,12 @@ enum Cmd {
         #[arg(long)]
         remove: bool,
     },
-    /// Show or save a typing preference (native character mode is not implemented yet).
+    /// Show or choose what the other computer types for your keys: the same
+    /// physical keys (default), or the letters printed on them. Experimental:
+    /// letters (characters, auto) only work toward Windows and Mac computers
+    /// and have not been tested on real hardware.
     Typing {
-        #[arg(long, value_enum, help = "Requested outgoing typing mode (characters/auto are not yet supported by native backends)")]
+        #[arg(long, value_enum, help = "physical: the same keys, so letters follow the other computer's layout (default). characters (experimental): the letters printed on your keys. auto (experimental): characters only when the layouts differ. Letters work only toward Windows and Mac computers")]
         keys: Option<typing::Mode>,
         #[arg(long, value_name = "NAME_OR_ID", help = "Change or show only this paired computer's preference")]
         peer: Option<String>,
@@ -313,6 +339,19 @@ enum Cmd {
         #[command(subcommand)]
         cmd: profiles::ProfileCmd,
     },
+    /// Give a paired computer a name of your own here (for example when two
+    /// computers call themselves the same). Only this computer shows it; the
+    /// other computer keeps its own name.
+    Rename {
+        /// Current name or id of the paired computer (see `one-mk devices`).
+        device: String,
+        /// The new name (spaces are fine without quotes).
+        #[arg(num_args = 0.., required_unless_present = "reset")]
+        name: Vec<String>,
+        /// Go back to the name the computer gave itself.
+        #[arg(long, conflicts_with = "name")]
+        reset: bool,
+    },
     /// Unpair a computer.
     Forget {
         /// Name or id of the paired computer (see `one-mk devices`).
@@ -326,10 +365,11 @@ enum Cmd {
         to: String,
     },
     /// Keep the pointer on this computer: edges lead nowhere while on.
+    /// Without an argument, says whether it is locked.
     LockPointer {
         /// Enable, disable or toggle pointer locking.
         #[arg(value_name = "on|off|toggle", value_parser = ["on", "off", "toggle"])]
-        state: String,
+        state: Option<String>,
     },
     /// Type on every connected computer at once: everything you type, click
     /// and scroll here goes to all of them until you stop it (also with
@@ -361,6 +401,12 @@ enum Cmd {
     Hotkeys(hotkeys::HotkeyArgs),
     /// Lock this computer's screen and every connected computer's.
     LockAll,
+    /// Show or set the window's look: system (follow the computer), light or dark.
+    Appearance {
+        /// system, light or dark; leave out to see the current setting.
+        #[arg(value_enum)]
+        to: Option<settings::Appearance>,
+    },
     /// Whether locking this computer locks the connected ones too: on or off.
     LockSync {
         /// Enable or disable shared screen locking.
@@ -374,7 +420,7 @@ enum Cmd {
     /// and put displays to sleep together.
     Power(power::PowerArgs),
     /// Change what keys do on the computers this one controls: remaps,
-    /// combos, tap/hold keys, layers, actions (see docs/INPUT-TUNING.md).
+    /// combos, tap/hold keys, layers, actions (see docs/INPUT.md).
     Keymap {
         #[command(subcommand)]
         cmd: Option<tuning::KeymapCmd>,
@@ -395,7 +441,13 @@ enum Cmd {
         #[command(subcommand)]
         action: pointer_extension::Action,
     },
-    /// Play a video across the shared desktop, or turn it off.
+    /// A video or picture as the wallpaper across your screens, or turn it off.
+    ///
+    /// Stable: video on X11 desktops, pictures on GNOME. Experimental (not
+    /// yet tested on real hardware there): macOS, Windows, layer-shell
+    /// Wayland desktops (KDE, Sway, Hyprland), video on GNOME Wayland through
+    /// oneMK's GNOME extension, one wallpaper shared across several
+    /// computers, and the smaller copy made of large videos.
     Wallpaper(live_wallpaper::Args),
     /// Scrolling on the computers this one controls: direction, natural,
     /// speed, smooth or by notches, modifier keys.
@@ -427,6 +479,9 @@ enum Cmd {
         /// Machine-readable output for a program to read.
         #[arg(long)]
         json: bool,
+        /// Also list the checks that did not apply here.
+        #[arg(long)]
+        all: bool,
     },
     /// Measure latency and CPU cost.
     Bench {
@@ -525,12 +580,11 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            if verbose > 0 {
-                eprintln!("one-mk: {e:?}");
-            } else {
-                // One line; -v shows each cause on its own.
-                eprintln!("one-mk: {e:#}");
-            }
+            // One line; -v shows each cause on its own.
+            let text = if verbose > 0 { format!("{e:?}") } else { format!("{e:#}") };
+            // "one-mk: one-mk is not running" says it twice.
+            let prefix = if text.starts_with("one-mk ") { "" } else { "one-mk: " };
+            eprintln!("{prefix}{text}");
             ExitCode::from(e.downcast_ref::<wallpaper::Failure>().map_or(1, |failure| failure.code))
         }
     }
@@ -554,13 +608,14 @@ fn options(r: RunArgs) -> Result<app::Options> {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let custom_home = cli.home.is_some();
     let verbose = cli.verbose;
     let action = Action::of(cli.run, cli.cmd)?;
-    let dir = match cli.home {
-        Some(d) => d,
-        None => default_home()?,
-    };
+    // A home of its own (`--home`, `ONE_MK_HOME`): a test, or a second
+    // one-mk. Nothing it does by itself reaches outside that folder: the
+    // "Send to" entries follow the default home's computers only.
+    let (dir, custom_home) = select_home(cli.home.as_deref(), one_mk_ctl::default_home(), migrate_old_home)?;
+    // Files an earlier version made with the process umask become private.
+    one_mk_ctl::private::tighten_home(&dir);
 
     // One thread for networking is plenty and keeps the footprint small;
     // input capture and injection have their own threads.
@@ -587,6 +642,7 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Update(options) => update::run(&dir, options),
             Cmd::Stop => update::stop(&dir).await,
             Cmd::Drag { on, off, zone } => drag::configure(&dir, on, off, zone).await,
+            Cmd::Partials { clear, downloads } => manage::partials(&dir, clear, downloads).await,
             Cmd::Run(_) => unreachable!("handled above"),
             Cmd::Clipboard { history, text, html, image, max_mb, skip_sensitive, allow_fetch } => {
                 if let Some(history) = history {
@@ -597,8 +653,8 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 else { clipctl::clipboard(&dir, clipctl::ClipChange { text, html, image, max_mb, skip_sensitive, allow_fetch }).await }
             }
-            Cmd::ClipSend { to } => clipctl::move_clipboard(&dir, to, true).await,
-            Cmd::ClipGet { from } => clipctl::move_clipboard(&dir, from, false).await,
+            Cmd::ClipSend { to, allow_sensitive } => clipctl::move_clipboard(&dir, to, true, allow_sensitive).await,
+            Cmd::ClipGet { from } => clipctl::move_clipboard(&dir, from, false, false).await,
             Cmd::Notify { state } => clipctl::notify(&dir, state).await,
             Cmd::Send { paths, to, connect, notify_errors } => send::run(&dir, paths, to, connect, notify_errors).await,
             Cmd::Pair { connect, machine, no_discovery } => {
@@ -606,19 +662,36 @@ fn run(cli: Cli) -> Result<()> {
                 integrate::refresh(&dir, custom_home);
                 paired
             }
-            Cmd::Invite(args) => invite::run(&dir, args).await,
-            Cmd::Join(args) => invite::join(&dir, args).await,
+            Cmd::Invite(args) => {
+                let paired = invite::run(&dir, args).await;
+                integrate::refresh(&dir, custom_home);
+                paired
+            }
+            Cmd::Join(args) => {
+                let paired = invite::join(&dir, args).await;
+                integrate::refresh(&dir, custom_home);
+                paired
+            }
             Cmd::Devices => devices(&dir, verbose > 0),
             Cmd::Status => manage::status(&dir).await,
             Cmd::Takeback => manage::takeback(&dir).await,
             Cmd::Install => install::install(&dir, custom_home).await,
-            Cmd::Uninstall => install::uninstall(),
+            Cmd::Uninstall => install::uninstall(&dir).await,
             Cmd::Integrate { remove } => integrate::run(&dir, custom_home, remove),
             Cmd::Layout { device, side, offset, swap_ctrl_cmd } => {
                 manage::layout(&dir, &device, side, offset.as_deref(), swap_ctrl_cmd).await
             }
             Cmd::Typing { keys, peer } => typing::run(&dir, keys, peer.as_deref()).await,
             Cmd::Profile { cmd } => profiles::run(&dir, cmd).await,
+            Cmd::Rename { device, name, reset } => {
+                let done = manage::rename(&dir, &device, &name.join(" "), reset)?;
+                println!("{done}");
+                if control::request(&dir, control::Request::Reload).await.is_ok_and(|r| r.is_some()) {
+                    println!("Applied right away.");
+                }
+                integrate::refresh(&dir, custom_home);
+                Ok(())
+            }
             Cmd::Forget { device } => {
                 forget(&dir, &device)?;
                 // A running daemon lets go of it at once: its input link
@@ -630,20 +703,22 @@ fn run(cli: Cli) -> Result<()> {
                 Ok(())
             }
             Cmd::Switch { to } => steer::switch(&dir, &to).await,
-            Cmd::LockPointer { state } => {
+            Cmd::LockPointer { state: Some(state) } => {
                 steer::lock_pointer(&dir, steer::Toggle::parse(&state).context("on, off or toggle")?).await
             }
+            Cmd::LockPointer { state: None } => steer::show_pointer_lock(&dir).await,
             Cmd::Broadcast { state, idle_off } => {
                 let state = state.map(|s| steer::Toggle::parse(&s).context("on, off or toggle")).transpose()?;
                 steer::broadcast(&dir, state, idle_off).await
             }
             Cmd::Edge(args) => settings::edge(&dir, args).await,
             Cmd::Gaming { mode: Some(mode) } => settings::gaming(&dir, mode).await,
-            Cmd::Gaming { mode: None } => { println!("Gaming mode: {}", settings::Settings::load(&dir)?.gaming); Ok(()) },
+            Cmd::Gaming { mode: None } => { println!("Gaming mode: {}", settings::Settings::view(&dir)?.gaming); Ok(()) },
             Cmd::Hotkeys(args) => hotkeys::hotkeys(&dir, args).await,
             Cmd::LockAll => steer::lock_all(&dir).await,
+            Cmd::Appearance { to } => settings::appearance(&dir, to),
             Cmd::LockSync { state: Some(state) } => settings::lock_sync(&dir, state).await,
-            Cmd::LockSync { state: None } => { println!("Lock sync: {}", if settings::Settings::load(&dir)?.lock_sync { "on" } else { "off" }); Ok(()) },
+            Cmd::LockSync { state: None } => { println!("Lock sync: {}", if settings::Settings::view(&dir)?.lock_sync { "on" } else { "off" }); Ok(()) },
             Cmd::Hooks(args) => hooks::run_command(&dir, args).await,
             Cmd::Power(args) => power::run_command(&dir, args).await,
             Cmd::Keymap { cmd } => tuning::keymap(&dir, cmd).await,
@@ -662,7 +737,7 @@ fn run(cli: Cli) -> Result<()> {
                 println!("fingerprint {}", id.fingerprint);
                 Ok(())
             }
-            Cmd::Doctor { json } => doctor::run(&dir, json).await,
+            Cmd::Doctor { json, all } => doctor::run(&dir, json, all).await,
             Cmd::Bench { count, rate, serve, connect, peer } => {
                 bench::run(&dir, bench::Options { count, rate: rate.max(1), serve, connect, peer }).await
             }
@@ -670,15 +745,46 @@ fn run(cli: Cli) -> Result<()> {
     })
 }
 
-/// Where identity and paired devices live. On Windows this is the local
-/// (non-roaming) AppData: the identity belongs to this one computer, and a
-/// roaming profile would give every computer the same one.
-fn default_home() -> Result<PathBuf> {
-    let dirs = directories::ProjectDirs::from("", "", "one-mk").context("no home directory")?;
-    let dir = dirs.config_local_dir().to_path_buf();
+/// The folder to use (`--home`, `ONE_MK_HOME`, or `default`: where identity
+/// and paired devices live, on Windows the local, non-roaming AppData) and
+/// whether it is a custom one. `migrate` (moving an older version's files
+/// into the default folder) runs only when the default folder is the one
+/// used: a custom home never reaches outside itself, not even to look.
+fn select_home(given: Option<&Path>, default: Result<PathBuf>, migrate: impl FnOnce(&Path)) -> Result<(PathBuf, bool)> {
+    let (dir, custom) = match given {
+        // Relative, a folder can't be checked up to the root (and the daemon
+        // would see another folder after a `cd`): make it absolute now.
+        Some(d) => {
+            let dir = std::path::absolute(d).with_context(|| format!("--home {}", d.display()))?;
+            let custom = match default {
+                Ok(default) => !same_folder(&dir, &default),
+                Err(_) => true,
+            };
+            (dir, custom)
+        }
+        None => (default?, false),
+    };
+    if !custom {
+        migrate(&dir);
+    }
+    Ok((dir, custom))
+}
+
+/// Whether `a` and `b` are the same folder (both may not exist yet).
+fn same_folder(a: &Path, b: &Path) -> bool {
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| std::path::absolute(p).unwrap_or_else(|_| p.to_owned()));
+    canonical(a) == canonical(b)
+}
+
+/// Moves an older version's files into the default home `dir`, once: on
+/// Windows they were kept in the roaming AppData.
+fn migrate_old_home(dir: &Path) {
     #[cfg(windows)]
-    migrate_roaming(dirs.config_dir(), &dir);
-    Ok(dir)
+    if let Some(dirs) = directories::ProjectDirs::from("", "", "one-mk") {
+        migrate_roaming(dirs.config_dir(), dir);
+    }
+    #[cfg(not(windows))]
+    let _ = dir;
 }
 
 /// Earlier versions kept their settings in the roaming AppData; move them
@@ -710,7 +816,7 @@ fn migrate_roaming(old: &Path, new: &Path) {
     tracing::info!("moved settings from {} to {}", old.display(), new.display());
 }
 
-fn default_downloads() -> Result<PathBuf> {
+pub(crate) fn default_downloads() -> Result<PathBuf> {
     let dirs = directories::UserDirs::new().context("no home directory")?;
     let downloads = dirs.download_dir().map_or_else(|| dirs.home_dir().join("Downloads"), |d| d.to_path_buf());
     Ok(downloads.join("one-mk"))
@@ -728,7 +834,10 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
         println!("{:<24} {:<9}  SIDE", "NAME", "ID");
     }
     for d in trust.devices() {
-        let name = one_mk_proto::sanitize_name(&d.name);
+        let name = match d.alias.as_deref().filter(|a| !a.trim().is_empty()) {
+            Some(_) if d.alias.as_deref() != Some(d.name.as_str()) => format!("{} ({})", one_mk_proto::sanitize_name(d.label()), one_mk_proto::sanitize_name(&d.name)),
+            _ => one_mk_proto::sanitize_name(d.label()),
+        };
         let side = if d.placed_by == one_mk_net::PlacedBy::Pending { "placement needed".into() }
             else { d.offset.map_or_else(|| d.side.clone(), |(x, y)| format!("{} at {x},{y}", d.side)) };
         if verbose {
@@ -741,17 +850,62 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
 }
 
 fn forget(dir: &Path, device: &str) -> Result<()> {
-    let mut trust = TrustStore::load(dir)?;
-    let d = trust.remove(device).ok_or_else(|| manage::unknown_device(device))?;
-    wallpaper::forget(dir, &d.fingerprint)?;
-    trust.save()?;
-    println!("Forgot {}.", d.name);
+    let d = TrustStore::update(dir, |trust| {
+        let Some(d) = trust.remove(device) else { return Err(manage::not_found(trust, device)) };
+        wallpaper::forget(dir, &d.fingerprint)?;
+        Ok(d)
+    })?;
+    println!("Forgot {}.", one_mk_proto::sanitize_name(d.label()));
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "1 second ago", never "1 seconds ago".
+    #[test]
+    fn times_agree_with_their_numbers() {
+        let ago = |seconds: u64| readable_time(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - seconds);
+        assert_eq!(ago(1), "1 second ago");
+        assert_eq!(ago(30), "30 seconds ago");
+        assert_eq!(ago(60), "1 minute ago");
+        assert_eq!(ago(3 * 3600), "3 hours ago");
+        assert_eq!(ago(86_400), "1 day ago");
+        assert_eq!(ago(2 * 86_400), "2 days ago");
+    }
+
+    /// Picking the folder has no side effects unless it is the default
+    /// one: `one-mk --home C:\\scratch devices` must never move, copy or
+    /// delete the real configuration (the roaming-profile migration).
+    #[test]
+    fn only_the_default_home_is_migrated() {
+        let root = std::env::temp_dir().join(format!("one-mk-select-home-{}", std::process::id()));
+        let default = root.join("default");
+        let custom = root.join("scratch");
+        let migrated = std::cell::RefCell::new(Vec::new());
+        let note = |dir: &Path| migrated.borrow_mut().push(dir.to_owned());
+
+        let (dir, is_custom) = select_home(Some(&custom), Ok(default.clone()), note).unwrap();
+        assert_eq!((dir, is_custom), (custom.clone(), true));
+        assert!(migrated.borrow().is_empty(), "a custom home ran the migration");
+
+        // No default folder known: a given one is custom, and nothing moves.
+        let (_, is_custom) = select_home(Some(&custom), Err(anyhow::anyhow!("no home directory")), note).unwrap();
+        assert!(is_custom && migrated.borrow().is_empty());
+
+        let (dir, is_custom) = select_home(None, Ok(default.clone()), note).unwrap();
+        assert_eq!((dir, is_custom), (default.clone(), false));
+        // The default folder named explicitly is the default folder.
+        let (dir, is_custom) = select_home(Some(&default), Ok(default.clone()), note).unwrap();
+        assert_eq!((dir, is_custom), (default.clone(), false));
+        assert_eq!(*migrated.borrow(), vec![default.clone(), default]);
+
+        assert!(select_home(None, Err(anyhow::anyhow!("no home directory")), note).is_err());
+        // A relative --home becomes absolute.
+        let (dir, _) = select_home(Some(Path::new("rel-home")), Ok(root.join("d")), |_| {}).unwrap();
+        assert!(dir.is_absolute() && dir.ends_with("rel-home"));
+    }
 
     #[test]
     fn polished_help_describes_options_and_supported_scopes() {
@@ -774,6 +928,22 @@ mod tests {
             assert!(help.contains(required), "{help}");
             assert!(!help.contains(forbidden), "{help}");
         }
+    }
+
+    #[test]
+    fn wallpaper_help_describes_every_command_and_says_what_is_experimental() {
+        let help = |args: &[&str]| Cli::try_parse_from(std::iter::once("one-mk").chain(args.iter().copied()).chain(["--help"])).err().unwrap().to_string();
+        let top = help(&["wallpaper"]);
+        for line in ["set ", "off ", "status ", "pause ", "play ", "extension "] {
+            let row = top.lines().find(|row| row.trim_start().starts_with(line)).unwrap_or_else(|| panic!("{line}: {top}"));
+            assert!(row.trim().len() > line.len() + 8, "no description for {line}: {top}");
+        }
+        assert!(top.contains("Experimental") && top.contains("macOS") && top.contains("Windows") && top.contains("several"), "{top}");
+        assert!(help(&["wallpaper", "set"]).contains("A video (MP4"));
+        assert!(help(&["wallpaper", "off"]).contains("your own wallpaper back"));
+        assert!(help(&["uninstall"]).contains("GNOME wallpaper extension"));
+        let install = help(&["wallpaper", "extension", "install"]);
+        assert!(install.contains("log out") && install.contains("nothing is"), "{install}");
     }
 
     #[test]

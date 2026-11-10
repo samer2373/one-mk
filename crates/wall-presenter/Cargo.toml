@@ -3,6 +3,11 @@ name = "one-mk-wall"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+publish.workspace = true
 description = "Default-disabled wallpaper presentation stop-gate probe (not a media importer)"
 
 [features]

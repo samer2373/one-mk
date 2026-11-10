@@ -121,7 +121,7 @@ pub fn uninstall() -> Result<String> {
 /// True if one-mk is set to start at login.
 pub fn is_installed() -> bool {
     if cfg!(target_os = "linux") {
-        home_dir().is_ok_and(|h| unit_path(&h).exists() || desktop_path(&h).exists())
+        crate::xdg::config_home().is_ok_and(|config| unit_path(&config).exists() || desktop_path(&config).exists())
     } else if cfg!(target_os = "macos") {
         home_dir().is_ok_and(|h| plist_path(&h, LABEL).exists())
     } else {
@@ -139,8 +139,8 @@ pub fn is_installed_for(home: Option<&Path>) -> bool {
 /// The text of this user's login entry.
 fn login_entry() -> Option<String> {
     if cfg!(target_os = "linux") {
-        let home = home_dir().ok()?;
-        let text: String = [unit_path(&home), desktop_path(&home)].iter().filter_map(|path| std::fs::read_to_string(path).ok()).collect();
+        let config = crate::xdg::config_home().ok()?;
+        let text: String = [unit_path(&config), desktop_path(&config)].iter().filter_map(|path| std::fs::read_to_string(path).ok()).collect();
         (!text.is_empty()).then_some(text)
     } else if cfg!(target_os = "macos") {
         std::fs::read_to_string(plist_path(&home_dir().ok()?, LABEL)).ok()
@@ -168,9 +168,9 @@ fn home_dir() -> Result<PathBuf> {
 
 fn write(path: &Path, text: &str) -> Result<()> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        crate::private::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
-    std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))
+    crate::private::write_readable(path, text).with_context(|| format!("writing {}", path.display()))
 }
 
 fn remove(path: &Path) -> Result<bool> {
@@ -183,26 +183,67 @@ fn remove(path: &Path) -> Result<bool> {
 
 // ----------------------------------------------------------------- Linux
 
-fn unit_path(home: &Path) -> PathBuf {
-    home.join(".config/systemd/user/one-mk.service")
+// All of these take the XDG base folders (`$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`:
+// `crate::xdg`), never `$HOME/.config` by hand, so the start-at-login entries
+// and the file manager's entries always land in the same tree.
+fn unit_path(config: &Path) -> PathBuf {
+    config.join("systemd/user/one-mk.service")
 }
 
-fn desktop_path(home: &Path) -> PathBuf {
-    home.join(".config/autostart/one-mk.desktop")
+fn desktop_path(config: &Path) -> PathBuf {
+    config.join("autostart/one-mk.desktop")
 }
 
-fn tray_desktop_path(home: &Path) -> PathBuf {
-    home.join(".config/autostart/one-mk-tray.desktop")
+fn tray_desktop_path(config: &Path) -> PathBuf {
+    config.join("autostart/one-mk-tray.desktop")
 }
 
 /// The (hidden) application entry that gives one-mk an app id, for the
 /// GlobalShortcuts portal.
-fn app_entry_path(home: &Path) -> PathBuf {
-    home.join(".local/share/applications").join(format!("{}.desktop", one_mk_proto::LINUX_APP_ID))
+fn app_entry_path(data: &Path) -> PathBuf {
+    data.join("applications").join(format!("{}.desktop", one_mk_proto::LINUX_APP_ID))
+}
+
+/// Whether [`install`] starts the service right away as well (a systemd
+/// user service or a LaunchAgent does; an autostart entry or a Windows
+/// startup entry only starts it at the next login).
+pub fn starts_service_now() -> bool {
+    if cfg!(target_os = "macos") {
+        true
+    } else if cfg!(target_os = "linux") {
+        crate::xdg::config_home().is_ok_and(|config| systemd_for(&config))
+    } else {
+        false
+    }
 }
 
 fn systemd_available() -> bool {
     ok("systemctl", &["--user", "show-environment"])
+}
+
+/// Whether the start-at-login entry for this config folder is a systemd
+/// user service. The user's systemd is one per account and reads units only
+/// from its own search path, whatever `$XDG_CONFIG_HOME` says here: for a
+/// unit written anywhere else (a test run with a throwaway config folder),
+/// `systemctl --user enable --now one-mk.service` would enable and start the
+/// account's real one-mk instead, and uninstall would stop it. Such a folder
+/// gets an autostart entry, which only that folder's session ever reads.
+fn systemd_for(config: &Path) -> bool {
+    systemd_available() && systemd_search_path().is_some_and(|dirs| unit_dir_searched(&dirs, &unit_path(config)))
+}
+
+/// systemd's own unit search path (`UnitPath`, space separated).
+fn systemd_search_path() -> Option<String> {
+    let out = Command::new("systemctl").args(["--user", "show", "--property=UnitPath"]).output().ok()?;
+    let text = String::from_utf8(out.stdout).ok()?;
+    out.status.success().then(|| text.trim().trim_start_matches("UnitPath=").to_owned())
+}
+
+/// Whether `unit`'s folder is one of `search_path`'s folders.
+fn unit_dir_searched(search_path: &str, unit: &Path) -> bool {
+    let Some(dir) = unit.parent() else { return false };
+    let same = |a: &Path, b: &Path| a == b || std::fs::canonicalize(a).is_ok_and(|a| std::fs::canonicalize(b).is_ok_and(|b| a == b));
+    search_path.split_whitespace().any(|d| same(Path::new(d), dir))
 }
 
 /// Quotes one word for a systemd `ExecStart=` or desktop `Exec=` line.
@@ -270,15 +311,15 @@ pub fn packaged_files(bindir: &Path) -> Vec<(String, String)> {
 }
 
 fn install_linux(l: &Launch) -> Result<String> {
-    let home = home_dir()?;
+    let (config, data) = (crate::xdg::config_home()?, crate::xdg::data_home()?);
     let mut msg = String::new();
     // Before the service starts: the daemon registers its app id at startup.
-    let app = app_entry_path(&home);
+    let app = app_entry_path(&data);
     write(&app, &(desktop_entry("one-mk", &l.exe, &l.args()).replace("X-GNOME-Autostart-enabled=true\n", "") + "NoDisplay=true\n"))?;
-    if systemd_available() {
-        let unit = unit_path(&home);
+    if systemd_for(&config) {
+        let unit = unit_path(&config);
         write(&unit, &systemd_unit(l))?;
-        let _ = remove(&desktop_path(&home)); // never start twice
+        let _ = remove(&desktop_path(&config)); // never start twice
         let enable: &[&str] = if l.start_now { &["--user", "enable", "--now", "one-mk.service"] } else { &["--user", "enable", "one-mk.service"] };
         if !ok("systemctl", &["--user", "daemon-reload"]) || !ok("systemctl", enable) {
             bail!("wrote {} but `systemctl --user enable one-mk.service` failed", unit.display());
@@ -289,12 +330,12 @@ fn install_linux(l: &Launch) -> Result<String> {
             unit.display()
         );
     } else {
-        let entry = desktop_path(&home);
+        let entry = desktop_path(&config);
         write(&entry, &desktop_entry("one-mk", &l.exe, &l.args()))?;
         msg += &format!("one-mk will start the next time you log in (systemd is not available here).\n  autostart entry: {}\n  to start it now:  one-mk run\n", entry.display());
     }
     if let Some(tray) = &l.tray {
-        let entry = tray_desktop_path(&home);
+        let entry = tray_desktop_path(&config);
         write(&entry, &desktop_entry("one-mk tray", tray, &l.tray_args(false)))?;
         msg += &format!("  the tray icon will start at login too: {}\n", entry.display());
     }
@@ -304,21 +345,23 @@ fn install_linux(l: &Launch) -> Result<String> {
 }
 
 fn uninstall_linux() -> Result<bool> {
-    let home = home_dir()?;
-    let unit = unit_path(&home);
+    let (config, data) = (crate::xdg::config_home()?, crate::xdg::data_home()?);
+    let unit = unit_path(&config);
     let mut did = false;
     if unit.exists() {
-        if systemd_available() {
+        // Only the unit systemd reads is the one it would disable.
+        let systemd = systemd_for(&config);
+        if systemd {
             ok("systemctl", &["--user", "disable", "--now", "one-mk.service"]);
         }
         did |= remove(&unit)?;
-        if systemd_available() {
+        if systemd {
             ok("systemctl", &["--user", "daemon-reload"]);
         }
     }
-    did |= remove(&desktop_path(&home))?;
-    did |= remove(&tray_desktop_path(&home))?;
-    did |= remove(&app_entry_path(&home))?;
+    did |= remove(&desktop_path(&config))?;
+    did |= remove(&tray_desktop_path(&config))?;
+    did |= remove(&app_entry_path(&data))?;
     Ok(did)
 }
 
@@ -361,10 +404,35 @@ fn gui_domain() -> String {
     format!("gui/{}", uid.as_deref().map_or("501", str::trim))
 }
 
-/// Writes a LaunchAgent and, if `load_now`, (re)loads it.
-fn mac_agent(home: &Path, label: &str, exe: &Path, args: &[String], log: &Path, keep_alive: bool, load_now: bool) -> Result<PathBuf> {
+/// The account's own home folder, from the user database: `$HOME` may point
+/// elsewhere (a test run, a throwaway folder) while launchd does not.
+fn account_home() -> Option<PathBuf> {
+    let user = Command::new("id").arg("-un").output().ok()?;
+    let user = String::from_utf8(user.stdout).ok()?;
+    let read = Command::new("dscl").args([".", "-read", &format!("/Users/{}", user.trim()), "NFSHomeDirectory"]).output().ok()?;
+    dscl_home(&String::from_utf8_lossy(&read.stdout))
+}
+
+/// `NFSHomeDirectory: /Users/me` (a path with spaces comes on the next line).
+fn dscl_home(said: &str) -> Option<PathBuf> {
+    let home = said.split_once("NFSHomeDirectory:")?.1.trim();
+    (!home.is_empty()).then(|| PathBuf::from(home))
+}
+
+/// launchd holds one job per label for the whole login session, whatever
+/// `$HOME` says. Loading or unloading from any other home folder would stop
+/// or replace the installed oneMK, so only the account's own one may.
+fn launchd_owns(home: &Path, account: Option<&Path>) -> bool {
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    account.is_some_and(|account| real(home) == real(account))
+}
+
+/// Writes a LaunchAgent and, if `load_now` and `home` is the account's own,
+/// (re)loads it; whether it did.
+fn mac_agent(home: &Path, label: &str, exe: &Path, args: &[String], log: &Path, keep_alive: bool, load_now: bool) -> Result<(PathBuf, bool)> {
     let plist = plist_path(home, label);
     write(&plist, &launch_agent(label, exe, args, log, keep_alive))?;
+    let load_now = load_now && launchd_owns(home, account_home().as_deref());
     if load_now {
         let domain = gui_domain();
         ok("launchctl", &["bootout", &format!("{domain}/{label}")]); // replace an older copy
@@ -372,22 +440,22 @@ fn mac_agent(home: &Path, label: &str, exe: &Path, args: &[String], log: &Path, 
             bail!("wrote {} but `launchctl bootstrap {domain}` failed", plist.display());
         }
     }
-    Ok(plist)
+    Ok((plist, load_now))
 }
 
 fn install_macos(l: &Launch) -> Result<String> {
     let home = home_dir()?;
     let log = home.join("Library/Logs/one-mk.log");
-    let plist = mac_agent(&home, LABEL, &l.exe, &l.args(), &log, true, l.start_now)?;
+    let (plist, started) = mac_agent(&home, LABEL, &l.exe, &l.args(), &log, true, l.start_now)?;
     let mut msg = format!(
         "one-mk will now start whenever you log in{}.\n  LaunchAgent: {}\n  log:         {}\n  macOS will ask for Accessibility and Input Monitoring permission the first time; allow one-mk.\n",
-        if l.start_now { ", and is starting now" } else { " (it is already running now)" },
+        if started { ", and is starting now" } else if l.start_now { " (not started now: $HOME is not your home folder)" } else { " (it is already running now)" },
         plist.display(),
         log.display()
     );
     if let Some(tray) = &l.tray {
         let tray_log = home.join("Library/Logs/one-mk-tray.log");
-        let p = mac_agent(&home, TRAY_LABEL, tray, &l.tray_args(false), &tray_log, false, false)?;
+        let (p, _) = mac_agent(&home, TRAY_LABEL, tray, &l.tray_args(false), &tray_log, false, false)?;
         msg += &format!("  the menu bar icon will start at login too: {}\n", p.display());
     }
     msg += "  to undo:     one-mk uninstall";
@@ -396,11 +464,14 @@ fn install_macos(l: &Launch) -> Result<String> {
 
 fn uninstall_macos() -> Result<bool> {
     let home = home_dir()?;
+    let owns = launchd_owns(&home, account_home().as_deref());
     let mut did = false;
     for label in [LABEL, TRAY_LABEL] {
         let plist = plist_path(&home, label);
         if plist.exists() {
-            ok("launchctl", &["bootout", &format!("{}/{label}", gui_domain())]);
+            if owns {
+                ok("launchctl", &["bootout", &format!("{}/{label}", gui_domain())]);
+            }
             did |= remove(&plist)?;
         }
     }
@@ -493,8 +564,47 @@ fn windows_run_owned(value: &str, folder: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn systemd_is_used_only_for_a_unit_folder_it_reads() {
+        let real = "/home/u/.config/systemd/user.control /run/user/1000/systemd/transient /home/u/.config/systemd/user /etc/systemd/user /usr/lib/systemd/user";
+        assert!(unit_dir_searched(real, &unit_path(Path::new("/home/u/.config"))));
+        // A throwaway config folder: systemd would act on the real unit instead.
+        assert!(!unit_dir_searched(real, &unit_path(Path::new("/tmp/omk-test/x/c"))));
+        assert!(!unit_dir_searched("", &unit_path(Path::new("/home/u/.config"))));
+        // The same folder through a link (a symlinked home) still counts.
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("c");
+        std::fs::create_dir_all(config.join("systemd/user")).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&config, dir.path().join("link")).unwrap();
+            let search = format!("/etc/systemd/user {}", config.join("systemd/user").display());
+            assert!(unit_dir_searched(&search, &unit_path(&dir.path().join("link"))));
+        }
+    }
+
     fn launch(home: Option<&str>) -> Launch {
         Launch { exe: "/opt/my apps/one-mk".into(), tray: None, home: home.map(PathBuf::from), start_now: true }
+    }
+
+    /// A run with `$HOME` elsewhere must never load or unload the installed
+    /// oneMK's launchd job (one per label for the whole login session).
+    #[test]
+    fn only_the_account_home_drives_launchd() {
+        assert_eq!(dscl_home("NFSHomeDirectory: /Users/me\n"), Some(PathBuf::from("/Users/me")));
+        assert_eq!(dscl_home("NFSHomeDirectory:\n /Users/Jane Doe\n"), Some(PathBuf::from("/Users/Jane Doe")));
+        assert_eq!(dscl_home("No such key: NFSHomeDirectory\n"), None);
+        let account = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        assert!(launchd_owns(account.path(), Some(account.path())));
+        assert!(!launchd_owns(other.path(), Some(account.path())));
+        assert!(!launchd_owns(account.path(), None), "unknown account home: hands off");
+        #[cfg(unix)]
+        {
+            let link = other.path().join("same");
+            std::os::unix::fs::symlink(account.path(), &link).unwrap();
+            assert!(launchd_owns(&link, Some(account.path())), "the same folder by another path");
+        }
     }
 
     #[test]
@@ -601,11 +711,26 @@ mod tests {
 
     #[test]
     fn files_live_where_the_systems_look() {
-        let h = Path::new("/home/u");
-        assert_eq!(unit_path(h), Path::new("/home/u/.config/systemd/user/one-mk.service"));
-        assert_eq!(desktop_path(h), Path::new("/home/u/.config/autostart/one-mk.desktop"));
-        assert_eq!(tray_desktop_path(h), Path::new("/home/u/.config/autostart/one-mk-tray.desktop"));
-        assert_eq!(app_entry_path(h), Path::new("/home/u/.local/share/applications/io.github.onemk.OneMk.desktop"));
-        assert_eq!(plist_path(h, LABEL), Path::new("/home/u/Library/LaunchAgents/com.one-mk.daemon.plist"));
+        // Under the XDG folders, wherever they are: not under a hard-coded
+        // `$HOME/.config` while the file manager's entries follow `$XDG_DATA_HOME`.
+        let (config, data) = (Path::new("/cfg"), Path::new("/dat/share"));
+        assert_eq!(unit_path(config), Path::new("/cfg/systemd/user/one-mk.service"));
+        assert_eq!(desktop_path(config), Path::new("/cfg/autostart/one-mk.desktop"));
+        assert_eq!(tray_desktop_path(config), Path::new("/cfg/autostart/one-mk-tray.desktop"));
+        assert_eq!(app_entry_path(data), Path::new("/dat/share/applications/io.github.onemk.OneMk.desktop"));
+        assert_eq!(plist_path(Path::new("/home/u"), LABEL), Path::new("/home/u/Library/LaunchAgents/com.one-mk.daemon.plist"));
+    }
+
+    /// The entries the desktop must find are written readable but never
+    /// group-writable, in folders made private, whatever the umask.
+    #[cfg(unix)]
+    #[test]
+    fn login_entries_are_written_with_fixed_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config/autostart/one-mk.desktop");
+        write(&path, "[Desktop Entry]\n").unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o133, 0, "readable by the owner, never group-writable");
+        assert_eq!(std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
     }
 }

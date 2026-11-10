@@ -69,7 +69,7 @@ impl Suggestion {
 /// input, so only the command (or the idle rule) works there.
 pub fn takeback_hint() -> &'static str {
     if cfg!(target_os = "linux") {
-        "To take it back, run `one-mk takeback` here (it also comes back by itself after a minute without input from the other computer)."
+        "To take it back, run `one-mk takeback` here (it also comes back by itself when the other computer sends no input for a while; see `one-mk edge --idle-return`)."
     } else {
         "To take it back, use this computer's mouse or keyboard, or run `one-mk takeback`."
     }
@@ -103,6 +103,13 @@ pub struct Status {
     /// (`Ctrl+Alt+B`); empty when there is none.
     pub broadcast_hotkey: String,
     pub peers: Vec<PeerStatus>,
+    /// Paired computers (ids) that refused this one because they no longer
+    /// trust it: it was forgotten there.
+    pub removed: Vec<String>,
+    /// Computers that keep trying to connect but never get in (one this
+    /// computer doesn't trust, or attempts that break off during the
+    /// handshake), each said as advice for a person. Never trusted for it.
+    pub unrecognised: Vec<String>,
     /// `one-mk lock-pointer` is on: edges lead nowhere.
     pub pointer_locked: bool,
     /// This computer's screen is locked (as far as the OS tells).
@@ -129,6 +136,9 @@ pub struct Status {
     pub discovery: Option<bool>,
     pub clipboard_history_revision: u64,
     pub clipboard_history_note: String,
+    /// This run shares no clipboard (`run --no-clipboard`), whatever the
+    /// clipboard settings say. Older daemons don't say: false.
+    pub clipboard_off: bool,
     /// What the input backend needs the user to know or do, one line each
     /// (e.g. approve the desktop's permission dialog); empty when it works.
     pub input: Vec<String>,
@@ -365,6 +375,15 @@ pub struct PeerStatus {
     pub screens: Vec<Rect>,
 }
 
+/// What to say about a paired computer that refused this one because it
+/// forgot it.
+pub fn removed_hint(name: &str, id: &str) -> String {
+    format!(
+        "{name} removed this computer from its paired computers, so it refuses to connect. \
+         Remove it here too with `one-mk forget {id}`, or pair the two again with `one-mk pair` on both."
+    )
+}
+
 /// What to do where the desktop has no global shortcuts.
 pub const HOTKEYS_FALLBACK: &str = "bind `one-mk switch next` (and `one-mk switch here`) to a key in your desktop settings";
 
@@ -432,6 +451,12 @@ impl Status {
         for p in &self.peers {
             out += &format!("peer\t{}\t{}\t{}\t{}\t{}\t{}\n", p.id, p.side, p.os, u8::from(p.online), p.swap, p.name);
         }
+        for id in &self.removed {
+            out += &format!("removed\t{}\n", id.replace(['\t', '\n', '\r'], " "));
+        }
+        for note in &self.unrecognised {
+            out += &format!("unrecognised\t{}\n", note.replace(['\t', '\n', '\r'], " "));
+        }
         // Monitors go on lines of their own, after the peers they belong
         // to: older readers skip lines they don't know.
         let screen = |who: &str, r: &Rect| format!("screen\t{who}\t{}\t{}\t{}\t{}\n", r.x, r.y, r.w, r.h);
@@ -483,6 +508,7 @@ impl Status {
         if let Some(discovery) = self.discovery { out += &format!("discovery\t{discovery}\n"); }
         out += &format!("clipboard-history-revision\t{}\n", self.clipboard_history_revision);
         if !self.clipboard_history_note.is_empty() { out += &format!("clipboard-history-note\t{}\n", self.clipboard_history_note.replace(['\t', '\r', '\n'], " ")); }
+        if self.clipboard_off { out += "clipboard-sharing\toff\n"; }
         for line in &self.input {
             out += &format!("input\t{}\n", line.replace(['\t', '\n', '\r'], " "));
         }
@@ -509,6 +535,11 @@ impl Status {
             );
         }
         out
+    }
+
+    /// `peer` (an id) refused this computer: it was forgotten there.
+    pub fn removed_us(&self, peer: &str) -> bool {
+        self.removed.iter().any(|id| id == peer)
     }
 
     /// Where `peer`'s (0,0) sits in this computer's pixels, if it was placed.
@@ -552,6 +583,8 @@ impl Status {
                 ["controlling", v] => s.controlling = Some(v.into()),
                 ["controlled_by", v] => s.controlled_by = Some(v.into()),
                 ["broadcast", v] => s.broadcast.push(v.into()),
+                ["removed", v] => s.removed.push(v.into()),
+                ["unrecognised", v] => s.unrecognised.push(v.into()),
                 ["broadcast_hotkey", v] => s.broadcast_hotkey = v.into(),
                 ["pointer_locked", v] => s.pointer_locked = v == "1",
                 ["screen_locked", v] => s.screen_locked = v == "1",
@@ -569,6 +602,7 @@ impl Status {
                 ["discovery", "false"] => s.discovery = Some(false),
                 ["clipboard-history-revision", revision] => s.clipboard_history_revision = revision.parse().unwrap_or(0),
                 ["clipboard-history-note", note] => s.clipboard_history_note = note.to_string(),
+                ["clipboard-sharing", "off"] => s.clipboard_off = true,
                 ["hotkeys", state, detail] => (s.hotkeys, s.hotkeys_detail) = (state.into(), detail.into()),
                 ["profile", v] => s.layout.profile = Some(v.into()),
                 ["input", v] => s.input.push(v.into()),
@@ -672,7 +706,7 @@ impl Status {
             out += &format!("Gaming mode: {}{now}.\n", self.gaming);
         }
         if self.lock_sync {
-            out += "Lock sync is on: locking any computer locks the others.\n";
+            out += "Lock sync is on: locking this computer locks the connected ones that have lock sync on too.\n";
         }
         if let Some(line) = self.hotkeys_line() {
             out += &format!("{line}\n");
@@ -695,12 +729,19 @@ impl Status {
             let state = match self.link_of(&p.id).filter(|_| p.online) {
                 Some(l) => format!("online, {}", l.render()),
                 None if p.online => "online".to_owned(),
+                None if self.removed_us(&p.id) => "removed this computer".to_owned(),
                 None => "offline".to_owned(),
             };
             out += &format!("  {:<24} {:<10} {:<14} {state}\n", p.name, os_name(p.os), on_your(p.side));
             if let Some(offset) = self.offset_of(&p.id) {
                 out += &format!("  {:<24} {}\n", "", placement(p.side, Some(offset)));
             }
+        }
+        for p in self.peers.iter().filter(|p| !p.online && self.removed_us(&p.id)) {
+            out += &format!("{}\n", removed_hint(&p.name, &p.id));
+        }
+        for note in &self.unrecognised {
+            out += &format!("{note}\n");
         }
         for t in &self.transfers {
             out += &format!("{}\n", t.render());
@@ -803,6 +844,18 @@ mod tests {
         // A side this reader doesn't know only costs the suggestion.
         let odd = suggested.encode().replace("suggest\t1234-5678\tleft", "suggest\t1234-5678\tnorth");
         assert_eq!(Status::decode(&odd).unwrap().suggestion, None);
+        // A computer that forgot this one: said as such, with what to do,
+        // and an older reader just skips the line.
+        let peer = PeerStatus { id: "3333-4444".into(), name: "desk".into(), side: Side::Left, os: 0, online: false, swap: "auto".into(), screens: vec![] };
+        let unrecognised = Status { unrecognised: vec!["A computer this one doesn't recognise keeps trying to connect".into()], ..Status::default() };
+        assert_eq!(Status::decode(&unrecognised.encode()), Some(unrecognised.clone()));
+        assert!(unrecognised.render().contains("doesn't recognise keeps trying"), "{}", unrecognised.render());
+        let removed = Status { peers: vec![peer], removed: vec!["3333-4444".into()], ..Status::default() };
+        assert_eq!(Status::decode(&removed.encode()), Some(removed.clone()));
+        let text = removed.render();
+        assert!(text.lines().any(|l| l.contains("desk") && l.trim_end().ends_with("removed this computer")), "{text}");
+        assert!(text.contains("Remove it here too with `one-mk forget 3333-4444`"), "{text}");
+        assert!(!text.contains("offline"), "{text}");
         let layout = LayoutStatus { warnings: vec!["layout of B does not overlap yours".into()], ..LayoutStatus::default() };
         let warned = Status { layout: Box::new(layout), ..Status::default() };
         assert_eq!(Status::decode(&warned.encode()).unwrap(), warned);
@@ -1081,6 +1134,14 @@ mod invitation_tests {
         let status = Status { clipboard_history_enabled: true, clipboard_history_note: error.into(), ..Default::default() };
         assert!(status.render().contains(error));
         assert!(Status::decode(&status.encode()).unwrap().render().contains(error));
+    }
+
+    #[test]
+    fn a_run_without_clipboard_says_so_and_older_daemons_count_as_sharing() {
+        let off = Status { clipboard_off: true, ..Default::default() };
+        assert!(Status::decode(&off.encode()).unwrap().clipboard_off);
+        assert!(!Status::decode(&Status::default().encode()).unwrap().clipboard_off);
+        assert!(!Status::decode("ok\nname\tdesk\n").unwrap().clipboard_off, "older daemons say nothing");
     }
 
     #[test]

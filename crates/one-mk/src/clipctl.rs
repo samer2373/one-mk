@@ -41,7 +41,7 @@ pub struct Online {
 
 /// Reads `settings.toml` and applies it to the running services.
 pub fn apply_settings(dir: &Path, services: &Services) -> Result<Settings> {
-    let s = Settings::load(dir)?;
+    let s = Settings::load_lenient(dir)?;
     apply(&s, services);
     Ok(s)
 }
@@ -69,12 +69,24 @@ pub fn handle(dir: &Path, services: &Services, online: Vec<Online>, trust: &Trus
             services.inbox.transfers().report(t, finished);
             let _ = reply.send("ok\n".to_owned());
         }
-        Request::ClipSend(to) => clip_request(services, &online, trust, to, true, reply),
-        Request::ClipGet(from) => clip_request(services, &online, trust, from, false, reply),
+        Request::ClipSend(to) => clip_request(services, &online, trust, to, Move::Send { allow_sensitive: false }, reply),
+        Request::ClipSendSensitive(to) => clip_request(services, &online, trust, to, Move::Send { allow_sensitive: true }, reply),
+        Request::ClipGet(from) => clip_request(services, &online, trust, from, Move::Get, reply),
         Request::FetchClipboard => {
             let local = services.clip.as_ref().map(|clip| clip.local_computer());
             let target = next_clipboard_peer(&online, local).map(|peer| peer.fp.to_string());
-            clip_request(services, &online, trust, target, false, reply);
+            clip_request(services, &online, trust, target, Move::Get, reply);
+        }
+        Request::Partials { clear } => {
+            let inbox = services.inbox.clone();
+            tokio::spawn(async move {
+                let text = tokio::task::spawn_blocking(move || {
+                    let removed = if clear { inbox.clear_partials() } else { 0 };
+                    let kept = inbox.partials();
+                    format!("ok\n{}\n{}\n{}\n{removed}\n", kept.count, kept.bytes, kept.oldest.as_secs())
+                }).await.unwrap_or_else(|_| "error could not look in the received files folder\n".to_owned());
+                let _ = reply.send(text);
+            });
         }
         Request::ClipHistory { action, json } => {
             let clip = services.clip.clone();
@@ -101,14 +113,22 @@ fn next_clipboard_peer<'a>(online: &'a [Online], local: Option<(&str, Fingerprin
     next.or_else(|| online.iter().min_by_key(key))
 }
 
+/// What a clipboard request asks for.
+#[derive(Clone, Copy)]
+enum Move {
+    Send { allow_sensitive: bool },
+    Get,
+}
+
 fn clip_request(
     services: &Services,
     online: &[Online],
     trust: &TrustStore,
     who: Option<String>,
-    send: bool,
+    what: Move,
     reply: oneshot::Sender<String>,
 ) {
+    let send = matches!(what, Move::Send { .. });
     let Some(clip) = services.clip.clone() else {
         let _ = reply.send("error the clipboard is not shared on this computer (it was started with --no-clipboard)\n".into());
         return;
@@ -122,15 +142,19 @@ fn clip_request(
     };
     tokio::spawn(async move {
         let (fp, name, addr) = target;
-        let moved = if send { clip.send_now(fp, addr).await } else { clip.pull(fp, addr).await };
+        let moved = match what {
+            Move::Send { allow_sensitive } => clip.send_now(fp, addr, allow_sensitive).await,
+            Move::Get => clip.pull(fp, addr).await,
+        };
         let size = |m: &crate::clip::Moved| crate::clip::mb(m.bytes);
         let text = match moved {
             Ok(m) => match m.ack {
                 Some(ClipAck::FormatsOff) => format!("error {name} has {} switched off, so it ignored your clipboard (see `one-mk clipboard` there)\n", m.what),
-                Some(ClipAck::TooLarge) => format!("error your clipboard ({}) is over {name}'s size limit, so it ignored it\n", size(&m)),
+                Some(ClipAck::TooLarge) => format!("error your clipboard ({}) is over {name}'s size limit (or more than its X11 clipboard can hold), so it ignored it\n", size(&m)),
                 // name, what and size.
                 _ => format!("ok\n{name}\n{}\n{}\n", m.what, size(&m)),
             },
+            Err(e) if send && e.to_string() == crate::clip::SENSITIVE_UNSUPPORTED => format!("error {name} {}\n", crate::clip::SENSITIVE_UNSUPPORTED),
             Err(e) if !send && e.to_string() == crate::clip::FETCH_DISABLED_MESSAGE => format!("error {name} does not allow fetching its clipboard; on {name} run: one-mk clipboard --allow-fetch on\n"),
             Err(e) => format!("error {e:#}\n"),
         };
@@ -142,20 +166,20 @@ fn clip_request(
 fn pick<'a>(online: &'a [Online], trust: &TrustStore, who: Option<&str>) -> Result<&'a Online, String> {
     if let Some(q) = who {
         let Some(device) = trust.find(q) else {
-            return Err(format!("no paired computer called {q:?} (see `one-mk devices`)"));
+            return Err(trust.explain_miss(q).unwrap_or_else(|| format!("no paired computer called {q:?} (see `one-mk devices`)")));
         };
         let fp = device.fingerprint();
         return online
             .iter()
             .find(|o| Some(o.fp) == fp)
-            .ok_or_else(|| format!("{} is not connected right now", one_mk_proto::sanitize_name(&device.name)));
+            .ok_or_else(|| format!("{} is not connected right now", trust.display(device)));
     }
     match online {
         [] => Err("no computer is connected right now".to_owned()),
         [only] => Ok(only),
         many => {
             let names: Vec<&str> = many.iter().map(|o| o.name.as_str()).collect();
-            Err(format!("several computers are connected ({}); choose one by name", names.join(", ")))
+            Err(format!("several computers are connected ({}); choose one by its name or id (--to for clip-send, --from for clip-get)", names.join(", ")))
         }
     }
 }
@@ -203,9 +227,10 @@ impl ClipChange {
 /// the change to the running daemon.
 pub async fn clipboard(dir: &Path, change: ClipChange) -> Result<()> {
     if change.is_empty() {
-        let s = Settings::load(dir)?;
+        let s = Settings::view(dir)?;
         println!("Clipboard sharing: {}.", s.clipboard.summary());
-        println!("Change it with `one-mk clipboard --text|--html|--image on|off --max-mb N`.");
+        println!("Change it with `one-mk clipboard --text|--html|--image on|off`, `--max-mb N` (1 to {}), `--skip-sensitive on|off`, `--allow-fetch on|off`;", ClipSettings::MAX_MB_LIMIT);
+        println!("clipboard history: `one-mk clipboard history --help`.");
         return Ok(());
     }
     let summary = Settings::update(dir, |s| {
@@ -219,7 +244,7 @@ pub async fn clipboard(dir: &Path, change: ClipChange) -> Result<()> {
 /// `one-mk notify [on|off]`: whether a received transfer raises a desktop notification.
 pub async fn notify(dir: &Path, state: Option<OnOff>) -> Result<()> {
     let Some(OnOff(on)) = state else {
-        let s = Settings::load(dir)?;
+        let s = Settings::view(dir)?;
         println!("A notification when files arrive: {}.", if s.notify_files { "on" } else { "off" });
         return Ok(());
     };
@@ -241,8 +266,12 @@ async fn applied(dir: &Path) -> Result<()> {
 }
 
 /// `one-mk clip-send` and `clip-get`: asks the daemon to move the clipboard.
-pub async fn move_clipboard(dir: &Path, who: Option<String>, send: bool) -> Result<()> {
-    let req = if send { Request::ClipSend(who) } else { Request::ClipGet(who) };
+pub async fn move_clipboard(dir: &Path, who: Option<String>, send: bool, allow_sensitive: bool) -> Result<()> {
+    let req = match (send, allow_sensitive) {
+        (true, false) => Request::ClipSend(who),
+        (true, true) => Request::ClipSendSensitive(who),
+        (false, _) => Request::ClipGet(who),
+    };
     let Some(reply) = control::request(dir, req).await? else {
         bail!("{}", control::NOT_RUNNING);
     };
@@ -352,6 +381,23 @@ mod tests {
         assert!(ClipChange { max_mb: Some(ClipSettings::MAX_MB_LIMIT), ..Default::default() }.apply(&mut c).is_ok());
     }
 
+    /// Two computers with one name: the advice offers what works (their ids),
+    /// and an id picks one.
+    #[test]
+    fn computers_with_the_same_name_are_chosen_by_id() {
+        let dir = temp("pick-twins");
+        let t = trust(&dir, &[(1, "Mac"), (2, "Mac")]);
+        let (a, b) = (fp(1).short(), fp(2).short());
+        // What the daemon lists: name with id when they would read the same.
+        let on = vec![online(1, &format!("Mac ({a})")), online(2, &format!("Mac ({b})"))];
+        let e = pick(&on, &t, None).err().unwrap();
+        assert!(e.contains(&format!("Mac ({a})")) && e.contains(&format!("Mac ({b})")) && e.contains("name or id"), "{e}");
+        let e = pick(&on, &t, Some("Mac")).err().unwrap();
+        assert!(e.contains("2 paired computers are called") && e.contains(&a) && e.contains(&b), "{e}");
+        assert_eq!(pick(&on, &t, Some(&b)).unwrap().fp, fp(2));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn the_target_computer_is_found_by_name_or_id_or_as_the_only_one_connected() {
         let dir = temp("pick");
@@ -447,15 +493,15 @@ mod tests {
         assert!(sv.inbox.transfers().notifying());
 
         // The commands that move the clipboard report the daemon's error as the error.
-        let e = move_clipboard(&dir, None, true).await.unwrap_err();
+        let e = move_clipboard(&dir, None, true, false).await.unwrap_err();
         assert!(format!("{e}").contains("no computer is connected"), "{e}");
-        let e = move_clipboard(&dir, Some("x".into()), false).await.unwrap_err();
+        let e = move_clipboard(&dir, Some("x".into()), false, false).await.unwrap_err();
         assert!(format!("{e}").contains("no paired computer called"), "{e}");
 
         daemon.abort();
         let _ = daemon.await;
         // Without a daemon, they say so (settings are still saved).
-        move_clipboard(&dir, None, true).await.unwrap_err();
+        move_clipboard(&dir, None, true, false).await.unwrap_err();
         clipboard(&dir, ClipChange { text: Some(OnOff(false)), ..Default::default() }).await.unwrap();
         assert!(!Settings::load(&dir).unwrap().clipboard.text);
         let _ = std::fs::remove_dir_all(dir);

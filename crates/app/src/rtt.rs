@@ -213,6 +213,38 @@ pub fn ms_number(us: u32) -> String {
     if us < 1000 { "<1".to_owned() } else { (us.saturating_add(500) / 1000).to_string() }
 }
 
+/// A reading that moved by less than this since the last frame is the same
+/// picture (a millisecond of jitter is a pixel or two on a graph that
+/// is at least 20 ms tall).
+pub const VALUE_STEP_US: u32 = 2_000;
+
+/// How much a new reading changes what a frame would show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change {
+    /// Nothing worth a frame: a steady line scrolls a pixel or two a
+    /// second.
+    None,
+    /// The reading moved by [`VALUE_STEP_US`] or more: worth a frame, but a
+    /// jittery link needn't have one every second.
+    Value,
+    /// A computer came or went, packets were lost, or the link crossed
+    /// into "some stalls" or "slow": say so at once.
+    Urgent,
+}
+
+/// What a frame drawn with the readings `old` would show differently with
+/// `new`.
+pub fn change(old: &[(String, LinkStats)], new: &[(String, LinkStats)]) -> Change {
+    let class = |us: u32| (us >= STALL_US, us >= SLOW_US);
+    if old.len() != new.len() || old.iter().zip(new).any(|((a_id, a), (b_id, b))| a_id != b_id || a.lost != b.lost || class(a.rtt_us) != class(b.rtt_us)) {
+        Change::Urgent
+    } else if old.iter().zip(new).any(|((_, a), (_, b))| a.rtt_us.abs_diff(b.rtt_us) >= VALUE_STEP_US && ms_number(a.rtt_us) != ms_number(b.rtt_us)) {
+        Change::Value
+    } else {
+        Change::None
+    }
+}
+
 /// The history of every connected computer, by id.
 #[derive(Clone, Debug, Default)]
 pub struct Rtts {
@@ -264,6 +296,36 @@ mod tests {
 
     fn link(ms: f32, lost: u64) -> LinkStats {
         LinkStats { rtt_us: (ms * 1000.0) as u32, lost, sent: 0 }
+    }
+
+    fn named(readings: &[(&str, f32, u64)]) -> Vec<(String, LinkStats)> {
+        readings.iter().map(|(id, ms, lost)| ((*id).to_owned(), link(*ms, *lost))).collect()
+    }
+
+    #[test]
+    fn a_steady_link_does_not_ask_for_a_new_frame() {
+        let old = named(&[("a", 4.2, 3)]);
+        assert_eq!(change(&old, &named(&[("a", 4.4, 3)])), Change::None);
+        assert_eq!(change(&old, &named(&[("a", 3.6, 3)])), Change::None);
+        assert_eq!(change(&old, &named(&[("a", 5.4, 3)])), Change::None, "a millisecond of jitter that reads as another number");
+        assert_eq!(change(&named(&[("a", 0.4, 0)]), &named(&[("a", 1.6, 0)])), Change::None);
+        assert_eq!(change(&[], &[]), Change::None);
+    }
+
+    #[test]
+    fn a_new_number_is_worth_a_frame_but_not_in_a_hurry() {
+        assert_eq!(change(&named(&[("a", 4.2, 3)]), &named(&[("a", 7.0, 3)])), Change::Value);
+    }
+
+    #[test]
+    fn what_matters_is_said_at_once() {
+        let old = named(&[("a", 4.2, 3)]);
+        assert_eq!(change(&old, &named(&[("a", 4.2, 4)])), Change::Urgent, "a packet lost");
+        assert_eq!(change(&old, &named(&[("a", 45.0, 3)])), Change::Urgent, "some stalls");
+        assert_eq!(change(&named(&[("a", 60.0, 0)]), &named(&[("a", 120.0, 0)])), Change::Urgent, "slow");
+        assert_eq!(change(&old, &named(&[("a", 4.2, 3), ("b", 4.0, 0)])), Change::Urgent, "a computer joined");
+        assert_eq!(change(&old, &named(&[("b", 4.2, 3)])), Change::Urgent, "another computer");
+        assert_eq!(change(&[], &old), Change::Urgent, "the first reading");
     }
 
     fn ring(times: &[f32]) -> (Ring, f64) {

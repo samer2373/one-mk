@@ -58,12 +58,11 @@ it.
   itself (its 750 ms lease ends). If it was the last one, broadcast ends.
 - **A computer whose user takes control back** (its own mouse or keyboard on
   Windows and macOS, `one-mk takeback` anywhere) drops out the same way.
-- **A computer that let go after a minute without input** (its idle rule) is
-  not dropped: it is entered again with your next key, click, scroll or
-  movement, and that input waits until it accepts. This is how broadcast can
-  sit idle for longer than a minute while you read the output of a command.
-  (A computer that let go less than 58 s after the last input sent to it is
-  taken to have been taken back by its user.)
+- **A computer that let go after a while without input** (its idle rule,
+  `one-mk edge --idle-return`, 10 minutes by default) is not dropped: it is
+  entered again with your next key, click, scroll or movement, and that input
+  waits until it accepts. This is how broadcast can sit idle for longer than
+  that while you read the output of a command.
 - A computer that is busy (another computer controls it) or does not accept
   within 750 ms drops out.
 
@@ -198,8 +197,8 @@ keepalives); off again, back to 10 ms. Memory: 34 MB resident, against
 - A computer that is killed or loses the network drops out only when the
   connection notices (a few seconds); until then it is still listed.
 - The other computers show no sign that it is a broadcast (by design).
-- A computer that lets go because of its own idle rule (a minute without
-  input) says so (`IdleRevoked`, capability `IDLE_REVOKE`), and is entered again
+- A computer that lets go because of its own idle rule (`--idle-return`)
+  says so (`IdleRevoked`, capability `IDLE_REVOKE`), and is entered again
   with your next input. A user who takes control back is never undone: the
   computer leaves the broadcast until you start it again, at any time. A
   computer running an older one-mk cannot say which it was, so it too leaves

@@ -32,10 +32,10 @@ use anyhow::{Context, Result, bail};
 use one_mk_net::TrustStore;
 use one_mk_proto::{Side, sanitize_name};
 use serde::{Deserialize, Serialize};
-use std::fs::File;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 const FILE: &str = "profiles.toml";
 /// Held while profiles are changed (see [`Profiles::update`]).
@@ -195,9 +195,15 @@ impl Profiles {
         std::fs::create_dir_all(dir)?;
         let tmp = dir.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let write = || -> Result<()> {
-            std::fs::write(&tmp, toml::to_string_pretty(self)?)?;
+            use std::io::Write;
+            let mut file = one_mk_ctl::private::create_new(&tmp)?;
+            file.write_all(toml::to_string_pretty(self)?.as_bytes())?;
+            // On disk before it replaces the old file: a crash leaves one or the other.
+            file.sync_all()?;
+            drop(file);
             std::fs::rename(&tmp, path(dir))?;
-            Ok(())
+            // And the folder, so the new name survives a crash too.
+            one_mk_net::sync_dir(dir)
         };
         write().inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
@@ -205,19 +211,19 @@ impl Profiles {
     }
 
     /// Changes the saved profiles: waits for an exclusive lock on a file
-    /// next to `profiles.toml`, loads what is there, applies `change` and
-    /// saves. If `change` fails nothing is written.
+    /// next to `profiles.toml` (at most [`one_mk_net::COMMAND_LOCK_WAIT`]),
+    /// loads what is there, applies `change` and saves. If `change` fails
+    /// nothing is written.
     pub fn update<R>(dir: &Path, change: impl FnOnce(&mut Profiles) -> Result<R>) -> Result<R> {
+        Self::update_within(dir, one_mk_net::COMMAND_LOCK_WAIT, change)
+    }
+
+    /// [`Profiles::update`], waiting at most `wait` for the lock (the
+    /// daemon's event loop must never hang on a stopped command).
+    pub fn update_within<R>(dir: &Path, wait: Duration, change: impl FnOnce(&mut Profiles) -> Result<R>) -> Result<R> {
         std::fs::create_dir_all(dir)?;
-        let lock_path = dir.join(LOCK_FILE);
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .with_context(|| format!("opening {}", lock_path.display()))?;
-        lock.lock().with_context(|| format!("locking {}", lock_path.display()))?;
-        // Unlocked when `lock` is dropped (also if this fails or panics).
+        let _lock = one_mk_net::lock_file(&dir.join(LOCK_FILE), wait)?;
+        // Unlocked when `_lock` is dropped (also if this fails or panics).
         let mut profiles = Profiles::load(dir)?;
         let out = change(&mut profiles)?;
         profiles.save(dir)?;
@@ -253,41 +259,46 @@ pub fn snapshot(trust: &TrustStore) -> Vec<Placed> {
         .iter()
         .map(|d| Placed {
             fingerprint: d.fingerprint.clone(),
-            name: d.name.clone(),
+            name: d.label().to_owned(),
             side: d.side().to_string(),
             offset: d.offset,
         })
         .collect()
 }
 
-/// Puts `profile`'s layout in `devices.toml`. Computers paired since it was
-/// saved are left where they are; those no longer paired are skipped.
-/// Returns the names of the computers that moved.
-pub fn apply(dir: &Path, profile: &Profile) -> Result<Vec<String>> {
-    let mut trust = TrustStore::load(dir)?;
-    let mut moved = Vec::new();
-    for p in &profile.devices {
-        let Some(fp) = p.fingerprint.parse().ok() else { continue };
-        let Some(dev) = trust.get_mut(&fp) else { continue };
-        let side: Side = p.side.parse().unwrap_or_else(|_| dev.side());
-        let offset = p.offset.map(|(x, y)| (x.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET), y.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET)));
-        if (dev.side(), dev.offset) != (side, offset) {
-            manage::place(dev, side, offset);
-            moved.push(sanitize_name(&dev.name));
+/// Puts `profile`'s layout in `devices.toml`, waiting at most `wait` for its
+/// lock. Computers paired since it was saved are left where they are; those
+/// no longer paired are skipped. Returns the names of the computers that
+/// moved.
+pub fn apply(dir: &Path, profile: &Profile, wait: Duration) -> Result<Vec<String>> {
+    TrustStore::update_within(dir, wait, |trust| {
+        let mut moved = Vec::new();
+        for p in &profile.devices {
+            let Some(fp) = p.fingerprint.parse().ok() else { continue };
+            let Some(dev) = trust.get_mut(&fp) else { continue };
+            let side: Side = p.side.parse().unwrap_or_else(|_| dev.side());
+            let offset = p.offset.map(|(x, y)| (x.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET), y.clamp(-one_mk_net::MAX_OFFSET, one_mk_net::MAX_OFFSET)));
+            if (dev.side(), dev.offset) != (side, offset) {
+                manage::place(dev, side, offset);
+                moved.push(fp);
+            }
         }
-    }
-    if !moved.is_empty() {
-        trust.save()?;
-    }
-    Ok(moved)
+        Ok(moved.iter().map(|fp| trust.display_fp(fp)).collect())
+    })
 }
 
 /// Puts profile `name` in place and records it as the active one. Returns
 /// the profile's name as saved and who moved.
 pub fn use_profile(dir: &Path, name: &str) -> Result<(String, Vec<String>)> {
-    Profiles::update(dir, |all| {
+    use_profile_within(dir, name, one_mk_net::COMMAND_LOCK_WAIT)
+}
+
+/// [`use_profile`], waiting at most `wait` for each lock it takes (the
+/// daemon, switching by network, passes [`one_mk_net::DAEMON_LOCK_WAIT`]).
+pub fn use_profile_within(dir: &Path, name: &str, wait: Duration) -> Result<(String, Vec<String>)> {
+    Profiles::update_within(dir, wait, |all| {
         let Some(p) = all.get(name).cloned() else { bail!("no layout profile called {name:?}; see `one-mk profile list`") };
-        let moved = apply(dir, &p)?;
+        let moved = apply(dir, &p, wait)?;
         all.active = Some(p.name.clone());
         Ok((p.name, moved))
     })
@@ -375,7 +386,7 @@ pub async fn run(dir: &Path, cmd: ProfileCmd) -> Result<()> {
                 println!("No layout profiles yet. Save the current layout with `one-mk profile save <name>`.");
                 return Ok(());
             }
-            print!("{}", render(&all));
+            print!("{}", render(&all, TrustStore::load(dir).ok().as_ref()));
             Ok(())
         }
         ProfileCmd::Delete { name } => {
@@ -447,7 +458,10 @@ fn describe_rules(p: &Profile) -> String {
     parts.join(" or ")
 }
 
-fn render(all: &Profiles) -> String {
+/// `trust`: the paired computers, to show each by the name it has now (two
+/// that are called the same by their ids); a computer no longer paired
+/// shows under the name the profile saved.
+fn render(all: &Profiles, trust: Option<&TrustStore>) -> String {
     let mut out = String::new();
     for p in &all.list {
         let active = all.active.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(&p.name));
@@ -457,7 +471,8 @@ fn render(all: &Profiles) -> String {
         }
         for d in &p.devices {
             let side = d.side.parse().unwrap_or(Side::Right);
-            out += &format!("  {:<24} {}\n", sanitize_name(&d.name), manage::placement(side, d.offset));
+            let name = d.fingerprint.parse().ok().and_then(|fp| trust.and_then(|t| t.get(&fp).map(|dev| t.display(dev)))).unwrap_or_else(|| sanitize_name(&d.name));
+            out += &format!("  {:<24} {}\n", name, manage::placement(side, d.offset));
         }
     }
     out
@@ -478,10 +493,18 @@ mod tests {
     use one_mk_net::{Device, Identity};
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("one-mk-profiles-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        crate::testdir::scratch(&format!("profiles-{tag}"))
+    }
+
+    /// Saving flushes the folder after the rename, so the new
+    /// `profiles.toml` survives a power cut.
+    #[cfg(all(unix, debug_assertions))]
+    #[test]
+    fn saving_flushes_the_folder() {
+        let dir = temp_dir("durable");
+        Profiles::update(&dir, |all| { all.active = Some("x".into()); Ok(()) }).unwrap();
+        assert!(one_mk_net::was_synced(&dir));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn pair(dir: &Path, name: &str, side: Side) -> String {
@@ -536,7 +559,7 @@ mod tests {
         assert_eq!(place_of(&dir, &desk).0, Side::Right);
         assert!(use_profile(&dir, "nowhere").is_err());
 
-        let text = render(&Profiles::load(&dir).unwrap());
+        let text = render(&Profiles::load(&dir).unwrap(), None);
         assert!(text.contains("home (in use)") && text.contains("on your left, its (0,0) at -1280,-120 of yours"), "{text}");
         run(&dir, ProfileCmd::Delete { name: "home".into() }).await.unwrap();
         let all = Profiles::load(&dir).unwrap();

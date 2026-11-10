@@ -3,6 +3,11 @@ name = "one-mk-wall-import"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+publish.workspace = true
 description = "Finite, fail-closed optional wallpaper import worker"
 
 [features]

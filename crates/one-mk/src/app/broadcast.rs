@@ -12,7 +12,7 @@
 //! visit ends (`App::end_visit`), so nothing stays held anywhere.
 
 use super::tune::ScrollIn;
-use super::{App, ENTER_TIMEOUT, IDLE, KEY_ESC, MAX_COALESCE, Remote, SWITCH_TIMEOUT};
+use super::{App, ENTER_TIMEOUT, KEY_ESC, MAX_COALESCE, Remote, SWITCH_TIMEOUT};
 use one_mk_ctl::client::Toggle;
 use one_mk_input::{CaptureCmd, DeviceRef, Event};
 use one_mk_net::Fingerprint;
@@ -219,7 +219,7 @@ impl App {
     /// it was paired under.
     pub(super) fn name_for(&self, fp: Fingerprint) -> String {
         match (self.trust.get(&fp), self.peers.get(&fp)) {
-            (Some(d), _) => one_mk_proto::sanitize_name(&d.name),
+            (Some(d), _) => self.trust.display(d),
             (None, Some(p)) => p.name.clone(),
             (None, None) => fp.short(),
         }
@@ -243,13 +243,16 @@ impl App {
     }
 
     /// How long a controller may send nothing before this computer lets go
-    /// of it (shorter in the daemon tests).
-    pub(super) fn owner_idle(&self) -> Duration {
+    /// of it (`[edge] idle_return`; the default is shorter in the daemon
+    /// tests); `None`: never.
+    pub(super) fn owner_idle(&self) -> Option<Duration> {
         #[cfg(test)]
-        if let Some(d) = testing::get(&self.dir).1 {
-            return d;
+        if self.settings.edge.idle_return == crate::settings::IdleReturn::Default
+            && let Some(d) = testing::get(&self.dir).1
+        {
+            return Some(d);
         }
-        IDLE
+        self.settings.edge.idle_return.duration()
     }
 
     /// Connected computers that said what their screens are, by name.
@@ -584,7 +587,7 @@ impl App {
             // user taking control back (or an older one-mk, which cannot say):
             // it leaves until the broadcast is started again.
             Control::IdleRevoked { epoch: e } if e == epoch => {
-                Some((Out::Rest, "it let go after a minute without input; your next input enters it again"))
+                Some((Out::Rest, "it let go after a while without input (its `one-mk edge --idle-return`); your next input enters it again"))
             }
             Control::Revoked { epoch: e } if e == epoch => Some((Out::Leave, "it took back control")),
             // Broadcast never asks what has the focus there.

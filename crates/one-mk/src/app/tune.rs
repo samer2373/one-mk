@@ -1,6 +1,6 @@
 //! Input tuning in the send path of a visit: the key mapper, pointer
 //! speed, scroll tuning and button remapping (`[input]`, see
-//! `crate::tuning` and `docs/INPUT-TUNING.md`). Hotkeys have seen the
+//! `crate::tuning` and `docs/INPUT.md`). Hotkeys have seen the
 //! physical keys before anything here; the Ctrl/Cmd swap applies after.
 //! Input from a keyboard or mouse with rules of its own (per-device rules)
 //! uses those on top of the rest; see "Per-device rules" in the doc.

@@ -7,12 +7,15 @@ pub mod client;
 pub mod install;
 pub mod integrate;
 pub mod macos_windows;
+pub mod private;
 pub mod proc;
+pub mod settings_file;
 pub mod setup;
 pub mod status;
 pub mod wallpaper;
 pub mod update_logic;
 pub mod wifi;
+pub mod xdg;
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;

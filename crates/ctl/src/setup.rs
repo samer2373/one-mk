@@ -23,14 +23,14 @@ struct Lock(std::path::PathBuf);
 
 impl Lock {
     fn take(dir: &Path) -> Option<Self> {
-        let _ = std::fs::create_dir_all(dir);
+        let _ = crate::private::create_dir_all(dir);
         let path = dir.join(LOCK);
         let fresh = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age < LOCK_STALE);
         if path.exists() && !fresh(&path) {
             let _ = std::fs::remove_file(&path);
         }
         // `create_new` is atomic: of two windows, exactly one gets the file.
-        std::fs::OpenOptions::new().write(true).create_new(true).open(&path).ok().map(|_| Self(path))
+        crate::private::create_new(&path).ok().map(|_| Self(path))
     }
 }
 
@@ -153,8 +153,8 @@ pub fn run(dir: &Path, host: &dyn Host) -> Option<Report> {
     };
     // Writing the marker is best effort: if the folder is read-only, setup
     // runs again next time, which is harmless because every step is idempotent.
-    let _ = std::fs::create_dir_all(dir);
-    let _ = std::fs::write(dir.join(MARKER), b"1\n");
+    let _ = crate::private::create_dir_all(dir);
+    let _ = crate::private::write(&dir.join(MARKER), b"1\n");
     Some(Report { login, integrations, service })
 }
 
@@ -321,6 +321,22 @@ mod tests {
         let report = run(&dir, &Late(Fake::default())).unwrap();
         assert_eq!(report.service, Step::Done);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The marker and the lock are private from the first byte (a person with
+    /// umask 002 would otherwise get group-writable files in a folder made here).
+    #[cfg(unix)]
+    #[test]
+    fn the_marker_and_the_lock_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("modes").join("a/b");
+        let held = Lock::take(&dir).unwrap();
+        assert_eq!(std::fs::metadata(dir.join(LOCK)).unwrap().permissions().mode() & 0o777, 0o600);
+        drop(held);
+        assert!(run(&dir, &Fake::default()).is_some());
+        assert_eq!(std::fs::metadata(dir.join(MARKER)).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap().parent().unwrap());
     }
 
     #[test]

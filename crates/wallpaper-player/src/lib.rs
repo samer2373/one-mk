@@ -167,6 +167,9 @@ pub struct Status {
     pub computers: std::collections::BTreeMap<String, Playback>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gnome: Option<GnomeSetup>,
+    /// What is experimental here ([`experimental_note`]); shown, never hidden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experimental: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,7 +183,39 @@ pub struct GnomeSetup { pub stage: GnomeStage, pub message: String, pub can_inst
 #[serde(rename_all = "snake_case")]
 pub enum ExtensionAction { Install, Enable }
 
-pub const GNOME_PLAYBACK_UNAVAILABLE: &str = "GNOME video needs the oneMK extension on qualified GNOME Shell 50.1. Open Wallpaper and choose Install GNOME extension, then log out and back in once; it turns itself on. Pictures still work without it.";
+pub const GNOME_PLAYBACK_UNAVAILABLE: &str = "Video wallpapers on GNOME need oneMK's GNOME extension (GNOME 50), which is not active on this computer yet. One step to fix it: choose Install GNOME extension on the Wallpaper page, or run `one-mk wallpaper extension install`, then log out and back in once. Pictures work without it.";
+
+/// Said with [`GNOME_PLAYBACK_UNAVAILABLE`] while a shared video is shown
+/// as a still picture on this computer instead.
+pub const GNOME_STILL_SHOWN: &str = "Until then this computer shows the video's first frame as a still picture; your own wallpaper comes back when you turn the wallpaper off.";
+
+/// The GNOME Shell releases oneMK's wallpaper extension runs on: the whole
+/// GNOME 50 series (point releases keep the extension API). Older and newer
+/// series are refused with a clear message rather than left to break.
+pub const GNOME_SHELL_SERIES: &str = "50";
+
+pub fn supported_gnome_shell(version: &str) -> bool {
+    version.trim().split('.').next() == Some(GNOME_SHELL_SERIES)
+}
+
+pub fn unsupported_gnome_shell(version: &str) -> String {
+    format!("GNOME Shell {} is not supported for video wallpapers: oneMK's GNOME extension runs on GNOME {GNOME_SHELL_SERIES}. Pictures still work.", version.trim())
+}
+
+/// What is still experimental where this computer runs, in one sentence for
+/// the Wallpaper page, `one-mk wallpaper status` and its help; `None` when
+/// everything in use is a stable path (X11 video, GNOME pictures). `sharing`:
+/// the wallpaper spans more than this computer.
+pub fn experimental_note(sharing: bool) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    if cfg!(target_os = "macos") { parts.push("Wallpaper on macOS is experimental: it has not been tested on a real Mac yet."); }
+    if cfg!(windows) { parts.push("Wallpaper on Windows is experimental: it has not been tested on a real Windows PC yet."); }
+    #[cfg(target_os = "linux")]
+    if gnome_wayland() { parts.push("Video on GNOME Wayland (through oneMK's GNOME extension) is experimental; pictures are stable."); }
+    else if std::env::var_os("WAYLAND_DISPLAY").is_some() { parts.push("Wallpaper on this Wayland desktop is experimental: layer-shell desktops have only been tested on Sway."); }
+    if sharing { parts.push("Sharing one wallpaper across several computers is experimental."); }
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
 
 pub fn gnome_wayland() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|desktop|
@@ -389,7 +424,19 @@ mod tests {
             assert!(serde_json::from_str::<Wire>(&json).is_err());
         }
         let status: Status = serde_json::from_str(r#"{"plan":null,"message":"off","available":true,"poster":null}"#).unwrap();
-        assert!(status.gnome.is_none());
+        assert!(status.gnome.is_none() && status.experimental.is_none());
+    }
+    #[test]
+    fn the_gnome_extension_accepts_the_whole_50_series_only() {
+        for version in ["50", "50.0", "50.1", "50.2", "50.rc", " 50.3\n"] { assert!(supported_gnome_shell(version), "{version}"); }
+        for version in ["49.4", "51.0", "5", "500.1", "", "fifty"] { assert!(!supported_gnome_shell(version), "{version}"); }
+        assert!(unsupported_gnome_shell("51.0").contains("GNOME Shell 51.0 is not supported"));
+        assert!(GNOME_PLAYBACK_UNAVAILABLE.contains("one-mk wallpaper extension install") && GNOME_PLAYBACK_UNAVAILABLE.contains("Install GNOME extension"));
+    }
+    #[test]
+    fn sharing_and_untested_systems_are_labelled_experimental() {
+        assert!(experimental_note(true).unwrap().contains("Sharing one wallpaper across several computers is experimental"));
+        if cfg!(any(target_os = "macos", windows)) { assert!(experimental_note(false).unwrap().contains("not been tested")); }
     }
     #[test]
     fn only_s_ok_contains_a_video_frame() {

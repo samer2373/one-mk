@@ -140,7 +140,12 @@ impl HotkeySettings {
 /// A computer, as the jump shortcuts count them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Numbered {
+    /// The name it calls itself (the same on every computer: the order
+    /// follows it).
     pub name: String,
+    /// What to show: the name chosen here, if any, and the short id when
+    /// two computers would otherwise read the same.
+    pub label: String,
     /// The full fingerprint (unique, unlike names).
     pub id: String,
     /// This computer.
@@ -150,17 +155,32 @@ pub struct Numbered {
 /// This computer and every paired one, sorted by name (then id): with every
 /// computer paired to every other, Ctrl+Alt+2 is the same computer
 /// whichever keyboard presses it.
+#[cfg(test)]
 pub fn numbered(this: (&str, &str), paired: impl IntoIterator<Item = (String, String)>) -> Vec<Numbered> {
-    let mut all: Vec<Numbered> = paired.into_iter().map(|(name, id)| Numbered { name, id, this: false }).collect();
-    all.push(Numbered { name: this.0.to_owned(), id: this.1.to_owned(), this: true });
+    numbered_labelled(this, paired.into_iter().map(|(name, id)| (name.clone(), name, id)))
+}
+
+/// [`numbered`] with the name to show for each paired computer (`(name,
+/// label, id)`).
+fn numbered_labelled(this: (&str, &str), paired: impl IntoIterator<Item = (String, String, String)>) -> Vec<Numbered> {
+    let mut all: Vec<Numbered> = paired.into_iter().map(|(name, label, id)| Numbered { name, label, id, this: false }).collect();
+    all.push(Numbered { name: this.0.to_owned(), label: this.0.to_owned(), id: this.1.to_owned(), this: true });
     all.sort_by(|a, b| (a.name.to_lowercase(), &a.id).cmp(&(b.name.to_lowercase(), &b.id)));
+    // Two the same on screen get their short ids (the ids are what a
+    // command accepts).
+    let same: Vec<bool> = all.iter().map(|a| all.iter().filter(|b| b.label.trim().eq_ignore_ascii_case(a.label.trim())).count() > 1).collect();
+    for (c, same) in all.iter_mut().zip(same) {
+        if same && let Ok(fp) = c.id.parse::<one_mk_net::Fingerprint>() {
+            c.label = format!("{} ({})", c.label, fp.short());
+        }
+    }
     all
 }
 
 /// The numbering from what is on disk: the identity and `devices.toml`.
 pub fn numbered_from(identity: &Identity, trust: &TrustStore) -> Vec<Numbered> {
-    let paired = trust.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone()));
-    numbered((&identity.name, &identity.fingerprint.to_string()), paired)
+    let paired = trust.devices().iter().map(|d| (d.name.clone(), d.label().to_owned(), d.fingerprint.clone()));
+    numbered_labelled((&identity.name, &identity.fingerprint.to_string()), paired)
 }
 
 /// What a shortcut asks the daemon: exactly what `one-mk switch` and
@@ -256,7 +276,7 @@ impl HotkeyArgs {
 /// The shortcuts and the numbering, in words.
 pub fn describe(s: &HotkeySettings, order: &[Numbered]) -> String {
     if !s.enabled {
-        return "Keyboard shortcuts are off (`one-mk hotkeys --on` turns them on).\n".into();
+        return "Keyboard shortcuts are off (`one-mk hotkeys --on` turns them on). Ctrl+Alt+Shift+Esc still brings the pointer home.\n".into();
     }
     let bindings = match s.bindings() {
         Ok(b) => b,
@@ -267,7 +287,7 @@ pub fn describe(s: &HotkeySettings, order: &[Numbered]) -> String {
         rows.push((j.label(), "move the mouse and keyboard to computer 1 to 9:".into()));
         for (i, c) in order.iter().take(9).enumerate() {
             let this = if c.this { " (this computer)" } else { "" };
-            rows.push((String::new(), format!("  {}  {}{this}", i + 1, sanitize_name(&c.name))));
+            rows.push((String::new(), format!("  {}  {}{this}", i + 1, sanitize_name(&c.label))));
         }
     }
     for (a, c) in bindings.iter().filter(|(a, _)| !matches!(a, Action::Jump(_))) {
@@ -303,7 +323,8 @@ pub async fn hotkeys(dir: &Path, args: HotkeyArgs) -> Result<()> {
             Ok(s.hotkeys.clone())
         })?
     } else {
-        Settings::load(dir)?.hotkeys
+        // Only showing: a part of the file that can't be read is left out and said so.
+        Settings::view(dir)?.hotkeys
     };
     let order = numbered_from(&Identity::load_or_create(dir)?, &TrustStore::load(dir)?);
     print!("{}", describe(&settings, &order));
@@ -345,6 +366,29 @@ mod tests {
         let there = numbered(("Zed", "cccc"), [("mid".into(), "bbbb".into()), ("alpha".into(), "aaaa".into()), ("alpha".into(), "dddd".into())]);
         let ids = |o: &[Numbered]| o.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&there), ids(&o));
+    }
+
+    /// Computers that read the same are listed with their ids, and a name
+    /// chosen here changes only what is shown, never the order (every
+    /// computer must number the same set the same way).
+    #[test]
+    fn the_list_tells_same_named_computers_apart() {
+        let fp = |n: u8| one_mk_net::Fingerprint([n; 32]);
+        let (a, b, c) = (fp(1), fp(2), fp(3));
+        let paired = [
+            ("Mac".to_owned(), "Office".to_owned(), a.to_string()),
+            ("Mac".to_owned(), "Mac".to_owned(), b.to_string()),
+            ("Mac".to_owned(), "Mac".to_owned(), c.to_string()),
+        ];
+        let order = numbered_labelled(("Desk", &fp(9).to_string()), paired);
+        let labels: Vec<&str> = order.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(order.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Desk", "Mac", "Mac", "Mac"], "ordered by what they call themselves");
+        assert_eq!(labels[0], "Desk");
+        assert_eq!(labels[1], "Office", "a name of your own tells it apart");
+        assert_eq!(labels[2], format!("Mac ({})", b.short()));
+        assert_eq!(labels[3], format!("Mac ({})", c.short()));
+        let shown = describe(&HotkeySettings::default(), &order);
+        assert!(shown.contains(&format!("Mac ({})", b.short())) && shown.contains(&format!("Mac ({})", c.short())), "{shown}");
     }
 
     #[test]

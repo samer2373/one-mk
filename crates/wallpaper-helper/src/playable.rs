@@ -46,8 +46,7 @@ pub fn path(path: &Path) -> Result<PathBuf> {
     // Made under a name of its own, then put in place in one step: a player
     // or probe opening the same video meanwhile never finds the link
     // missing, and two of them making it at once both end with a good one.
-    let unique = links.join(format!(".{}-{}-{}.part", stem.to_string_lossy(), std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_nanos())));
+    let unique = links.join(part_name(&stem.to_string_lossy()));
     fs::hard_link(path, &unique).context("Couldn't open the wallpaper video")?;
     let placed = fs::rename(&unique, &link);
     let _ = fs::remove_file(&unique);
@@ -55,6 +54,16 @@ pub fn path(path: &Path) -> Result<PathBuf> {
     // already this video.
     if placed.is_err() && !same_file(&link, path) { placed.context("Couldn't open the wallpaper video")?; }
     Ok(link)
+}
+
+/// A name for a link being made: never the same twice in one process. The
+/// clock alone isn't enough: macOS reads it in microseconds, so threads
+/// opening one video together got the same name and `hard_link` failed
+/// with "File exists".
+fn part_name(stem: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_nanos());
+    format!(".{stem}-{}-{nanos}-{}.part", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Whether `a` and `b` are the same file (hard links of one another): the
@@ -84,6 +93,13 @@ mod tests {
         assert_eq!(sniff(&mkv), Some("mkv"));
         assert_eq!(sniff(b"not a video at all"), None);
         assert_eq!(sniff(&[]), None);
+    }
+
+    #[test]
+    fn names_for_links_being_made_never_repeat() {
+        let names: std::collections::HashSet<_> = (0..1000).map(|_| part_name("abc")).collect();
+        assert_eq!(names.len(), 1000);
+        assert!(names.iter().all(|name| name.starts_with('.') && name.ends_with(".part")));
     }
 
     #[test]

@@ -43,14 +43,18 @@ pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: V
 
 pub async fn dropped(dir: &Path, paths: Vec<PathBuf>, peer: String) -> Result<()> {
     let (count, name) = send(dir, paths, Some(peer), vec![]).await?;
-    crate::notify::sent(count, &name).await;
+    // "notify off" silences this toast like the one for received files.
+    crate::notify::sent(count, &name, crate::settings::Settings::load_or_default(dir).notify_files).await;
     Ok(())
 }
 
 async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>) -> Result<(usize, String)> {
-    let files = transfer::collect(&paths)?;
+    let (files, skipped) = transfer::collect_noted(&paths)?;
+    if let Some(line) = skipped_line(&skipped) {
+        eprintln!("{line}");
+    }
     if files.is_empty() {
-        bail!("nothing to send (the folders are empty)");
+        bail!("{}", if skipped.iter().all(|note| note.ends_with("(an empty folder)")) { "nothing to send (the folders are empty)" } else { "nothing to send (everything was skipped, see above)" });
     }
     let total = files.iter().fold(0u64, |total, file| total.saturating_add(file.size));
     if files.len() > 10_000 || total > 1 << 40 {
@@ -59,10 +63,11 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
     let identity = Arc::new(Identity::load_or_create(dir)?);
     let trust = TrustStore::load(dir)?;
     let device = pick(&trust, to.as_deref())?.clone();
+    let shown = trust.display(&device);
     let fp = device.fingerprint().context("corrupt fingerprint in devices.toml")?;
 
     let start = Instant::now();
-    let tried = Attempt { dir, identity: &identity, device: &device, fp, connect: &connect };
+    let tried = Attempt { dir, identity: &identity, device: &device, shown: shown.clone(), fp, connect: &connect };
     let (first, mut sent) = tried.send(files, false).await?;
     // The receiver counts a connection until it hears it closed, and the one
     // before this may still be on its way out: ask again once.
@@ -75,6 +80,15 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
         sent = sent.saturating_add(more);
     }
 
+    // Forgotten by the other computer: every file fails the same way, so say it once, with what to do.
+    if results.iter().any(|(_, outcome)| matches!(outcome, Outcome::Failed(why) if why == transfer::NOT_PAIRED)) {
+        if std::io::IsTerminal::is_terminal(&std::io::stderr()) { eprint!("\r\x1b[2K"); }
+        bail!(
+            "{shown} removed this computer from its paired computers, so it takes nothing from it and nothing was sent (sending again will not help). \
+             Remove it here too with `one-mk forget {}`, or pair the two again with `one-mk pair` on both.",
+            device.short_id()
+        );
+    }
     let elapsed = start.elapsed().as_secs_f64();
     // The progress line is redrawn in place only in a terminal; a log or a
     // pipe gets no control codes.
@@ -100,17 +114,38 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
             }
         }
     }
-    eprintln!(
-        "Sent {} to {} in {:.1} s ({}/s)",
-        summary(saved, saved_bytes),
-        device.name,
-        elapsed,
-        bytes((sent as f64 / elapsed.max(1e-6)) as u64)
-    );
-    if failed > 0 {
-        bail!("{failed} file(s) were not sent ({first_reason})");
+    // Nothing arrived: the error below says so, and "Sent 0 files ... (1.9 MB/s)" would not be true.
+    if saved > 0 {
+        eprintln!(
+            "Sent {} to {} in {:.1} s ({}/s)",
+            summary(saved, saved_bytes),
+            shown,
+            elapsed,
+            bytes((sent as f64 / elapsed.max(1e-6)) as u64)
+        );
     }
-    Ok((saved, device.name.clone()))
+    if failed > 0 {
+        bail!("{}", not_sent(failed, &first_reason));
+    }
+    Ok((saved, shown))
+}
+
+/// "1 file was not sent (why)" / "3 files were not sent (why of the first)".
+fn not_sent(failed: usize, first_reason: &str) -> String {
+    if failed == 1 { format!("1 file was not sent ({first_reason})") } else { format!("{failed} files were not sent ({first_reason}; the others are listed above)") }
+}
+
+/// One line telling the person what was left out of a send, or `None`.
+/// Symbolic links, pipes and empty folders are not sent; saying so beats a
+/// summary that looks complete.
+fn skipped_line(skipped: &[String]) -> Option<String> {
+    if skipped.is_empty() {
+        return None;
+    }
+    let plain = |note: &String| note.chars().flat_map(|c| if c.is_control() { c.escape_default().collect::<Vec<_>>() } else { vec![c] }).collect::<String>();
+    let shown: Vec<String> = skipped.iter().take(3).map(plain).collect();
+    let more = if skipped.len() > 3 { format!(", and {} more", skipped.len() - 3) } else { String::new() };
+    Some(format!("Skipped {} that cannot be sent: {}{more}", if skipped.len() == 1 { "1 item".to_owned() } else { format!("{} items", skipped.len()) }, shown.join(", ")))
 }
 
 /// What one try at sending needs.
@@ -118,6 +153,8 @@ struct Attempt<'a> {
     dir: &'a Path,
     identity: &'a Arc<Identity>,
     device: &'a Device,
+    /// Its name as people see it (with its id if another is called the same).
+    shown: String,
     fp: Fingerprint,
     connect: &'a [SocketAddr],
 }
@@ -127,13 +164,13 @@ impl Attempt<'_> {
     /// that crossed the network.
     async fn send(&self, files: Vec<Outgoing>, retry: bool) -> Result<(Vec<(Outgoing, Outcome)>, u64)> {
         let node = Node::bind_any(self.identity.clone(), 0)?;
-        let peer = find(&node, self.identity, self.device, self.fp, self.connect.to_vec()).await?;
+        let peer = find(&node, self.identity, self.device, &self.shown, self.fp, self.connect.to_vec(), "try --connect <ip:port>").await?;
         let conn = peer.conn;
 
         let total = files.iter().fold(0u64, |total, file| total.saturating_add(file.size));
         let addr = conn.remote_address();
         let addr = SocketAddr::new(addr.ip().to_canonical(), addr.port());
-        let name = &self.device.name;
+        let name = &self.shown;
         if retry {
             eprintln!("Trying again ({})", summary(files.len(), total));
         } else {
@@ -155,7 +192,20 @@ impl Attempt<'_> {
         );
         let id = reports.borrow().id;
         let ticker = tokio::spawn(show_progress(progress.clone(), start, reports.clone()));
-        let results = transfer::send_files_as(&conn, files, progress.clone(), id).await;
+        let results = tokio::select! {
+            results = transfer::send_files_as(&conn, files, progress.clone(), id) => results,
+            // Ctrl+C: close with a reason, or the receiver only learns it
+            // when the link times out ("connection lost: timed out").
+            _ = tokio::signal::ctrl_c() => {
+                ticker.abort();
+                reports.send_modify(|u| u.finished = true);
+                let _ = reporter.await;
+                conn.close(0u32.into(), b"the sender cancelled");
+                node.shutdown(CLOSE_WAIT).await;
+                if std::io::IsTerminal::is_terminal(&std::io::stderr()) { eprint!("\r\x1b[2K"); }
+                bail!("cancelled; what arrived is kept, send again to resume");
+            }
+        };
         ticker.abort();
         // One task tells the daemon, in order, so nothing can arrive after the end.
         reports.send_modify(|u| u.finished = true);
@@ -171,14 +221,14 @@ impl Attempt<'_> {
 
 fn pick<'a>(trust: &'a TrustStore, to: Option<&str>) -> Result<&'a Device> {
     if let Some(q) = to {
-        return trust.find(q).with_context(|| format!("no paired computer called {q:?} (see `one-mk devices`)"));
+        return trust.find(q).ok_or_else(|| crate::manage::not_found(trust, q));
     }
     match trust.devices() {
         [] => bail!("no paired computers; run `one-mk pair` first"),
         [only] => Ok(only),
         many => {
-            let names: Vec<&str> = many.iter().map(|d| d.name.as_str()).collect();
-            bail!("several paired computers ({}); choose one with --to", names.join(", "))
+            let names: Vec<String> = many.iter().map(|d| trust.display(d)).collect();
+            bail!("several paired computers ({}); choose one with --to <name or id>", names.join(", "))
         }
     }
 }
@@ -186,7 +236,9 @@ fn pick<'a>(trust: &'a TrustStore, to: Option<&str>) -> Result<&'a Device> {
 /// Dials the device at its saved addresses, `--connect` addresses, and
 /// wherever mDNS finds it; the first connection with the right
 /// certificate wins.
-pub(crate) async fn find(node: &Node, identity: &Identity, device: &Device, fp: Fingerprint, connect: Vec<SocketAddr>) -> Result<Peer> {
+/// `hint`: what else to try, for the error if it can't be reached.
+/// `shown`: its name as people see it (`TrustStore::display`).
+pub(crate) async fn find(node: &Node, identity: &Identity, device: &Device, shown: &str, fp: Fingerprint, connect: Vec<SocketAddr>, hint: &str) -> Result<Peer> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Peer>();
     let mut dialed = HashSet::new();
     let mut dial = |addr: SocketAddr| {
@@ -224,8 +276,7 @@ pub(crate) async fn find(node: &Node, identity: &Identity, device: &Device, fp: 
                 }
             }
             _ = &mut deadline => bail!(
-                "could not reach {}; is `one-mk run` running there? (try --connect <ip:port>)",
-                device.name
+                "could not reach {shown}; is `one-mk run` running there? ({hint})"
             ),
         }
     }
@@ -335,10 +386,7 @@ mod tests {
     }
 
     fn temp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("one-mk-send-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        crate::testdir::scratch(&format!("send-{tag}"))
     }
 
     fn receiver(tag: &str) -> Receiver {
@@ -427,6 +475,83 @@ mod tests {
         held.push(rx.inbox.admit(me).unwrap());
         let sent = send(&home, vec![file], None, vec![]).await;
         let why = format!("{:#}", sent.unwrap_err());
-        assert!(why.contains("1 file(s) were not sent"), "{why}");
+        assert!(why.contains("1 file was not sent"), "{why}");
+    }
+
+    /// The same path twice used to make two concurrent streams for one
+    /// partial file, which cancelled each other ("stopped by peer").
+    #[tokio::test]
+    async fn the_same_file_named_twice_is_sent_once() {
+        let rx = receiver("dup");
+        let (home, _) = sender_home("dup", &rx);
+        let file = temp("dup-src").join("hello.txt");
+        std::fs::write(&file, "hello\n").unwrap();
+        let (count, _) = send(&home, vec![file.clone(), file.clone(), file.parent().unwrap().join("./hello.txt")], None, vec![]).await.unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(std::fs::read_dir(&rx.root).unwrap().flatten().filter(|e| e.path().is_file()).count(), 1);
+    }
+
+    /// A symbolic link named on the command line to a file is sent (as that
+    /// file, under the link's name): "Send to" on a linked item works.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_named_symlink_to_a_file_is_sent() {
+        let rx = receiver("link");
+        let (home, _) = sender_home("link", &rx);
+        let src = temp("link-src");
+        std::fs::write(src.join("real.txt"), "real contents").unwrap();
+        std::os::unix::fs::symlink(src.join("real.txt"), src.join("shortcut.txt")).unwrap();
+        let (count, _) = send(&home, vec![src.join("shortcut.txt")], None, vec![]).await.unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(std::fs::read_to_string(rx.root.join("shortcut.txt")).unwrap(), "real contents");
+    }
+
+    /// With two computers called the same, a name chooses neither: the
+    /// message says why and offers the ids; an id chooses one.
+    #[test]
+    fn a_name_two_computers_share_asks_for_an_id() {
+        let dir = temp("pick-twins");
+        let mut trust = TrustStore::load(&dir).unwrap();
+        for n in [1u8, 2] {
+            trust.upsert(Device { name: "Mac".into(), fingerprint: Fingerprint([n; 32]).to_string(), ..Default::default() });
+        }
+        let (a, b) = (Fingerprint([1; 32]).short(), Fingerprint([2; 32]).short());
+        let err = format!("{}", pick(&trust, Some("Mac")).unwrap_err());
+        assert!(err.contains("2 paired computers are called \"Mac\"") && err.contains(&a) && err.contains(&b), "{err}");
+        let err = format!("{}", pick(&trust, None).unwrap_err());
+        assert!(err.contains(&format!("Mac ({a})")) && err.contains(&format!("Mac ({b})")) && err.contains("--to <name or id>"), "{err}");
+        assert_eq!(pick(&trust, Some(&b)).unwrap().fingerprint, Fingerprint([2; 32]).to_string());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn failures_are_counted_in_words_that_agree() {
+        assert_eq!(not_sent(1, "a.txt: disk full"), "1 file was not sent (a.txt: disk full)");
+        assert!(not_sent(3, "a.txt: disk full").starts_with("3 files were not sent (a.txt: disk full"));
+    }
+
+    #[test]
+    fn skipped_items_are_summarised_in_one_line() {
+        assert_eq!(skipped_line(&[]), None);
+        assert_eq!(skipped_line(&["a (a symbolic link)".into()]).unwrap(), "Skipped 1 item that cannot be sent: a (a symbolic link)");
+        let many: Vec<String> = (1..=5).map(|n| format!("f{n} (an empty folder)")).collect();
+        assert_eq!(skipped_line(&many).unwrap(), "Skipped 5 items that cannot be sent: f1 (an empty folder), f2 (an empty folder), f3 (an empty folder), and 2 more");
+        assert!(!skipped_line(&["bad\nname (x)".into()]).unwrap().contains('\n'), "a raw newline is never printed");
+    }
+
+    /// Nothing but skipped items: the failure says so instead of "folders are empty".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_send_of_only_skipped_things_fails_with_a_clear_message() {
+        let rx = receiver("onlyskip");
+        let (home, _) = sender_home("onlyskip", &rx);
+        let src = temp("onlyskip-src");
+        std::fs::create_dir_all(src.join("folder")).unwrap();
+        std::os::unix::fs::symlink(&src, src.join("folder/loop")).unwrap();
+        let why = format!("{:#}", send(&home, vec![src.join("folder")], None, vec![]).await.unwrap_err());
+        assert!(why.contains("everything was skipped"), "{why}");
+        let empty = temp("onlyskip-empty");
+        let why = format!("{:#}", send(&home, vec![empty], None, vec![]).await.unwrap_err());
+        assert!(why.contains("the folders are empty"), "{why}");
     }
 }

@@ -12,9 +12,9 @@
 use super::App;
 use crate::learn::{self, Act, Cooldown, Online, Pushes, Shown};
 use crate::settings::Learn;
-use one_mk_ctl::status::{Suggestion, device_arg, is_it_there, on_your};
+use one_mk_ctl::status::{Suggestion, is_it_there, on_your};
 use one_mk_net::{Device, Fingerprint, PlacedBy};
-use one_mk_proto::{Edge, HOME_INSET, Pos, Side, Start, free_edges, sanitize_name, wrap_point};
+use one_mk_proto::{Edge, HOME_INSET, Pos, Side, Start, free_edges, wrap_point};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -197,11 +197,9 @@ impl App {
 
     /// The command-line name of paired computer `fp` (see `device_arg`):
     /// its name only if that finds it and nothing else.
-    fn arg_for(&self, fp: Fingerprint) -> String {
+    pub(super) fn arg_for(&self, fp: Fingerprint) -> String {
         let Some(d) = self.trust.get(&fp) else { return fp.short() };
-        let name = sanitize_name(&d.name);
-        let unique = self.trust.find(&name).is_some_and(|f| f.fingerprint == d.fingerprint);
-        if unique { device_arg(&name, &fp.short()) } else { fp.short() }
+        self.trust.arg(d)
     }
 
     fn suggest(&mut self, fp: Fingerprint, side: Side, now: Instant) {
@@ -248,14 +246,14 @@ impl App {
         if !self.trust.get(&fp).is_some_and(Device::learnable) {
             return; // the usual case: nothing to read or write
         }
-        // Saved from what is on disk now, so a change made meanwhile (a
-        // `one-mk layout` not yet applied) is not written over.
-        self.reload_trust();
-        let Some(d) = self.trust.get_mut(&fp).filter(|d| d.learnable()) else { return };
-        d.placed_by = PlacedBy::Confirmed;
-        if let Err(e) = self.trust.save() {
-            tracing::debug!("saving that the layout was used: {e:#}");
-        }
+        // Saved from what is on disk now, under the lock, so a change made
+        // meanwhile (a `one-mk layout` not yet applied) is not written over.
+        self.change_trust("that the layout was used", |trust| {
+            if let Some(d) = trust.get_mut(&fp).filter(|d| d.learnable()) {
+                d.placed_by = PlacedBy::Confirmed;
+            }
+            Ok(())
+        });
         self.update_sides(); // the probes may go
     }
 

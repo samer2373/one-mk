@@ -5,49 +5,79 @@
 use super::*;
 use crate::rtt::{self, Quality, Ring, Summary};
 
-const ROW_GRAPH_H: f32 = 22.0;
-pub(super) const ROW_H: f32 = 34.0;
+/// Health's graph beside a computer's name.
+const HEALTH_GRAPH_H: f32 = 28.0;
+/// A computer's row in Health's Connections card.
+pub(super) const ROW_H: f32 = 52.0;
 
 /// The colour for a state: calm grey while it is smooth, amber when not.
 /// The word beside it says the same, so colour is never the only signal.
 fn tone(q: Option<Quality>) -> Color32 {
     match q {
-        Some(Quality::Stalls | Quality::Slow) => WARN,
-        _ => INK2,
+        Some(Quality::Stalls | Quality::Slow) => pal().warn,
+        _ => pal().ink2,
     }
 }
 
-/// The line, in the box `r`: grey or amber, with a dot at the newest
-/// reading and a marker where packets were lost.
-fn sparkline(p: &Painter, r: Rect, ring: &Ring, now: f64, q: Option<Quality>) {
+/// Health's graph, in the box `r`: the last couple of minutes as a line,
+/// drawn for a page: a faint baseline at half height, a soft fill under the line,
+/// the newest reading as a dot on a halo, lost packets as rings.
+fn health_trace(p: &Painter, r: Rect, ring: &Ring, now: f64, q: Option<Quality>) {
     let t = ring.trace(now, r.width(), r.height());
     let col = tone(q);
+    let line_col = col;
     let width = if q == Some(Quality::Slow) { 2.0 } else { 1.5 };
-    p.hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0, LINE));
+    let mid = (r.center().y).round() + 0.5;
+    p.add(egui::Shape::dashed_line(&[pos2(r.left(), mid), pos2(r.right(), mid)], Stroke::new(1.0, pal().line), 2.0, 3.0));
+    p.hline(r.x_range(), r.bottom().round() - 0.5, Stroke::new(1.0, pal().line2));
     for line in &t.lines {
         let pts: Vec<Pos2> = line.iter().map(|[x, y]| r.min + vec2(*x, *y)).collect();
-        match pts[..] {
-            [] => {}
-            [one] => {
-                p.circle_filled(one, 1.5, col);
+        if pts.len() >= 2 {
+            // The soft fill: a strip from the line down to the bottom, fading out.
+            let mut mesh = egui::epaint::Mesh::default();
+            let (top_c, low_c) = (line_col.gamma_multiply(0.16), line_col.gamma_multiply(0.0));
+            for p in &pts {
+                mesh.colored_vertex(*p, top_c);
+                mesh.colored_vertex(pos2(p.x, r.bottom() - 1.0), low_c);
             }
-            _ => {
-                p.add(egui::Shape::line(pts, Stroke::new(width, col)));
+            for k in 0..pts.len() as u32 - 1 {
+                let (a, b) = (2 * k, 2 * k + 2);
+                mesh.add_triangle(a, b, a + 1);
+                mesh.add_triangle(b, b + 1, a + 1);
             }
+            p.add(egui::Shape::mesh(mesh));
+            p.add(egui::Shape::line(pts, Stroke::new(width, line_col)));
+        } else if let [one] = pts[..] {
+            p.circle_filled(one, 1.5, line_col);
         }
     }
     if let Some([x, y]) = t.lines.last().and_then(|l| l.last()) {
-        // The newest reading: cyan while it answers well (live, connected),
-        // amber when it doesn't.
-        p.circle_filled(r.min + vec2(*x, *y), 2.5, if col == INK2 { OK } else { col });
+        let at = r.min + vec2(*x, *y);
+        let dot = if col == pal().ink2 { pal().ok } else { col };
+        p.circle_filled(at, 5.0, dot.gamma_multiply(0.2));
+        p.circle_filled(at, 2.5, dot);
     }
-    // Lost packets: a thin amber line top to bottom ending in a ring, so
-    // it reads apart from a slow reading and not only by colour.
     for x in &t.losses {
         let x = r.left() + x;
-        p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom())], Stroke::new(1.0, WARN.gamma_multiply(0.6)));
-        p.circle_stroke(pos2(x, r.top() + 2.5), 2.5, Stroke::new(1.0, WARN));
+        p.line_segment([pos2(x, r.top() + 5.0), pos2(x, r.bottom() - 1.0)], Stroke::new(1.0, pal().warn.gamma_multiply(0.6)));
+        p.circle_stroke(pos2(x, r.top() + 2.5), 2.5, Stroke::new(1.0, pal().warn));
     }
+}
+
+/// A round trip as a page shows it: the number in JetBrains Mono at 500,
+/// its unit quieter after it. Painted right-aligned at `right`; returns
+/// how wide it came out.
+fn paint_ms(p: &Painter, right: Pos2, text: &str, ink: Color32) -> f32 {
+    let (number, rest) = text.split_once(' ').map_or((text, ""), |(n, r)| (n, r));
+    let mut job = egui::text::LayoutJob::default();
+    job.append(number, 0.0, egui::TextFormat { font_id: mono_medium(T_BODY + 1.0), color: ink, ..Default::default() });
+    if !rest.is_empty() {
+        job.append(&format!(" {rest}"), 0.0, egui::TextFormat { font_id: mono(T_META), color: pal().ink2, ..Default::default() });
+    }
+    let galley = p.layout_job(job);
+    let w = galley.size().x;
+    p.galley(pos2(right.x - w, right.y - galley.size().y / 2.0), galley, ink);
+    w
 }
 
 impl App {
@@ -55,34 +85,6 @@ impl App {
     /// a scripted history (a screenshot) ended.
     pub(super) fn rtt_now(&self) -> f64 {
         self.rtt_frozen.unwrap_or(self.now)
-    }
-
-    /// The panel under the desk: tall enough for the inspector with the
-    /// latency card, on the Desk tab once a computer is paired.
-    pub(super) fn panel_h(&self) -> f32 {
-        if self.tab == Tab::Files {
-            // The page scrolls, so the desk above keeps enough room for its
-            // monitors to stay readable drop targets in a small window.
-            // Narrow, the desk above is a row of named chips: the page takes the room.
-            if self.ctx.content_rect().width() < 1040.0 {
-                // Chips need a row (two at most): the page takes the rest.
-                let peers = self.running().map_or(0, |s| s.peers.len());
-                let chips = if peers > 3 { 2.0 * 52.0 } else { 52.0 };
-                return (self.ctx.content_rect().height() - shell::HEAD_H - chips - 3.0 * M).max(210.0);
-            }
-            return (self.ctx.content_rect().height() * 0.56).clamp(210.0, 460.0);
-        }
-        // A narrow window stacks Layout's cards: give them half the height.
-        if self.tab == Tab::Layout && self.ctx.content_rect().width() < 1040.0 {
-            return (self.ctx.content_rect().height() * 0.46).max(PANEL_H);
-        }
-        let with_card = self.tab == Tab::Desk && self.running().is_some_and(|s| !s.peers.is_empty());
-        let short = self.ctx.content_rect().height() < 640.0;
-        match (with_card, short) {
-            (true, false) => 228.0,
-            (true, true) => 220.0,
-            (false, _) => PANEL_H,
-        }
     }
 
     /// A graph is on screen right now (so the daemon is worth asking).
@@ -113,57 +115,50 @@ impl App {
         }
     }
 
-    /// The Health tab's list of computers, one compact row each, in a box
-    /// from `y`; returns its height. Nothing is drawn (and 0 returned)
-    /// with no computers paired.
-    pub(super) fn latency_rows(&self, ui: &Ui, x: f32, y: f32, w: f32) -> f32 {
-        let Some(s) = self.running().filter(|s| !s.peers.is_empty()) else { return 0.0 };
+    /// One computer's row in Health's Connections card, in `row`: a status
+    /// mark (● answering well, ◆ stalls or slow, ○ offline), its name, the
+    /// last couple of minutes as a line when there is room, and the round
+    /// trip in mono with what it says.
+    pub(super) fn connection_row(&self, ui: &Ui, peer: &PeerStatus, row: Rect) {
         let p = ui.painter();
-        let head = 36.0;
-        let h = head + ROW_H * s.peers.len() as f32 + 8.0;
-        let boxr = Rect::from_min_size(pos2(x, y), vec2(w, h));
-        p.rect(boxr, CornerRadius::same(10), RAISED, Stroke::new(1.0, LINE), StrokeKind::Inside);
-        p.text(pos2(x + 16.0, y + 20.0), Align2::LEFT_CENTER, "Connection to each computer", semibold(T_BODY), INK);
-        let sub = format!("last {}", rtt::span_words());
-        p.text(pos2(x + w - 16.0, y + 20.0), Align2::RIGHT_CENTER, &sub, regular(T_META), INK2);
-        a11y_text(ui, Id::unique("latency-head"), Rect::from_min_size(boxr.min, vec2(w, head)), Role::Heading, "Connection to each computer", None);
-        let now = self.rtt_now();
-        // Narrow: the graph goes first, the numbers and the word stay.
-        let graph_w = if w >= 520.0 { 110.0 } else { 0.0 };
-        let word_w = 84.0;
-        let num_w = 52.0;
-        for (k, peer) in s.peers.iter().enumerate() {
-            let row = Rect::from_min_size(pos2(x + 8.0, y + head + ROW_H * k as f32), vec2(w - 16.0, ROW_H));
-            if k > 0 {
-                p.hline(row.x_range().shrink(8.0), row.top() - 0.5, Stroke::new(1.0, LINE));
-            }
-            let mid = row.center().y;
-            let word_right = row.right() - 8.0;
-            let num_right = word_right - word_w - 8.0;
-            let (words, summary) = (self.latency_words(peer), self.summary_of(&peer.id).filter(|_| peer.online));
-            let name_w = row.width() - 16.0 - word_w - num_w - graph_w - if graph_w > 0.0 { 16.0 } else { 8.0 };
-            let name = fit(p, &peer.name, &regular(T_BODY), name_w);
-            p.text(pos2(row.left() + 8.0, mid), Align2::LEFT_CENTER, &name, regular(T_BODY), INK);
-            if name != peer.name {
-                ui.interact(Rect::from_min_size(pos2(row.left() + 8.0, row.top()), vec2(name_w, ROW_H)), Id::unique(("latency-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
-            }
-            if !peer.online {
-                p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, "offline", regular(T_META), INK2);
-            } else {
-                let q = summary.and_then(|s| s.quality());
-                let waiting = "No samples yet";
-                let word = q.map_or(waiting, Quality::word);
-                p.text(pos2(word_right, mid), Align2::RIGHT_CENTER, word, regular(T_META), if q.is_some() { tone(q) } else { INK2 });
-                if let Some(s) = summary {
-                    p.text(pos2(num_right, mid), Align2::RIGHT_CENTER, rtt::ms(s.now_us), mono(T_META), INK);
-                }
-                if let (true, Some(ring), Some(s)) = (graph_w > 0.0, self.rtts.of(&peer.id), summary.filter(|s| s.count >= rtt::MIN_SAMPLES)) {
-                    let g = Rect::from_min_size(pos2(num_right - num_w - 8.0 - graph_w, mid - ROW_GRAPH_H / 2.0), vec2(graph_w, ROW_GRAPH_H));
-                    sparkline(p, g, ring, now, s.quality());
-                }
-            }
-            a11y_text(ui, Id::unique(("latency-row", &peer.id)), row, Role::ListItem, &words, None);
+        let mid = row.center().y;
+        let (words, summary) = (self.latency_words(peer), self.summary_of(&peer.id).filter(|_| peer.online));
+        let quality = summary.and_then(|s| s.quality());
+        let mark = if !peer.online {
+            widgets::Mark::Off
+        } else if matches!(quality, Some(Quality::Stalls | Quality::Slow)) {
+            widgets::Mark::Warn
+        } else {
+            widgets::Mark::Ok
+        };
+        widgets::status_mark(p, pos2(row.left() + 4.0, mid), 8.0, mark);
+        // The value at the right: "4 ms", "38 ms · some stalls", or a word.
+        let (value, mono_value) = match (peer.online, summary) {
+            (false, _) => ("Offline".to_owned(), false),
+            (true, Some(s)) => match quality {
+                Some(q) if q != Quality::Smooth => (format!("{} · {}", rtt::ms(s.now_us), q.word().to_lowercase()), true),
+                _ => (rtt::ms(s.now_us), true),
+            },
+            (true, None) => ("No samples yet".to_owned(), false),
+        };
+        let warm = matches!(quality, Some(Quality::Stalls | Quality::Slow));
+        let vw = if mono_value {
+            paint_ms(p, pos2(row.right(), mid), &value, if warm { pal().warn } else { pal().ink })
+        } else {
+            p.text(pos2(row.right(), mid), Align2::RIGHT_CENTER, &value, regular(T_BODY), pal().ink2).width()
+        };
+        // The line, when the row has room for it beside the name.
+        let graph_w = if row.width() >= 520.0 { 150.0 } else if row.width() >= 400.0 { 104.0 } else { 0.0 };
+        let name_room = row.width() - 26.0 - vw.max(44.0) - 16.0 - if graph_w > 0.0 { graph_w + 16.0 } else { 0.0 };
+        let name = fit(p, &peer.name, &regular(T_BODY), name_room.max(40.0));
+        p.text(pos2(row.left() + 22.0, mid), Align2::LEFT_CENTER, &name, regular(T_BODY), pal().ink);
+        if name != peer.name {
+            ui.interact(Rect::from_min_size(pos2(row.left() + 22.0, row.top()), vec2(name_room.max(40.0), row.height())), Id::unique(("latency-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
         }
-        h
+        if let (true, Some(ring), Some(s)) = (graph_w > 0.0, self.rtts.of(&peer.id), summary.filter(|s| s.count >= rtt::MIN_SAMPLES)) {
+            let g = Rect::from_min_size(pos2(row.right() - vw.max(44.0) - 16.0 - graph_w, mid - HEALTH_GRAPH_H / 2.0), vec2(graph_w, HEALTH_GRAPH_H));
+            health_trace(p, g, ring, self.rtt_now(), s.quality());
+        }
+        a11y_text(ui, Id::unique(("latency-row", &peer.id)), row, Role::ListItem, &words, None);
     }
 }

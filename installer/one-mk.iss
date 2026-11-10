@@ -15,7 +15,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..
 OutputBaseFilename=one-mk-x86_64-pc-windows-msvc-setup
 SetupIconFile=..\docs\brand\app-icon\windows-linux\onemk.ico
-UninstallDisplayIcon={app}\one-mk-app.exe
+UninstallDisplayIcon={app}\one-mk.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -30,10 +30,19 @@ Source: "{#ReleaseDir}\one-mk.exe"; DestDir: "{app}"
 Source: "{#ReleaseDir}\one-mk-tray.exe"; DestDir: "{app}"
 Source: "{#ReleaseDir}\one-mk-app.exe"; DestDir: "{app}"
 Source: "{#ReleaseDir}\one-mk-wallpaper.exe"; DestDir: "{app}"
+; Licences: oneMK's, every crate built in (THIRD-PARTY-NOTICES), the fonts'.
+; The app icon, for the shortcuts and the uninstall entry (the programs carry no icon resource).
+Source: "..\docs\brand\app-icon\windows-linux\onemk.ico"; DestDir: "{app}"; DestName: "one-mk.ico"
+Source: "..\LICENSE-MIT"; DestDir: "{app}\licenses"
+Source: "..\LICENSE-APACHE"; DestDir: "{app}\licenses"
+Source: "..\THIRD-PARTY-NOTICES"; DestDir: "{app}\licenses"; DestName: "THIRD-PARTY-NOTICES.txt"
+Source: "..\crates\app\fonts\OFL-Inter.txt"; DestDir: "{app}\licenses"
+Source: "..\crates\app\fonts\OFL-JetBrainsMono.txt"; DestDir: "{app}\licenses"
+Source: "..\crates\app\fonts\OFL-Unbounded.txt"; DestDir: "{app}\licenses"
 
 [Icons]
-Name: "{group}\oneMK"; Filename: "{app}\one-mk-app.exe"
-Name: "{autodesktop}\oneMK"; Filename: "{app}\one-mk-app.exe"; Tasks: desktopicon
+Name: "{group}\oneMK"; Filename: "{app}\one-mk-app.exe"; IconFilename: "{app}\one-mk.ico"
+Name: "{autodesktop}\oneMK"; Filename: "{app}\one-mk-app.exe"; IconFilename: "{app}\one-mk.ico"; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addpath; Check: NeedsPath(ExpandConstant('{app}'))

@@ -1,4 +1,4 @@
-# A pointer on a computer with no mouse (plan 3A)
+# A pointer on a computer with no mouse
 
 When another computer controls this one and this one has **no mouse
 attached** (a laptop used with the lid closed, a headless box, a tablet
@@ -8,8 +8,8 @@ have this problem; Mouse Without Borders works around it with a "Draw mouse
 cursor" option. one-mk draws a small arrow of its own where needed.
 
 This page says what each OS does, how sure we are, and what one-mk does
-about it. **Verified** means seen running on this dev box (Ubuntu 26.04,
-GNOME 50 on Wayland, plus a private Xvfb). **Documented** means the vendor's
+about it. **Verified** means seen running on the maintainer's computer (Ubuntu 26.04,
+GNOME 50 on Wayland, plus a private X server). **Documented** means the vendor's
 own documentation says so. **Reported** means user reports only. Nothing
 here was run on Windows or macOS: that code is compiled, not tested.
 
@@ -83,8 +83,8 @@ here was run on Windows or macOS: that code is compiled, not tested.
   ([KWin change](https://phabricator.kde.org/R108:b5b2adc5a26e51445342a95d93286b5b81b3841f)).
   The libei / RemoteDesktop virtual pointer that one-mk injects through is a
   pointer device to the compositor, so it should count. **Not verified:**
-  one-mk never injects into the live desktop of the dev box, and there is
-  no headless GNOME/KDE test setup here.
+  it was not tried on a live GNOME or KDE desktop, and there is
+  no headless GNOME/KDE test setup.
 - wlroots compositors (Sway, Hyprland) draw the pointer of any seat with the
   pointer capability; the virtual pointer (`zwlr_virtual_pointer_v1`) gives
   the seat that capability. **Not verified** here.

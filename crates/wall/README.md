@@ -57,6 +57,6 @@ real QUIC path and exchanges the independent fixed-size experimental envelope.
 It uses Linux CLOCK_MONOTONIC only for a known cross-process ground truth.
 Other target builds deliberately stub this measurement, not the pure core.
 
-See `docs/spikes/wallpaper-sync-spike.md` for results, limitations, wire layout,
-reproduction, decoder licensing and next release gates. These examples do not
+The sync spike's written report was removed from the tree (it remains in the
+repository history). These examples do not
 change the existing codec, protocol version, daemon behavior, or user settings.

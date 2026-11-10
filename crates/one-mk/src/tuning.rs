@@ -2,7 +2,7 @@
 //! and button remapping (`[input]` in `settings.toml`), which of them
 //! apply to a given computer, and `one-mk keymap|pointer|scroll|buttons`.
 //! The engines are pure and live in `one_mk_proto` (`remap`, `pointer`,
-//! `scroll`); the design is in `docs/INPUT-TUNING.md`.
+//! `scroll`); what each command does is in `docs/INPUT.md`.
 //!
 //! Rules are kept as written (strings) and parsed when a visit starts, so
 //! a typo in one rule costs that rule, not the whole file; `one-mk keymap
@@ -13,7 +13,7 @@ use anyhow::{Result, bail};
 use one_mk_net::TrustStore;
 use one_mk_proto::keynames::{self, Trigger};
 use one_mk_proto::pointer::{self, Accel, PointerTune};
-use one_mk_proto::remap::{self, Keymap, KeymapSet, Output, RuleSpec, What};
+use one_mk_proto::remap::{self, Action, Keymap, KeymapSet, Output, RuleSpec, What};
 use one_mk_proto::scroll::{self, ModScroll, Natural, ScrollConfig};
 use one_mk_proto::appmatch::AppPattern;
 use one_mk_proto::device::{DeviceRef, Fingerprint, InputDevice};
@@ -29,8 +29,8 @@ mod mouse;
 pub use mouse::{AutoscrollArgs, GesturesCmd, autoscroll_command, gestures_command};
 
 /// Whether this computer's input backend reports unaccelerated motion.
-/// None does yet (see `docs/INPUT-TUNING.md`): acceleration `off` and
-/// `curve` then fall back to the system's.
+/// None does yet: acceleration `off` and `curve` then fall back to the
+/// system's, and `one-mk pointer --accel` (hidden from help) refuses them.
 pub const RAW_MOTION: bool = false;
 
 /// Why acceleration `off`/`curve` can't be had here, and what to do instead.
@@ -483,7 +483,15 @@ impl KeyRule {
             (None, None, None) => return Err("`to` is missing (or `tap` and `hold`)".into()),
             (None, _, _) => return Err("a tap/hold key needs both `tap` and `hold`".into()),
         };
-        Ok(RuleSpec { from, layer: self.layer.as_ref().map(|l| l.to_ascii_lowercase()), what })
+        let covered = from.groups | from.sided | (from.sided >> 4);
+        if from.key == 1 && covered & 0b111 == 0b111 {
+            return Err("from: ctrl+alt+shift+esc is one-mk's emergency chord (it lets go of every key); it can't be remapped".into());
+        }
+        // A key rule can name a mouse button too (`from = "button1"`): the
+        // same guard as `[[input.button]]`, in every layer.
+        keep_clicking(&from, &what, || match &self.to { Some(to) => to.describe(), None => "a tap/hold key".into() })?;
+        refuse_emergency_chord(&what)?;
+        Ok(RuleSpec { from, layer: self.layer.clone(), what })
     }
 
     fn describe(&self) -> String {
@@ -673,8 +681,81 @@ pub struct ButtonRule {
 impl ButtonRule {
     fn spec(&self) -> Result<RuleSpec, String> {
         let from = self.from.trigger()?;
-        Ok(RuleSpec { from, layer: None, what: What::To(self.to.parse().map_err(|e| format!("to: {e}"))?) })
+        let what = What::To(self.to.parse().map_err(|e| format!("to: {e}"))?);
+        keep_clicking(&from, &what, || self.to.describe())?;
+        refuse_emergency_chord(&what)?;
+        Ok(RuleSpec { from, layer: None, what })
     }
+}
+
+/// A key that types ctrl+alt+shift+esc would press the emergency chord (it
+/// lets go of every key) on the computer it is typed on, again and again;
+/// refused, as remapping that chord is (see [`KeyRule::spec`]).
+fn refuse_emergency_chord(what: &What) -> Result<(), String> {
+    let outputs: Vec<&Output> = match what {
+        What::To(output) => vec![output],
+        What::TapHold { tap, hold, .. } => vec![tap, hold],
+    };
+    for output in outputs {
+        let chords: &[keynames::Chord] = match output {
+            Output::Chord(chord) => std::slice::from_ref(chord),
+            Output::Sequence(chords) => chords,
+            _ => &[],
+        };
+        if chords.iter().any(|chord| chord.key == 1 && (chord.mods | chord.mods >> 4) & 0b111 == 0b111) {
+            return Err("to: ctrl+alt+shift+esc is one-mk's emergency chord (it lets go of every key); no key can be made to type it".into());
+        }
+    }
+    Ok(())
+}
+
+/// The computers named by `switch NAME` in `outputs` that no paired
+/// computer answers to (`paired`: name, id and OS of each): pressing that
+/// key can only fail.
+fn unknown_switch_targets(outputs: &[&str], paired: &[(String, String, u8)]) -> Vec<String> {
+    outputs
+        .iter()
+        .filter_map(|text| match text.parse::<Output>() {
+            Ok(Output::Action(Action::Switch(to))) if !matches!(to.as_str(), "next" | "here") && !paired.iter().any(|(name, id, _)| peer_matches(&to, name, id)) => Some(to),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every output a key rule has, as written (a sequence has no actions).
+fn key_rule_outputs(rule: &KeyRule) -> Vec<&str> {
+    let one = match &rule.to { Some(To::One(s)) => Some(s.as_str()), _ => None };
+    one.into_iter().chain(rule.tap.as_deref()).chain(rule.hold.as_deref()).collect()
+}
+
+/// After saving a rule that switches to a computer: says so if none is paired under that name.
+fn switch_note(dir: &Path, outputs: &[&str]) {
+    for to in unknown_switch_targets(outputs, &paired(dir)) {
+        println!("Note: no paired computer is called {to:?}, so this key will only report that. Check `one-mk devices` (a name or an id works).");
+    }
+}
+
+/// Left and right click are how the computer is used at all: making either
+/// (without modifiers) do nothing, hold a layer, or wait to tell a tap from
+/// a hold would leave the pointer dead or every click and drag broken.
+/// Shared by button rules and key rules (which can name buttons too), in
+/// every layer. `to` describes the rule's output for the message.
+fn keep_clicking(from: &Trigger, what: &What, to: impl FnOnce() -> String) -> Result<(), String> {
+    if !matches!(from.key, 0x110 | 0x111) || from.has_mods() {
+        return Ok(());
+    }
+    let dead = match what {
+        What::To(output) => matches!(output, Output::None | Output::Layer(_)),
+        What::TapHold { .. } => true,
+    };
+    if dead {
+        return Err(format!(
+            "the {} button must keep clicking: it can't be mapped to {} (map it to another button or a key instead)",
+            if from.key == 0x110 { "left" } else { "right" },
+            to()
+        ));
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------- resolving
@@ -888,11 +969,11 @@ impl TuningSettings {
         let mut seen: HashMap<(Option<String>, Trigger), u8> = HashMap::new();
         let mut out = Vec::new();
         for (rank, _, spec, at) in found {
-            match seen.get(&(spec.layer.clone(), spec.from)) {
+            match seen.get(&(spec.layer.as_ref().map(|l| l.to_ascii_lowercase()), spec.from)) {
                 Some(&r) if r == rank => warnings.push(format!("{at}: another rule for {} in the same scope comes first", spec.from)),
                 Some(_) => {} // overridden by a more specific scope
                 None => {
-                    seen.insert((spec.layer.clone(), spec.from), rank);
+                    seen.insert((spec.layer.as_ref().map(|l| l.to_ascii_lowercase()), spec.from), rank);
                     out.push(spec);
                 }
             }
@@ -1174,13 +1255,20 @@ impl TuningSettings {
             }
         }
         for (i, r) in self.keymap.rule.iter().enumerate() {
-            if let Err(e) = r.spec() {
-                out.push(format!("{}: {e}", place("input.keymap.rule", i)));
+            match r.spec() {
+                Err(e) => out.push(format!("{}: {e}", place("input.keymap.rule", i))),
+                Ok(_) => out.extend(unknown_switch_targets(&key_rule_outputs(r), paired).into_iter().map(|to| format!(
+                    "{}: `switch {to}` names no paired computer, so pressing the key only reports that (see `one-mk devices`)", place("input.keymap.rule", i)))),
             }
         }
         for (i, r) in self.button.iter().enumerate() {
-            if let Err(e) = r.spec() {
-                out.push(format!("{}: {e}", place("input.button", i)));
+            match r.spec() {
+                Err(e) => out.push(format!("{}: {e}", place("input.button", i))),
+                Ok(_) => {
+                    let to = match &r.to { To::One(s) => Some(s.as_str()), To::Many(_) => None };
+                    out.extend(unknown_switch_targets(&to.into_iter().collect::<Vec<_>>(), paired).into_iter().map(|to| format!(
+                        "{}: `switch {to}` names no paired computer, so pressing the button only reports that (see `one-mk devices`)", place("input.button", i))));
+                }
             }
         }
         for s in &scopes {
@@ -1313,7 +1401,7 @@ impl TuningSettings {
         let local = if cfg!(target_os = "linux") && has_local {
             "\nlocal key rules are not available on Linux"
         } else if has_local {
-            "\nLocal rules are also applied on this computer when the input service is ready."
+            "\nLocal rules (experimental) are also applied on this computer when the input service is ready."
         } else {
             ""
         };
@@ -1349,6 +1437,52 @@ fn device_note(dir: &Path, scope: &Scope) {
         Ok(Some(untested)) => println!("Note: per-device rules here are {untested}."),
         Err(why) => println!("Note: {why}, so this rule doesn't apply here. It is kept: it works in an X11 session, on Windows and on macOS."),
     }
+}
+
+/// After saving a rule in a layer: says so if no key switches that layer on.
+fn layer_note(dir: &Path, name: &str) {
+    let wanted = format!("layer:{}", name.trim().to_ascii_lowercase());
+    let sets = |to: &To| match to {
+        To::One(s) => s.trim().eq_ignore_ascii_case(&wanted),
+        To::Many(_) => false,
+    };
+    if let Ok(settings) = Settings::load_lenient(dir)
+        && !settings.input.keymap.rule.iter().any(|rule| rule.to.as_ref().is_some_and(sets))
+        && !settings.input.button.iter().any(|rule| sets(&rule.to))
+    {
+        println!("Note: no key switches the layer {name:?} on yet, so this rule can't work. Add one with `one-mk keymap add KEY layer:{name}` (the layer is on while KEY is held).");
+    }
+}
+
+/// After saving a rule that runs a command: says so if the settings
+/// folder's permissions make one-mk refuse to run it.
+fn run_note(dir: &Path) {
+    if let Ok(settings) = Settings::load_lenient(dir)
+        && settings.input.runs_commands()
+        && let Some(reason) = &settings.hooks.blocked
+    {
+        println!("Note: this rule runs a command, and one-mk refuses to run commands now: {reason}. Remove group and world write access from the settings folder, or use `one-mk hooks --trust-permissions`.");
+    }
+}
+
+/// Whether this desktop can't tell keyboards and mice apart, so rules for
+/// one device never apply here (they are kept for other computers' desktops).
+fn devices_unavailable(dir: &Path) -> bool {
+    let seen = crate::inputdevices::Remembered::load(dir).unwrap_or_default();
+    crate::inputdevices::support(&seen, false).is_err()
+}
+
+/// ` [inactive on this desktop]` after a rule for one device that can't apply here.
+fn device_mark(scope: &Scope, unavailable: bool) -> &'static str {
+    if unavailable && scope.device().is_some() { " [inactive on this desktop: it can't tell keyboards and mice apart]" } else { "" }
+}
+
+/// A number from the command line, short enough to put in a message.
+fn shown(v: f64) -> String {
+    if v.is_nan() { "NaN".into() }
+    else if v.is_infinite() { if v < 0.0 { "-infinity".into() } else { "infinity".into() } }
+    else if v.abs() < 1e6 { v.to_string() }
+    else { format!("{v:e}") }
 }
 
 fn paired(dir: &Path) -> Vec<(String, String, u8)> {
@@ -1441,8 +1575,9 @@ impl ScopeArgs {
 
 #[derive(clap::Args, Debug, Default, Clone)]
 pub struct KeyScopeArgs {
-    /// Add a rule for this computer's keyboard.
-    #[arg(long, conflicts_with_all = ["peer", "os"])]
+    /// Experimental (Windows and macOS only): add a rule for this
+    /// computer's own keyboard.
+    #[arg(long, conflicts_with_all = ["peer", "os"], hide = local_rules_unavailable().is_some())]
     pub local: bool,
     #[command(flatten)]
     pub remote: ScopeArgs,
@@ -1461,7 +1596,12 @@ impl KeyScopeArgs {
         }
     }
 
+    /// The scope to add a rule for (removing and listing use `selected`, so
+    /// a rule that can't apply here can still be taken out).
     fn scope(&self, dir: &Path) -> Result<Scope> {
+        if self.local && let Some(why) = local_rules_unavailable() {
+            bail!("--local: {why}");
+        }
         let s = self.selected(dir)?;
         check_scope(dir, &s)?;
         Ok(s)
@@ -1477,7 +1617,9 @@ impl KeyScopeArgs {
 pub enum KeymapCmd {
     /// Show the key rules.
     List,
-    /// Also apply key and button rules on this computer.
+    /// Experimental (Windows and macOS only): also apply the key and button
+    /// rules on this computer's own keyboard and mouse.
+    #[command(hide = local_rules_unavailable().is_some())]
     Local {
         /// Save whether native local remapping is requested.
         #[arg(value_name = "on|off", value_parser = settings::parse_on_off, action = clap::ArgAction::Set)]
@@ -1533,15 +1675,27 @@ fn find_key_rule(rules: &[KeyRule], from: &Trigger, layer: &Option<String>, scop
     })
 }
 
+/// Why rules for this computer's own keyboard can't be used here (`None`:
+/// they can, as an experimental feature).
+pub fn local_rules_unavailable() -> Option<&'static str> {
+    if !cfg!(feature = "native-local-remap") {
+        Some("local key rules are not included in this build of one-mk")
+    } else if !cfg!(any(windows, target_os = "macos")) {
+        Some("local key rules (experimental) work on Windows and macOS only; on Linux the rules apply to the computers you control")
+    } else {
+        None
+    }
+}
+
 fn local_rules_note() -> &'static str {
     if !cfg!(feature = "native-local-remap") {
         "Local rules are not included in this build."
     } else if cfg!(windows) {
-        "Your key and button rules also apply here. Ctrl + Alt + Shift + Esc turns local rules off. After a session or power interruption, turn the switch off and on to resume."
+        "Experimental, not yet tested on real hardware. Your key and button rules also apply here. Ctrl + Alt + Shift + Esc turns local rules off. After a session or power interruption, turn the switch off and on to resume."
     } else if cfg!(target_os = "linux") {
         "Local key rules are not available on Linux; stored rules remain inactive."
     } else {
-        "Your key and button rules also apply here. Caps Lock can become one other key; a Caps Lock rule with a condition, Fn, media and function keys are not supported yet. Ctrl + Alt + Shift + Esc turns local rules off. After an interruption, turn the switch off and on to resume."
+        "Experimental, not yet tested on real hardware. Your key and button rules also apply here. Caps Lock can become one other key; a Caps Lock rule with a condition, Fn, media and function keys are not supported yet. Ctrl + Alt + Shift + Esc turns local rules off. After an interruption, turn the switch off and on to resume."
     }
 }
 
@@ -1558,7 +1712,7 @@ async fn local_runtime_status(dir: &Path) {
     }
 }
 
-fn list_keymap(s: &TuningSettings) {
+fn list_keymap(s: &TuningSettings, unavailable: bool) {
     if s.keymap.rule.is_empty() {
         println!("No key rules: keys are sent as they are. Add one with `one-mk keymap add capslock esc`.");
         return;
@@ -1567,26 +1721,29 @@ fn list_keymap(s: &TuningSettings) {
     for r in &s.keymap.rule {
         let state = if *r.scope.target() == Scope::Local {
             if cfg!(target_os = "linux") { " [inactive: local key rules are not available on Linux]" }
-            else if cfg!(any(windows, target_os = "macos")) { " [on this computer]" }
+            else if cfg!(any(windows, target_os = "macos")) { " [on this computer, experimental]" }
             else { " [not available on this desktop]" }
         } else { "" };
-        println!("  {}{}{state}", r.describe(), where_suffix(&r.scope, &r.app));
+        println!("  {}{}{state}{}", r.describe(), where_suffix(&r.scope, &r.app), device_mark(&r.scope, unavailable));
     }
     if s.keymap.rule.iter().any(|rule| *rule.scope.target() == Scope::Local) {
         println!("{}", local_rules_note());
     }
-    if let Some(ms) = s.keymap.tap_ms {
-        println!("Tap/hold keys decide after {ms} ms.");
+    if s.keymap.tap_ms.is_some() {
+        println!("Tap/hold keys decide after {} ms.", s.keymap.tap().as_millis());
     }
 }
 
 pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
     match cmd.unwrap_or(KeymapCmd::List) {
         KeymapCmd::List => {
-            list_keymap(&Settings::load(dir)?.input);
+            list_keymap(&Settings::view(dir)?.input, devices_unavailable(dir));
             local_runtime_status(dir).await;
         }
         KeymapCmd::Local { enabled } => {
+            if enabled && let Some(why) = local_rules_unavailable() {
+                bail!("{why}");
+            }
             Settings::update(dir, |settings| {
                 settings.input.local_rules = enabled;
                 Ok(())
@@ -1627,6 +1784,8 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
             }
             let shown = rule.describe();
+            let used_layer = rule.layer.clone();
+            let added = rule.clone();
             Settings::update(dir, |s| {
                 let rules = &mut s.input.keymap.rule;
                 match find_key_rule(rules, &spec.from, &rule.layer, &scope, &app) {
@@ -1650,6 +1809,11 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
             })?;
             println!("{shown}{}.", where_suffix(&scope, &app));
             device_note(dir, &scope);
+            run_note(dir);
+            switch_note(dir, &key_rule_outputs(&added));
+            if let Some(name) = used_layer {
+                layer_note(dir, &name);
+            }
             settings::apply(dir).await?;
         }
         KeymapCmd::Remove { from, layer, scope } => {
@@ -1671,8 +1835,16 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
 
 /// `one-mk keymap check`: every problem, exit status 1 if any.
 fn check_command(dir: &Path) -> Result<()> {
-    let s = Settings::load(dir)?;
-    let problems = s.input.check(&paired(dir));
+    let s = Settings::load_lenient(dir)?;
+    let mut problems = s.problems.clone();
+    problems.extend(s.input.check(&paired(dir)));
+    if s.input.runs_commands()
+        && let Some(reason) = &s.hooks.blocked
+    {
+        problems.push(format!(
+            "rules that run commands (`run: ...`) are refused: {reason}. Remove group and world write access from the settings folder, or explicitly use `one-mk hooks --trust-permissions`"
+        ));
+    }
     if s.input.is_empty() {
         println!("No input tuning is set.");
     }
@@ -1692,12 +1864,11 @@ fn check_command(dir: &Path) -> Result<()> {
 #[derive(clap::Args, Debug, Default)]
 pub struct PointerArgs {
     /// How far the pointer moves on other computers, times this (0.1 to 10).
-    #[arg(long, value_name = "X")]
+    #[arg(long, value_name = "X", allow_negative_numbers = true)]
     pub speed: Option<f64>,
-    /// system (this computer's acceleration, the default), off or curve.
-    /// off and curve need raw mouse motion, which no backend reports yet:
-    /// they are refused (turn acceleration off in the OS instead).
-    #[arg(long, value_enum, value_name = "MODE")]
+    /// Not available on this system yet (it needs raw mouse motion): only
+    /// `system` is accepted. Turn acceleration off in the OS instead.
+    #[arg(long, value_enum, value_name = "MODE", hide = true)]
     pub accel: Option<AccelMode>,
     /// Forget the pointer settings for this scope.
     #[arg(long)]
@@ -1706,7 +1877,7 @@ pub struct PointerArgs {
     pub scope: ScopeArgs,
 }
 
-fn describe_pointer(s: &TuningSettings) {
+fn describe_pointer(s: &TuningSettings, unavailable: bool) {
     if s.pointer.is_empty() {
         println!("Pointer: as on this computer (speed 1, this computer's acceleration).");
     }
@@ -1718,13 +1889,13 @@ fn describe_pointer(s: &TuningSettings) {
         if let Some(a) = r.acceleration {
             parts.push(format!("acceleration {a}"));
         }
-        println!("Pointer{}: {}.", where_suffix(&r.scope, &r.app), if parts.is_empty() { "unchanged".into() } else { parts.join(", ") });
+        println!("Pointer{}: {}.{}", where_suffix(&r.scope, &r.app), if parts.is_empty() { "unchanged".into() } else { parts.join(", ") }, device_mark(&r.scope, unavailable));
     }
 }
 
 pub async fn pointer_command(dir: &Path, args: PointerArgs) -> Result<()> {
     if args.speed.is_none() && args.accel.is_none() && !args.reset {
-        describe_pointer(&Settings::load(dir)?.input);
+        describe_pointer(&Settings::view(dir)?.input, devices_unavailable(dir));
         return Ok(());
     }
     let app = args.scope.app()?;
@@ -1732,13 +1903,13 @@ pub async fn pointer_command(dir: &Path, args: PointerArgs) -> Result<()> {
     if let Some(v) = args.speed
         && !(v.is_finite() && (pointer::MIN_SPEED..=pointer::MAX_SPEED).contains(&v))
     {
-        bail!("--speed {v}: say a number from 0.1 to 10");
+        bail!("--speed {}: say a number from 0.1 to 10", shown(v));
     }
     if let Some(a) = args.accel
         && a != AccelMode::System
         && !RAW_MOTION
     {
-        bail!("acceleration {a} is not available: {}", no_raw_motion_reason());
+        bail!("--accel {a} is not available on this system yet: {}", no_raw_motion_reason());
     }
     let s = Settings::update(dir, |s| {
         let rules = &mut s.input.pointer;
@@ -1767,7 +1938,7 @@ pub async fn pointer_command(dir: &Path, args: PointerArgs) -> Result<()> {
         }
         Ok(s.input.clone())
     })?;
-    describe_pointer(&s);
+    describe_pointer(&s, devices_unavailable(dir));
     device_note(dir, &scope);
     settings::apply(dir).await
 }
@@ -1782,7 +1953,7 @@ pub struct ScrollArgs {
     #[arg(long, value_name = "on|off", value_parser = settings::parse_on_off)]
     pub reverse_horizontal: Option<bool>,
     /// Scroll this much faster or slower (0.1 to 10).
-    #[arg(long, value_name = "X")]
+    #[arg(long, value_name = "X", allow_negative_numbers = true)]
     pub speed: Option<f64>,
     /// auto (as it comes), smooth (in pixels) or discrete (whole notches).
     #[arg(long, value_enum)]
@@ -1807,12 +1978,12 @@ pub struct ScrollArgs {
     pub scope: ScopeArgs,
 }
 
-fn describe_scroll(s: &TuningSettings) {
+fn describe_scroll(s: &TuningSettings, unavailable: bool, only: Option<Device>) {
     if s.scroll.is_empty() {
         println!("Scrolling: as on this computer.");
     }
     let on = |b: bool| if b { "on" } else { "off" };
-    for r in &s.scroll {
+    for r in s.scroll.iter().filter(|r| only.is_none_or(|kind| r.device.is_none_or(|device| device == kind))) {
         let mut parts = Vec::new();
         if let Some(v) = r.reverse_vertical {
             parts.push(format!("reverse vertical {}", on(v)));
@@ -1834,8 +2005,8 @@ fn describe_scroll(s: &TuningSettings) {
         for (m, b) in &r.modifiers {
             parts.push(format!("{m}: {b}"));
         }
-        let device = r.device.map_or("", |d| if d == Device::Wheel { " (wheels)" } else { " (touchpads)" });
-        println!("Scrolling{device}{}: {}.", where_suffix(&r.scope, &r.app), if parts.is_empty() { "unchanged".into() } else { parts.join(", ") });
+        let device = r.device.map_or("", |d| if d == Device::Wheel { ", wheels only" } else { ", touchpads only" });
+        println!("Scrolling{device}{}: {}.{}", where_suffix(&r.scope, &r.app), if parts.is_empty() { "unchanged".into() } else { parts.join(", ") }, device_mark(&r.scope, unavailable));
     }
 }
 
@@ -1862,7 +2033,7 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
         args.scope.device = None;
     }
     if !args.changes_anything() {
-        describe_scroll(&Settings::load(dir)?.input);
+        describe_scroll(&Settings::view(dir)?.input, devices_unavailable(dir), args.kind);
         return Ok(());
     }
     let app = args.scope.app()?;
@@ -1870,7 +2041,7 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
     if let Some(v) = args.speed
         && !(v.is_finite() && (scroll::MIN_SPEED..=scroll::MAX_SPEED).contains(&v))
     {
-        bail!("--speed {v}: say a number from 0.1 to 10");
+        bail!("--speed {}: say a number from 0.1 to 10", shown(v));
     }
     let mut mods = Vec::new();
     for m in &args.modifier {
@@ -1914,7 +2085,7 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
         }
         Ok(s.input.clone())
     })?;
-    describe_scroll(&s);
+    describe_scroll(&s, devices_unavailable(dir), None);
     device_note(dir, &scope);
     settings::apply(dir).await
 }
@@ -1954,14 +2125,14 @@ pub enum ButtonsCmd {
     Clear,
 }
 
-fn list_buttons(s: &TuningSettings) {
+fn list_buttons(s: &TuningSettings, unavailable: bool) {
     if s.button.is_empty() {
         println!("No button rules: buttons are sent as they are.");
         return;
     }
     println!("Button rules:");
     for r in &s.button {
-        println!("  {} -> {}{}", r.from.describe(), r.to.describe(), where_suffix(&r.scope, &r.app));
+        println!("  {} -> {}{}{}", r.from.describe(), r.to.describe(), where_suffix(&r.scope, &r.app), device_mark(&r.scope, unavailable));
     }
 }
 
@@ -1985,7 +2156,7 @@ fn set_button(rules: &mut Vec<ButtonRule>, rule: ButtonRule, t: &Trigger) {
 pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
     match cmd.unwrap_or(ButtonsCmd::List) {
         ButtonsCmd::List => {
-            list_buttons(&Settings::load(dir)?.input);
+            list_buttons(&Settings::view(dir)?.input, devices_unavailable(dir));
             return Ok(());
         }
         ButtonsCmd::Map { button, to, scope } => {
@@ -1996,6 +2167,7 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             let rule = ButtonRule { from, to, scope, app };
             rule.spec().map_err(anyhow::Error::msg)?;
             let line = format!("{} -> {}{}", rule.from.describe(), rule.to.describe(), where_suffix(&rule.scope, &rule.app));
+            let mapped = match &rule.to { To::One(s) => Some(s.clone()), To::Many(_) => None };
             let scope = rule.scope.clone();
             Settings::update(dir, |s| {
                 set_button(&mut s.input.button, rule, &t);
@@ -2003,6 +2175,8 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             })?;
             println!("{line}.");
             device_note(dir, &scope);
+            run_note(dir);
+            if let Some(to) = &mapped { switch_note(dir, &[to.as_str()]); }
         }
         ButtonsCmd::Unmap { button, scope } => {
             let app = scope.app()?;
@@ -2629,6 +2803,62 @@ scope = { peer = "Laptop" }
         assert!(t.specs(&facts(os::MACOS)).1.is_empty(), "overrides are not conflicts");
     }
 
+    /// A key that types the emergency chord is refused; a `switch` to a
+    /// computer nobody paired is flagged (the key can only fail); the
+    /// spelling of a layer is kept in what is said about it.
+    #[test]
+    fn keys_that_can_only_fail_are_refused_or_flagged() {
+        let t = load(
+            r#"
+[[input.keymap.rule]]
+from = "esc"
+to = "ctrl+alt+shift+esc"
+
+[[input.keymap.rule]]
+from = "f13"
+to = ["ctrl+a", "lctrl+ralt+shift+esc"]
+
+[[input.keymap.rule]]
+from = "f14"
+tap = "a"
+hold = "ctrl+alt+shift+esc"
+
+[[input.button]]
+from = "button5"
+to = "ctrl+alt+shift+esc"
+
+[[input.keymap.rule]]
+from = "f15"
+to = "switch nobody"
+
+[[input.keymap.rule]]
+from = "f16"
+to = "switch Desk"
+
+[[input.keymap.rule]]
+from = "f17"
+to = "switch next"
+
+[[input.keymap.rule]]
+from = "j"
+to = "down"
+layer = "Nav"
+"#,
+        );
+        let paired = vec![("Desk".to_owned(), "abcdef0123456789".to_owned(), os::LINUX)];
+        let problems = t.check(&paired);
+        for place in ["input.keymap.rule #1", "input.keymap.rule #2", "input.keymap.rule #3", "input.button #1"] {
+            assert!(problems.iter().any(|p| p.starts_with(place) && p.contains("emergency chord")), "{place}: {problems:?}");
+        }
+        assert!(problems.iter().any(|p| p.starts_with("input.keymap.rule #4") && p.contains("`switch nobody` names no paired computer")), "{problems:?}");
+        assert!(!problems.iter().any(|p| p.contains("switch Desk") || p.contains("switch next")), "known and built-in targets are fine: {problems:?}");
+        assert!(problems.iter().any(|p| p.contains("layer \"Nav\"")), "the layer is named as written: {problems:?}");
+        // The chord is fine on its own keys, and other chords with esc are fine.
+        assert!(KeyRule { from: "f13".into(), to: Some(To::One("ctrl+shift+esc".into())), ..Default::default() }.spec().is_ok());
+        assert!(KeyRule { from: "f13".into(), to: Some(To::One("ctrl+alt+shift+esc".into())), ..Default::default() }.spec().is_err());
+        assert_eq!(unknown_switch_targets(&["switch abcd-ef01", "switch here"], &paired), Vec::<String>::new(), "an id works too");
+    }
+
     #[test]
     fn check_reports_conflicts_typos_and_unreachable_rules() {
         let t = load(
@@ -2726,6 +2956,31 @@ acceleration = "off"
         assert_eq!(parse_mod_scroll("0.5"), Ok(ModScroll::Multiply(0.5)));
         assert!(parse_mod_scroll("x500").unwrap_err().contains("from x0.1"));
         assert!(parse_mod_scroll("sideways").unwrap_err().contains("say horizontal"));
+    }
+
+    /// A hand-written key rule naming the left or right button gets the same
+    /// guard as a button rule: never "none", a layer, or tap/hold, in any
+    /// layer. `keymap check` reports it and the rule is never applied.
+    #[test]
+    fn key_rules_cannot_kill_the_primary_buttons() {
+        for rule in [
+            "from = \"button1\"\nto = \"none\"",
+            "from = \"button2\"\nto = \"layer:nav\"",
+            "from = \"button1\"\ntap = \"a\"\nhold = \"ctrl\"",
+            "from = \"button1\"\nto = \"none\"\nlayer = \"nav\"",
+        ] {
+            let t = load(&format!("[[input.keymap.rule]]\n{rule}\n"));
+            let problems = t.check(&[]);
+            assert!(problems.iter().any(|p| p.contains("must keep clicking")), "{rule}: {problems:?}");
+            let peer = PeerFacts { name: "x", id: "", os: os::LINUX, apps: &[], device: None };
+            let (specs, warnings) = t.specs(&peer);
+            assert!(specs.is_empty() && warnings.iter().any(|w| w.contains("must keep clicking")), "{rule}: skipped, not applied");
+        }
+        // Other buttons, and the primary ones with modifiers or to something real, still work.
+        for rule in ["from = \"button4\"\nto = \"none\"", "from = \"ctrl+button1\"\nto = \"none\"", "from = \"button1\"\nto = \"button2\""] {
+            let t = load(&format!("[[input.keymap.rule]]\n{rule}\n"));
+            assert!(t.keymap.rule[0].spec().is_ok(), "{rule}");
+        }
     }
 
     #[test]

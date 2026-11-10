@@ -539,7 +539,7 @@ pub fn install(setup: &Setup) -> Result<Outcome> {
     let skipped = done.iter().map(|(_, w)| w.skipped.len()).sum();
     Ok(Outcome {
         message: format!(
-            "File manager entries added in {}:\n{}  they follow the computers you pair or forget; to remove them:  one-mk uninstall\n{}",
+            "File manager entries added in {}:\n{}  they follow the computers you pair or forget; to remove them: one-mk integrate --remove\n{}",
             dirs.join(", "),
             describe(&done),
             skipped_text(done.iter().flat_map(|(_, w)| &w.skipped))
@@ -820,16 +820,18 @@ echo mine
 
     #[test]
     fn newlines_and_nul_in_paths_are_refused() {
+        let root = tmp("hostile");
         for bad in ["/opt/a\nExec=touch /tmp/injected\n/one-mk", "/opt/a\rb", "/opt/a\0b"] {
             let s = Setup { exe: bad.into(), ..setup(&[(A, "x")]) };
             let e = s.check().unwrap_err().to_string();
             assert!(e.contains("line break") || e.contains("NUL"), "{e}");
             let s = Setup { home: Some(bad.into()), ..setup(&[(A, "x")]) };
             assert!(s.check().is_err());
-            let t = Target { dir: tmp("hostile").join("m"), kind: Kind::KdeMenu };
+            let t = Target { dir: root.join("m"), kind: Kind::KdeMenu };
             assert!(write_target(&t, &s).is_err());
             assert!(!t.dir.exists() || generated(&t).is_empty());
         }
+        let _ = std::fs::remove_dir_all(root);
         assert!(setup(&[(A, "x")]).check().is_ok());
     }
 

@@ -23,7 +23,7 @@ Without the extension nothing changes: the calls to it fail quietly.
 ## How
 
 The daemon (`crates/input/src/portal_pointer.rs`) calls the extension's
-D-Bus interface `org.onemk.Pointer1` (`Hide`, `Show`, `State`, `Inspect`) from
+D-Bus interface `org.onemk.Pointer1` (`Hide`, `HideUntilMoved`, `Show`, `State`, `Inspect`) from
 the capture loop: `Hide` while a capture is active, asked again every 5
 seconds, `Show` when it ends. The extension uses
 `Meta.CursorTracker.inhibit_cursor_visibility()`, so it can't stay hidden:
@@ -32,12 +32,22 @@ seconds, `Show` when it ends. The extension uses
 - when the one that asked disconnects (the daemon crashes or stops),
 - and when the extension is disabled.
 
+`HideUntilMoved` hides it where it stands after another computer has moved
+this one's pointer and let go, until this computer's own mouse or touchpad is
+used.
+
 ## Testing
 
 `extensions/gnome/one-mk-pointer@one-mk.org` was loaded into the headless
-isolated Shell of `docs/spikes/gnome/isolated-session.sh` (GNOME Shell 50.1)
+isolated Shell of `tools/gnome-wallpaper/isolated-session.sh` (GNOME Shell 50.1)
 and driven over D-Bus: hide and show are idempotent, the 15 s hold ends by
 itself, renewing keeps it hidden, a disconnect shows it. That Shell has no
 pointer, so what is drawn is checked on a real session. The daemon side is
 covered by `the_pointer_is_hidden_only_while_captured` in `portal_tests.rs`.
-Qualified on GNOME Shell 50.1 only (`metadata.json`).
+Tried on GNOME Shell 50.1; it declares GNOME Shell 50 (`shell-version` in
+`metadata.json`).
+`one-mk pointer-extension install` checks `gnome-shell --version` against that
+list and refuses any other series, a version it cannot read, and a computer
+without GNOME Shell (nothing is installed, and the message says why), so it
+never installs an extension GNOME would reject or that was not tried on that
+series. There is no option to override it.

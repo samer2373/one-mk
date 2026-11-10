@@ -363,9 +363,9 @@ dependencies = [
 
 [[package]]
 name = "async-executor"
-version = "1.14.0"
+version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c96bf972d85afc50bf5ab8fe2d54d1586b4e0b46c97c50a0c9e71e2f7bcd812a"
+checksum = "f426a31126c735126297bc5ea7a521263c9faff4f63ca415267ee625651c4f37"
 dependencies = [
  "async-task",
  "concurrent-queue",
@@ -3312,7 +3312,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "one-mk"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3323,6 +3323,7 @@ dependencies = [
  "fs4",
  "futures-util",
  "if-addrs",
+ "image",
  "libc",
  "one-mk-clipboard",
  "one-mk-ctl",
@@ -3353,7 +3354,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-app"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "directories",
@@ -3373,7 +3374,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-clipboard"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3394,7 +3395,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-ctl"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "directories",
@@ -3411,7 +3412,9 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
+ "toml 1.1.8+spec-1.1.0",
  "windows",
  "windows-sys 0.61.2",
  "zbus",
@@ -3420,7 +3423,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-input"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3459,7 +3462,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-net"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "base64",
@@ -3484,7 +3487,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-proto"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "unicode-general-category",
  "unicode-segmentation",
@@ -3492,7 +3495,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-tray"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "ksni",
@@ -3504,7 +3507,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "blake3",
  "futures-util",
@@ -3522,11 +3525,11 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall-canvas"
-version = "0.1.28"
+version = "0.1.29"
 
 [[package]]
 name = "one-mk-wall-import"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "blake3",
  "image",
@@ -3541,7 +3544,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall-sync"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "blake3",
  "libc",
@@ -3551,7 +3554,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wallpaper"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "libloading",
@@ -3564,7 +3567,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wallpaper-helper"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "anyhow",
  "block2 0.6.2",

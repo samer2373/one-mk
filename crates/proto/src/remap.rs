@@ -1,8 +1,8 @@
 //! The key mapper: what a key (or mouse button) becomes on the computer
 //! input is sent to. Remaps, combos (`ctrl+h` -> Backspace), sequences,
 //! tap/hold keys, layers and actions. Pure logic: the daemon feeds it
-//! physical key transitions and sends what it emits. See
-//! `docs/INPUT-TUNING.md` for the design.
+//! physical key transitions and sends what it emits. See `docs/INPUT.md`
+//! for what the rules can do.
 //!
 //! Per event it does a table lookup and a few counter updates, and never
 //! allocates (except once for a device with keys down at the same time as
@@ -92,7 +92,7 @@ fn valid_layer(name: &str) -> Result<String, NameError> {
     let ok = !name.is_empty()
         && name.len() <= 32
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if ok { Ok(name.to_ascii_lowercase()) } else { err(format!("layer name {name:?}: use 1 to 32 letters, digits, - or _")) }
+    if ok { Ok(name.to_owned()) } else { err(format!("layer name {name:?}: use 1 to 32 letters, digits, - or _")) }
 }
 
 impl FromStr for Output {
@@ -321,7 +321,7 @@ impl Keymap {
         let mut warnings = Vec::new();
         let mut activated = Vec::new();
         let layer = |map: &mut Keymap, name: &str| -> Result<u8, NameError> {
-            if let Some(i) = map.layer_names.iter().position(|n| n == name) {
+            if let Some(i) = map.layer_names.iter().position(|n| n.eq_ignore_ascii_case(name)) {
                 return Ok(i as u8 + 1);
             }
             if map.layer_names.len() == MAX_LAYERS {
@@ -665,8 +665,8 @@ impl Mapper {
     }
 
     /// A physical key (or button) of `device` (`None`: not known) went
-    /// down or up. See "The mapper with several devices" in
-    /// `docs/INPUT-TUNING.md` for which press a repeat or release belongs to.
+    /// down or up. A repeat or release belongs to the press it follows, from the
+    /// device that pressed it.
     pub fn key_from(&mut self, code: u32, down: bool, device: Option<DeviceRef>, now: Instant, out: &mut impl FnMut(Emit)) {
         if code >= CODE_LIMIT {
             return;

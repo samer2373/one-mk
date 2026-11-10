@@ -19,7 +19,7 @@ jobs:
       - run: cargo clippy --locked -j 2 -p one-mk-wall-import --all-targets -- -D warnings
       - run: python3 scripts/check-wallpaper-artifact.py --self-test
       - run: python3 scripts/test-wallpaper-release-gates.py
-      - run: python3 docs/spikes/gnome/test_presentation_cleanup.py
+      - run: python3 tools/gnome-wallpaper/test_presentation_cleanup.py
       - run: |
           cargo build --locked -j 2 -p one-mk-wall-import
           cargo metadata --locked --format-version 1 > target/wallpaper-metadata.json
@@ -59,6 +59,25 @@ jobs:
       # On each system itself: the daemon (one-mk-net) can't be linted
       # cross-compiled, and some code only exists on one system.
       - run: cargo clippy --workspace --locked --all-targets -- -D warnings
+
+  # The same release checks release.yml runs before publishing: licence
+  # notices, cargo-deny over the whole workspace, install.sh, and the
+  # manifest/sign/publish steps against a stub gh.
+  release-gates:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with: { toolchain: stable }
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-deny@0.20.2 }
+      - run: python3 scripts/third-party-notices.py --check
+      - run: cargo deny --locked --all-features check
+      - run: bash scripts/test-install.sh
+      - run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          bash scripts/check-updates.sh
 
   # The Linux packages and the package-manager files, built from a debug
   # build and checked without installing anything (scripts/check-packaging.sh).

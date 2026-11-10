@@ -31,6 +31,8 @@ mod history_save;
 #[cfg(target_os = "linux")]
 mod history_watch;
 mod sensitivity;
+#[cfg(target_os = "linux")]
+mod x11_read;
 
 /// Default for the largest clipboard content we send or accept, in bytes
 /// (all formats together).
@@ -62,6 +64,14 @@ impl ClipData {
 
     pub fn is_empty(&self) -> bool {
         self.text.is_none() && self.html.is_none() && self.png.is_none()
+    }
+
+    /// Nothing to carry: no format at all, or only empty ones (an empty
+    /// piece of text is what some apps leave after "copying" nothing).
+    pub fn has_no_content(&self) -> bool {
+        self.text.as_ref().is_none_or(String::is_empty)
+            && self.html.as_ref().is_none_or(String::is_empty)
+            && self.png.as_ref().is_none_or(Vec::is_empty)
     }
 }
 
@@ -120,6 +130,10 @@ pub enum Read {
     TooLarge { digest: Digest, size: usize },
     /// The source marked the content as sensitive and the filter skips it.
     Concealed(Digest),
+    /// The source marked the content as sensitive, and the caller asked for
+    /// it explicitly ([`Clipboard::read_explicit`]): it is returned, but as
+    /// this, so the caller can refuse it or send it marked.
+    Sensitive { digest: Digest, data: Arc<ClipData> },
     Changed { digest: Digest, data: Arc<ClipData> },
 }
 
@@ -133,6 +147,11 @@ pub struct Clipboard {
     history_apps: Arc<Mutex<Vec<String>>>,
     #[cfg(target_os = "linux")]
     _watch: Option<Arc<std::os::unix::net::UnixStream>>,
+    /// The system clipboard (not [`Clipboard::memory`]).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    system: bool,
+    /// Stands in for the platform's [`write_limit`](Self::write_limit) in tests.
+    test_limit: Option<usize>,
 }
 
 enum Cmd {
@@ -140,7 +159,7 @@ enum Cmd {
     Digest { reply: oneshot::Sender<Result<Option<Digest>>> },
     #[cfg(target_os = "linux")]
     Capture { skip_history: bool, owner: u32, timestamp: u32 },
-    Write { data: ClipData, origin: String, record: bool, reply: oneshot::Sender<Result<Digest>> },
+    Write { data: ClipData, origin: String, record: bool, concealed: bool, reply: oneshot::Sender<Result<Digest>> },
 }
 
 impl Clipboard {
@@ -163,6 +182,7 @@ impl Clipboard {
     }
 
     fn spawn(backend: Backend) -> Self {
+        let backend_kind = match backend { Backend::System(_) => Kind::System, Backend::Memory(_) => Kind::Memory };
         let (tx, rx) = mpsc::channel();
         let filter = Arc::new(Mutex::new(Filter::default()));
         let shared = filter.clone();
@@ -173,7 +193,7 @@ impl Clipboard {
         let worker_apps = history_apps.clone();
         std::thread::Builder::new()
             .name("one-mk-clipboard".into())
-            .spawn(move || Worker { backend, cache: None, filter: shared, history: worker_history, excluded: VecDeque::new(), restored: None,
+            .spawn(move || Worker { backend, cache: None, filter: shared, history: worker_history, excluded: VecDeque::new(), received_sensitive: VecDeque::new(), restored: None,
                 #[cfg(target_os = "linux")]
                 restored_owner: None,
                 history_apps: worker_apps }.run(rx))
@@ -181,7 +201,37 @@ impl Clipboard {
         Self { tx, filter, history, history_status, history_apps,
             #[cfg(target_os = "linux")]
             _watch: None,
+            system: matches!(backend_kind, Kind::System),
+            test_limit: None,
         }
+    }
+
+    /// The most one format (text, HTML or an image) put on this clipboard
+    /// may hold, where the platform sets a limit; `None` if it sets none.
+    ///
+    /// An X11 clipboard is the one: arboard hands the content over in a
+    /// single request (it has no INCR transfers), so anything larger than
+    /// the X server's largest request (16 MB with BIG-REQUESTS) is set but
+    /// can't be pasted: every paste fails ("Maximum request length
+    /// exceeded") and the pasting program waits for an answer that never
+    /// comes. Wayland data-control, Windows and macOS have no such limit.
+    pub fn write_limit(&self) -> Option<usize> {
+        if self.test_limit.is_some() {
+            return self.test_limit;
+        }
+        #[cfg(target_os = "linux")]
+        if self.system {
+            return x11_write_limit();
+        }
+        None
+    }
+
+    /// A clipboard that says it holds at most `bytes` per format (as an X11
+    /// one does), for tests.
+    #[doc(hidden)]
+    pub fn with_write_limit(mut self, bytes: usize) -> Self {
+        self.test_limit = Some(bytes);
+        self
     }
 
     /// Changes what is shared, from the next read on.
@@ -231,7 +281,15 @@ impl Clipboard {
     }
 
     pub async fn write_from(&self, data: ClipData, origin: String, record: bool) -> Result<Digest> {
-        self.call(|reply| Cmd::Write { data, origin, record, reply }).await
+        self.call(|reply| Cmd::Write { data, origin, record, concealed: false, reply }).await
+    }
+
+    /// Puts content that another computer marked as sensitive on the
+    /// clipboard. It is never recorded in the history (so never saved to
+    /// disk), and, like a local password copy, never pushed or handed on
+    /// automatically.
+    pub async fn write_concealed(&self, data: ClipData) -> Result<Digest> {
+        self.call(|reply| Cmd::Write { data, origin: String::new(), record: false, concealed: true, reply }).await
     }
 
     async fn call<T>(&self, cmd: impl FnOnce(oneshot::Sender<Result<T>>) -> Cmd) -> Result<T> {
@@ -351,6 +409,88 @@ enum Backend {
     Memory(MemoryClipboard),
 }
 
+enum Kind {
+    System,
+    Memory,
+}
+
+/// Room for the request header around the data of an X11 `ChangeProperty`
+/// (24 bytes, 4 more with BIG-REQUESTS).
+#[cfg(target_os = "linux")]
+const X11_REQUEST_HEADER: usize = 64;
+
+/// What [`Clipboard::write_limit`] is for the system clipboard on Linux:
+/// the X server's largest request when arboard uses X11 (no Wayland
+/// data-control: the same test arboard makes). Asked once it is known.
+#[cfg(target_os = "linux")]
+fn x11_write_limit() -> Option<usize> {
+    static KNOWN: Mutex<Option<Option<usize>>> = Mutex::new(None);
+    if let Some(known) = *KNOWN.lock().unwrap_or_else(|error| error.into_inner()) {
+        return known;
+    }
+    let found = if wayland_data_control() {
+        Some(None)
+    } else {
+        use x11rb::connection::RequestConnection as _;
+        // No display yet: not known, asked again next time.
+        x11rb::connect(None).ok().map(|(connection, _)| Some(connection.maximum_request_bytes().saturating_sub(X11_REQUEST_HEADER)))
+    };
+    if let Some(found) = found {
+        *KNOWN.lock().unwrap_or_else(|error| error.into_inner()) = Some(found);
+    }
+    found.flatten()
+}
+
+/// Text and HTML from the X11 clipboard, or `None` where arboard doesn't
+/// use X11 (Wayland data-control; other platforms). Sets `broken` when the
+/// X server can't be reached (it restarted: open again next time, which
+/// also finds its new auth file).
+#[cfg(target_os = "linux")]
+fn x11_text_and_html(filter: &Filter, broken: &mut bool) -> Option<(Option<String>, Option<String>)> {
+    if wayland_data_control() {
+        return None;
+    }
+    let mut read = |wanted: bool, formats: &[&str]| {
+        if !wanted {
+            return None;
+        }
+        x11_read::read(formats, CEILING_BYTES).unwrap_or_else(|e| {
+            tracing::debug!("reading the X11 clipboard: {e:#}");
+            *broken |= x11rb::connect(None).is_err();
+            None
+        })
+    };
+    Some((read(filter.text, x11_read::TEXT), read(filter.html, x11_read::HTML)))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn x11_text_and_html(_: &Filter, _: &mut bool) -> Option<(Option<String>, Option<String>)> {
+    None
+}
+
+/// Whether arboard uses the Wayland data-control protocol rather than X11
+/// (the same test it makes; it doesn't change while we run).
+#[cfg(target_os = "linux")]
+fn wayland_data_control() -> bool {
+    static KNOWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *KNOWN.get_or_init(|| std::env::var_os("WAYLAND_DISPLAY").is_some() && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok())
+}
+
+/// Refuses text or HTML larger than an X11 clipboard can hand over (see
+/// [`Clipboard::write_limit`]), instead of setting a clipboard nothing can
+/// paste. Images are encoded by arboard, so their size is not known here.
+#[cfg(target_os = "linux")]
+fn check_x11_size(raw: &Raw) -> Result<()> {
+    let largest = raw.text.as_ref().map_or(0, String::len).max(raw.html.as_ref().map_or(0, String::len));
+    match x11_write_limit() {
+        Some(limit) if largest > limit => bail!(
+            "{} MB of text is more than this computer's X11 clipboard can hand over ({} MB at most)",
+            largest >> 20, limit >> 20
+        ),
+        _ => Ok(()),
+    }
+}
+
 impl Backend {
     /// Reads what `filter` lets through; a format that is switched off is
     /// not even fetched.
@@ -360,12 +500,19 @@ impl Backend {
             Backend::System(cb) => {
                 let handle = open(cb)?;
                 let mut broken = false;
-                // Asking for a format that isn't there is an error too ("incorrect
-                // type received"); only a dead handler thread means the display
-                // server went away under us.
-                let mut note = |e: &arboard::Error| broken |= handler_lost(e);
-                let text = if filter.text { handle.get_text().map_err(|e| note(&e)).ok() } else { None };
-                let html = if filter.html { handle.get().html().map_err(|e| note(&e)).ok() } else { None };
+                // On X11, text and HTML through our own reader: arboard's breaks
+                // off large (INCR) transfers (see `x11_read`).
+                let (text, html) = match x11_text_and_html(filter, &mut broken) {
+                    Some(both) => both,
+                    None => {
+                        // Asking for a format that isn't there is an error too ("incorrect
+                        // type received"); only a dead handler thread means the display
+                        // server went away under us.
+                        let mut note = |e: &arboard::Error| broken |= handler_lost(e);
+                        let text = if filter.text { handle.get_text().map_err(|e| note(&e)).ok() } else { None };
+                        (text, if filter.html { handle.get().html().map_err(|e| note(&e)).ok() } else { None })
+                    }
+                };
                 if broken {
                     // The display server went away under it: open again next time.
                     *cb = None;
@@ -402,6 +549,8 @@ impl Backend {
                 Ok(())
             }
             Backend::System(cb) => {
+                #[cfg(target_os = "linux")]
+                check_x11_size(&raw)?;
                 let first = write_system(open(cb)?, &raw);
                 let Err(first) = first else { return Ok(()) };
                 // A handle kept across a restart of the display server (GNOME
@@ -484,6 +633,12 @@ struct Worker {
     filter: Arc<Mutex<Filter>>,
     history: Arc<Mutex<history::History>>,
     excluded: VecDeque<Digest>,
+    /// Copies another computer sent marked as sensitive. Unlike `excluded`
+    /// (this computer's own password copies, which the user may choose to
+    /// share by switching `skip_concealed` off), the sender's mark is
+    /// binding: these are never handed out by an automatic read, whatever
+    /// the local filter says.
+    received_sensitive: VecDeque<Digest>,
     restored: Option<Digest>,
     #[cfg(target_os = "linux")]
     restored_owner: Option<u32>,
@@ -516,9 +671,16 @@ impl Worker {
                         let r = self.backend_read().map(|raw| (!raw.is_empty()).then(|| raw.digest()));
                         let _ = reply.send(r);
                     }
-                    Cmd::Write { data, origin, record, reply } => {
-                        let saved = record.then(|| Arc::new(data.clone()));
+                    Cmd::Write { data, origin, record, concealed, reply } => {
+                        let saved = (record && !concealed).then(|| Arc::new(data.clone()));
                         let r = self.write(data);
+                        if concealed && let Ok(digest) = &r {
+                            self.exclude(*digest);
+                            if !self.received_sensitive.contains(digest) {
+                                if self.received_sensitive.len() == 32 { self.received_sensitive.pop_front(); }
+                                self.received_sensitive.push_back(*digest);
+                            }
+                        }
                         if r.is_ok() && let Some(saved) = saved {
                             let digest = history::digest(&saved);
                             self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(saved, digest, false, &origin);
@@ -590,17 +752,20 @@ impl Worker {
         }
         let digest = raw.digest();
         if raw.concealed { self.exclude(digest); }
-        let concealed = raw.concealed || self.excluded.contains(&digest);
+        // A peer's sensitive copy is never read automatically, even with the
+        // local filter off: the sender asked for it to stay private.
+        let received = self.received_sensitive.contains(&digest);
+        let concealed = raw.concealed || received || self.excluded.contains(&digest);
         if skip.contains(&digest) {
             return Ok(Read::Unchanged(digest));
         }
-        if concealed && skip_concealed && !explicit {
+        if concealed && (skip_concealed || received) && !explicit {
             return Ok(Read::Concealed(digest));
         }
         if let Some((d, data)) = &self.cache
             && *d == digest
         {
-            return Ok(sized(digest, data.clone(), max));
+            return Ok(marked(sized(digest, data.clone(), max), concealed && explicit));
         }
         let text_len = raw.text.as_ref().map_or(0, String::len) + raw.html.as_ref().map_or(0, String::len);
         if text_len > max || raw.image.as_ref().is_some_and(|i| i.rgba.len() > MAX_RGBA) {
@@ -614,7 +779,7 @@ impl Worker {
             self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(data.clone(), history_digest, concealed, "this computer");
         }
         self.cache = Some((digest, data.clone()));
-        Ok(sized(digest, data, max))
+        Ok(marked(sized(digest, data, max), concealed && explicit))
     }
 
     fn write(&mut self, data: ClipData) -> Result<Digest> {
@@ -634,6 +799,15 @@ impl Worker {
         #[cfg(target_os = "linux")]
         if matches!(self.backend, Backend::System(_)) { self.restored_owner = sensitivity::owner().ok(); }
         Ok(digest)
+    }
+}
+
+/// A readable copy that the source marked as sensitive is returned as such
+/// (only explicit reads get this far: the others stop at `Concealed`).
+fn marked(read: Read, concealed: bool) -> Read {
+    match read {
+        Read::Changed { digest, data } if concealed => Read::Sensitive { digest, data },
+        other => other,
     }
 }
 
@@ -760,6 +934,56 @@ mod tests {
         let history = clipboard.history().lock().unwrap();
         assert_eq!(history.len(), 2, "own XFixes selection events must not re-record restores");
         assert_eq!(history.get(1).unwrap().origin, "peer");
+    }
+
+    /// An X11 clipboard holds what arboard can hand over in one request:
+    /// more is refused with a reason, not set unpasteable.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires an explicitly private X11 display"]
+    async fn real_x11_refuses_text_it_could_not_hand_over() {
+        assert_eq!(std::env::var("ONE_MK_PRIVATE_X11").as_deref(), Ok("1"));
+        assert!(std::env::var_os("WAYLAND_DISPLAY").is_none());
+        let clipboard = Clipboard::system();
+        let limit = clipboard.write_limit().expect("an X11 clipboard has a limit");
+        assert!(limit > 1 << 20 && limit < 64 << 20, "{limit}");
+        let error = clipboard.write(ClipData { text: Some("x".repeat(limit + 1)), ..Default::default() }).await.unwrap_err();
+        assert!(format!("{error:#}").contains("more than this computer's X11 clipboard can hand over"), "{error:#}");
+        clipboard.write(ClipData { text: Some("x".repeat(limit)), ..Default::default() }).await.unwrap();
+        let (memory, _) = Clipboard::memory();
+        assert_eq!(memory.write_limit(), None);
+    }
+
+    /// A secret another computer sent on purpose (marked) lands on the
+    /// clipboard but is not kept in the history, and is not handed on by the
+    /// automatic push or a fetch either.
+    #[tokio::test]
+    async fn a_marked_arrival_is_not_recorded_or_passed_on() {
+        let (cb, mem) = Clipboard::memory();
+        cb.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        cb.write_concealed(ClipData { text: Some("TOPSECRET".into()), ..Default::default() }).await.unwrap();
+        assert_eq!(mem.text().as_deref(), Some("TOPSECRET"));
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)));
+        assert!(cb.history().lock().unwrap().is_empty(), "a marked arrival is never recorded");
+        // Another computer's ordinary copy still is recorded.
+        cb.write_from(ClipData { text: Some("plain".into()), ..Default::default() }, "peer".into(), true).await.unwrap();
+        assert_eq!(cb.history().lock().unwrap().len(), 1);
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }));
+    }
+
+    /// The sender's mark is binding: switching the local "skip sensitive"
+    /// filter off (which lets this computer's own password copies go out)
+    /// must not turn a peer's sensitive copy into an ordinary read that the
+    /// automatic push or a pull answer would send on unmarked.
+    #[tokio::test]
+    async fn a_marked_arrival_stays_private_with_the_local_filter_off() {
+        let (cb, _mem) = Clipboard::memory();
+        cb.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        cb.set_filter(Filter { skip_concealed: false, ..Filter::default() });
+        cb.write_concealed(ClipData { text: Some("TOPSECRET".into()), ..Default::default() }).await.unwrap();
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)), "never an ordinary automatic read");
+        assert!(matches!(cb.read_explicit(vec![]).await.unwrap(), Read::Sensitive { .. }), "an explicit send still sees it as sensitive");
+        assert!(cb.history().lock().unwrap().is_empty(), "never recorded");
     }
 
     #[tokio::test]
@@ -903,7 +1127,7 @@ mod tests {
         assert_eq!(cb.digest().await.unwrap(), Some(d));
 
         // The user asking to send it explicitly overrides.
-        let Read::Changed { data, .. } = cb.read_explicit(vec![]).await.unwrap() else { panic!() };
+        let Read::Sensitive { data, .. } = cb.read_explicit(vec![]).await.unwrap() else { panic!() };
         assert_eq!(data.text.as_deref(), Some("hunter2"));
 
         // And the skip can be turned off.

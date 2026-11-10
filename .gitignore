@@ -4,3 +4,8 @@
 /.clipboard-history-qa/
 
 .claude/
+
+__pycache__/
+*.pyc
+.DS_Store
+/.build/

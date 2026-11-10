@@ -34,6 +34,11 @@ use tokio::sync::oneshot;
 
 const FETCH_DISABLED: u32 = 0x434c4950;
 pub const FETCH_DISABLED_MESSAGE: &str = "does not allow fetching its clipboard";
+/// What `clip-send` says about a copy a password manager marked as sensitive.
+pub const SENSITIVE_REFUSED: &str = "your clipboard is marked sensitive (a password manager copied it), so it was not sent; to send it anyway run: one-mk clip-send --allow-sensitive";
+/// What `clip-send --allow-sensitive` says when the receiver could not
+/// promise to keep a sensitive copy private (`clipctl` puts its name first).
+pub const SENSITIVE_UNSUPPORTED: &str = "runs an older oneMK that would not keep this private (or does not share its clipboard); update it first, nothing was sent";
 
 /// The longest a peer may take to deliver one clipboard snapshot.
 const RECEIVE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -72,6 +77,13 @@ fn describe(data: &ClipData) -> String {
     }
 }
 
+/// `size` and the `limit` it is over, as [`mb`] says them, in bytes when
+/// they would read the same ("25.0 MB, limit 25.0 MB").
+pub fn over(size: usize, limit: usize) -> (String, String) {
+    let (a, b) = (mb(size), mb(limit));
+    if a == b { (format!("{size} bytes"), format!("{limit} bytes")) } else { (a, b) }
+}
+
 /// "12 B", "3 KB", "1.9 MB": binary units, like the size limit.
 pub fn mb(bytes: usize) -> String {
     if bytes >= 1 << 20 {
@@ -81,6 +93,17 @@ pub fn mb(bytes: usize) -> String {
     } else {
         format!("{bytes} B")
     }
+}
+
+/// A peer controlling us.
+struct Session {
+    /// Resolved with the peer's address when it leaves.
+    leave: oneshot::Sender<SocketAddr>,
+    id: u64,
+    /// Our clipboard's digest when it took control (`None` until read;
+    /// `Some(None)`: it was empty). A change since then is a copy made
+    /// here during the visit.
+    baseline: Option<Option<Digest>>,
 }
 
 #[derive(Default)]
@@ -93,7 +116,9 @@ struct State {
     /// Peers we are receiving a clipboard from.
     receiving: HashSet<Fingerprint>,
     /// Peers controlling us: resolved with their address when they leave.
-    sessions: HashMap<Fingerprint, oneshot::Sender<SocketAddr>>,
+    sessions: HashMap<Fingerprint, Session>,
+    /// Numbers sessions, so a late baseline can't land on a newer session.
+    next_session: u64,
     /// Our bulk connection to each peer.
     bulk: HashMap<Fingerprint, quinn::Connection>,
 }
@@ -151,10 +176,19 @@ impl ClipSync {
     /// we can tell on `left` whether the user copied something here.
     pub fn entered(self: &Arc<Self>, fp: Fingerprint, name: &str) {
         let (tx, rx) = oneshot::channel();
-        self.state().sessions.insert(fp, tx); // replaces (and ends) any earlier session
+        let id = {
+            let mut s = self.state();
+            s.next_session += 1;
+            let id = s.next_session;
+            s.sessions.insert(fp, Session { leave: tx, id, baseline: None }); // replaces (and ends) any earlier session
+            id
+        };
         let (this, name) = (self.clone(), name.to_owned());
         tokio::spawn(async move {
             let baseline = this.cb.digest().await.ok().flatten();
+            if let Some(session) = this.state().sessions.get_mut(&fp).filter(|s| s.id == id) {
+                session.baseline = Some(baseline);
+            }
             if let Ok(addr) = rx.await {
                 this.spawn_push(fp, name, addr, baseline);
             }
@@ -163,8 +197,8 @@ impl ClipSync {
 
     /// `fp` (reachable at `addr`) stopped controlling us.
     pub fn left(&self, fp: Fingerprint, addr: SocketAddr) {
-        if let Some(tx) = self.state().sessions.remove(&fp) {
-            let _ = tx.send(addr);
+        if let Some(session) = self.state().sessions.remove(&fp) {
+            let _ = session.leave.send(addr);
         }
     }
 
@@ -210,7 +244,7 @@ impl ClipSync {
         let skip: Vec<Digest> = self.state().known.get(&fp).copied().into_iter().chain(also_skip).collect();
         match self.cb.read(skip).await {
             Ok(Read::Changed { digest, data }) => {
-                match self.send(fp, addr, &data, true).await {
+                match self.send(fp, addr, &data, true, false).await {
                     Ok(None | Some(ClipAck::Stored)) => {
                         self.state().known.insert(fp, digest);
                         tracing::debug!(peer = %name, bytes = data.len(), "sent clipboard");
@@ -226,11 +260,12 @@ impl ClipSync {
                 }
             }
             Ok(Read::TooLarge { digest, size }) => {
-                tracing::warn!(peer = %name, "clipboard is too large to share ({}, limit {}); skipped \
-                    (raise the limit with `one-mk clipboard --max-mb`)", mb(size), mb(self.cb.filter().max_bytes()));
+                let (size, limit) = over(size, self.cb.filter().max_bytes());
+                tracing::warn!(peer = %name, "clipboard is too large to share ({size}, limit {limit}); skipped \
+                    (raise the limit with `one-mk clipboard --max-mb`)");
                 self.state().known.insert(fp, digest);
             }
-            Ok(Read::Concealed(digest)) => {
+            Ok(Read::Concealed(digest) | Read::Sensitive { digest, .. }) => {
                 tracing::debug!(peer = %name, "clipboard is marked sensitive; not shared");
                 self.state().known.insert(fp, digest);
             }
@@ -256,10 +291,12 @@ impl ClipSync {
 
     /// Sends `data` on a new clipboard stream. With `want_ack`, waits for
     /// the receiver's answer (`None`: it gave none, as older versions don't).
-    async fn send(&self, fp: Fingerprint, addr: SocketAddr, data: &ClipData, want_ack: bool) -> anyhow::Result<Option<ClipAck>> {
+    /// `concealed`: the content is sensitive; the receiver is told so and then
+    /// keeps it out of its history.
+    async fn send(&self, fp: Fingerprint, addr: SocketAddr, data: &ClipData, want_ack: bool, concealed: bool) -> anyhow::Result<Option<ClipAck>> {
         let conn = self.bulk(fp, addr).await?;
         let (mut send, mut recv) = open_stream(&conn, StreamKind::Clipboard).await?;
-        let wrote = write_snapshot(&mut send, data).await;
+        let wrote = write_snapshot(&mut send, data, concealed).await;
         if !want_ack {
             return wrote.map(|()| None);
         }
@@ -274,26 +311,55 @@ impl ClipSync {
 
     /// Pushes our clipboard to `fp` now, whether or not it changed since
     /// we last did and without the pointer crossing. The user asked for
-    /// this copy to be sent, so it goes even if it is marked sensitive;
-    /// the formats and size limit still apply.
-    pub async fn send_now(self: &Arc<Self>, fp: Fingerprint, addr: SocketAddr) -> anyhow::Result<Moved> {
-        match self.cb.read_explicit(Vec::new()).await.context("reading the clipboard")? {
-            Read::Changed { digest, data } => {
-                let ack = self.send(fp, addr, &data, true).await?;
-                if matches!(ack, None | Some(ClipAck::Stored)) {
-                    self.state().known.insert(fp, digest);
-                }
-                Ok(Moved { bytes: data.len(), what: describe(&data), ack })
+    /// this copy to be sent; the formats and size limit still apply.
+    ///
+    /// A copy a password manager marked as sensitive is refused unless
+    /// `allow_sensitive` (`one-mk clip-send --allow-sensitive`); when it is
+    /// sent, the receiver is told, so it keeps it out of its history.
+    pub async fn send_now(self: &Arc<Self>, fp: Fingerprint, addr: SocketAddr, allow_sensitive: bool) -> anyhow::Result<Moved> {
+        let (digest, data, concealed) = match self.cb.read_explicit(Vec::new()).await.context("reading the clipboard")? {
+            Read::Changed { digest, data } => (digest, data, false),
+            Read::Sensitive { digest, data } => (digest, data, true),
+            Read::TooLarge { size, .. } => {
+                let (size, limit) = over(size, self.cb.filter().max_bytes());
+                bail!("your clipboard is {size}, over the limit of {limit}; raise it with `one-mk clipboard --max-mb N`")
             }
-            Read::TooLarge { size, .. } => bail!(
-                "your clipboard is {}, over the limit of {}; raise it with `one-mk clipboard --max-mb N`",
-                mb(size),
-                mb(self.cb.filter().max_bytes())
-            ),
             Read::Empty | Read::Unchanged(_) | Read::Concealed(_) => bail!(
                 "your clipboard is empty, or holds only formats that are switched off (see `one-mk clipboard`)"
             ),
+        };
+        if data.has_no_content() {
+            bail!("your clipboard is empty (it holds an empty piece of text)");
         }
+        if concealed && !allow_sensitive {
+            bail!("{SENSITIVE_REFUSED}");
+        }
+        // The concealed bit is only a request: a receiver from before it
+        // existed would record, save and hand on the content. Ask first,
+        // and send nothing to one that doesn't promise to keep it private.
+        if concealed && !self.keeps_private(fp, addr).await? {
+            bail!("{SENSITIVE_UNSUPPORTED}");
+        }
+        let ack = self.send(fp, addr, &data, true, concealed).await?;
+        if matches!(ack, None | Some(ClipAck::Stored)) && !concealed {
+            self.state().known.insert(fp, digest);
+        }
+        Ok(Moved { bytes: data.len(), what: describe(&data), ack })
+    }
+
+    /// Whether `fp` keeps a copy marked sensitive private: it answers a
+    /// [`ClipHeader::private_probe`] with [`ClipAck::Private`]. An older
+    /// receiver reads the probe as an empty snapshot and says nothing (or
+    /// something else), which is a no. Only a failure to reach it is an error.
+    async fn keeps_private(&self, fp: Fingerprint, addr: SocketAddr) -> anyhow::Result<bool> {
+        let conn = self.bulk(fp, addr).await?;
+        let (mut send, mut recv) = open_stream(&conn, StreamKind::Clipboard).await?;
+        let mut buf = Vec::new();
+        ClipHeader::private_probe().encode_frame(&mut buf);
+        send.write_all(&buf).await?;
+        send.finish()?;
+        let mut ack = [0u8; 1];
+        Ok(matches!(tokio::time::timeout(ACK_TIMEOUT, recv.read_exact(&mut ack)).await, Ok(Ok(())) if ClipAck::from_u8(ack[0]) == Some(ClipAck::Private)))
     }
 
     /// Fetches the clipboard of `fp` into ours.
@@ -312,19 +378,23 @@ impl ClipSync {
                     anyhow::anyhow!("it did not answer: it may be running an older one-mk, or not sharing its clipboard ({error:#})")
                 }
             })?;
-            self.read_snapshot(fp, &self.peer_name(fp), &header, &mut recv).await
+            self.read_snapshot(fp, &self.peer_name(fp), &header, &mut recv, false).await
         })
         .await
         .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out")))?;
         match got {
             Received::Stored { bytes, what } => Ok(Moved { bytes, what, ack: Some(ClipAck::Stored) }),
+            Received::KeptNewer => bail!("a newer copy was made here meanwhile; it was kept"),
             Received::Nothing => bail!("its clipboard is empty, or it does not share it (`one-mk clipboard` there)"),
             Received::FormatsOff => bail!("what it has is switched off here (see `one-mk clipboard`)"),
-            Received::TooLarge(size) => bail!(
-                "its clipboard is {}, over the limit of {} here; raise it with `one-mk clipboard --max-mb N`",
-                mb(size),
-                mb(self.cb.filter().max_bytes())
-            ),
+            Received::TooLarge { size, limit, display: false } => {
+                let (size, limit) = over(size, limit);
+                bail!("its clipboard is {size}, over the limit of {limit} here; raise it with `one-mk clipboard --max-mb N`")
+            }
+            Received::TooLarge { size, limit, display: true } => {
+                let (size, limit) = over(size, limit);
+                bail!("its clipboard is {size}, more than this computer's clipboard can hold ({limit} at most on X11)")
+            }
         }
     }
 
@@ -358,14 +428,24 @@ impl ClipSync {
         recv: &mut quinn::RecvStream,
     ) -> anyhow::Result<Option<usize>> {
         let header = read_clip_header(recv).await?;
+        if header.is_private_probe() {
+            // We keep marked copies out of the history and never pass them on.
+            if send.write_all(&[ClipAck::Private as u8]).await.is_ok() {
+                let _ = send.finish();
+            }
+            return Ok(None);
+        }
         if header.pull {
             self.answer_pull(name, send).await?;
             return Ok(None);
         }
-        let (ack, stored) = match self.read_snapshot(fp, name, &header, recv).await? {
+        let (ack, stored) = match self.read_snapshot(fp, name, &header, recv, true).await? {
             Received::Stored { bytes, .. } => (Some(ClipAck::Stored), Some(bytes)),
+            // Superseded rather than refused: sending it again would not
+            // help, and ours goes to it when it leaves.
+            Received::KeptNewer => (Some(ClipAck::Stored), None),
             Received::FormatsOff => (Some(ClipAck::FormatsOff), None),
-            Received::TooLarge(_) => (Some(ClipAck::TooLarge), None),
+            Received::TooLarge { .. } => (Some(ClipAck::TooLarge), None),
             Received::Nothing => (None, None),
         };
         // Tell the sender what became of it; it may have stopped listening, which is fine.
@@ -398,12 +478,17 @@ impl ClipSync {
             Some(d) => println!("{name} fetched this computer's clipboard ({}).", describe(d)),
             None => tracing::debug!(peer = %name, "pull answered with nothing"),
         }
-        write_snapshot(send, data.as_deref().unwrap_or(&ClipData::default())).await
+        write_snapshot(send, data.as_deref().unwrap_or(&ClipData::default()), false).await
     }
 
     /// Reads the payloads `header` announces and puts what the settings
     /// allow on the clipboard, remembering that `fp` has it.
-    async fn read_snapshot(&self, fp: Fingerprint, name: &str, header: &ClipHeader, recv: &mut quinn::RecvStream) -> anyhow::Result<Received> {
+    ///
+    /// `pushed`: `fp` sent it unasked. If `fp` controls us and something was
+    /// copied here since it took control, that copy is newer than what it
+    /// pushes (copied before it crossed, and maybe still arriving: a large
+    /// one takes seconds), so ours is kept and goes to `fp` when it leaves.
+    async fn read_snapshot(&self, fp: Fingerprint, name: &str, header: &ClipHeader, recv: &mut quinn::RecvStream, pushed: bool) -> anyhow::Result<Received> {
         let filter = self.cb.filter();
         let wanted = |f: ClipFormat| match f {
             ClipFormat::Text => filter.text,
@@ -414,15 +499,28 @@ impl ClipSync {
             return Ok(Received::Nothing);
         }
         let allowed: u64 = header.items.iter().filter(|(f, _)| wanted(*f)).map(|(_, n)| u64::from(*n)).sum();
-        if allowed == 0 {
+        // Only formats that are switched off: not an empty piece of text.
+        if !header.items.iter().any(|(f, _)| wanted(*f)) {
             let _ = recv.stop(0u32.into());
             return Ok(Received::FormatsOff);
         }
         let max = filter.max_bytes();
         if allowed > max as u64 {
-            tracing::warn!("peer sent a {} clipboard (limit {}); ignored", mb(allowed as usize), mb(max));
+            let (size, limit) = over(allowed as usize, max);
+            tracing::warn!("peer sent a {size} clipboard (limit {limit}); ignored");
             let _ = recv.stop(0u32.into());
-            return Ok(Received::TooLarge(allowed as usize));
+            return Ok(Received::TooLarge { size: allowed as usize, limit: max, display: false });
+        }
+        // More than this computer's clipboard can hand over to a program
+        // that pastes (X11): refused, not set unpasteable.
+        if let Some(limit) = self.cb.write_limit()
+            && let Some(&(_, largest)) = header.items.iter().filter(|(f, _)| wanted(*f)).max_by_key(|(_, n)| *n)
+            && largest as usize > limit
+        {
+            let (size, limit_text) = over(largest as usize, limit);
+            tracing::warn!("peer sent a {size} clipboard, more than this computer's X11 clipboard can hand over ({limit_text} at most); ignored");
+            let _ = recv.stop(0u32.into());
+            return Ok(Received::TooLarge { size: largest as usize, limit, display: true });
         }
         let last = header.items.iter().rposition(|(f, _)| wanted(*f)).expect("allowed > 0");
         let mut data = ClipData::default();
@@ -440,19 +538,35 @@ impl ClipSync {
         }
         // Whatever is left is formats we don't take: not worth reading.
         let _ = recv.stop(0u32.into());
-        if data.is_empty() {
+        if data.has_no_content() {
             return Ok(Received::Nothing);
         }
+        if pushed && self.copied_during_visit(fp).await {
+            tracing::debug!(peer = %name, "something was copied here since it took control; kept that newer copy");
+            return Ok(Received::KeptNewer);
+        }
         let (bytes, what) = (data.len(), describe(&data));
-        let digest = self.cb.write_from(data, name.into(), true).await?;
-        self.state().known.insert(fp, digest);
+        // Sensitive content the sender chose to send: on the clipboard, but never in the history.
+        let digest = if header.concealed { self.cb.write_concealed(data).await? } else { self.cb.write_from(data, name.into(), true).await? };
+        let mut s = self.state();
+        s.known.insert(fp, digest);
+        // What it sent is no copy made here.
+        if let Some(session) = s.sessions.get_mut(&fp).filter(|session| session.baseline.is_some()) {
+            session.baseline = Some(Some(digest));
+        }
         Ok(Received::Stored { bytes, what })
+    }
+
+    /// Whether `fp` controls us and our clipboard changed since it took control.
+    async fn copied_during_visit(&self, fp: Fingerprint) -> bool {
+        let Some(baseline) = self.state().sessions.get(&fp).and_then(|session| session.baseline) else { return false };
+        self.cb.digest().await.is_ok_and(|now| now != baseline)
     }
 
     fn peer_name(&self, fp: Fingerprint) -> String {
         self.history_dir.lock().unwrap_or_else(|error| error.into_inner()).as_ref()
             .and_then(|dir| one_mk_net::TrustStore::load(dir).ok())
-            .and_then(|trust| trust.devices().iter().find(|device| device.fingerprint() == Some(fp)).map(|device| device.name.clone()))
+            .and_then(|trust| trust.devices().iter().find(|device| device.fingerprint() == Some(fp)).map(|device| trust.display(device)))
             .unwrap_or_else(|| fp.short())
     }
 }
@@ -460,15 +574,19 @@ impl ClipSync {
 /// What came of a snapshot read off a stream.
 enum Received {
     Stored { bytes: usize, what: String },
+    /// Not applied: something newer was copied here (see `read_snapshot`).
+    KeptNewer,
     /// An empty snapshot.
     Nothing,
     /// Every format in it is switched off.
     FormatsOff,
-    TooLarge(usize),
+    /// Over `limit`: the size limit, or (`display`) what the platform's
+    /// clipboard can hold ([`Clipboard::write_limit`]).
+    TooLarge { size: usize, limit: usize, display: bool },
 }
 
 /// A snapshot as one header and the payloads, then the end of the stream.
-async fn write_snapshot(send: &mut quinn::SendStream, data: &ClipData) -> anyhow::Result<()> {
+async fn write_snapshot(send: &mut quinn::SendStream, data: &ClipData, concealed: bool) -> anyhow::Result<()> {
     let parts: Vec<(ClipFormat, &[u8])> = [
         (ClipFormat::Text, data.text.as_deref().map(str::as_bytes)),
         (ClipFormat::Html, data.html.as_deref().map(str::as_bytes)),
@@ -477,7 +595,7 @@ async fn write_snapshot(send: &mut quinn::SendStream, data: &ClipData) -> anyhow
     .into_iter()
     .filter_map(|(f, b)| Some((f, b?)))
     .collect();
-    let header = ClipHeader { items: parts.iter().map(|(f, b)| (*f, b.len() as u32)).collect(), pull: false };
+    let header = ClipHeader { items: parts.iter().map(|(f, b)| (*f, b.len() as u32)).collect(), pull: false, concealed };
     let mut buf = Vec::new();
     header.encode_frame(&mut buf);
     send.write_all(&buf).await?;
@@ -524,6 +642,72 @@ mod tests {
         b.settings(ClipSettings::default());
         a.clip.push_once(b.fp(), "b", b.addr(), None).await;
         eventually("retry accepted", || b.mem.text().as_deref() == Some("unchanged clipboard")).await;
+    }
+
+    /// A copies, crosses to B, and the user copies on B at once: A's push,
+    /// still arriving, must not replace that newer copy, which goes back to
+    /// A when it leaves (found by the multi-device rig: both ended up with
+    /// the older copy).
+    #[tokio::test]
+    async fn a_push_never_replaces_a_newer_copy_made_during_the_visit() {
+        let (a, b) = (Pc::new(), Pc::new());
+        a.serve();
+        b.serve();
+        text(&b.mem, "on b before the visit");
+        b.clip.entered(a.fp(), "a");
+        eventually("baseline read", || b.clip.state().sessions.get(&a.fp()).is_some_and(|s| s.baseline.is_some())).await;
+        text(&b.mem, "newer, copied on b during the visit");
+        text(&a.mem, "older, copied on a before crossing");
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert_eq!(b.mem.text().as_deref(), Some("newer, copied on b during the visit"));
+        b.clip.left(a.fp(), a.addr());
+        eventually("newer copy back on a", || a.mem.text().as_deref() == Some("newer, copied on b during the visit")).await;
+
+        // Without a copy during the visit the push lands as before.
+        text(&a.mem, "copied on a, then crossing");
+        b.clip.entered(a.fp(), "a");
+        eventually("baseline read", || b.clip.state().sessions.get(&a.fp()).is_some_and(|s| s.baseline.is_some())).await;
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert_eq!(b.mem.text().as_deref(), Some("copied on a, then crossing"));
+        let writes = a.mem.writes();
+        b.clip.left(a.fp(), a.addr());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(a.mem.writes(), writes, "nothing new to send back");
+    }
+
+    /// A receiver whose clipboard can hold less than the size limit (X11:
+    /// one request, 16 MB) refuses a larger copy and says so, rather than
+    /// setting a clipboard that every paste then fails on.
+    #[tokio::test]
+    async fn a_copy_too_large_for_the_receivers_clipboard_is_refused_not_set() {
+        let a = Pc::new();
+        let (cb, mem) = Clipboard::memory();
+        let cb = cb.with_write_limit(1000);
+        let node = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let b = Pc { clip: ClipSync::new(cb, node.clone()), node, mem };
+        b.serve();
+        text(&b.mem, "kept");
+        text(&a.mem, &"x".repeat(1001));
+        let moved = a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
+        assert_eq!(moved.ack, Some(ClipAck::TooLarge));
+        assert_eq!(b.mem.text().as_deref(), Some("kept"));
+        assert_eq!(b.mem.writes(), 0);
+        text(&a.mem, &"x".repeat(1000));
+        assert_eq!(a.clip.send_now(b.fp(), b.addr(), false).await.unwrap().ack, Some(ClipAck::Stored));
+        assert_eq!(b.mem.text().map(|t| t.len()), Some(1000));
+        // Fetched the other way, it says why.
+        let (c, d) = (Pc::new(), b);
+        c.serve();
+        c.settings(ClipSettings { allow_pull: true, ..Default::default() });
+        text(&c.mem, &"y".repeat(2000));
+        let error = d.clip.pull(c.fp(), c.addr()).await.unwrap_err();
+        assert!(format!("{error:#}").contains("2 KB, more than this computer's clipboard can hold (1000 B at most on X11)"), "{error:#}");
+    }
+
+    #[test]
+    fn sizes_over_a_limit_never_read_the_same() {
+        assert_eq!(over(26_214_401, 25 << 20), ("26214401 bytes".into(), "26214400 bytes".into()));
+        assert_eq!(over(30 << 20, 25 << 20), ("30.0 MB".into(), "25.0 MB".into()));
     }
 
     #[tokio::test]
@@ -592,6 +776,32 @@ mod tests {
             self.serve_ack(None);
         }
 
+        /// Like [`serve_ack`](Self::serve_ack), keeping every header it was sent.
+        fn serve_recording(&self, acknowledgement: Option<u8>) -> Arc<Mutex<Vec<ClipHeader>>> {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let node = self.node.clone();
+            let kept = seen.clone();
+            tokio::spawn(async move {
+                while let Some(Ok(peer)) = node.accept().await {
+                    let kept = kept.clone();
+                    tokio::spawn(async move {
+                        while let Ok((_, mut send, mut recv)) = peer.accept_stream().await {
+                            if let Ok(h) = read_clip_header(&mut recv).await {
+                                let _ = read_exact(&mut recv, h.total() as usize).await;
+                                kept.lock().unwrap().push(h.clone());
+                                if let Some(acknowledgement) = acknowledgement {
+                                    let _ = send.write_all(&[acknowledgement]).await;
+                                    let _ = send.finish();
+                                }
+                            }
+                            drop(send);
+                        }
+                    });
+                }
+            });
+            seen
+        }
+
         fn serve_ack(&self, acknowledgement: Option<u8>) {
             let node = self.node.clone();
             tokio::spawn(async move {
@@ -646,14 +856,14 @@ mod tests {
         b.serve();
         c.serve();
         text(&a.mem, "for b only");
-        let moved = a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        let moved = a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         assert_eq!(moved, Moved { bytes: 10, what: "text".into(), ack: Some(ClipAck::Stored) });
         assert_eq!(b.mem.text().as_deref(), Some("for b only"));
         assert_eq!(c.mem.writes(), 0, "the other computer is left alone");
 
         // Even if it is the same content as last time: asking again sends again.
         b.mem.set(Raw::default());
-        a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         assert_eq!(b.mem.text().as_deref(), Some("for b only"));
         assert_eq!(b.mem.writes(), 2);
         // ... and it is remembered as B's, so the pointer crossing doesn't send it a third time.
@@ -668,19 +878,19 @@ mod tests {
         b.serve();
         let err = |e: anyhow::Error| format!("{e:#}");
 
-        assert!(err(a.clip.send_now(b.fp(), b.addr()).await.unwrap_err()).contains("empty"));
+        assert!(err(a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err()).contains("empty"));
 
         // Over our own limit: not even sent.
         text(&a.mem, &"x".repeat(2 << 20));
         a.settings(ClipSettings { max_mb: 1, ..Default::default() });
-        let e = err(a.clip.send_now(b.fp(), b.addr()).await.unwrap_err());
+        let e = err(a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err());
         assert!(e.contains("2.0 MB") && e.contains("1.0 MB") && e.contains("--max-mb"), "{e}");
         assert_eq!(b.mem.writes(), 0);
 
         // Over the receiver's limit: sent, refused, and we are told.
         a.settings(ClipSettings::default());
         b.settings(ClipSettings { max_mb: 1, ..Default::default() });
-        let m = a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        let m = a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         assert_eq!(m.ack, Some(ClipAck::TooLarge));
         assert_eq!(b.mem.writes(), 0);
 
@@ -690,13 +900,48 @@ mod tests {
             image: Some(one_mk_clipboard::Image { width: 1, height: 1, rgba: vec![1, 2, 3, 255] }),
             ..Raw::default()
         });
-        let m = a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        let m = a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         assert_eq!(m.ack, Some(ClipAck::FormatsOff));
         assert_eq!(b.mem.writes(), 0);
 
         // We have it switched off: nothing to send.
         a.settings(ClipSettings { image: false, ..Default::default() });
-        assert!(err(a.clip.send_now(b.fp(), b.addr()).await.unwrap_err()).contains("switched off"));
+        assert!(err(a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err()).contains("switched off"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_piece_of_text_is_called_empty_not_switched_off() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve();
+        text(&a.mem, "");
+        let e = format!("{:#}", a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err());
+        assert!(e.contains("is empty") && !e.contains("switched off"), "{e}");
+        assert_eq!(b.mem.writes(), 0);
+    }
+
+    /// A password-manager copy is refused by an explicit send unless allowed,
+    /// and when allowed the receiver records it nowhere: not in its history,
+    /// not for its own automatic push.
+    #[tokio::test]
+    async fn a_sensitive_copy_is_refused_unless_allowed_and_then_never_recorded() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve();
+        b.settings(ClipSettings { history_max: 20, ..Default::default() });
+        a.mem.set(Raw { text: Some("TOPSECRET".into()), concealed: true, ..Raw::default() });
+        let e = format!("{:#}", a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err());
+        assert!(e.contains("marked sensitive") && e.contains("--allow-sensitive"), "{e}");
+        assert_eq!(b.mem.writes(), 0, "refused: nothing crossed");
+
+        let moved = a.clip.send_now(b.fp(), b.addr(), true).await.unwrap();
+        assert_eq!(moved.ack, Some(ClipAck::Stored));
+        assert_eq!(b.mem.text().as_deref(), Some("TOPSECRET"));
+        assert!(b.clip.clipboard().history().lock().unwrap().is_empty(), "the receiver must not record a marked copy");
+        assert!(matches!(b.clip.clipboard().read(vec![]).await.unwrap(), Read::Concealed(_)), "nor hand it on automatically");
+
+        // An ordinary copy sent the same way is recorded as before.
+        text(&a.mem, "ordinary");
+        a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
+        assert_eq!(b.clip.clipboard().history().lock().unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -705,7 +950,7 @@ mod tests {
         b.serve();
         a.mem.set(Raw { text: Some("plain".into()), html: Some("<b>rich</b>".into()), ..Raw::default() });
         b.settings(ClipSettings { html: false, ..Default::default() });
-        let m = a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        let m = a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         assert_eq!(m.ack, Some(ClipAck::Stored));
         let got = b.mem.get();
         assert_eq!((got.text.as_deref(), got.html.as_deref()), (Some("plain"), None));
@@ -713,7 +958,7 @@ mod tests {
         // And a sender doesn't offer what it has switched off.
         a.settings(ClipSettings { text: false, ..Default::default() });
         b.settings(ClipSettings::default());
-        a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
         let got = b.mem.get();
         assert_eq!((got.text.as_deref(), got.html.as_deref()), (None, Some("<b>rich</b>")));
     }
@@ -778,7 +1023,7 @@ mod tests {
         let (a, old) = (Pc::new(), Pc::new());
         old.serve_old();
         text(&a.mem, "hi");
-        let m = a.clip.send_now(old.fp(), old.addr()).await.unwrap();
+        let m = a.clip.send_now(old.fp(), old.addr(), false).await.unwrap();
         assert_eq!(m.ack, None, "sent, but it can't say what it did");
 
         let e = format!("{:#}", a.clip.pull(old.fp(), old.addr()).await.unwrap_err());
@@ -807,13 +1052,32 @@ mod tests {
         eventually("B to get it once skipping is off", || b.mem.text().as_deref() == Some("hunter2")).await;
     }
 
+    /// A receiver from before the sensitive mark would record, save and
+    /// re-share the content: it is asked first and refused, and nothing
+    /// crosses. An older receiver that acknowledges every snapshot as stored
+    /// is refused too: only the explicit "private" answer counts.
     #[tokio::test]
-    async fn explicit_send_overrides_the_sensitive_skip() {
+    async fn a_sensitive_copy_is_never_sent_to_a_receiver_that_cannot_keep_it_private() {
+        for acknowledgement in [None, Some(ClipAck::Stored as u8)] {
+            let (a, old) = (Pc::new(), Pc::new());
+            let seen = old.serve_recording(acknowledgement);
+            a.mem.set(Raw { text: Some("TOPSECRET".into()), concealed: true, ..Raw::default() });
+            let e = format!("{:#}", a.clip.send_now(old.fp(), old.addr(), true).await.unwrap_err());
+            assert!(e.contains(SENSITIVE_UNSUPPORTED), "{e}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let seen = seen.lock().unwrap();
+            assert!(seen.iter().all(|h| h.items.is_empty()), "only the content-free probe reached it: {seen:?}");
+            assert!(!seen.is_empty(), "it was asked");
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_send_with_allow_sensitive_overrides_the_sensitive_skip() {
         let (a, b) = (Pc::new(), Pc::new());
         b.serve();
         text(&a.mem, "my wifi password");
         a.mem.set_concealed(true);
-        a.clip.send_now(b.fp(), b.addr()).await.unwrap();
+        a.clip.send_now(b.fp(), b.addr(), true).await.unwrap();
         assert_eq!(b.mem.text().as_deref(), Some("my wifi password"));
     }
 

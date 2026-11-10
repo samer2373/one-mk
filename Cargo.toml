@@ -4,9 +4,15 @@ members = ["crates/*"]
 default-members = ["crates/one-mk", "crates/tray", "crates/app", "crates/wallpaper-helper"]
 
 [workspace.package]
-version = "0.1.28"
+version = "0.1.29"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+authors = ["Samer Abu-Sleem <samer2373@users.noreply.github.com>"]
+repository = "https://github.com/samer2373/one-mk"
+homepage = "https://github.com/samer2373/one-mk"
+readme = "README.md"
+# Shipped as programs, never published to crates.io.
+publish = false
 
 [profile.release]
 lto = "fat"

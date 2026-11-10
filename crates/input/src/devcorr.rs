@@ -4,7 +4,7 @@
 //! path, a little before or after. [`Correlator`] pairs the two. Pure: the
 //! backends feed it and send what comes out; the times are milliseconds.
 //!
-//! Rules (see "How each event is attributed" in `docs/INPUT-TUNING.md`):
+//! Rules (the per-device rules in `docs/INPUT.md` rest on them):
 //! a key or button event is matched in order with the device events of the
 //! same key and direction: the oldest one waiting, or the next to arrive
 //! within [`WAIT_MS`] (later events wait behind it, so nothing is

@@ -26,13 +26,53 @@ pub struct Server {
     rx: mpsc::UnboundedReceiver<Pending>,
     task: tokio::task::JoinHandle<()>,
     path: PathBuf,
+    /// Held as long as the daemon serves this folder (see [`InstanceLock`]).
+    _instance: InstanceLock,
+}
+
+/// The exclusive hold one process has on a settings folder: the daemon
+/// takes it when it starts serving, and work that must not run beside a
+/// daemon (`uninstall` putting the wallpaper back by itself) takes it
+/// instead. The OS lets it go when the holder exits, even after a crash.
+pub struct InstanceLock {
+    _held: Option<std::fs::File>,
+}
+
+impl InstanceLock {
+    const FILE: &str = ".one-mk-instance.lock";
+
+    /// Takes the hold on `dir`, or `None` while another process has it. A
+    /// folder that does not exist has no daemon and nothing to protect.
+    pub fn try_acquire(dir: &Path) -> Result<Option<Self>> {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        }
+        let file = match options.open(dir.join(Self::FILE)) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && !dir.exists() => return Ok(Some(Self { _held: None })),
+            Err(e) => return Err(e).with_context(|| format!("opening {}", dir.join(Self::FILE).display())),
+        };
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Self { _held: Some(file) })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(e)) => Err(e).with_context(|| format!("locking {}", dir.join(Self::FILE).display())),
+        }
+    }
 }
 
 impl Server {
     pub async fn start(dir: &Path) -> Result<Self> {
         if let Ok(Some(_)) = request(dir, Request::Status).await {
-            bail!("one-mk is already running for this user");
+            bail!("one-mk is already running with the settings folder {} (stop it with `one-mk stop`, or give this one its own --home)", dir.display());
         }
+        check_endpoint(dir)?;
+        let instance = InstanceLock::try_acquire(dir)?.with_context(|| format!(
+            "one-mk is already running (or starting, or `one-mk uninstall` is busy) with the settings folder {}; stop it with `one-mk stop`, or give this one its own --home",
+            dir.display()))?;
         let listener = sys::bind(dir).with_context(|| format!("opening control endpoint {}", sys::path(dir).display()))?;
         let (tx, rx) = mpsc::unbounded_channel();
         let token = listener.token();
@@ -49,7 +89,7 @@ impl Server {
                 }
             }
         });
-        Ok(Self { rx, task, path: sys::path(dir) })
+        Ok(Self { rx, task, path: sys::path(dir), _instance: instance })
     }
 
     pub async fn recv(&mut self) -> Option<Pending> {
@@ -107,22 +147,79 @@ fn same(a: &str, b: &str) -> bool {
 /// Asks the running daemon. `None` means none is running.
 pub async fn request(dir: &Path, req: Request) -> Result<Option<String>> {
     match &req {
-        Request::Switch(one_mk_ctl::client::SwitchTo::Device(name)) | Request::ClipSend(Some(name)) | Request::ClipGet(Some(name)) => validate_target(name)?,
+        Request::Switch(one_mk_ctl::client::SwitchTo::Device(name)) | Request::ClipSend(Some(name)) | Request::ClipSendSensitive(Some(name)) | Request::ClipGet(Some(name)) => validate_target(name)?,
         _ => {}
     }
     let patience = req.reply_timeout();
+    check_endpoint(dir)?;
     let stream = match tokio::time::timeout(TIMEOUT, sys::connect(dir)).await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused) => {
             return Ok(None);
         }
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::InvalidInput => {
+            bail!("the settings folder {} is too long for one-mk's control socket (about 100 characters at most): your change is saved, but one-mk can't be told about it; use a shorter --home", dir.display());
+        }
         Ok(Err(e)) => return Err(e).with_context(|| format!("connecting to control endpoint {}", sys::path(dir).display())),
-        Err(_) => bail!("one-mk did not answer"),
+        Err(_) => return Err(NotAnswering.into()),
     };
     let reply = tokio::time::timeout(patience + TIMEOUT, exchange(stream, req)).await
-        .map_err(|_| anyhow::anyhow!("one-mk did not answer"))?
+        .map_err(|_| NotAnswering)?
         .with_context(|| format!("exchanging command with control endpoint {}", sys::path(dir).display()))?;
     Ok(Some(reply))
+}
+
+/// The running one-mk took the request but did not answer in time: it is
+/// busy or stuck (stopped in a debugger, suspended). Callers that saved a
+/// change first say so (see [`NotAnswering::saved`]).
+#[derive(Debug)]
+pub struct NotAnswering;
+
+impl std::fmt::Display for NotAnswering {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the running one-mk did not answer (it may be busy or stuck; if this keeps happening, end the one-mk process and start it again)")
+    }
+}
+
+impl std::error::Error for NotAnswering {}
+
+impl NotAnswering {
+    /// The error for a change that was saved, which the running one-mk
+    /// did not confirm applying.
+    pub fn saved(error: anyhow::Error) -> anyhow::Error {
+        if error.downcast_ref::<NotAnswering>().is_some() {
+            anyhow::anyhow!("saved, but the running one-mk did not confirm it: it applies the change once it answers again, or when it next starts")
+        } else {
+            error.context("saved, but could not tell the running one-mk")
+        }
+    }
+}
+
+/// The longest control socket path this system allows (`sun_path`, less its
+/// NUL): 108 bytes on Linux, 104 on macOS and the BSDs.
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly"))))]
+const MAX_SOCKET_PATH: usize = 107;
+#[cfg(all(unix, any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly")))]
+const MAX_SOCKET_PATH: usize = 103;
+
+/// Refuses a settings folder whose control socket path is too long for
+/// Unix: clearly, rather than as a connection error that looks like
+/// "not running" or makes `pair` retry for ever.
+fn check_endpoint(dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let path = sys::path(dir);
+        let len = path.as_os_str().len();
+        if len > MAX_SOCKET_PATH {
+            bail!(
+                "the path of the settings folder {} is too long: one-mk's control socket there would be {len} characters long, and this system allows {MAX_SOCKET_PATH}; use a shorter --home (or ONE_MK_HOME)",
+                dir.display()
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 pub fn validate_target(name: &str) -> Result<()> {
@@ -241,6 +338,22 @@ mod tests {
         d
     }
 
+    /// A settings folder too deep for a Unix socket is a clear error for
+    /// commands and the daemon alike, never "not running"; and a change
+    /// the running one-mk didn't confirm says it was saved.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_too_long_home_is_named_and_an_unconfirmed_change_saved() {
+        let deep = std::env::temp_dir().join("d".repeat(120));
+        let err = request(&deep, Request::Status).await.unwrap_err();
+        assert!(format!("{err:#}").contains("is too long") && format!("{err:#}").contains("shorter --home"), "{err:#}");
+        assert!(Server::start(&deep).await.is_err());
+        assert!(check_endpoint(&temp_dir("short")).is_ok());
+        let saved = NotAnswering::saved(NotAnswering.into());
+        assert!(saved.to_string().starts_with("saved, but the running one-mk did not confirm it"), "{saved}");
+        assert!(!NotAnswering.to_string().starts_with("one-mk "), "main would print \"one-mk: one-mk ...\"");
+    }
+
     /// Answers `status` with "hello" and `reload` with "ok".
     async fn answer(mut server: Server) {
         while let Some((req, reply)) = server.recv().await {
@@ -261,11 +374,13 @@ mod tests {
         }
         let task = tokio::spawn(answer(server));
         assert!(Server::start(&dir).await.is_err(), "a second daemon is refused");
+        assert!(InstanceLock::try_acquire(&dir).unwrap().is_none(), "the daemon holds its folder");
         assert_eq!(request(&dir, Request::Status).await.unwrap().as_deref(), Some("hello\n"));
         assert_eq!(request(&dir, Request::Reload).await.unwrap().as_deref(), Some("ok\n"));
         task.abort();
         let _ = task.await;
         assert_eq!(request(&dir, Request::Status).await.unwrap(), None, "socket removed with the server");
+        assert!(InstanceLock::try_acquire(&dir).unwrap().is_some(), "and its hold released");
         let _ = std::fs::remove_dir_all(dir);
     }
 

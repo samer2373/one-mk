@@ -30,14 +30,39 @@ pub enum Action {
 }
 
 fn destination() -> Result<PathBuf> {
-    let data = match std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        Some(data) => PathBuf::from(data),
-        None => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?).join(".local/share"),
+    Ok(one_mk_ctl::xdg::data_home()?.join("gnome-shell/extensions").join(UUID))
+}
+
+/// The GNOME Shell versions the bundled extension declares (and was tried
+/// on), from its metadata.json.
+fn qualified_shells() -> Vec<String> {
+    let metadata: Value = serde_json::from_str(FILES[0].1).unwrap_or_default();
+    metadata["shell-version"].as_array().map(|all| all.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+}
+
+/// `gnome-shell --version` ("GNOME Shell 50.1"), if GNOME Shell is here.
+pub(crate) fn shell_version() -> Option<String> {
+    let out = std::process::Command::new("gnome-shell").arg("--version").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// Whether the extension can be used with the shell that said `version`:
+/// it is only installed for versions it declares and was tried on, because
+/// GNOME refuses an extension that doesn't list its version and nothing
+/// here has been tried on the others.
+fn check_shell(version: Option<&str>, qualified: &[String]) -> Result<()> {
+    let Some(version) = version else {
+        bail!("GNOME Shell was not found on this computer, and the extension is for GNOME only: nothing was installed. one-mk works without it.");
     };
-    if !data.is_absolute() {
-        bail!("HOME/XDG_DATA_HOME must be absolute");
+    let number = version.rsplit(' ').next().unwrap_or(version);
+    let major = number.split('.').next().unwrap_or(number);
+    if qualified.iter().any(|q| q == major) {
+        return Ok(());
     }
-    Ok(data.join("gnome-shell/extensions").join(UUID))
+    bail!(
+        "this extension is qualified for GNOME Shell {} only, and this computer has {version}: nothing was installed. The extension is optional; without it the pointer simply stays drawn at the screen edge while the mouse is on another computer.",
+        qualified.join(", ")
+    );
 }
 
 fn hash(bytes: &[u8]) -> String {
@@ -85,16 +110,16 @@ fn managed(dir: &Path) -> Result<bool> {
 
 fn write(dir: &Path) -> Result<()> {
     let parent = dir.parent().context("missing extensions folder")?;
-    std::fs::create_dir_all(parent)?;
+    one_mk_ctl::private::create_dir_all(parent)?;
     let stage = parent.join(format!(".one-mk-install-{}-{}", std::process::id(), rand::random::<u64>()));
-    std::fs::create_dir(&stage)?;
+    one_mk_ctl::private::create_dir_readable(&stage)?;
     let result = (|| -> Result<()> {
         let mut hashes = serde_json::Map::new();
         for &(name, contents) in FILES {
-            std::fs::write(stage.join(name), contents)?;
+            one_mk_ctl::private::write_readable(&stage.join(name), contents)?;
             hashes.insert(name.into(), json!(hash(contents.as_bytes())));
         }
-        std::fs::write(stage.join(MARKER), serde_json::to_vec(&json!({"uuid": UUID, "version": 1, "files": hashes}))?)?;
+        one_mk_ctl::private::write_readable(&stage.join(MARKER), serde_json::to_vec(&json!({"uuid": UUID, "version": 1, "files": hashes}))?)?;
         std::fs::rename(&stage, dir)?;
         Ok(())
     })();
@@ -111,6 +136,7 @@ pub async fn command(action: &Action) -> Result<()> {
     let dir = destination()?;
     match action {
         Action::Install => {
+            check_shell(shell_version().as_deref(), &qualified_shells())?;
             let upgrade = managed(&dir)?;
             if upgrade {
                 std::fs::remove_dir_all(&dir)?;
@@ -153,7 +179,7 @@ pub async fn command(action: &Action) -> Result<()> {
                     Ok(Some(1)) => println!("GNOME: active. The pointer is hidden while the mouse is on another computer."),
                     Ok(Some(state)) => println!("GNOME: not active (state {state}). Run `one-mk pointer-extension enable`."),
                     Ok(None) => println!("GNOME doesn't know it yet. Log out and back in, then run `one-mk pointer-extension enable`."),
-                    Err(e) => println!("GNOME: could not ask ({e:#})."),
+                    Err(e) => println!("GNOME: could not ask ({}).", crate::doctor::plain_bus_error(&format!("{e:#}"))),
                 }
             }
         }
@@ -169,19 +195,24 @@ mod linux {
     use std::time::Duration;
 
     async fn extensions() -> Result<zbus::Proxy<'static>> {
-        let connection = zbus::connection::Builder::session()?.method_timeout(Duration::from_secs(2)).build().await?;
-        Ok(zbus::Proxy::new(&connection, "org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions", "org.gnome.Shell.Extensions").await?)
+        let connection = zbus::connection::Builder::session().map_err(bus)?.method_timeout(Duration::from_secs(2)).build().await.map_err(bus)?;
+        zbus::Proxy::new(&connection, "org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions", "org.gnome.Shell.Extensions").await.map_err(bus)
+    }
+
+    /// A bus error in plain words, once.
+    fn bus(e: impl std::fmt::Display) -> anyhow::Error {
+        anyhow::anyhow!(crate::doctor::plain_bus_error(&format!("{e:#}")))
     }
 
     /// GNOME's state number for the extension (1 is active), if it knows it.
     pub async fn state() -> Result<Option<u32>> {
-        let info: HashMap<String, zbus::zvariant::OwnedValue> = extensions().await?.call("GetExtensionInfo", &(UUID,)).await?;
+        let info: HashMap<String, zbus::zvariant::OwnedValue> = extensions().await?.call("GetExtensionInfo", &(UUID,)).await.map_err(bus)?;
         Ok(info.get("state").and_then(|s| f64::try_from(s).ok()).filter(|s| s.is_finite() && (0.0..=99.0).contains(s)).map(|s| s as u32))
     }
 
     pub async fn enable() -> Result<()> {
         ensure!(state().await?.is_some(), "GNOME doesn't know the extension yet. Log out and back in once, then try again.");
-        let enabled: bool = extensions().await?.call("EnableExtension", &(UUID,)).await?;
+        let enabled: bool = extensions().await?.call("EnableExtension", &(UUID,)).await.map_err(bus)?;
         ensure!(enabled, "GNOME could not enable the extension. Log out and back in once, then try again.");
         Ok(())
     }
@@ -213,6 +244,18 @@ mod tests {
         let metadata: Value = serde_json::from_str(FILES[0].1).unwrap();
         assert_eq!(metadata["uuid"], UUID);
         assert!(FILES[1].1.contains("org.onemk.Pointer1") && FILES[2].1.contains("org.onemk.Pointer1"));
+    }
+
+    #[test]
+    fn only_the_declared_shell_versions_are_installed_for() {
+        let qualified = qualified_shells();
+        assert!(!qualified.is_empty());
+        let ok = format!("GNOME Shell {}.1", qualified[0]);
+        assert!(check_shell(Some(&ok), &qualified).is_ok());
+        let old = check_shell(Some("GNOME Shell 47.2"), &qualified).unwrap_err().to_string();
+        assert!(old.contains("qualified for GNOME Shell") && old.contains("47.2") && old.contains("nothing was installed"), "{old}");
+        assert!(check_shell(Some("GNOME Shell 5.0"), &qualified).is_err(), "50 is not 5");
+        assert!(check_shell(None, &qualified).unwrap_err().to_string().contains("not found"));
     }
 
     #[test]

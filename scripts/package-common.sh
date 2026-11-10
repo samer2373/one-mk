@@ -33,6 +33,14 @@ need_binaries() {
 # RFC 3339 date of the commit, for the metainfo.
 release_date() { date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%d 2>/dev/null || date -u -r "$SOURCE_DATE_EPOCH" +%Y-%m-%d; }
 
+# write_metainfo FILE: the AppStream metainfo for this version, with its
+# release notes (docs/release-notes/v<version>.md), the same in every package.
+write_metainfo() {
+    mkdir -p "$(dirname "$1")"
+    python3 -I "$ROOT/scripts/metainfo.py" "$VERSION" "$(release_date)" > "$1" || die "scripts/metainfo.py failed"
+    chmod 644 "$1"
+}
+
 # Same permissions whatever the builder's umask, and every file's time
 # clamped, so the archive does not depend on who built it or when.
 clamp_times() {

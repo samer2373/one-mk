@@ -78,7 +78,7 @@ pub fn describe(support: Support, mode: DrawMode) -> String {
 /// `one-mk pointer-overlay [auto|always|never]`.
 pub async fn command(dir: &Path, mode: Option<&str>) -> Result<()> {
     let Some(mode) = mode else {
-        let mode = Settings::load(dir)?.pointer.draw_when_no_mouse;
+        let mode = Settings::view(dir)?.pointer.draw_when_no_mouse;
         let running = crate::control::request(dir, crate::control::Request::Status)
             .await
             .ok()

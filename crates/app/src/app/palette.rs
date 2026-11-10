@@ -35,6 +35,9 @@ enum Act {
     WallChoose,
     WallPause(bool),
     WallOff,
+    Appearance(crate::style::Appearance),
+    /// A setting on the Settings page: its category and row.
+    Setting(settings_page::Cat, &'static str),
 }
 
 struct Entry {
@@ -49,23 +52,6 @@ const SETTINGS: &[(&str, Tab)] = &[
     ("Wallpaper · Fill, fit or stretch", Tab::Wallpaper),
     ("Wallpaper · Pause on battery", Tab::Wallpaper),
     ("Wallpaper · Play on a computer", Tab::Wallpaper),
-    ("Crossing edges · Don't cross near corners", Tab::Advanced),
-    ("Crossing edges · Wait at the edge", Tab::Advanced),
-    ("Crossing edges · Hold a key to cross", Tab::Advanced),
-    ("Crossing edges · Stay in fullscreen windows", Tab::Advanced),
-    ("Power · Keep computers I control awake", Tab::Advanced),
-    ("Power · Sleep displays together", Tab::Advanced),
-    ("Power · Lock every screen with this one", Tab::Advanced),
-    ("Games · Gaming mode", Tab::Advanced),
-    ("Keyboard shortcuts", Tab::Advanced),
-    ("Ctrl and Cmd · Swap them between a Mac and a PC", Tab::Advanced),
-    ("Run commands when the pointer arrives or leaves", Tab::Advanced),
-    ("Typing on the other computer · Letters across layouts", Tab::Advanced),
-    ("Pointer wrap", Tab::Advanced),
-    ("Learn computer positions", Tab::Advanced),
-    ("Draw a pointer on computers with no mouse", Tab::Advanced),
-    ("Updates · Look for updates", Tab::Advanced),
-    ("Updates · Install them without asking", Tab::Advanced),
     ("Clipboard · Text, rich text and images", Tab::Files),
     ("Clipboard · Others can get this clipboard", Tab::Files),
     ("Clipboard · Skip sensitive copies", Tab::Files),
@@ -80,8 +66,8 @@ const SETTINGS: &[(&str, Tab)] = &[
     ("Mouse · Scrolling", Tab::Keys),
     ("Mouse · Gestures", Tab::Keys),
     ("Mouse · Autoscroll", Tab::Keys),
-    ("Layout · Where each computer sits", Tab::Layout),
-    ("Layout · Profiles and Wi-Fi", Tab::Layout),
+    ("Arrange · Where each computer sits", Tab::Arrange),
+    ("Arrange · Profiles and Wi-Fi", Tab::Arrange),
     ("Start at login", Tab::Desk),
 ];
 
@@ -116,18 +102,26 @@ fn score(text: &str, query: &str) -> u32 {
     }
 }
 
+/// Where an entry goes in the list for `query`: a title typed out in full
+/// is what was meant ("Health" opens Health, not "Check health again"),
+/// then actions before computers, pages and settings, then how well it matches.
+fn rank(group: &str, title: &str, query: &str) -> (bool, usize, u32) {
+    let order = ["Actions", "Computers", "Go to", "Settings"].iter().position(|x| *x == group).unwrap_or(9);
+    (!title.trim().eq_ignore_ascii_case(query.trim()), order, score(title, query))
+}
+
 impl App {
     fn palette_entries(&self) -> Vec<Entry> {
         let mut out = vec![];
-        let k = shell::cmd();
-        let tab = |t: Tab, title: &str, hint: String| Entry { group: "Go to", title: title.into(), hint, act: Act::Tab(t) };
-        out.push(tab(Tab::Desk, "Desk", format!("{k}1")));
-        out.push(tab(Tab::Layout, "Arrange computers", "Desk".into()));
-        out.push(tab(Tab::Wallpaper, "Wallpaper", format!("{k}2")));
-        out.push(tab(Tab::Files, "Clipboard & files", format!("{k}3")));
-        out.push(tab(Tab::Keys, "Keys & mouse", format!("{k}4")));
-        out.push(tab(Tab::Advanced, "Settings", format!("{k},")));
-        out.push(tab(Tab::Health, "Health", String::new()));
+        // The pages in the bar's order, each with its shortcut.
+        let tab = |t: Tab, title: &str| Entry { group: "Go to", title: title.into(), hint: shell::shortcut(t), act: Act::Tab(t) };
+        out.push(tab(Tab::Desk, "Desk"));
+        out.push(tab(Tab::Arrange, "Arrange computers"));
+        out.push(tab(Tab::Wallpaper, "Wallpaper"));
+        out.push(tab(Tab::Files, "Clipboard & files"));
+        out.push(tab(Tab::Keys, "Keys & mouse"));
+        out.push(tab(Tab::Health, "Health"));
+        out.push(tab(Tab::Settings, "Settings"));
         let act = |title: String, hint: &str, act: Act| Entry { group: "Actions", title, hint: hint.into(), act };
         match self.status.as_ref() {
             Some(None) => out.push(act("Start oneMK".into(), "", Act::Start)),
@@ -162,6 +156,14 @@ impl App {
         }
         if let Some(v) = &self.update_available {
             out.push(act(format!("Update oneMK to {v}"), "", Act::Update));
+        }
+        for a in crate::style::Appearance::ALL {
+            let hint = if a == self.appearance() { "Now" } else { "" };
+            out.push(Entry { group: "Settings", title: format!("Appearance: {}", a.label()), hint: hint.into(), act: Act::Appearance(a) });
+        }
+        // Settings' own rows: each opens its category and lights its row.
+        for (title, cat, key) in settings_page::JUMPS {
+            out.push(Entry { group: "Settings", title: (*title).into(), hint: format!("Settings · {}", cat.label()), act: Act::Setting(*cat, key) });
         }
         for (title, t) in SETTINGS {
             let page = TABS.iter().find(|x| x.0 == *t).map_or("", |x| x.1);
@@ -213,6 +215,8 @@ impl App {
             }
             Act::WallPause(paused) => self.wallpaper_command(one_mk_wallpaper::Command::Pause { paused }),
             Act::WallOff => self.wallpaper_command(one_mk_wallpaper::Command::Off),
+            Act::Appearance(a) => self.set_appearance(a),
+            Act::Setting(cat, key) => self.jump_to_setting(cat, key),
         }
     }
 
@@ -226,7 +230,8 @@ impl App {
         if fade < 1.0 {
             ctx.request_repaint();
         }
-        ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("palette-dim"))).rect_filled(screen, 0.0, Color32::from_black_alpha((140.0 * fade) as u8));
+        // The same dimming as behind a sheet (light: black 20 %, dark: 50 %).
+        ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("palette-dim"))).rect_filled(screen, 0.0, crate::style::scrim().gamma_multiply(fade));
 
         let q = self.palette.query.trim().to_owned();
         let mut found: Vec<(Entry, Vec<std::ops::Range<usize>>)> = self.palette_entries().into_iter().filter_map(|e| {
@@ -238,8 +243,7 @@ impl App {
             Some((e, m))
         }).collect();
         if !q.is_empty() {
-            let order = |g: &str| ["Actions", "Computers", "Go to", "Settings"].iter().position(|x| *x == g).unwrap_or(9);
-            found.sort_by_key(|(e, _)| (order(e.group), score(&e.title, &q)));
+            found.sort_by_key(|(e, _)| rank(e.group, &e.title, &q));
         }
         if self.palette.sel_for != q {
             self.palette.sel = 0;
@@ -268,22 +272,13 @@ impl App {
         }
 
         // Rows: a heading where the group changes, then the entries.
-        const ROW: f32 = 40.0;
+        const ROW: f32 = PALETTE_ROW;
         const HEAD: f32 = 26.0;
-        const MAX_H: f32 = 380.0;
-        let mut rows: Vec<(Option<&'static str>, usize)> = vec![];
-        let mut last = "";
-        for (k, (e, _)) in found.iter().enumerate() {
-            if e.group != last {
-                rows.push((Some(e.group), k));
-                last = e.group;
-            }
-            rows.push((None, k));
-        }
-        let list_h: f32 = rows.iter().map(|(h, _)| if h.is_some() { HEAD } else { ROW }).sum::<f32>().min(MAX_H).max(if n == 0 { 64.0 } else { 0.0 });
-        let w = (screen.width() - 80.0).min(620.0);
-        let h = 56.0 + list_h + 8.0 + 40.0;
-        let rect = Rect::from_min_size(pos2(screen.center().x - w / 2.0, screen.top() + (screen.height() * 0.16).max(60.0) + 6.0 * (1.0 - fade)), vec2(w, h));
+        let groups: Vec<&'static str> = found.iter().map(|(e, _)| e.group).collect();
+        let rows = palette_rows(&groups);
+        let lay = palette_layout(screen, &rows);
+        let list_h = lay.list_h;
+        let rect = lay.rect.translate(vec2(0.0, 6.0 * (1.0 - fade)));
         let clicked_out = ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !rect.contains(p)));
         if clicked_out && now - self.palette.opened > 0.1 {
             self.palette.open = false;
@@ -292,29 +287,29 @@ impl App {
         let mut run = None;
         egui::Area::new(Id::unique("palette")).order(egui::Order::Tooltip).fixed_pos(rect.min).show(ctx, |ui| {
             let (r, _) = ui.allocate_exact_size(rect.size(), Sense::hover());
-            for s in widgets::glass_shapes_as(ui.ctx(), Id::unique("palette-glass").value(), r, 18.0, widgets::PALETTE_GLASS) {
+            for s in widgets::glass_shapes_as(ui.ctx(), Id::unique("palette-glass").value(), r, f32::from(R_SHEET), widgets::PALETTE_GLASS) {
                 ui.painter().add(s);
             }
             let p = ui.painter().clone();
             // The query.
             let input = Rect::from_min_size(r.min, vec2(r.width(), 56.0));
-            icons::search(&p, pos2(input.left() + 26.0, input.center().y), INK2);
+            icons::search(&p, pos2(input.left() + 26.0, input.center().y), pal().ink2);
             let field = Rect::from_min_max(pos2(input.left() + 46.0, input.top() + 12.0), pos2(input.right() - 18.0, input.bottom() - 12.0));
             let mut child = ui.new_child(UiBuilder::new().max_rect(field));
             let edit = egui::TextEdit::singleline(&mut self.palette.query)
                 .id(Id::unique("palette-query"))
                 .font(regular(17.0))
-                .text_color(INK)
-                .hint_text(egui::RichText::new("Search actions, computers and settings").color(INK3))
+                .text_color(pal().ink)
+                .hint_text(egui::RichText::new("Search actions, computers and settings").color(pal().ink3))
                 .frame(egui::Frame::NONE)
                 .desired_width(field.width());
             let resp = child.add(edit);
             resp.request_focus();
-            p.hline(input.x_range(), input.bottom() - 0.5, Stroke::new(1.0, HAIRLINE));
+            p.hline(input.x_range(), input.bottom() - 0.5, Stroke::new(1.0, pal().line));
             // The results.
             let list = Rect::from_min_size(pos2(r.left(), input.bottom() + 4.0), vec2(r.width(), list_h));
             if n == 0 {
-                p.text(list.center(), Align2::CENTER_CENTER, "Nothing found. Try another word.", regular(T_BODY), INK3);
+                p.text(list.center(), Align2::CENTER_CENTER, "Nothing found. Try another word.", regular(T_BODY), pal().ink3);
             }
             let mut child = ui.new_child(UiBuilder::new().max_rect(list));
             child.set_clip_rect(list);
@@ -323,7 +318,7 @@ impl App {
                 for (head, k) in &rows {
                     if let Some(g) = head {
                         let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), HEAD), Sense::hover());
-                        ui.painter().text(pos2(hr.left() + 16.0, hr.center().y + 3.0), Align2::LEFT_CENTER, g.to_uppercase(), semibold(T_META - 1.5), INK3);
+                        ui.painter().text(pos2(hr.left() + 16.0, hr.center().y + 3.0), Align2::LEFT_CENTER, g.to_uppercase(), semibold(T_META - 1.5), pal().ink3);
                         continue;
                     }
                     let (e, lit) = &found[*k];
@@ -332,29 +327,28 @@ impl App {
                     if resp.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
                         self.palette.sel = *k;
                     }
-                    // Tabbed onto, a row is the chosen one (its lift and Volt
-                    // tile are the focus look), and its ring shows.
+                    // Tabbed onto, a row is the chosen one (its fill and
+                    // accent tile are the focus look), and its ring shows.
                     if resp.gained_focus() {
                         self.palette.sel = *k;
                     }
                     widgets::focus_ring(ui, &resp, row, 10);
                     let chosen = self.palette.sel == *k;
                     if chosen {
-                        // The chosen row: a quiet lift, as a system list does; its icon
-                        // tile carries the Volt.
-                        ui.painter().rect(row, CornerRadius::same(10), ON_GLASS_LIT, Stroke::new(1.0, Color32::from_white_alpha(14)), StrokeKind::Inside);
+                        // The chosen row: `accent_soft`; its icon tile in the accent.
+                        ui.painter().rect_filled(row, CornerRadius::same(10), pal().accent_soft);
                         if down || up {
                             ui.scroll_to_rect(rr, None);
                         }
                     }
                     let ic = Rect::from_center_size(pos2(row.left() + 22.0, row.center().y), vec2(26.0, 26.0));
-                    ui.painter().rect_filled(ic, CornerRadius::same(7), if chosen { SIGNAL } else { Color32::from_white_alpha(18) });
+                    ui.painter().rect_filled(ic, CornerRadius::same(7), if chosen { pal().accent } else { pal().surface2 });
                     let icon = match e.act {
                         Act::Tab(Tab::Files) => Icon::Clipboard,
                         Act::Tab(Tab::Keys) => Icon::Keys,
-                        Act::Tab(Tab::Advanced) => Icon::Advanced,
+                        Act::Tab(Tab::Settings) | Act::Appearance(_) | Act::Setting(..) => Icon::Settings,
                         Act::Tab(Tab::Health) | Act::Recheck => Icon::Health,
-                        Act::Tab(Tab::Layout) => Icon::Layout,
+                        Act::Tab(Tab::Arrange) => Icon::Arrange,
                         Act::Tab(Tab::Wallpaper) | Act::WallChoose | Act::WallPause(_) | Act::WallOff => Icon::Wallpaper,
                         Act::Tab(_) => Icon::Desk,
                         Act::LockAll | Act::KeepHere(_) => Icon::Lock,
@@ -367,7 +361,7 @@ impl App {
                         Act::Update => Icon::Update,
                         Act::Received => Icon::Clipboard,
                     };
-                    icons::draw(ui.painter(), icon, ic.shrink(5.5), if chosen { SIGNAL_INK } else { INK });
+                    icons::draw(ui.painter(), icon, ic.shrink(5.5), if chosen { pal().on_accent } else { pal().ink2 });
                     // The title with what was typed lit up.
                     let mut job = egui::text::LayoutJob::default();
                     let mut at = 0;
@@ -379,17 +373,20 @@ impl App {
                         }
                         // Only the typed characters stand out: in full ink and
                         // semibold, the rest of the title a step quieter.
-                        job.append(&e.title[at..range.start], 0.0, egui::TextFormat::simple(regular(14.0), INK_HOVER));
-                        job.append(&e.title[range.clone()], 0.0, egui::TextFormat::simple(semibold(14.0), INK));
+                        job.append(&e.title[at..range.start], 0.0, egui::TextFormat::simple(regular(T_BODY), pal().ink_hover));
+                        job.append(&e.title[range.clone()], 0.0, egui::TextFormat::simple(semibold(T_BODY), pal().ink));
                         at = range.end;
                     }
-                    job.append(&e.title[at..], 0.0, egui::TextFormat::simple(regular(14.0), INK_HOVER));
+                    job.append(&e.title[at..], 0.0, egui::TextFormat::simple(regular(T_BODY), if lit.is_empty() { pal().ink } else { pal().ink_hover }));
                     let g = ui.painter().layout_job(job);
-                    ui.painter().galley(pos2(ic.right() + 12.0, row.center().y - g.size().y / 2.0), g, INK);
-                    if !e.hint.is_empty() {
-                        ui.painter().text(pos2(row.right() - 12.0, row.center().y), Align2::RIGHT_CENTER, &e.hint, regular(T_META), INK3);
+                    ui.painter().galley(pos2(ic.right() + 12.0, row.center().y - g.size().y / 2.0), g, pal().ink);
+                    // A shortcut in a mono key chip; other hints in `ink3`.
+                    if !e.hint.is_empty() && matches!(e.act, Act::Tab(_)) && e.group == "Go to" {
+                        widgets::kbd(ui.painter(), pos2(row.right() - 10.0, row.center().y), Align2::RIGHT_CENTER, &e.hint);
+                    } else if !e.hint.is_empty() {
+                        ui.painter().text(pos2(row.right() - 12.0, row.center().y), Align2::RIGHT_CENTER, &e.hint, regular(T_META), if chosen { pal().accent_text } else { pal().ink3 });
                     } else if chosen {
-                        ui.painter().text(pos2(row.right() - 12.0, row.center().y), Align2::RIGHT_CENTER, "↵", regular(T_BODY), INK2);
+                        widgets::kbd(ui.painter(), pos2(row.right() - 10.0, row.center().y), Align2::RIGHT_CENTER, "↵");
                     }
                     widgets::a11y(&resp, Role::Button, &e.title, Some(chosen));
                     if resp.clicked() {
@@ -399,16 +396,14 @@ impl App {
             });
             // What the keys do.
             let foot = Rect::from_min_max(pos2(r.left(), r.bottom() - 40.0), r.max);
-            p.hline(foot.x_range(), foot.top() + 0.5, Stroke::new(1.0, HAIRLINE));
-            p.text(pos2(foot.left() + 16.0, foot.center().y), Align2::LEFT_CENTER, "oneMK", regular(T_META), INK3);
+            p.hline(foot.x_range(), foot.top() + 0.5, Stroke::new(1.0, pal().line));
+            p.text(pos2(foot.left() + 16.0, foot.center().y), Align2::LEFT_CENTER, "oneMK", regular(T_META), pal().ink3);
+            // Close, Move and Open: each word in `ink3`, its key in a mono chip.
             let mut x = foot.right() - 16.0;
             for (word, key) in [("Close", "esc"), ("Move", "↑↓"), ("Open", "↵")] {
-                let kw = text_width(ui, key, regular(T_META - 1.0)) + 12.0;
-                let kr = Rect::from_min_size(pos2(x - kw, foot.center().y - 10.0), vec2(kw, 20.0));
-                p.rect(kr, CornerRadius::same(5), Color32::from_white_alpha(14), Stroke::new(0.5, Color32::from_white_alpha(40)), StrokeKind::Inside);
-                p.text(kr.center(), Align2::CENTER_CENTER, key, regular(T_META - 1.0), INK2);
+                let kr = widgets::kbd(&p, pos2(x, foot.center().y), Align2::RIGHT_CENTER, key);
                 let ww = text_width(ui, word, regular(T_META));
-                p.text(pos2(kr.left() - 6.0, foot.center().y), Align2::RIGHT_CENTER, word, regular(T_META), INK3);
+                p.text(pos2(kr.left() - 6.0, foot.center().y), Align2::RIGHT_CENTER, word, regular(T_META), pal().ink3);
                 x = kr.left() - 6.0 - ww - 14.0;
             }
         });
@@ -418,9 +413,85 @@ impl App {
     }
 }
 
+/// The list's rows: a heading where the group changes (`Some(group)`),
+/// then each entry by its index in `groups` (the results, in order).
+fn palette_rows(groups: &[&'static str]) -> Vec<(Option<&'static str>, usize)> {
+    let mut rows = vec![];
+    let mut last = "";
+    for (k, g) in groups.iter().enumerate() {
+        if *g != last {
+            rows.push((Some(*g), k));
+            last = g;
+        }
+        rows.push((None, k));
+    }
+    rows
+}
+
+/// Where the palette goes in `screen` (handoff 5.8): at most 620 wide, 40
+/// from the sides, a sixth of the way down; the search (56), the list (40 a
+/// row, 26 a heading, up to 380, then it scrolls; room for "Nothing found"
+/// when empty) and the footer of key hints (40).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PaletteLayout {
+    rect: Rect,
+    list_h: f32,
+}
+
+fn palette_layout(screen: Rect, rows: &[(Option<&'static str>, usize)]) -> PaletteLayout {
+    const HEAD: f32 = 26.0;
+    const SEARCH: f32 = 56.0;
+    const FOOT: f32 = 40.0;
+    let top = screen.top() + (screen.height() * 0.16).max(60.0);
+    // Never taller than the window leaves below its top.
+    let max_list = (screen.bottom() - 16.0 - top - SEARCH - 8.0 - FOOT).clamp(PALETTE_ROW * 2.0, 380.0);
+    let list_h = if rows.is_empty() { 64.0 } else { rows.iter().map(|(h, _)| if h.is_some() { HEAD } else { PALETTE_ROW }).sum::<f32>().min(max_list) };
+    let w = (screen.width() - 80.0).min(PALETTE_W);
+    PaletteLayout { rect: Rect::from_min_size(pos2(screen.center().x - w / 2.0, top), vec2(w, SEARCH + list_h + 8.0 + FOOT)), list_h }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_named_in_full_comes_first() {
+        let mut found = [("Actions", "Check health again"), ("Go to", "Health"), ("Actions", "Choose a wallpaper"), ("Go to", "Wallpaper"), ("Settings", "Wallpaper · Pause on battery")];
+        found.sort_by_key(|(g, t)| rank(g, t, "health"));
+        assert_eq!(found[0].1, "Health");
+        found.sort_by_key(|(g, t)| rank(g, t, "Wallpaper "));
+        assert_eq!(found[0].1, "Wallpaper");
+        found.sort_by_key(|(g, t)| rank(g, t, "wall"));
+        assert_eq!(found[0].1, "Choose a wallpaper", "a part of a word still puts actions first");
+    }
+
+    #[test]
+    fn rows_head_each_group_once_and_keep_every_entry() {
+        let groups = ["Go to", "Go to", "Actions", "Settings", "Settings"];
+        let rows = palette_rows(&groups);
+        assert_eq!(rows.iter().filter(|(h, _)| h.is_some()).count(), 3);
+        let entries: Vec<usize> = rows.iter().filter(|(h, _)| h.is_none()).map(|(_, k)| *k).collect();
+        assert_eq!(entries, vec![0, 1, 2, 3, 4]);
+        assert_eq!(rows[0], (Some("Go to"), 0));
+        assert!(palette_rows(&[]).is_empty());
+    }
+
+    #[test]
+    fn the_palette_is_620_at_most_and_fits_a_small_window() {
+        let rows = palette_rows(&["Go to"; 30]);
+        let big = palette_layout(Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0)), &rows);
+        assert_eq!(big.rect.width(), 620.0);
+        assert_eq!(big.list_h, 380.0, "a long list scrolls inside 380");
+        assert!((big.rect.center().x - 720.0).abs() < 0.01);
+        let small = palette_layout(Rect::from_min_size(Pos2::ZERO, vec2(820.0, 540.0)), &rows);
+        assert_eq!(small.rect.width(), 620.0);
+        assert!(small.rect.bottom() <= 540.0 - 16.0, "{:?}", small.rect);
+        // Rows are 40: the list shows whole rows of 40 plus the heading.
+        let few = palette_layout(Rect::from_min_size(Pos2::ZERO, vec2(1100.0, 720.0)), &palette_rows(&["Go to", "Go to"]));
+        assert_eq!(few.list_h, 26.0 + 2.0 * 40.0);
+        // Nothing found still leaves room to say so.
+        assert_eq!(palette_layout(Rect::from_min_size(Pos2::ZERO, vec2(820.0, 540.0)), &[]).list_h, 64.0);
+    }
 
     #[test]
     fn every_word_must_be_found_and_is_lit() {
@@ -428,6 +499,23 @@ mod tests {
         assert!(matches("Lock every screen", "lock wall").is_none());
         // Case doesn't matter.
         assert!(matches("Keyboard shortcuts", "KEYB").is_some());
+    }
+
+    #[test]
+    fn settings_titles_come_from_settings_so_each_lands_on_its_row() {
+        // Settings' own rows are listed by `settings_page::JUMPS` (each opens
+        // its category and lights its row); this list holds other pages'.
+        assert!(SETTINGS.iter().all(|(_, tab)| *tab != Tab::Settings));
+        // A typed query finds a setting by any word of its title, as the
+        // palette does, and the row it stands for is in the category it says.
+        for (query, cat, key) in [("wait at", settings_page::Cat::Edges, "edge-dwell"), ("pointer wrap", settings_page::Cat::Pointer, "pointer-wrap"),
+            ("look for updates", settings_page::Cat::General, "update-check"), ("stop when idle", settings_page::Cat::Typing, "broadcast-idle"),
+            ("ctrl and cmd", settings_page::Cat::Typing, "swaps"), ("run commands", settings_page::Cat::Commands, "hook-0"),
+            ("gaming", settings_page::Cat::Games, "gaming"), ("keyboard shortcuts", settings_page::Cat::Shortcuts, "hotkeys"),
+            ("lock every screen with", settings_page::Cat::Power, "lock-sync")] {
+            let found: Vec<_> = settings_page::JUMPS.iter().filter(|(title, _, _)| matches(title, query).is_some()).collect();
+            assert!(found.iter().any(|(_, c, k)| *c == cat && *k == key), "{query}: {found:?}");
+        }
     }
 
     #[test]

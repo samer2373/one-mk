@@ -83,7 +83,7 @@ pub static HELP: &[(&str, Help)] = &[
     ("clip-text", Help { caption: "Copied text appears on other computers", detail: "Copy text here and paste it on another paired computer. Off: text stays on the computer you copied it on.", scene: Copy(Item::Text) }),
     ("clip-html", Help { caption: "Keeps bold, links and colors", detail: "Formatted text keeps its formatting when you paste it on another computer. Off: it arrives as plain text.", scene: Copy(Item::Rich) }),
     ("clip-image", Help { caption: "Copied pictures travel too", detail: "Copy a picture or a screenshot here and paste it on another computer. Off: only text is shared.", scene: Copy(Item::Image) }),
-    ("allow-fetch", Help { caption: "Other computers can ask for your clipboard", detail: "Any paired computer can copy this clipboard with Get clipboard, including passwords you copied. Off: only what you send yourself leaves this computer.", scene: Copy(Item::Fetch) }),
+    ("allow-fetch", Help { caption: "Other computers can ask for your clipboard", detail: "Any paired computer can copy this clipboard with Get clipboard. Passwords stay back while “Passwords stay on this computer” is on. Off: only what you send yourself leaves this computer.", scene: Copy(Item::Fetch) }),
     ("notify", Help { caption: "A notice when a file lands on this computer", detail: "A notification appears when someone sends you a file. Off: files still arrive, silently.", scene: Notice }),
     ("edge-corner", Help { caption: "Keeps corners easy to hit", detail: "The pointer won't cross within this many pixels of a corner, so you can reach a corner or a close button without sliding onto the next screen. 0 turns it off.", scene: Cross(self::Cross::Corner) }),
     ("edge-dwell", Help { caption: "Rest this long to cross", detail: "The pointer has to stay against the edge this many milliseconds before it crosses. A short wait stops accidental crossings. 0 crosses at once.", scene: Cross(self::Cross::Dwell) }),
@@ -103,14 +103,14 @@ pub static HELP: &[(&str, Help)] = &[
     ("scroll-device", Help { caption: "Wheels and touchpads can differ", detail: "Choose whether the scrolling settings below apply to mouse wheels, touchpads, or both.", scene: None }),
     ("pointer-speed", Help { caption: "How far the pointer moves", detail: "A multiplier on pointer movement. 1× leaves it as it is; below 1× is slower, above 1× is faster.", scene: None }),
     ("pointer-accel", Help { caption: "Whether quick movements go further", detail: "Like here: use this computer's acceleration. Off: the pointer moves in proportion to your hand, however fast. Curve: the faster you move, the further it goes. Off and Curve need raw mouse movement, which isn't available on every system.", scene: None }),
-    ("clip-sensitive", Help { caption: "Passwords stay on this computer", detail: "Passwords and other copies their app marked as sensitive aren't pushed to other computers or handed out when another computer asks for your clipboard. Sending something yourself still sends it.", scene: Copy(Item::Secret) }),
-    ("file-drop-zones", Help { caption: "Drop a file on a screen edge to send it", detail: "Hold a file over the thin strip at the edge that faces another computer and let go: it is copied into that computer's Downloads folder. Off: only dropping on a computer on the desk sends files.", scene: Copy(Item::Text) }),
+    ("clip-sensitive", Help { caption: "Passwords stay on this computer", detail: "Passwords and other copies their app marked as sensitive aren't pushed to other computers or handed out when another computer asks for your clipboard. Sending one yourself is refused unless you add --allow-sensitive on the command line.", scene: Copy(Item::Secret) }),
+    ("file-drop-zones", Help { caption: "Drop a file on a screen edge to send it", detail: "Experimental. Hold a file over the thin strip at the screen edge that faces another computer and let go: it is copied into that computer's received-files folder. Nothing asks before it sends. Off by default; tried so far only with scripted drags.", scene: Copy(Item::Text) }),
     ("history-enabled", Help { caption: "Remember recent copies", detail: "Keeps a list of what you copied so you can bring an old copy back. Off: nothing you copy is kept. It may keep passwords their app didn't mark as secret.", scene: None }),
     ("history-persist", Help { caption: "Keep the list when oneMK restarts", detail: "Saves the history to disk, unencrypted, so it survives a restart. Off: the history lives in memory only and goes when oneMK stops.", scene: None }),
     ("wallpaper-battery", Help { caption: "Saves power on laptops", detail: "A video wallpaper pauses while a laptop is running on its battery.", scene: None }),
     ("wallpaper-computer", Help { caption: "Whether this computer shows it", detail: "Turn the wallpaper on or off for this computer.", scene: None }),
     ("hook-shell", Help { caption: "Pipes and && work in the command", detail: "Runs the command through the computer's shell, so pipes, `&&` and variables work. Off: the program is started directly.", scene: None }),
-    ("also-on-this-computer", Help { caption: "Your rules apply here too", detail: "Apply your key and button rules here as well as on the other computers. Pointer speed and scrolling stay unchanged. Ctrl + Alt + Shift + Esc turns local rules off and brings you back here.", scene: None }),
+    ("also-on-this-computer", Help { caption: "Your rules apply here too", detail: "Experimental, not yet tested on real hardware. Apply your key and button rules here as well as on the other computers. Pointer speed and scrolling stay unchanged. Ctrl + Alt + Shift + Esc turns local rules off and brings you back here.", scene: None }),
     ("autoscroll-toggle", Help { caption: "Click a button, then move to scroll", detail: "Click the chosen mouse button, then move away to scroll the other computer. Click again or press Esc to stop.", scene: None }),
     ("autoscroll-speed", Help { caption: "How fast autoscroll goes", detail: "A multiplier on autoscroll. 1× leaves it as it is; below 1× is slower, above 1× is faster.", scene: None }),
     ("update-check", Help { caption: "Checks for a newer oneMK by itself", detail: "oneMK checks whether a newer version is out and tells you. Off: it never checks by itself.", scene: None }),
@@ -120,6 +120,8 @@ pub static HELP: &[(&str, Help)] = &[
     ("pointer-overlay", Help { caption: "A pointer for computers with no mouse", detail: "A computer with no mouse attached can show no pointer at all while you control it. Auto: oneMK draws a small arrow only when the system shows none. Always: whenever this computer is controlled. Never: not at all.", scene: None }),
     ("broadcast-idle", Help { caption: "Typing on every computer stops itself", detail: "Typing on every computer at once stops after this many minutes without input. 0 means it never stops by itself.", scene: None }),
     ("wallpaper-fit", Help { caption: "How the picture meets the screens", detail: "Fill: the picture covers the screens and crops what doesn't fit. Fit: all of it shows, with bars where the shapes differ. Stretch: it is pulled to the exact shape of the screens, which can distort it.", scene: None }),
+    ("appearance", Help { caption: "System follows this computer's setting", detail: "Light, Dark, or whichever this computer uses. The window changes at once.", scene: None }),
+    ("typing", Help { caption: "Which keys the other computer types", detail: "Keys: each key you press is the same key on the other computer, whatever its layout. Letters and Auto are experimental: the other computer types the letters printed on your keys, even with a different layout.", scene: None }),
     ("hotkeys", Help { caption: "Shortcuts that jump to another computer", detail: "Press a shortcut to send the keyboard and mouse straight to a computer, without moving the pointer to an edge. Off: only the edges switch.", scene: Keys }),
 ];
 
@@ -158,7 +160,7 @@ pub fn draw(p: &Painter, r: Rect, scene: Scene, t: f32) {
         p.add(egui::Shape::convex_polygon(
             vec![at, at + vec2(0.0, 14.0), at + vec2(4.0, 10.5), at + vec2(7.5, 15.5), at + vec2(9.5, 14.5), at + vec2(6.5, 9.5), at + vec2(11.0, 9.5)],
             col,
-            Stroke::new(1.0, GROUND),
+            Stroke::new(1.0, pal().bg),
         ));
     };
     match scene {
@@ -179,7 +181,7 @@ pub fn draw(p: &Painter, r: Rect, scene: Scene, t: f32) {
             let jump = ease(seg(t, 0.4, 0.6));
             let from = a.center() + vec2(-6.0, -6.0);
             let to = b.center() + vec2(-6.0, -6.0);
-            pointer(if jump < 0.5 { from } else { to }, if jump < 0.5 { INK } else { SIGNAL });
+            pointer(if jump < 0.5 { from } else { to }, if jump < 0.5 { pal().ink } else { pal().accent });
         }
         Scene::Scroll(k) => roll(p, r, k, t),
         Scene::Notice => {
@@ -189,8 +191,8 @@ pub fn draw(p: &Painter, r: Rect, scene: Scene, t: f32) {
             file(p, a.center().lerp(b.center(), x), 1.0 - seg(t, 0.5, 0.55));
             let drop = ease(seg(t, 0.55, 0.7)) * (1.0 - seg(t, 0.9, 1.0));
             let banner = Rect::from_min_size(pos2(b.left() + 6.0, b.top() + 6.0 - 20.0 * (1.0 - drop)), vec2(b.width() - 12.0, 14.0));
-            p.rect_filled(banner, CornerRadius::same(4), mix(Color32::TRANSPARENT, SIGNAL, drop));
-            p.rect_filled(banner.shrink2(vec2(6.0, 5.0)), CornerRadius::same(1), mix(Color32::TRANSPARENT, SIGNAL_INK, drop));
+            p.rect_filled(banner, CornerRadius::same(4), mix(Color32::TRANSPARENT, pal().accent, drop));
+            p.rect_filled(banner.shrink2(vec2(6.0, 5.0)), CornerRadius::same(1), mix(Color32::TRANSPARENT, pal().on_accent, drop));
         }
     }
 }
@@ -205,8 +207,8 @@ fn screens(r: Rect) -> (Rect, Rect) {
 }
 
 fn screen(p: &Painter, r: Rect, lit: f32) {
-    p.rect_filled(r, CornerRadius::same(6), mix(GROUND, RAISED, lit));
-    p.rect_stroke(r, CornerRadius::same(6), Stroke::new(1.5, mix(LINE, TRACK_EDGE, lit)), StrokeKind::Inside);
+    p.rect_filled(r, CornerRadius::same(6), mix(pal().bg, pal().well, lit));
+    p.rect_stroke(r, CornerRadius::same(6), Stroke::new(1.5, mix(pal().line, pal().ink3, lit)), StrokeKind::Inside);
 }
 
 fn cross(p: &Painter, (a, b): (Rect, Rect), c: Cross, t: f32, pointer: &dyn Fn(Pos2, Color32)) {
@@ -214,7 +216,7 @@ fn cross(p: &Painter, (a, b): (Rect, Rect), c: Cross, t: f32, pointer: &dyn Fn(P
     screen(p, b, 1.0);
     let mid = a.center().y;
     let (start, edge, land) = (a.left() + 18.0, a.right() - 3.0, b.left() + 34.0);
-    let (mut at, mut col, mut blocked) = (pos2(start, mid), INK, false);
+    let (mut at, mut col, mut blocked) = (pos2(start, mid), pal().ink, false);
     match c {
         Cross::Locked => {
             at.x = lerp(start, edge, ease(seg(t, 0.1, 0.45)));
@@ -223,14 +225,14 @@ fn cross(p: &Painter, (a, b): (Rect, Rect), c: Cross, t: f32, pointer: &dyn Fn(P
         }
         Cross::Fullscreen => {
             // A window filling the screen: the pointer meets the edge and stays.
-            p.rect_filled(a.shrink(4.0), CornerRadius::same(3), PILL);
-            p.rect_filled(Rect::from_min_size(a.min + vec2(4.0, 4.0), vec2(a.width() - 8.0, 6.0)), CornerRadius::same(2), BUTTON_LIT);
+            p.rect_filled(a.shrink(4.0), CornerRadius::same(3), pal().hover);
+            p.rect_filled(Rect::from_min_size(a.min + vec2(4.0, 4.0), vec2(a.width() - 8.0, 6.0)), CornerRadius::same(2), pal().surface2_hover);
             at.x = lerp(start, edge, ease(seg(t, 0.1, 0.5)));
             blocked = t > 0.5;
         }
         Cross::Corner => {
             let zone = Rect::from_min_size(pos2(a.right() - 22.0, a.top()), vec2(22.0, 22.0));
-            p.rect_filled(zone, CornerRadius { ne: 6, ..Default::default() }, mix(Color32::TRANSPARENT, SIGNAL, 0.22));
+            p.rect_filled(zone, CornerRadius { ne: 6, ..Default::default() }, mix(Color32::TRANSPARENT, pal().accent, 0.22));
             if t < 0.5 {
                 at = pos2(lerp(start, edge, ease(seg(t, 0.05, 0.4))), a.top() + 10.0);
                 blocked = t > 0.4;
@@ -250,12 +252,12 @@ fn cross(p: &Painter, (a, b): (Rect, Rect), c: Cross, t: f32, pointer: &dyn Fn(P
         Cross::Wrap => {
             // Out through the right end, in at the left end.
             let (lo, hi) = (a.left() + 3.0, b.right() - 3.0);
-            col = INK;
+            col = pal().ink;
             if t < 0.45 {
                 at.x = lerp(a.left() + 30.0, hi, ease(seg(t, 0.05, 0.45)));
             } else {
                 at.x = lerp(lo, a.left() + 30.0, ease(seg(t, 0.6, 0.9)));
-                col = SIGNAL;
+                col = pal().accent;
                 if t < 0.6 {
                     at.x = -100.0;
                 }
@@ -270,7 +272,7 @@ fn cross(p: &Painter, (a, b): (Rect, Rect), c: Cross, t: f32, pointer: &dyn Fn(P
         }
     }
     if at.x > a.right() && c != Cross::Wrap {
-        col = SIGNAL;
+        col = pal().accent;
     }
     // Between the two ends of a wrap the pointer is nowhere.
     if at.x >= 0.0 {
@@ -305,20 +307,20 @@ fn roll(p: &Painter, r: Rect, k: Roll, t: f32) {
     for row in -1..7 {
         for col in -1..8 {
             let at = pos2(s.left() + ox + col as f32 * 28.0, s.top() + oy + row as f32 * 14.0 + 4.0);
-            clip.rect_filled(Rect::from_min_size(at, vec2(18.0, 4.0)), CornerRadius::same(2), mix(Color32::TRANSPARENT, INK2, 0.5));
+            clip.rect_filled(Rect::from_min_size(at, vec2(18.0, 4.0)), CornerRadius::same(2), mix(Color32::TRANSPARENT, pal().ink2, 0.5));
         }
     }
     // The wheel, always turned the same way.
     let c = pos2(s.right() + 22.0, s.center().y - 12.0);
     let (a, b) = if k == Roll::FlipSide { (vec2(-7.0, 0.0), vec2(7.0, 0.0)) } else { (vec2(0.0, -8.0), vec2(0.0, 8.0)) };
-    let st = Stroke::new(2.0, INK);
+    let st = Stroke::new(2.0, pal().ink);
     p.line_segment([c + a, c + b], st);
     let (dir, tip) = (b.normalized(), c + b);
     let perp = vec2(-dir.y, dir.x);
     p.line_segment([tip, tip - dir * 4.0 + perp * 4.0], st);
     p.line_segment([tip, tip - dir * 4.0 - perp * 4.0], st);
     if !tag.is_empty() {
-        p.text(pos2(s.center().x, s.bottom() + 14.0), Align2::CENTER_CENTER, tag, regular(T_META), if second { SIGNAL } else { INK2 });
+        p.text(pos2(s.center().x, s.bottom() + 14.0), Align2::CENTER_CENTER, tag, regular(T_META), if second { pal().accent } else { pal().ink2 });
     }
     if !key.is_empty() {
         keycap(p, pos2(c.x, s.center().y + 22.0), key, seg(t, 0.55, 0.6) * (1.0 - seg(t, 0.95, 1.0)));
@@ -334,7 +336,7 @@ fn copy(p: &Painter, (a, b): (Rect, Rect), item: Item, t: f32) {
             // B asks first, then the clipboard comes across.
             let ask = ease(seg(t, 0.1, 0.35));
             let q = b.center().lerp(a.center(), ask);
-            p.circle_filled(q, 3.0, mix(Color32::TRANSPARENT, INK2, (1.0 - seg(t, 0.35, 0.4)) * seg(t, 0.1, 0.15)));
+            p.circle_filled(q, 3.0, mix(Color32::TRANSPARENT, pal().ink2, (1.0 - seg(t, 0.35, 0.4)) * seg(t, 0.1, 0.15)));
             ease(seg(t, 0.4, 0.8))
         }
         // Marked sensitive: it starts to go, is turned back and stays.
@@ -352,15 +354,15 @@ fn copy(p: &Painter, (a, b): (Rect, Rect), item: Item, t: f32) {
 }
 
 fn glyph(p: &Painter, c: Pos2, item: Item, alpha: f32) {
-    let ink = mix(Color32::TRANSPARENT, INK, alpha);
-    let dim = mix(Color32::TRANSPARENT, INK2, alpha);
+    let ink = mix(Color32::TRANSPARENT, pal().ink, alpha);
+    let dim = mix(Color32::TRANSPARENT, pal().ink2, alpha);
     let page = Rect::from_center_size(c, vec2(22.0, 26.0));
-    p.rect_filled(page, CornerRadius::same(3), mix(Color32::TRANSPARENT, BUTTON_LIT, alpha));
+    p.rect_filled(page, CornerRadius::same(3), mix(Color32::TRANSPARENT, pal().surface2_hover, alpha));
     p.rect_stroke(page, CornerRadius::same(3), Stroke::new(1.0, dim), StrokeKind::Inside);
     let bar = |y: f32, w: f32, col: Color32, h: f32| p.rect_filled(Rect::from_min_size(pos2(page.left() + 4.0, page.top() + y), vec2(w, h)), CornerRadius::same(1), col);
     match item {
         Item::Image => {
-            p.circle_filled(page.left_top() + vec2(8.0, 8.0), 2.5, mix(Color32::TRANSPARENT, SIGNAL, alpha));
+            p.circle_filled(page.left_top() + vec2(8.0, 8.0), 2.5, mix(Color32::TRANSPARENT, pal().accent, alpha));
             p.add(egui::Shape::convex_polygon(
                 vec![page.left_bottom() + vec2(3.0, -3.0), page.left_bottom() + vec2(9.0, -12.0), page.left_bottom() + vec2(13.0, -7.0), page.left_bottom() + vec2(16.0, -10.0), page.right_bottom() + vec2(-3.0, -3.0)],
                 dim,
@@ -368,7 +370,7 @@ fn glyph(p: &Painter, c: Pos2, item: Item, alpha: f32) {
             ));
         }
         Item::Rich => {
-            bar(5.0, 10.0, mix(Color32::TRANSPARENT, SIGNAL, alpha), 3.0);
+            bar(5.0, 10.0, mix(Color32::TRANSPARENT, pal().accent, alpha), 3.0);
             bar(11.0, 14.0, ink, 2.0);
             bar(16.0, 9.0, dim, 2.0);
         }
@@ -391,29 +393,29 @@ fn mirror(p: &Painter, r: Rect, m: Both, t: f32) {
             let a = seg(t, 0.25, 0.4) * (1.0 - seg(t, 0.6, 0.75));
             moon(p, r.center(), a);
             if a > 0.2 {
-                p.line_segment([r.center() + vec2(-11.0, 11.0), r.center() + vec2(11.0, -11.0)], Stroke::new(2.0, mix(Color32::TRANSPARENT, ERROR, a)));
+                p.line_segment([r.center() + vec2(-11.0, 11.0), r.center() + vec2(11.0, -11.0)], Stroke::new(2.0, mix(Color32::TRANSPARENT, pal().danger, a)));
             }
         }
         Both::Sleep => {
             let dim = seg(t, 0.3, 0.45) * (1.0 - seg(t, 0.8, 0.9));
-            p.rect_filled(r.shrink(1.5), CornerRadius::same(5), mix(Color32::TRANSPARENT, GROUND, dim * 0.92));
+            p.rect_filled(r.shrink(1.5), CornerRadius::same(5), mix(Color32::TRANSPARENT, pal().bg, dim * 0.92));
             moon(p, r.center(), dim);
         }
         Both::Lock => {
             let on = seg(t, 0.35, 0.5) * (1.0 - seg(t, 0.85, 0.95));
-            p.rect_filled(r.shrink(1.5), CornerRadius::same(5), mix(Color32::TRANSPARENT, GROUND, on * 0.85));
+            p.rect_filled(r.shrink(1.5), CornerRadius::same(5), mix(Color32::TRANSPARENT, pal().bg, on * 0.85));
             padlock(p, r.center(), on);
         }
     }
 }
 
 fn moon(p: &Painter, c: Pos2, a: f32) {
-    p.circle_filled(c, 8.0, mix(Color32::TRANSPARENT, INK, a));
-    p.circle_filled(c + vec2(4.0, -3.0), 7.0, mix(Color32::TRANSPARENT, GROUND, a));
+    p.circle_filled(c, 8.0, mix(Color32::TRANSPARENT, pal().ink, a));
+    p.circle_filled(c + vec2(4.0, -3.0), 7.0, mix(Color32::TRANSPARENT, pal().bg, a));
 }
 
 fn padlock(p: &Painter, c: Pos2, a: f32) {
-    let col = mix(Color32::TRANSPARENT, INK, a);
+    let col = mix(Color32::TRANSPARENT, pal().ink, a);
     p.rect_filled(Rect::from_center_size(c + vec2(0.0, 3.0), vec2(16.0, 12.0)), CornerRadius::same(3), col);
     p.add(egui::Shape::line(vec![c + vec2(-5.0, -3.0), c + vec2(-5.0, -8.0), c + vec2(5.0, -8.0), c + vec2(5.0, -3.0)], Stroke::new(2.0, col)));
 }
@@ -421,9 +423,9 @@ fn padlock(p: &Painter, c: Pos2, a: f32) {
 fn keycap(p: &Painter, c: Pos2, label: &str, pressed: f32) {
     let w = 12.0 + label.chars().count() as f32 * 6.4;
     let r = Rect::from_center_size(c + vec2(0.0, pressed), vec2(w, 20.0));
-    p.rect_filled(r, CornerRadius::same(5), mix(BUTTON, SIGNAL, pressed));
-    p.rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, KEY_EDGE), StrokeKind::Inside);
-    p.text(r.center(), Align2::CENTER_CENTER, label, mono(T_META), mix(INK, SIGNAL_INK, pressed));
+    p.rect_filled(r, CornerRadius::same(5), mix(pal().surface2, pal().accent, pressed));
+    p.rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, pal().key_edge), StrokeKind::Inside);
+    p.text(r.center(), Align2::CENTER_CENTER, label, mono(T_META), mix(pal().ink, pal().on_accent, pressed));
 }
 
 fn ring(p: &Painter, c: Pos2, r: f32, fill: f32) {
@@ -432,11 +434,11 @@ fn ring(p: &Painter, c: Pos2, r: f32, fill: f32) {
         let a = -std::f32::consts::FRAC_PI_2 + fill * std::f32::consts::TAU * k as f32 / (n - 1) as f32;
         c + vec2(a.cos(), a.sin()) * r
     });
-    p.add(egui::Shape::line(pts.collect(), Stroke::new(2.0, SIGNAL)));
+    p.add(egui::Shape::line(pts.collect(), Stroke::new(2.0, pal().accent)));
 }
 
 fn cross_mark(p: &Painter, c: Pos2) {
-    let s = Stroke::new(2.0, ERROR);
+    let s = Stroke::new(2.0, pal().danger);
     p.line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], s);
     p.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], s);
 }

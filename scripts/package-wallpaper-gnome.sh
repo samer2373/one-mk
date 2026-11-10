@@ -11,9 +11,9 @@ cp "$binary" "$output/libexec/one-mk-wallpaper"
 cp -R "$root/extensions/gnome/one-mk-wallpaper@one-mk.org" "$output/share/gnome-shell/extensions/"
 cp "$root/LICENSE-MIT" "$root/LICENSE-APACHE" "$output/"
 printf '%s\n' 'OPTIONAL GNOME COMPONENT. Default OFF. No automatic install or enable.' \
-    'GNOME Shell 50.1: GStreamer video runs in the separate oneMK wallpaper helper, never in Shell.' \
+    'GNOME 50 (experimental): GStreamer video runs in the separate oneMK wallpaper helper, never in Shell.' \
     'The Wallpaper page offers separate, consented Install and Enable actions. No download is required.' \
     'Log out and back in once after installation, then Enable and choose a video. Off restores the desktop.' \
-    'See docs/reviews/GNOME-WAYLAND-VIDEO.md for qualification and safety details.' > "$output/README.txt"
+    'See docs/GNOME-WAYLAND-VIDEO.md for qualification and safety details.' > "$output/README.txt"
 (cd "$output" && find . -type f ! -name SHA256SUMS -print | LC_ALL=C sort | xargs sha256sum > SHA256SUMS)
 (cd "$output" && sha256sum -c SHA256SUMS)

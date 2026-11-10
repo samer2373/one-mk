@@ -237,6 +237,16 @@ fn split_list(s: &str) -> Vec<String> {
 
 // ---------- the settings, as the window shows them ----------
 
+/// The largest clipboard one-mk will carry, in MB: the same ceiling as
+/// `one-mk clipboard --max-mb` (`CEILING_BYTES` in the clipboard crate).
+pub const CLIP_MAX_MB: u32 = 256;
+
+/// Whether this desktop can have file edge drops at all (Windows, macOS, or
+/// Linux on X11; not Wayland). The same rule as `one_mk_input::dropzone::supported`.
+pub fn drop_zones_available() -> bool {
+    cfg!(any(windows, target_os = "macos")) || (cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_some())
+}
+
 /// `settings.toml` (and `profiles.toml`), with one-mk's defaults for what
 /// isn't there. The same defaults as `crates/one-mk/src/settings.rs`.
 #[derive(Clone, Debug, PartialEq)]
@@ -256,6 +266,8 @@ pub struct Prefs {
     pub history_persist: bool,
     pub history_enabled: bool,
     pub notify_files: bool,
+    /// `[window] appearance`: System (the default), Light or Dark.
+    pub appearance: crate::style::Appearance,
     /// Gaming mode: `off`, `on` or `auto`.
     pub gaming: String,
     pub typing: &'static str,
@@ -332,12 +344,13 @@ impl Prefs {
             clip_text: flag("clipboard", "text", true),
             clip_html: flag("clipboard", "html", true),
             clip_image: flag("clipboard", "image", true),
-            clip_max_mb: num("clipboard", "max_mb", 25).clamp(1, 4096) as u32,
+            clip_max_mb: num("clipboard", "max_mb", 25).clamp(1, i64::from(CLIP_MAX_MB)) as u32,
             // Off unless the file says so: oneMK writes `allow_pull` only when it is on, and
             // a file from before `settings_version = 2` has its old `true` switched off.
             clip_allow_fetch: num("", "settings_version", 1) >= 2 && flag("clipboard", "allow_pull", false),
             clip_skip_sensitive: flag("clipboard", "skip_sensitive", true),
-            drop_zones: flag("drag", "enabled", cfg!(any(windows, target_os = "macos")) || (cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_some())),
+            // Opt-in: on only when the file says so, with the current settings version (older files held a default written out by whichever session saved first).
+            drop_zones: num("", "settings_version", 1) >= 3 && flag("drag", "enabled", false),
             broadcast_idle: num("broadcast", "idle_off_minutes", 15).clamp(0, 1440) as u32,
             pointer_draw: text("pointer", "draw_when_no_mouse", "auto"),
             edge_wrap: get("edge", "wrap").and_then(Val::as_bool).map(|on| if on { "on" } else { "off" }.to_owned()).unwrap_or_else(|| text("edge", "wrap", "off")),
@@ -354,6 +367,7 @@ impl Prefs {
             history_persist: flag("clipboard", "history_persist", false),
             history_enabled: num("clipboard", "history_max", 0) > 0 && num("clipboard", "history_max_mb", 16) > 0,
             notify_files: flag("", "notify_files", true),
+            appearance: crate::style::Appearance::parse(&text("window", "appearance", "system")),
             gaming: text("", "gaming", "off"),
             typing: match text("typing", "keys", "physical").as_str() {
                 "characters" => "characters",
@@ -451,11 +465,38 @@ pub struct Check {
     pub action: Option<String>,
 }
 
+/// An error from `one-mk` or the service as the window shows it: what
+/// happened, in its own words, without the steps meant for a terminal
+/// (commands, `settings.toml`). Only when nothing but such steps is left
+/// is it replaced by a pointer to the window's own options.
 pub fn window_issue(text: &str) -> String {
-    if text.contains("settings.toml") { "Check the options in Advanced, then try again.".into() }
-    else if text.contains('`') || ["one-mk run", "one-mk install", "one-mk pair", "one-mk hooks", "one-mk edge", "one-mk send", "one-mk keymap", "one-mk clipboard", "one-mk hotkeys", "one-mk takeback", "one-mk gestures", "one-mk invite", "one-mk join", "one-mk doctor", "sudo ", "chmod "].iter().any(|command| text.contains(command)) {
-        "Review the options in this window, or restart oneMK and try again.".into()
-    } else { text.replace("one-mk", "oneMK") }
+    const COMMANDS: [&str; 16] = ["one-mk run", "one-mk install", "one-mk pair", "one-mk hooks", "one-mk edge", "one-mk send", "one-mk keymap", "one-mk clipboard", "one-mk hotkeys", "one-mk takeback", "one-mk gestures", "one-mk invite", "one-mk join", "one-mk doctor", "sudo ", "chmod "];
+    let terminal = |part: &str| part.contains('`') || part.contains("settings.toml") || COMMANDS.iter().any(|command| part.contains(command));
+    if text.contains("settings.toml") && (text.contains("Permission denied") || text.contains("Read-only file system")) {
+        return "oneMK isn't allowed to save its settings here (permission denied).".into();
+    }
+    // A step in brackets goes ("… (`one-mk clipboard` there)"), then each
+    // clause that is one ("…; on Mac run: one-mk clipboard --allow-fetch on").
+    let mut plain = text.to_owned();
+    while let Some(open) = plain.find(" (") {
+        let Some(close) = plain[open..].find(')').map(|c| open + c) else { break };
+        if !terminal(&plain[open..=close]) {
+            break;
+        }
+        plain.replace_range(open..=close, "");
+    }
+    let kept: Vec<&str> = plain.split("; ").map(str::trim).filter(|part| !part.is_empty() && !terminal(part)).collect();
+    if kept.is_empty() || (kept.len() == 1 && kept[0].split_whitespace().count() < 2) {
+        return if text.contains("settings.toml") { "Check the options in Settings, then try again.".into() } else { "Review the options in this window, or restart oneMK and try again.".into() };
+    }
+    if kept.len() == 1 && kept[0] == text {
+        return text.replace("one-mk", "oneMK");
+    }
+    let mut said = kept.join("; ").trim_end_matches([':', ',', ' ']).to_owned();
+    if !said.ends_with(['.', '!', '?']) {
+        said.push('.');
+    }
+    said.replace("one-mk", "oneMK")
 }
 
 /// What `one-mk doctor --json` found, worst first, keeping its order
@@ -555,8 +596,8 @@ fn legacy_check(mut check: Check) -> Option<Check> {
                 _ => "Sharing cannot use its network connection.".into(),
             };
             check.fix = Some(match who {
-                Some(w) => format!("Quit {w}, then choose Recheck. Or use another port on both computers."),
-                None => "Quit the program using it, then choose Recheck. Or use another port on both computers.".into(),
+                Some(w) => format!("Quit {w}, then choose Check again. Or use another port on both computers."),
+                None => "Quit the program using it, then choose Check again. Or use another port on both computers.".into(),
             });
             return Some(check);
         }
@@ -578,8 +619,8 @@ fn legacy_check(mut check: Check) -> Option<Check> {
                 _ => "The firewall may be blocking sharing connections.".into(),
             };
             check.fix = Some(match port {
-                Some(p) => format!("Allow incoming UDP on port {p} for oneMK in the firewall's settings, then choose Recheck."),
-                None => "Allow incoming connections for oneMK in the firewall's settings, then choose Recheck.".into(),
+                Some(p) => format!("Allow incoming UDP on port {p} for oneMK in the firewall's settings, then choose Check again."),
+                None => "Allow incoming connections for oneMK in the firewall's settings, then choose Check again.".into(),
             });
             return Some(check);
         }
@@ -889,12 +930,26 @@ mod tests {
         }
     }
 
+    /// What went wrong is kept; only the terminal steps go.
+    #[test]
+    fn window_diagnostics_keep_the_reason() {
+        assert_eq!(window_issue("MacBook Air does not allow fetching its clipboard; on MacBook Air run: one-mk clipboard --allow-fetch on"), "MacBook Air does not allow fetching its clipboard.");
+        assert_eq!(window_issue("its clipboard is empty, or it does not share it (`one-mk clipboard` there)"), "its clipboard is empty, or it does not share it.");
+        assert_eq!(window_issue("saving /home/x/.config/one-mk/settings.toml: Permission denied (os error 13)"), "oneMK isn't allowed to save its settings here (permission denied).");
+        assert_eq!(window_issue("Studio PC is offline"), "Studio PC is offline");
+        assert_eq!(window_issue("Edit settings.toml"), "Check the options in Settings, then try again.");
+        assert_eq!(window_issue("Try `one-mk hotkeys`"), "Review the options in this window, or restart oneMK and try again.");
+        assert_eq!(window_issue("one-mk is busy (try again)"), "oneMK is busy (try again)");
+    }
+
     #[test]
     fn desktop_settings_read_nested_overrides_and_defaults() {
         let defaults = Prefs::read("", "");
-        assert!(defaults.clip_skip_sensitive && !defaults.history_persist);
+        assert!(defaults.clip_skip_sensitive && !defaults.history_persist && !defaults.drop_zones, "file edge drops are opt-in");
+        assert!(!Prefs::read("settings_version = 2\n[drag]\nenabled=true\n", "").drop_zones, "an old file's true was a frozen default, not a choice");
+        assert_eq!(CLIP_MAX_MB, 256, "the window and one-mk clipboard --max-mb share one ceiling");
         assert_eq!((defaults.pointer_draw.as_str(), defaults.edge_wrap.as_str(), defaults.edge_learn.as_str(), defaults.broadcast_idle), ("auto", "off", "suggest", 15));
-        let settings = "[clipboard]\nskip_sensitive=false\nhistory_persist=true\nhistory_max=20\n[drag]\nenabled=true\n[broadcast]\nidle_off_minutes=7\n[pointer]\ndraw_when_no_mouse='always'\n[edge]\nwrap='all'\nlearn='suggest'\ncorner=12\ndwell_ms=100\nmodifier='ctrl'\n[edge.left]\ndwell_ms=250\n[hooks]\non_enter='echo hi'\ntimeout_secs=9\nshell=false\n[hooks.options.enter]\ncomputer='abcdef01'\ntimeout_secs=12\nshell=true\n";
+        let settings = "settings_version = 3\n[clipboard]\nskip_sensitive=false\nhistory_persist=true\nhistory_max=20\n[drag]\nenabled=true\n[broadcast]\nidle_off_minutes=7\n[pointer]\ndraw_when_no_mouse='always'\n[edge]\nwrap='all'\nlearn='suggest'\ncorner=12\ndwell_ms=100\nmodifier='ctrl'\n[edge.left]\ndwell_ms=250\n[hooks]\non_enter='echo hi'\ntimeout_secs=9\nshell=false\n[hooks.options.enter]\ncomputer='abcdef01'\ntimeout_secs=12\nshell=true\n";
         let prefs = Prefs::read(settings, "");
         assert!(!prefs.clip_skip_sensitive && prefs.history_persist && prefs.drop_zones);
         assert_eq!(prefs.broadcast_idle, 7);

@@ -932,6 +932,7 @@ pub struct Cap {
 }
 
 /// The drawing's size in key units, with and without the keypad.
+#[cfg_attr(not(test), allow(dead_code))] // The models' tests size the board with it.
 pub fn keyboard_size(keypad: bool) -> (f32, f32) {
     (if keypad { 23.75 } else { 19.25 }, 6.5)
 }

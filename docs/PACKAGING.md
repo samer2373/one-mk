@@ -7,9 +7,9 @@ step of `.github/workflows/release.yml`, and what has and has not been tried.
 |---|---|---|---|---|
 | plain `.tar.gz` / `.zip` | inline in the workflow | build: "Package" | `one-mk-<target>.tar.gz` (macOS, Linux), `one-mk-x86_64-pc-windows-msvc.zip` | in use since the first release; `install.sh` downloads the Linux `.tar.gz` |
 | macOS `.app` and `.dmg` (designed installer window) | `scripts/bundle-mac.sh` + `scripts/dmg/` | build: "Mac app" | `one-mk-<target>.app.zip` and `one-mk-<target>.dmg`, for `aarch64-apple-darwin` and `x86_64-apple-darwin` | released since 0.1.1; signed and notarized when the signing secrets are set; `install.sh` uses the `.app.zip`; the designed `.dmg` window is **written, never opened on a real Mac** |
-| Windows installer | `installer/one-mk.iss` (Inno Setup) | build: "Windows installer" | `one-mk-x86_64-pc-windows-msvc-setup.exe` | released since 0.1.2; CI installs it silently and runs `one-mk id` from the install |
+| Windows installer | `installer/one-mk.iss` (Inno Setup) | build: "Windows installer" | `one-mk-x86_64-pc-windows-msvc-setup.exe` | attached to releases since 0.1.2; CI installs it silently and runs `one-mk id` from the install |
 | Debian `.deb` | `scripts/bundle-deb.sh` | build: "Linux .deb" | `one-mk-x86_64-unknown-linux-gnu.deb` | released since 0.1.1; CI installs it with `dpkg -i` and runs `one-mk id` |
-| AppImage | `scripts/package-appimage.sh` + `packaging/linux/` | build: "Linux AppImage" | `one-mk-x86_64-unknown-linux-gnu.AppImage` | AppDir built and run here and in CI; the `.AppImage` file is built in CI only, **not yet released** |
+| AppImage | `scripts/package-appimage.sh` + `packaging/linux/` | build: "Linux AppImage" | `one-mk-x86_64-unknown-linux-gnu.AppImage` | AppDir built and run here and in CI; the `.AppImage` file is built in CI only (never locally) and is attached to releases |
 | Flatpak source bundle | `scripts/package-flatpak.sh` + `packaging/flatpak/` | publish: "Homebrew and Flatpak files" | `one-mk-flatpak-sources.tar.gz` | **written, untested** (`flatpak-builder` never run) |
 | Homebrew cask and formula | `scripts/package-homebrew.sh` + `packaging/homebrew/` | publish: "Homebrew and Flatpak files" | `one-mk.rb`, `one-mk-source.rb` | **written, untested** (no Mac) |
 
@@ -48,7 +48,7 @@ job generates `update-manifest.json`, signs it with Ed25519 when
 compiled public key and includes manifest/signature in SHA256SUMS before
 uploading to the draft. A published release cannot be overwritten by a rerun.
 Unsigned publication is explicitly reported and refused by the client.
-Owner key setup, rotation and the installation safety rules are in
+Publisher key setup, rotation and the installation safety rules are in
 [UPDATES.md](UPDATES.md). `bash scripts/check-updates.sh` tests this pipeline
 with local stand-in assets and a stub `gh`; it publishes nothing.
 
@@ -80,13 +80,16 @@ crate says `version.workspace = true`. Nothing else holds a version:
 `scripts/check-packaging.sh` (also the `packaging` job of `ci.yml`, on a debug
 build) builds into a scratch folder and checks, installing nothing:
 
-- the `.deb` from `bundle-deb.sh`: the files in it, the control version,
-  `one-mk --version` from an unpacked copy, no world-writable or setuid files,
-  `desktop-file-validate`;
-- the AppDir: `AppRun --version`, the files appimagetool wants at the top,
-  `desktop-file-validate`, `appstreamcli validate --no-net`;
+- the `.deb` from `bundle-deb.sh`, built by a builder with umask 002: the files
+  in it, the control version, `one-mk --version` from an unpacked copy, no
+  world-writable or setuid files, the modes stored in the archive (files 0644,
+  programs 0755, folders 0755), the AppStream metainfo with this release's
+  notes, `desktop-file-validate`, `appstreamcli validate --no-net`;
+- the AppDir: `AppRun --version`, the files appimagetool wants at the top, its
+  modes, `desktop-file-validate`, `appstreamcli validate --no-net`;
 - the Flatpak source bundle: unpacked elsewhere, every `path:` resolves and
-  matches its `sha256`, no checkout path or placeholder left;
+  matches its `sha256`, no checkout path or placeholder left, the metainfo
+  filled in and valid;
 - the Homebrew files, filled in from stand-in `.dmg` files named like the
   release's: no placeholder left, the right checksum, the right file names
   (and `ruby -c` when Ruby is installed);
@@ -135,7 +138,7 @@ one-mk.app/Contents/Info.plist
 ### The installer window
 
 Opening the `.dmg` shows a fixed 660 x 400 window in the brand's dark look:
-the oneMK icon on the left, the Applications folder on the right, an amber
+the oneMK icon on the left, the Applications folder on the right, a cobalt
 arrow between them and one line, "Drag oneMK to Applications, then open it.
 Setup takes a minute." No toolbar, sidebar or status bar. The app then guides
 the user through pairing, so there is no terminal step.
@@ -143,7 +146,7 @@ the user through pairing, so there is no terminal step.
 | file | what it is |
 |---|---|
 | `scripts/dmg/settings.py` | the dmgbuild settings: window size and place, icon size, the two icon positions, the hidden toolbar and sidebar, the `Applications` link, the volume icon (`docs/brand/app-icon/macos/onemk.icns`) |
-| `scripts/dmg/make_background.py` | draws the artwork with Pillow from the brand files (`docs/brand/tokens.json`, the Geist fonts in `crates/app/fonts`, the logo) and the numbers in `settings.py`; `--check` validates everything and writes the preview |
+| `scripts/dmg/make_background.py` | draws the artwork with Pillow from the brand files (the dark colours in `docs/brand/tokens.json`, Inter from `crates/app/fonts`, `docs/brand/logo/onemk-lockup-on-dark.svg` drawn by `scripts/brand_render.py`) and the numbers in `settings.py`; `--check` validates everything and writes the preview |
 | `scripts/dmg/background.png`, `background@2x.png` | the drawn art, **checked in**: the release then needs no fonts, no Pillow and no particular Pillow version, and a change to the art shows in review. `check.sh` fails if they no longer match the script. Tagged 72 and 144 dpi; dmgbuild finds the `@2x` file next to the first and joins them with `tiffutil -cathidpicheck` into the multi-resolution TIFF Finder wants |
 | `scripts/dmg/check.sh` | the check, runs anywhere with Python 3 and Pillow; also part of `check-packaging.sh` and CI |
 
@@ -223,13 +226,24 @@ package (version exactly as in `Cargo.toml`, `amd64`) contains the daemon,
 tray, window and wallpaper helper in `/usr/bin`, the window's launcher
 `/usr/share/applications/one-mk.desktop` (written inline by the script), the
 hidden `/usr/share/applications/io.github.onemk.OneMk.desktop` and the 256 px
-icon. The hidden entry names the app id: GNOME's GlobalShortcuts portal
+icon, and the AppStream metainfo (`/usr/share/metainfo/io.github.onemk.OneMk.metainfo.xml`,
+from `packaging/linux/` by `scripts/metainfo.py`, with the release notes of
+`docs/release-notes/v<version>.md`; the AppImage and the Flatpak carry the same
+file). Whoever builds it, every file in it is 0644 (programs 0755) and every
+folder 0755: the script sets the modes itself and fails if the archive has
+others. The hidden entry names the app id: GNOME's GlobalShortcuts portal
 refuses a session to an app id with no installed desktop entry. It comes from
 `one_mk_ctl::install::packaged_files` (the script runs the `packaging-files`
 example with `cargo`, so building the `.deb` needs the checkout and cargo),
 the same text `one-mk install` writes, and the script checks the built
-package contains it, hidden. The package has no maintainer scripts, starts
-and enables nothing, and ships no systemd unit or autostart entry: `one-mk
+package contains it, hidden. It also ships the polkit action of the
+update's root step (`/usr/share/polkit-1/actions/io.github.onemk.OneMk.update.policy`,
+docs/UPDATES.md), recommends `pkexec`, and carries the licence files
+(`/usr/share/doc/one-mk/`: `copyright`, `LICENSE-MIT`, `LICENSE-APACHE`,
+`THIRD-PARTY-NOTICES`, `OFL-Inter.txt`, `OFL-JetBrainsMono.txt`, `OFL-Unbounded.txt`;
+every other package carries the same files through `scripts/copy-notices.sh`). Its only maintainer script is
+a `postrm` that, on purge, removes `/var/lib/one-mk` (the update's root-only
+replay record). It starts and enables nothing, and ships no systemd unit or autostart entry: `one-mk
 install`, run as yourself, writes the user service and the tray's autostart
 entry (and its own copy of the hidden entry) into the home folder. It is
 built on ubuntu-22.04 (glibc 2.35), the oldest distribution it is meant for.
@@ -249,20 +263,20 @@ Installation uses embedded extension sources from the same build and the
 bundled renderer and never downloads anything. A Linux tarball
 also includes a sibling renderer and the optional component payload.
 
-On qualified **GNOME Shell 50.1**, selecting a video after explicit Enable starts
+On **GNOME 50** (any 50.x; experimental), selecting a video after explicit Enable starts
 the production helper. Enabling alone starts nothing. The extension authenticates
 the registering process and its tokenized windows, then clones their content
 behind applications without changing the native wallpaper. Off, renderer exit
-and extension disable remove the clones. Other Shell versions fail closed;
+and extension disable remove the clones. Other GNOME versions are refused with an "unsupported GNOME version" message;
 pictures remain supported without the extension. See
-[the video qualification report](reviews/GNOME-WAYLAND-VIDEO.md).
+[the video qualification report](GNOME-WAYLAND-VIDEO.md).
 AppImage/Flatpak staging is not extended with this component in this change.
 
 ## AppImage
 
 `scripts/package-appimage.sh` lays out `dist/one-mk.AppDir` (the three
 programs, `packaging/linux/one-mk.desktop`, the AppStream metainfo with the
-version and the commit date filled in, the hicolor icons, the copyright file
+version, the commit date and the release notes filled in, the hicolor icons, the copyright file
 and `packaging/linux/AppRun`), runs `AppRun --version` to prove the layout
 works, and then calls `appimagetool` if it can find one (`APPIMAGETOOL=/path`,
 or on `PATH`). The output is `one-mk-<arch>-unknown-linux-gnu.AppImage`, named

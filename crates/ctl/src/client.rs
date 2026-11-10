@@ -45,10 +45,16 @@ pub enum Request {
     /// Send this computer's clipboard to one paired computer now (the
     /// only one online if none is named).
     ClipSend(Option<String>),
+    /// [`Request::ClipSend`] for a clipboard a password manager marked as
+    /// sensitive (`one-mk clip-send --allow-sensitive`): without this that is refused.
+    ClipSendSensitive(Option<String>),
     /// Fetch one paired computer's clipboard into this one now.
     ClipGet(Option<String>),
     ClipHistory { action: HistoryAction, json: bool },
     FetchClipboard,
+    /// The unfinished received files kept for resuming (`one-mk partials`):
+    /// how many and how big, or with `clear` delete them.
+    Partials { clear: bool },
     /// A running `one-mk send` reports how far it is, so `status` and the
     /// window can show it. `finished` ends the report.
     Transfer { t: TransferStatus, finished: bool },
@@ -61,19 +67,24 @@ pub enum Request {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HistoryAction { List, Show(u64), Copy(u64), Delete(u64), Clear }
+pub enum HistoryAction {
+    List, Show(u64), Copy(u64), Delete(u64), Clear,
+    /// Answers once every save or removal of the saved history that was
+    /// asked for so far has finished: a barrier after turning saving off.
+    Flush,
+}
 
 impl HistoryAction {
     fn line(self) -> String {
         match self {
-            Self::List => "list".into(), Self::Clear => "clear".into(),
+            Self::List => "list".into(), Self::Clear => "clear".into(), Self::Flush => "flush".into(),
             Self::Show(id) => format!("show {id}"), Self::Copy(id) => format!("copy {id}"), Self::Delete(id) => format!("delete {id}"),
         }
     }
 
     fn parse(arg: &str) -> Option<Self> {
         match arg {
-            "list" => Some(Self::List), "clear" => Some(Self::Clear),
+            "list" => Some(Self::List), "clear" => Some(Self::Clear), "flush" => Some(Self::Flush),
             _ => {
                 let (verb, number) = arg.split_once(' ')?;
                 if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) { return None; }
@@ -168,9 +179,11 @@ impl Request {
             Request::WallpaperStatus => "wallpaper-status",
             Request::LiveWallpaper(_) => "wallpaper-live",
             Request::ClipSend(_) => "clip-send",
+            Request::ClipSendSensitive(_) => "clip-send-sensitive",
             Request::ClipGet(_) => "clip-get",
             Request::ClipHistory { .. } => "clip-history",
             Request::FetchClipboard => "fetch-clipboard",
+            Request::Partials { .. } => "partials",
             Request::Transfer { .. } => "transfer",
             Request::DismissSuggestion => "dismiss-suggestion",
             Request::Stop => "stop",
@@ -183,10 +196,11 @@ impl Request {
         match self {
             Request::LiveWallpaper(json) => format!("wallpaper-live {json}"),
             Request::ClipHistory { action, json } => format!("clip-history {}{}", action.line(), if *json { " --json" } else { "" }),
+            Request::Partials { clear } => if *clear { "partials clear".to_owned() } else { "partials".to_owned() },
             Request::Switch(to) => format!("switch {}", to.as_str()),
             Request::LockPointer(t) => format!("lock-pointer {}", t.as_str()),
             Request::Broadcast(t) => format!("broadcast {}", t.as_str()),
-            Request::ClipSend(d) | Request::ClipGet(d) => {
+            Request::ClipSend(d) | Request::ClipSendSensitive(d) | Request::ClipGet(d) => {
                 let device = d.as_deref().map(|d| format!(" {}", d.replace(['\n', '\r'], " "))).unwrap_or_default();
                 format!("{}{device}", self.name())
             }
@@ -211,6 +225,8 @@ impl Request {
         let device = || (!arg.is_empty()).then(|| arg.to_owned());
         match word {
             "fetch-clipboard" if arg.is_empty() => Some(Request::FetchClipboard),
+            "partials" if arg.is_empty() => Some(Request::Partials { clear: false }),
+            "partials" if arg == "clear" => Some(Request::Partials { clear: true }),
             "clip-history" => {
                 let (arg, json) = arg.strip_suffix(" --json").map_or((arg, false), |arg| (arg, true));
                 Some(Request::ClipHistory { action: HistoryAction::parse(arg)?, json })
@@ -230,6 +246,7 @@ impl Request {
             "wallpaper-status" if arg.is_empty() => Some(Request::WallpaperStatus),
             "wallpaper-live" if serde_json::from_str::<one_mk_wallpaper::Command>(arg).is_ok() => Some(Request::LiveWallpaper(arg.to_owned())),
             "clip-send" => Some(Request::ClipSend(device())),
+            "clip-send-sensitive" => Some(Request::ClipSendSensitive(device())),
             "clip-get" => Some(Request::ClipGet(device())),
             "transfer" if !arg.is_empty() => {
                 let f: Vec<&str> = arg.splitn(7, ' ').collect();
@@ -256,7 +273,7 @@ impl Request {
     pub fn reply_timeout(&self) -> Duration {
         match self {
             Request::LiveWallpaper(_) => Duration::from_secs(660),
-            Request::ClipSend(_) | Request::ClipGet(_) | Request::FetchClipboard
+            Request::ClipSend(_) | Request::ClipSendSensitive(_) | Request::ClipGet(_) | Request::FetchClipboard
                 | Request::ClipHistory { action: HistoryAction::Copy(_), .. } => Duration::from_secs(45),
             _ => Duration::from_secs(5),
         }
@@ -352,7 +369,7 @@ mod tests {
 
     #[test]
     fn history_requests_and_hostile_arguments() {
-        for action in [HistoryAction::List, HistoryAction::Show(1), HistoryAction::Copy(13), HistoryAction::Delete(u64::MAX - 1), HistoryAction::Clear] {
+        for action in [HistoryAction::List, HistoryAction::Show(1), HistoryAction::Copy(13), HistoryAction::Delete(u64::MAX - 1), HistoryAction::Clear, HistoryAction::Flush] {
             for json in [false, true] {
                 let request = Request::ClipHistory { action, json };
                 assert_eq!(Request::parse(&request.line()), Some(request));
@@ -423,6 +440,10 @@ mod tests {
             Request::Settings,
             Request::ClipSend(None),
             Request::ClipSend(Some("mac mini".into())),
+            Request::ClipSendSensitive(None),
+            Request::ClipSendSensitive(Some("mac mini".into())),
+            Request::Partials { clear: false },
+            Request::Partials { clear: true },
             Request::ClipGet(None),
             Request::ClipGet(Some("desk".into())),
             Request::Transfer {

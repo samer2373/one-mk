@@ -16,6 +16,10 @@ const MAX_HANDSHAKES_PER_IP: usize = 4;
 /// A handshake that hasn't finished by now is dropped. On a LAN it takes
 /// a few milliseconds.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
+/// Incoming handshakes that failed are remembered per address this long
+/// (see [`Node::failed_handshakes`]), and for at most this many addresses.
+const FAILED_KEPT: Duration = Duration::from_secs(30 * 60);
+const FAILED_ADDRESSES: usize = 32;
 
 /// A QUIC endpoint that both accepts and dials connections; every device is
 /// an equal peer, there is no "server" or "client" role.
@@ -25,7 +29,13 @@ pub struct Node {
     client: quinn::ClientConfig,
     identity: Arc<Identity>,
     accepted: Arc<Accepted>,
+    failed: Failed,
 }
+
+/// Incoming handshakes that never completed, by source address: how many
+/// and when the last one was. Bounded in time and size, so a flood from
+/// many addresses can't grow it.
+type Failed = Arc<Mutex<HashMap<IpAddr, (u32, std::time::Instant)>>>;
 
 /// Authenticated incoming connections, filled by a background task that
 /// runs handshakes concurrently (started by the first `accept()`).
@@ -62,7 +72,7 @@ impl Node {
             quinn::Endpoint::new(quinn::EndpointConfig::default(), Some(server), socket, runtime)?;
         let (tx, rx) = mpsc::channel(MAX_HANDSHAKES);
         let accepted = Arc::new(Accepted { start: Mutex::new(Some(tx)), rx: tokio::sync::Mutex::new(rx) });
-        Ok(Self { endpoint, client, identity, accepted })
+        Ok(Self { endpoint, client, identity, accepted, failed: Failed::default() })
     }
 
     /// An IPv6 socket must also take IPv4 peers (mapped addresses); Windows
@@ -146,9 +156,24 @@ impl Node {
     pub async fn accept(&self) -> Option<Result<Peer>> {
         let tx = self.accepted.start.lock().expect("not poisoned").take();
         if let Some(tx) = tx {
-            tokio::spawn(accept_loop(self.endpoint.clone(), tx));
+            tokio::spawn(accept_loop(self.endpoint.clone(), tx, self.failed.clone()));
         }
         self.accepted.rx.lock().await.recv().await.map(Ok)
+    }
+
+    /// Addresses whose incoming handshakes failed lately (the other side
+    /// gave up or aborted before it completed, or it timed out): how many
+    /// and how long ago the last one was. A computer that keeps trying but
+    /// never gets through shows up here, though it never becomes a peer.
+    pub fn failed_handshakes(&self) -> Vec<(IpAddr, u32, Duration)> {
+        let mut failed = self.failed.lock().expect("not poisoned");
+        failed.retain(|_, (_, at)| at.elapsed() < FAILED_KEPT);
+        failed.iter().map(|(ip, (n, at))| (*ip, *n, at.elapsed())).collect()
+    }
+
+    /// Forgets the failures from `ip` (a computer there just connected).
+    pub fn clear_failed_handshakes(&self, ip: IpAddr) {
+        self.failed.lock().expect("not poisoned").remove(&ip.to_canonical());
     }
 
     pub fn close(&self) {
@@ -178,7 +203,17 @@ fn root(e: &anyhow::Error) -> String {
     e.root_cause().to_string()
 }
 
-async fn accept_loop(endpoint: quinn::Endpoint, tx: mpsc::Sender<Peer>) {
+fn note_failure(failed: &Failed, ip: IpAddr) {
+    let mut failed = failed.lock().expect("not poisoned");
+    failed.retain(|_, (_, at)| at.elapsed() < FAILED_KEPT);
+    if failed.len() >= FAILED_ADDRESSES && !failed.contains_key(&ip) {
+        return;
+    }
+    let entry = failed.entry(ip).or_insert((0, std::time::Instant::now()));
+    *entry = (entry.0.saturating_add(1), std::time::Instant::now());
+}
+
+async fn accept_loop(endpoint: quinn::Endpoint, tx: mpsc::Sender<Peer>, failed: Failed) {
     let slots = Arc::new(Semaphore::new(MAX_HANDSHAKES));
     let per_ip: Arc<Mutex<HashMap<IpAddr, usize>>> = Arc::default();
     while let Some(incoming) = endpoint.accept().await {
@@ -193,7 +228,7 @@ async fn accept_loop(endpoint: quinn::Endpoint, tx: mpsc::Sender<Peer>) {
             incoming.refuse();
             continue;
         };
-        let tx = tx.clone();
+        let (tx, failed) = (tx.clone(), failed.clone());
         tokio::spawn(async move {
             let res = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
                 let conn = incoming.await?;
@@ -207,8 +242,14 @@ async fn accept_loop(endpoint: quinn::Endpoint, tx: mpsc::Sender<Peer>) {
                     // caller that stops accepting also stops new handshakes.
                     let _ = tx.send(peer).await;
                 }
-                Ok(Err(e)) => tracing::debug!(%ip, "incoming handshake failed: {e:#}"),
-                Err(_) => tracing::debug!(%ip, "incoming handshake timed out"),
+                Ok(Err(e)) => {
+                    tracing::debug!(%ip, "incoming handshake failed: {e:#}");
+                    note_failure(&failed, ip);
+                }
+                Err(_) => {
+                    tracing::debug!(%ip, "incoming handshake timed out");
+                    note_failure(&failed, ip);
+                }
             }
             drop(permit);
         });
@@ -265,6 +306,28 @@ fn transport() -> quinn::TransportConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A client that gives up during the handshake (here: the server is not
+    /// the computer it pinned) never becomes a peer, but the server keeps a
+    /// count by address, so it can say that something keeps trying.
+    #[tokio::test]
+    async fn aborted_incoming_handshakes_are_counted_by_address() {
+        let node = |addr: &str| Node::bind(Arc::new(Identity::ephemeral().unwrap()), addr.parse().unwrap()).unwrap();
+        let (server, client) = (node("127.0.0.1:0"), node("127.0.0.1:0"));
+        let accepting = server.clone();
+        tokio::spawn(async move { while accepting.accept().await.is_some() {} });
+        let wrong = Identity::ephemeral().unwrap().fingerprint;
+        for _ in 0..2 {
+            assert!(client.connect_pinned(server.local_addr().unwrap(), wrong).await.is_err());
+        }
+        for _ in 0..100 {
+            if server.failed_handshakes().iter().any(|(ip, n, _)| ip.is_loopback() && *n == 2) { break; }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(server.failed_handshakes().iter().any(|(ip, n, _)| ip.is_loopback() && *n == 2), "{:?}", server.failed_handshakes());
+        server.clear_failed_handshakes("127.0.0.1".parse().unwrap());
+        assert!(server.failed_handshakes().is_empty());
+    }
 
     #[test]
     fn per_ip_limit_is_released_on_drop() {

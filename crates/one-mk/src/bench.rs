@@ -35,16 +35,14 @@ pub async fn run(dir: &Path, opts: Options) -> Result<()> {
     let (client, conn, label) = if let Some(query) = &opts.peer {
         let identity = Arc::new(Identity::load_or_create(dir)?);
         let trust = TrustStore::load(dir)?;
-        let device = trust
-            .find(query)
-            .with_context(|| format!("no paired computer called {query:?} (see `one-mk devices`)"))?
-            .clone();
+        let device = trust.find(query).ok_or_else(|| crate::manage::not_found(&trust, query))?.clone();
+        let shown = trust.display(&device);
         let fp = device.fingerprint().context("corrupt fingerprint in devices.toml")?;
         let node = Node::bind_any(identity.clone(), 0)?;
-        let peer = crate::send::find(&node, &identity, &device, fp, Vec::new()).await?;
+        let peer = crate::send::find(&node, &identity, &device, &shown, fp, Vec::new(), "or measure a computer by address with `one-mk bench --connect <ip:port>`, where `one-mk bench --serve <port>` runs").await?;
         // Tells the daemon this connection only echoes probes.
         peer.open_stream(StreamKind::Probe).await?;
-        let label = format!("to {} ({})", device.name, peer.conn.remote_address());
+        let label = format!("to {shown} ({})", peer.conn.remote_address());
         (node, peer.conn, label)
     } else {
         let client = Node::bind_any(Arc::new(Identity::ephemeral()?), 0)?;

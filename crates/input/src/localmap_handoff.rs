@@ -1,5 +1,5 @@
 //! Local injection ownership fence. This is not a native hook implementation.
-//! See `docs/LOCAL-REMAP.md` for the required native acknowledgement contract.
+//! The native acknowledgement contract is the one these tests pin down.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};

@@ -141,8 +141,11 @@ pub struct Config {
     pub has_identity: bool,
     /// The paired computers, or why `devices.toml` could not be read.
     pub paired: Result<Vec<Paired>, String>,
-    /// Whether `settings.toml` (if there is one) can be read.
+    /// Whether `settings.toml` (if there is one) can be read in full.
     pub settings: Result<(), String>,
+    /// What one-mk leaves out of a `settings.toml` that has mistakes but is
+    /// still TOML (each with its line); the rest of the file is used.
+    pub ignored: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,6 +161,12 @@ pub struct PortFacts {
     pub bind: Bind,
     /// Which program holds it, when we could find out.
     pub holder: Option<String>,
+    /// When that is another one-mk: the settings folder it runs with, if
+    /// we could read it.
+    pub holder_home: Option<String>,
+    /// That other one-mk runs with this very settings folder (so it is not
+    /// answering: hung, or still starting).
+    pub holder_is_this_folder: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -255,7 +264,17 @@ pub fn daemon_check(d: &Daemon) -> Check {
 }
 
 pub fn config_checks(c: &Config, dir: &Path) -> Vec<Check> {
-    let folder = if let (true, Err(e)) = (c.dir_exists, &c.settings) {
+    let folder = if let (true, Err(_)) = (c.dir_exists, &c.settings) && !c.ignored.is_empty() {
+        Outcome::warn(
+            format!(
+                "Found at {}, but settings.toml has {}: {}. one-mk leaves out what it can't read and uses the rest.",
+                dir.display(),
+                if c.ignored.len() == 1 { "a mistake" } else { "mistakes" },
+                c.ignored.join("; ")
+            ),
+            "Fix the line named (settings.toml in the settings folder), or delete that part; the other settings are unaffected. Commands that change settings refuse until it is fixed.",
+        )
+    } else if let (true, Err(e)) = (c.dir_exists, &c.settings) {
         Outcome::warn(
             format!(
                 "Found at {}, but settings.toml cannot be read ({e}). one-mk ignores it: a running one-mk keeps the \
@@ -303,6 +322,19 @@ pub fn port_check(d: &Daemon, p: &PortFacts) -> Check {
             "Restart one-mk (`one-mk run`) and watch for an error about the port.",
         ),
         (false, Bind::Free) => Outcome::pass(format!("UDP port {port} is free for one-mk.")),
+        (false, Bind::InUse) if p.holder.as_deref() == Some("one-mk") && p.holder_is_this_folder => Outcome::fail(
+            format!("UDP port {port} is held by a one-mk that runs with this settings folder but does not answer (stuck, or still starting)."),
+            "Stop it with `one-mk stop` (or end that process), then start one-mk again.",
+        ),
+        (false, Bind::InUse) if p.holder.as_deref() == Some("one-mk") => {
+            // Not this settings folder's one-mk (it would be running): another one's.
+            let folder = p.holder_home.as_deref().map_or(String::new(), |h| format!(" (settings folder {h})"));
+            let stop = p.holder_home.as_deref().map_or("stop it".to_owned(), |h| format!("stop it with `one-mk --home {h:?} stop`"));
+            Outcome::fail(
+                format!("UDP port {port} is already used by another oneMK{folder} that runs with a different settings folder."),
+                &format!("Either {stop}, or start this one on its own port: `one-mk run --port {}` (computers reach each other on the port each one uses).", port.wrapping_add(10).max(1024)),
+            )
+        }
         (false, Bind::InUse) => {
             let who = p.holder.as_deref().map_or("another program".to_owned(), |h| format!("{h:?}"));
             Outcome::fail(
@@ -583,7 +615,7 @@ fn linux_portal_permissions(p: &Portals) -> Outcome {
         }
         Some(Err(e)) => {
             return Outcome::fail(
-                format!("This desktop cannot let one-mk control the mouse and keyboard ({e})."),
+                format!("This desktop cannot let one-mk control the mouse and keyboard ({}).", plain_bus_error(e)),
                 INSTALL,
             );
         }
@@ -598,7 +630,7 @@ fn linux_portal_permissions(p: &Portals) -> Outcome {
         }
         Some(Err(e)) => {
             return Outcome::fail(
-                format!("This desktop cannot let one-mk take the mouse and keyboard to other computers ({e})."),
+                format!("This desktop cannot let one-mk take the mouse and keyboard to other computers ({}).", plain_bus_error(e)),
                 INSTALL,
             );
         }
@@ -618,6 +650,33 @@ fn linux_portal_permissions(p: &Portals) -> Outcome {
             "Run `one-mk run` and choose Allow in the dialog your desktop shows. (If you dismissed it, run it again.)",
         )
     }
+}
+
+/// A D-Bus or portal error in plain words, once: the raw text repeats
+/// itself (`ZBus Error: ...: ZBus Error: ...`) and names things only a
+/// developer knows.
+pub fn plain_bus_error(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    let on_the_bus = ["zbus", "dbus", "d-bus", "unix:path", "unix:abstract", "session bus"].iter().any(|word| lower.contains(word));
+    if on_the_bus && (lower.contains("failed to connect") || lower.contains("no such file") || lower.contains("connection refused")) {
+        return "the desktop's message bus (D-Bus) cannot be reached from here".to_owned();
+    }
+    if lower.contains("timed out") || lower.contains("timeout") {
+        return "the desktop did not answer in time".to_owned();
+    }
+    if lower.contains("serviceunknown") || lower.contains("not provided by any") || lower.contains("unknownmethod") || lower.contains("unknown interface") {
+        return "this desktop does not offer it".to_owned();
+    }
+    // Anything else: its parts, once each, without the library's prefix.
+    let mut parts: Vec<String> = Vec::new();
+    for part in raw.split(": ") {
+        let part = part.trim().trim_start_matches("ZBus Error").trim_start_matches("ZBus error").trim_matches(|c: char| c == ':' || c.is_whitespace());
+        if !part.is_empty() && !parts.iter().any(|seen| seen.eq_ignore_ascii_case(part)) {
+            parts.push(part.to_owned());
+        }
+    }
+    let text = parts.join(": ");
+    if text.is_empty() { "the desktop reported an error".to_owned() } else { text }
 }
 
 /// Keyboard shortcuts, as the running daemon reports them; with none
@@ -640,7 +699,7 @@ pub fn hotkey_check(d: &Daemon, portal: Option<&Result<u32, String>>) -> Check {
         },
         None => match portal {
             Some(Ok(_)) => Outcome::pass("The desktop offers global shortcuts (the GlobalShortcuts portal)."),
-            Some(Err(e)) => Outcome::warn(format!("{away}: {e}."), &fallback),
+            Some(Err(e)) => Outcome::warn(format!("{away}: {}.", plain_bus_error(e)), &fallback),
             None => Outcome::skip("Checked while one-mk runs."),
         },
     };
@@ -696,7 +755,9 @@ pub fn tuning_check(t: Option<&Tuning>) -> Check {
         None => Outcome::skip("settings.toml can't be read (see the settings check)."),
         Some(Tuning { summary: None, .. }) => Outcome::skip("No key, button, pointer or scroll rules are set."),
         Some(Tuning { summary: Some(s), problems, notes }) if problems.is_empty() => {
-            Outcome::pass(notes.iter().fold(s.clone(), |all, n| format!("{all} {}.", n.trim_end_matches('.'))))
+            // The title already says "Input tuning".
+            let s = s.strip_prefix("Input tuning: ").map_or_else(|| s.clone(), |rest| { let mut c = rest.chars(); c.next().map_or_else(String::new, |f| f.to_uppercase().chain(c).collect()) });
+            Outcome::pass(notes.iter().fold(s, |all, n| format!("{all} {}.", n.trim_end_matches('.'))))
         }
         Some(Tuning { problems, notes, .. }) => Outcome::warn(
             format!("{}.", problems.iter().chain(notes).cloned().collect::<Vec<_>>().join("; ")),
@@ -761,7 +822,7 @@ pub fn device_rules_check(d: &DeviceRules) -> Check {
 fn probe_device_rules(dir: &Path, running: bool) -> DeviceRules {
     let r = crate::inputdevices::Remembered::load(dir).unwrap_or_default();
     let support = crate::inputdevices::support(&r, running);
-    let rules = Settings::load(dir).map(|s| s.input.uses_devices()).unwrap_or(false);
+    let rules = Settings::load_lenient(dir).map(|s| s.input.uses_devices()).unwrap_or(false);
     let connected = if running { r.devices.iter().filter(|x| x.connected).count() } else { 0 };
     DeviceRules { support, seen: r.devices.len(), connected, rules }
 }
@@ -840,7 +901,7 @@ pub fn edge_push_tested(backend: &str) -> Option<bool> {
 }
 
 fn probe_tuning(dir: &Path) -> Option<Tuning> {
-    let input = Settings::load(dir).ok()?.input;
+    let input = Settings::load_lenient(dir).ok()?.input;
     let paired = TrustStore::load(dir)
         .map(|t| t.devices().iter().map(|d| (d.name.clone(), d.fingerprint.clone(), d.os)).collect::<Vec<_>>())
         .unwrap_or_default();
@@ -860,8 +921,13 @@ pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
             let title = format!("Computer \"{name}\"");
             let online = d.status().is_some_and(|s| s.peers.iter().any(|x| x.id == p.id && x.online));
             let found = seen.iter().find(|s| s.id == p.id);
+            let removed = d.status().is_some_and(|s| s.removed_us(&p.id));
             let out = match (online, found, d.status().is_some()) {
                 (true, ..) => Outcome::pass("Connected."),
+                (false, ..) if removed => Outcome::fail(
+                    format!("\"{name}\" removed this computer from its paired computers, so it refuses to connect. The network is fine."),
+                    &format!("Remove it here too with `one-mk forget {}`, or pair the two again with `one-mk pair` on both.", p.id),
+                ),
                 (false, Some(f), true) => Outcome::warn(
                     format!("It is on the network ({}) but not connected to this computer.", f.addrs.join(", ")),
                     &format!(
@@ -894,6 +960,40 @@ pub fn peer_checks(d: &Daemon, paired: &[Paired], seen: &[Seen]) -> Vec<Check> {
             Check { id, title, outcome: out }
         })
         .collect()
+}
+
+/// What the running daemon found wrong with the layout: a computer placed
+/// where none of its screens touches this one's (the pointer can't cross
+/// to it), or two computers on one edge. Nothing to say otherwise (or
+/// when one-mk isn't running: only it knows the other screens).
+pub fn layout_check(d: &Daemon) -> Option<Check> {
+    let warnings = &d.status()?.layout.warnings;
+    if warnings.is_empty() {
+        return None;
+    }
+    let detail = warnings.iter().map(|w| {
+        let w = w.trim_end_matches('.');
+        let mut chars = w.chars();
+        chars.next().map_or_else(String::new, |c| c.to_uppercase().chain(chars).collect::<String>() + ".")
+    });
+    Some(check("layout", "Layout", Outcome::warn(
+        detail.collect::<Vec<_>>().join(" "),
+        "Place it next to this computer's screens with `one-mk layout` (see above), or drag it in the window's Arrange view.",
+    )))
+}
+
+/// Computers that keep trying to connect but never get in (see
+/// `Status::unrecognised`): the daemon says who and what to do. Nothing
+/// to say otherwise, or when one-mk isn't running.
+pub fn unrecognised_check(d: &Daemon) -> Option<Check> {
+    let notes = &d.status()?.unrecognised;
+    if notes.is_empty() {
+        return None;
+    }
+    Some(check("unrecognised", "Computers that can't get in", Outcome::warn(
+        notes.join(" "),
+        "Pair again only a computer you know is yours (`one-mk pair` on both): oneMK never trusts one by itself.",
+    )))
 }
 
 /// Private IPv4 ranges (RFC 1918): what a home or office LAN uses.
@@ -981,13 +1081,24 @@ pub fn summarize(checks: &[Check]) -> Summary {
     s
 }
 
-pub fn render_text(checks: &[Check]) -> String {
+/// The report. A check that did not apply here and asks nothing of the
+/// user (no fix) is left out unless `all`: it is noise on a first run.
+pub fn render_text(checks: &[Check], all: bool) -> String {
     let mut out = String::new();
+    let mut hidden = 0;
     for c in checks {
+        if !all && c.outcome.status == Status::Skip && c.outcome.fix.is_none() {
+            hidden += 1;
+            continue;
+        }
         out += &format!("{} {}: {}\n", c.outcome.status.tag(), c.title, c.outcome.detail);
         if let Some(fix) = &c.outcome.fix {
             out += &format!("       Fix: {fix}\n");
         }
+    }
+    if hidden > 0 {
+        out += &format!("({hidden} check{} that did not apply here {} left out; `one-mk doctor --all` shows every one.)\n",
+            if hidden == 1 { "" } else { "s" }, if hidden == 1 { "is" } else { "are" });
     }
     let s = summarize(checks);
     out += &match (s.fail, s.warn) {
@@ -1017,15 +1128,52 @@ pub(crate) fn json_str(s: &str) -> String {
     out
 }
 
+/// The port check's finding (`UDP port 24900 is already used by "one-mk".`)
+/// for the window: which port, and who has it, in plain words, with what to do.
+fn port_in_words(detail: &str) -> (String, String) {
+    let port = detail.split("UDP port ").nth(1).and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next()).filter(|p| !p.is_empty());
+    if detail.contains("is running but is not listening") {
+        let port = port.map_or_else(|| "its network port".to_owned(), |p| format!("network port {p}"));
+        return (format!("oneMK is running but isn't using {port}."), "Stop sharing and start it again.".into());
+    }
+    let port = port.map_or_else(|| "Its network port".to_owned(), |p| format!("Network port {p}"));
+    // A one-mk of this settings folder that holds the port but does not answer.
+    if detail.contains("does not answer") {
+        return (format!("{port} is held by a oneMK that is not answering."), "Press Stop (or run `one-mk stop`), then start sharing again.".into());
+    }
+    // Another one-mk (the finding names its settings folder when it is known).
+    if detail.contains("another oneMK") {
+        return (
+            format!("{port} is already used by another copy of oneMK."),
+            "Quit the other oneMK (it may run from another settings folder or for another user), then start sharing again.".into(),
+        );
+    }
+    match detail.split('"').nth(1) {
+        Some("one-mk" | "one-mk-app" | "one-mk-tray") => (
+            format!("{port} is already used by another copy of oneMK."),
+            "Quit the other oneMK (it may run from another settings folder or for another user), then start sharing again.".into(),
+        ),
+        Some(program) => (format!("{port} is already used by {program}."), format!("Quit {program}, then start sharing again.")),
+        None => (format!("{port} is already used by another program."), "Quit the program using it (it may be another copy of oneMK), then start sharing again.".into()),
+    }
+}
+
 fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
     let mut shown = source.clone();
     let status = source.outcome.status;
     let original = source.outcome.detail.as_str();
     let good = status == Status::Pass;
     let mut action = None;
+    // Details worked out from the source's, for the arms that say what is really wrong.
+    let carried: String;
     let (title, detail, fix) = match source.id.as_str() {
         "updates" | "local-key-rules" | "input-tuning" | "typing" => return (shown, None, true),
         "wallpaper" | "wallpaper-import-sandbox" | "drag" => return (shown, None, false),
+        "port" if status == Status::Fail => {
+            let (detail, fix) = port_in_words(original);
+            (shown.title, shown.outcome.detail, shown.outcome.fix) = ("Network connection".into(), detail, Some(fix));
+            return (shown, None, true);
+        }
         "daemon" => {
             if !good { action = Some("Start"); }
             ("Sharing", if good { "Sharing is on." } else if status == Status::Skip { "Sharing is stopped." }
@@ -1033,7 +1181,7 @@ fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
                 if good { None } else { Some("Start sharing again.") })
         }
         "config" => ("Settings", if good { "Your settings are ready. New settings are saved automatically." }
-            else { "Some saved settings could not be read. Default settings will be used next time sharing starts." },
+            else { "Some saved settings could not be read and are left out; everything else is used." },
             if good { None } else { Some("Review your preferences in Settings.") }),
         "identity" => {
             shown.outcome.status = Status::Pass;
@@ -1047,11 +1195,23 @@ fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
                 if status == Status::Skip { Some("Pair a computer to start sharing.") }
                 else if good { None } else { Some("Try pairing your computers again.") })
         }
-        "port" => ("Network connection", if good {
-            if original.contains("free") { "Ready for sharing to start." } else { "Ready to connect to your other computers." }
-        } else if status == Status::Fail { "Sharing cannot use its network connection." }
-            else { "The network connection could not be checked." },
-            if good { None } else { Some("Close other keyboard and mouse sharing apps, then try starting sharing again.") }),
+        "port" => {
+            let held = original.split_once("is already used by ").map(|(_, who)| who.trim_end_matches('.').trim_matches('"').to_owned());
+            ("Network connection", if good {
+                if original.contains("free") { "Ready for sharing to start." } else { "Ready to connect to your other computers." }
+            } else if status == Status::Fail && held.as_deref().is_some_and(|who| who.starts_with("another oneMK")) {
+                "Another copy of oneMK on this computer (with its own settings folder) already uses the network port sharing needs."
+            } else if status == Status::Fail && let Some(who) = held {
+                carried = format!("The network port sharing needs is already used by {who}.");
+                &carried
+            } else if status == Status::Fail && original.contains("does not answer") {
+                "A copy of oneMK that does not answer is holding the network port sharing needs."
+            } else if status == Status::Fail && original.contains("is not listening") { "Sharing is on but is not listening for other computers." }
+            else if status == Status::Fail { "Sharing cannot use its network connection." }
+                else { "The network connection could not be checked." },
+                if good { None } else if status == Status::Fail { Some("Close that program or the other copy, then start sharing again.") }
+                else { Some("Close other keyboard and mouse sharing apps, then try starting sharing again.") })
+        }
         "mdns" => ("Find nearby computers", if good { "Nearby computers can be found on this network." }
             else if status == Status::Skip { "Finding nearby computers is turned off." }
             else { "Nearby computers could not be found." },
@@ -1074,17 +1234,19 @@ fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
                 else { "Your desktop has not allowed mouse and keyboard sharing yet." },
                 if mac && !good { Some("Follow the permission guide to allow sharing in System Settings.") }
                 else if action == Some("Start") { Some("Start sharing to check permissions.") }
-                else if good { None } else { Some("Choose Allow in the permission window your desktop shows (it can be behind other windows). Then press Recheck.") })
+                else if good { None } else { Some("Choose Allow in the permission window your desktop shows (it can be behind other windows). Then choose Check again.") })
         }
         "hotkeys" => ("Keyboard shortcuts", if good { "Keyboard shortcuts are ready." }
             else if status == Status::Skip { "Keyboard shortcuts are turned off or still being set up." }
             else { "Keyboard shortcuts only work while the pointer is on another computer." },
             if good || status == Status::Skip { None } else { Some("You can still switch computers from the window.") }),
         "broadcast" => ("Share with several computers", if good { "Sharing with several computers at once is off." }
+            else if status == Status::Skip { "Not checked: sharing is not running." }
             else { "Your typing, clicks and scrolling go to several computers at once." },
             if status == Status::Warn { Some("Press Ctrl+Alt+Shift+Esc to stop sharing with several computers.") } else { None }),
         "clipboard" => ("Clipboard sharing", "Your clipboard sharing preferences are saved.", None),
-        "clipboard-history" => ("Clipboard history", "Saved clipboard history could not be read.", Some("Review clipboard history in Settings.")),
+        "clipboard-history" if status == Status::Fail => ("Clipboard history", "Saved clipboard history could not be read.", Some("Review clipboard history in Settings.")),
+        "clipboard-history" => ("Clipboard history", if original.contains("Disabled") { "Clipboard history is off." } else { "Clipboard history is on." }, None),
         "hooks" => ("Automatic actions", "An automatic action was blocked for your safety.", Some("Review automatic actions in Settings.")),
         "per-device-rules" => ("Individual keyboards and mice", if good { "Your keyboards and mice can have different preferences." }
             else { "Your desktop treats keyboards and mice as one device." },
@@ -1101,10 +1263,17 @@ fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
             else { "This may be a guest or public network." },
             if good { None } else { Some("Connect both computers to the same home or office Wi-Fi or wired network.") }),
         "link" => ("Connection quality", if good { "Your connected computers respond quickly." }
+            else if status == Status::Skip && original.contains("No computer") { "No computer is connected right now." }
+            else if status == Status::Skip { "Not measured: sharing is not running." }
             else { "The connection is slow or unreliable. Pointer movement may pause." },
             if status == Status::Warn { Some("Move closer to the Wi-Fi router or use a network cable. Pause large downloads.") } else { None }),
+        id if id.starts_with("peer:") && original.contains("removed this computer") => (source.title.as_str(),
+            "It removed this computer from its paired computers, so it refuses to connect. The network is fine.",
+            Some("Remove it here too, or pair the two computers again.")),
         id if id.starts_with("peer:") => (source.title.as_str(), if good { "Connected." } else { "Not connected right now." },
             if good { None } else { Some("Make sure sharing is on on both computers and they are on the same network.") }),
+        "layout" => ("Arrangement", "A computer is placed where the pointer can't reach it: none of its screens touches this computer's.",
+            Some("Drag it next to this computer's screens in Arrange.")),
         _ => return (shown, None, false),
     };
     shown.title = title.to_owned();
@@ -1146,9 +1315,9 @@ pub fn render_json(checks: &[Check]) -> String {
 // --------------------------------------------------------------- probes --
 
 /// `one-mk doctor`. Exits with status 1 if any check fails.
-pub async fn run(dir: &Path, json: bool) -> Result<()> {
+pub async fn run(dir: &Path, json: bool, all: bool) -> Result<()> {
     let checks = diagnose(dir).await;
-    let text = if json { render_json(&checks) } else { render_text(&checks) };
+    let text = if json { render_json(&checks) } else { render_text(&checks, all) };
     {
         use std::io::Write;
         let mut out = std::io::stdout().lock();
@@ -1176,7 +1345,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
                 let dir = dir.to_owned();
                 move || probe_config(&dir)
             },
-            Config { dir_exists: false, has_identity: false, paired: Err("probe failed".into()), settings: Ok(()) },
+            Config { dir_exists: false, has_identity: false, paired: Err("probe failed".into()), settings: Ok(()), ignored: Vec::new() },
         )
     );
     let paired = config.paired.clone().unwrap_or_default();
@@ -1198,7 +1367,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     );
 
     let (port_facts, mdns, firewall, mut portals, addrs, shortcuts) = tokio::join!(
-        blocking(move || probe_port(port), PortFacts { port, bind: Bind::Error("probe failed".into()), holder: None },),
+        blocking({ let dir = dir.to_owned(); move || probe_port(port, &dir) }, PortFacts { port, bind: Bind::Error("probe failed".into()), holder: None, holder_home: None, holder_is_this_folder: false },),
         async { if daemon.status().is_some_and(|status| status.discovery == Some(false)) {
             MdnsFacts { join: Ok(()), seen: Ok(Vec::new()) }
         } else { probe_mdns(wanted).await } },
@@ -1222,6 +1391,12 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     checks.push(check("updates", "Updates", if available { Outcome::warn(detail, "update-now") }
         else if detail.starts_with("Couldn't check:") { Outcome::skip(detail) } else { Outcome::pass(detail) }));
     checks.push(check("drag", "File edge drops", Outcome::skip(one_mk_input::dropzone::availability())));
+    if daemon.status().is_some()
+        && let Ok(Some((count, bytes, age, _))) = crate::manage::partials_of(dir, false).await
+        && let Some(text) = crate::manage::partials_text(count, bytes, age)
+    {
+        checks.push(check("partials", "Unfinished received files", Outcome::skip(text)));
+    }
     checks.extend(config_checks(&config, dir));
     checks.push(port_check(&daemon, &port_facts));
     checks.push(mdns_check(&daemon, &mdns));
@@ -1230,9 +1405,10 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         Some(status) => check("portals", "Permissions", Outcome::skip(format!("this daemon uses the {} backend", status.backend.as_str()))),
         None => portal_check(os, portals.as_ref(), daemon.status().map_or(&[], |s| &s.input)),
     }});
-    if let Ok(settings) = crate::settings::Settings::load(dir) {
+    if let Ok(settings) = crate::settings::Settings::load_lenient(dir) {
         if let Some(reason) = &settings.hooks.blocked {
-            checks.push(check("hooks", "Hooks", Outcome::fail(format!("Hooks REFUSED: {reason}"), "Fix settings.toml ownership and permissions and remove group/world write access from its folder; alternatively explicitly use `one-mk hooks --trust-permissions`.")));
+            let what = if settings.input.runs_commands() { "Hooks and `run:` key, button and gesture actions" } else { "Hooks" };
+            checks.push(check("hooks", "Hooks", Outcome::fail(format!("{what} REFUSED: {reason}"), "Fix settings.toml ownership and permissions and remove group/world write access from its folder; alternatively explicitly use `one-mk hooks --trust-permissions`.")));
         }
         checks.push(check("clipboard", "Clipboard", Outcome::pass(settings.clipboard.summary())));
         let retention = if settings.clipboard.history_max == 0 || settings.clipboard.history_max_mb == 0 { "Disabled; no copies retained" } else if settings.clipboard.history_persist { "Plain text on disk (unencrypted), in clipboard-history.bin" } else { "Memory only; forgotten on shutdown" };
@@ -1256,19 +1432,21 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         }));
     }
     checks.push(hotkey_check(&daemon, shortcuts.as_ref()));
-    checks.push(broadcast_check(&daemon, crate::settings::Settings::load(dir).ok().map(|s| s.broadcast).as_ref(), os));
+    checks.push(broadcast_check(&daemon, crate::settings::Settings::load_lenient(dir).ok().map(|s| s.broadcast).as_ref(), os));
     checks.push(tuning_check(probe_tuning(dir).as_ref()));
     checks.push(local_rules_check(daemon.status()));
     checks.push(device_rules_check(&probe_device_rules(dir, daemon.status().is_some())));
     checks.push(pointer_overlay_check(
         crate::pointeroverlay::support_here(daemon.status().map(|s| s.backend.as_str())),
-        crate::settings::Settings::load(dir).map(|s| s.pointer.draw_when_no_mouse).unwrap_or_default(),
+        crate::settings::Settings::load_lenient(dir).map(|s| s.pointer.draw_when_no_mouse).unwrap_or_default(),
     ));
-    if let Ok(settings) = crate::settings::Settings::load(dir) {
+    if let Ok(settings) = crate::settings::Settings::load_lenient(dir) {
         let status = daemon.status();
         let question = status.and_then(|s| s.suggestion.as_ref()).map(|g| one_mk_ctl::status::is_it_there(&g.name, g.side));
         checks.push(edge_push_check(&settings.edge, status.map_or("", |s| s.backend.as_str()), question));
     }
+    checks.extend(layout_check(&daemon));
+    checks.extend(unrecognised_check(&daemon));
     checks.push(network_check(&addrs));
     checks.push(connection_check(&daemon));
     let seen = mdns.seen.as_deref().unwrap_or_default();
@@ -1298,13 +1476,16 @@ async fn probe_daemon(dir: &Path) -> Daemon {
 
 fn probe_config(dir: &Path) -> Config {
     let paired = TrustStore::load(dir).map_err(|e| format!("{e:#}")).map(|t| {
-        t.devices().iter().map(|d| Paired { id: d.short_id(), name: d.name.clone(), addrs: d.addrs.clone() }).collect()
+        t.devices().iter().map(|d| Paired { id: d.short_id(), name: t.display(d), addrs: d.addrs.clone() }).collect()
     });
+    let settings = Settings::load(dir);
+    let ignored = if settings.is_err() { Settings::load_lenient(dir).map(|s| s.problems).unwrap_or_default() } else { Vec::new() };
     Config {
         dir_exists: dir.is_dir(),
         has_identity: dir.join("identity.key.der").is_file() && dir.join("identity.cert.der").is_file(),
         paired,
-        settings: Settings::load(dir).map(|_| ()).map_err(|e| one_line(&format!("{e:#}"))),
+        settings: settings.map(|_| ()).map_err(|e| one_line(&format!("{e:#}"))),
+        ignored,
     }
 }
 
@@ -1316,7 +1497,7 @@ fn one_line(error: &str) -> String {
     error.lines().map(str::trim).filter(|l| !l.is_empty() && !quoted(l)).collect::<Vec<_>>().join("; ")
 }
 
-fn probe_port(port: u16) -> PortFacts {
+fn probe_port(port: u16, dir: &Path) -> PortFacts {
     let mut bind = Bind::Free;
     // The daemon binds dual-stack, so either address family collides with it.
     for addr in [format!("0.0.0.0:{port}"), format!("[::]:{port}")] {
@@ -1335,11 +1516,36 @@ fn probe_port(port: u16) -> PortFacts {
         }
     }
     let holder = if bind == Bind::InUse { udp_holder(port) } else { None };
-    PortFacts { port, bind, holder }
+    let (holder, holder_home) = match holder {
+        Some((name, home)) => (Some(name), home),
+        None => (None, None),
+    };
+    let same = |home: &str| {
+        let home = Path::new(home);
+        home.is_absolute() && std::fs::canonicalize(home).ok().zip(std::fs::canonicalize(dir).ok()).is_some_and(|(a, b)| a == b)
+    };
+    let holder_is_this_folder = holder_home.as_deref().is_some_and(same);
+    PortFacts { port, bind, holder, holder_home, holder_is_this_folder }
 }
 
-/// The program holding a UDP port, found via /proc (Linux, own processes only).
-fn udp_holder(port: u16) -> Option<String> {
+/// The settings folder a one-mk process was started with (`--home X`,
+/// `--home=X` or ONE_MK_HOME), from /proc (own processes only).
+fn process_home(pid: &std::path::Path) -> Option<String> {
+    let cmdline = std::fs::read(pid.join("cmdline")).ok()?;
+    let args: Vec<String> = cmdline.split(|b| *b == 0).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+    if let Some(i) = args.iter().position(|a| a == "--home") {
+        return args.get(i + 1).cloned().filter(|h| !h.is_empty());
+    }
+    if let Some(home) = args.iter().find_map(|a| a.strip_prefix("--home=")) {
+        return Some(home.to_owned()).filter(|h| !h.is_empty());
+    }
+    let environ = std::fs::read(pid.join("environ")).ok()?;
+    environ.split(|b| *b == 0).find_map(|kv| String::from_utf8_lossy(kv).strip_prefix("ONE_MK_HOME=").map(str::to_owned)).filter(|h| !h.is_empty())
+}
+
+/// The program holding a UDP port (and, for one-mk, its settings folder),
+/// found via /proc (Linux, own processes only).
+fn udp_holder(port: u16) -> Option<(String, Option<String>)> {
     if !cfg!(target_os = "linux") {
         return None;
     }
@@ -1353,7 +1559,9 @@ fn udp_holder(port: u16) -> Option<String> {
             continue;
         };
         if fds.flatten().any(|fd| std::fs::read_link(fd.path()).is_ok_and(|l| l.to_string_lossy() == want)) {
-            return std::fs::read_to_string(pid.path().join("comm")).ok().map(|c| c.trim().to_owned());
+            let name = std::fs::read_to_string(pid.path().join("comm")).ok().map(|c| c.trim().to_owned())?;
+            let home = if name == "one-mk" { process_home(&pid.path()) } else { None };
+            return Some((name, home));
         }
     }
     None
@@ -1779,7 +1987,7 @@ mod tests {
     }
 
     fn cfg(dir: bool, id: bool, paired: Result<Vec<Paired>, String>) -> Vec<Check> {
-        config_checks(&Config { dir_exists: dir, has_identity: id, paired, settings: Ok(()) }, Path::new("/x/one-mk"))
+        config_checks(&Config { dir_exists: dir, has_identity: id, paired, settings: Ok(()), ignored: Vec::new() }, Path::new("/x/one-mk"))
     }
 
     fn paired(id: &str) -> Paired {
@@ -1804,7 +2012,7 @@ mod tests {
     #[test]
     fn a_settings_file_that_does_not_parse_is_reported() {
         let c = |settings| {
-            let cfg = Config { dir_exists: true, has_identity: true, paired: Ok(vec![]), settings };
+            let cfg = Config { dir_exists: true, has_identity: true, paired: Ok(vec![]), settings, ignored: Vec::new() };
             config_checks(&cfg, Path::new("/x/one-mk")).remove(0)
         };
         assert_eq!(st(&c(Ok(()))), Status::Pass);
@@ -1840,7 +2048,7 @@ mod tests {
     }
 
     fn pf(bind: Bind, holder: Option<&str>) -> PortFacts {
-        PortFacts { port: 24900, bind, holder: holder.map(str::to_owned) }
+        PortFacts { port: 24900, bind, holder: holder.map(str::to_owned), holder_home: None, holder_is_this_folder: false }
     }
 
     #[test]
@@ -1854,6 +2062,77 @@ mod tests {
         assert!(other.outcome.fix.unwrap().contains("--port"));
         assert_eq!(st(&port_check(&Daemon::NotRunning, &pf(Bind::InUse, None))), Status::Fail);
         assert_eq!(st(&port_check(&running(), &pf(Bind::Error("denied".into()), None))), Status::Warn);
+    }
+
+    /// Another one-mk holding the port (a different settings folder) is not
+    /// "some program": it says so, and what to do about it; the window text
+    /// carries the real reason instead of a fixed sentence.
+    #[test]
+    fn a_port_held_by_another_one_mk_says_which() {
+        let facts = PortFacts { holder_home: Some("/tmp/other".into()), ..pf(Bind::InUse, Some("one-mk")) };
+        let other = port_check(&Daemon::NotRunning, &facts);
+        assert_eq!(st(&other), Status::Fail);
+        assert!(other.outcome.detail.contains("another oneMK (settings folder /tmp/other)") && !other.outcome.detail.contains("\"one-mk\""), "{}", other.outcome.detail);
+        let fix = other.outcome.fix.clone().unwrap();
+        assert!(fix.contains("--port") && fix.contains("--home") && !fix.contains("Close that program"), "{fix}");
+        let stuck = port_check(&Daemon::NotRunning, &PortFacts { holder_home: Some("/tmp/mine".into()), holder_is_this_folder: true, ..pf(Bind::InUse, Some("one-mk")) });
+        assert!(stuck.outcome.detail.contains("this settings folder but does not answer") && stuck.outcome.fix.unwrap().contains("one-mk stop"));
+        let unknown = port_check(&Daemon::NotRunning, &pf(Bind::InUse, Some("one-mk")));
+        assert!(unknown.outcome.detail.contains("another oneMK") && unknown.outcome.fix.unwrap().contains("stop it"));
+        let (shown, _, visible) = window_check(&other);
+        assert!(visible && shown.outcome.detail.contains("another copy of oneMK"), "{}", shown.outcome.detail);
+        let (shown, ..) = window_check(&port_check(&Daemon::NotRunning, &pf(Bind::InUse, Some("deskflow"))));
+        assert!(shown.outcome.detail.contains("used by deskflow"), "the program is named: {}", shown.outcome.detail);
+        let (shown, ..) = window_check(&port_check(&running(), &pf(Bind::Free, None)));
+        assert!(shown.outcome.detail.contains("isn't using network port"), "{}", shown.outcome.detail);
+    }
+
+    /// The window's wording says what is true: off is off, not running is
+    /// not running, nothing connected is nothing connected.
+    #[test]
+    fn window_text_matches_what_the_check_found() {
+        let said = |id: &str, status: Status, detail: &str| window_check(&check(id, "", Outcome::new(status, detail, None))).0.outcome.detail;
+        assert_eq!(said("clipboard-history", Status::Skip, "Up to 50 items, 25 MB. Disabled; no copies retained. x"), "Clipboard history is off.");
+        assert_eq!(said("clipboard-history", Status::Skip, "Up to 50 items, 25 MB. Memory only; forgotten on shutdown. x"), "Clipboard history is on.");
+        assert_eq!(said("clipboard-history", Status::Fail, "Could not read it"), "Saved clipboard history could not be read.");
+        assert_eq!(said("broadcast", Status::Skip, "Checked while one-mk runs."), "Not checked: sharing is not running.");
+        assert_eq!(said("broadcast", Status::Pass, "Off."), "Sharing with several computers at once is off.");
+        assert!(said("broadcast", Status::Warn, "On: x").contains("go to several computers at once"));
+        assert_eq!(said("link", Status::Skip, "one-mk is not running, so there is no connection to measure."), "Not measured: sharing is not running.");
+        assert_eq!(said("link", Status::Skip, "No computer is connected right now."), "No computer is connected right now.");
+        assert!(said("link", Status::Warn, "slow").contains("slow or unreliable"));
+    }
+
+    #[test]
+    fn bus_errors_are_said_once_in_plain_words() {
+        let raw = "ZBus Error: Failed to connect to address `unix:path=/nonexistent/dead`: No such file or directory (os error 2)";
+        assert_eq!(plain_bus_error(raw), "the desktop's message bus (D-Bus) cannot be reached from here");
+        assert_eq!(plain_bus_error("the desktop portal did not answer in time (timeout)"), "the desktop did not answer in time");
+        assert_eq!(plain_bus_error("ZBus Error: ZBus Error: The portal said no"), "The portal said no", "a repeated library prefix is dropped");
+        assert_eq!(plain_bus_error("Failed to connect to the display"), "Failed to connect to the display", "not every connection error is the bus");
+        let shortcuts = hotkey_check(&Daemon::NotRunning, Some(&Err(raw.to_owned())));
+        assert!(!shortcuts.outcome.detail.contains("ZBus") && shortcuts.outcome.detail.contains("message bus"), "{}", shortcuts.outcome.detail);
+    }
+
+    #[test]
+    fn the_window_names_the_port_and_who_holds_it() {
+        let shown = |holder: Option<&str>| {
+            let (check, _, visible) = window_check(&port_check(&Daemon::NotRunning, &pf(Bind::InUse, holder)));
+            assert!(visible);
+            (check.outcome.detail, check.outcome.fix.unwrap_or_default())
+        };
+        let (detail, fix) = shown(Some("one-mk"));
+        assert_eq!(detail, "Network port 24900 is already used by another copy of oneMK.");
+        assert!(fix.starts_with("Quit the other oneMK"), "{fix}");
+        let (detail, fix) = shown(Some("deskflow"));
+        assert_eq!((detail.as_str(), fix.as_str()), ("Network port 24900 is already used by deskflow.", "Quit deskflow, then start sharing again."));
+        let (detail, _) = shown(None);
+        assert_eq!(detail, "Network port 24900 is already used by another program.");
+        for (detail, fix) in [shown(Some("one-mk")), shown(Some("x")), shown(None)] {
+            assert!(!format!("{detail}{fix}").contains('`') && !fix.contains("--port"), "no terminal advice: {detail} {fix}");
+        }
+        let (check, ..) = window_check(&port_check(&running(), &pf(Bind::Free, None)));
+        assert_eq!(check.outcome.detail, "oneMK is running but isn't using network port 24900.");
     }
 
     #[test]
@@ -2122,6 +2401,38 @@ mod tests {
         let c = peer_checks(&down, &with_addr, &[]);
         assert!(c[0].outcome.fix.as_ref().unwrap().contains("10.0.0.7:24900"));
         assert!(peer_checks(&down, &[], &[]).is_empty());
+
+        // It forgot this computer: not a network problem, whatever discovery saw.
+        let mut s = status("aaaa-aaaa", 24900, &[("bbbb-bbbb", false)]);
+        s.removed = vec!["bbbb-bbbb".into()];
+        let removed = Daemon::Running(Box::new(s));
+        for seen_it in [vec![], vec![seen("bbbb-bbbb")]] {
+            let c = peer_checks(&removed, &with_addr, &seen_it);
+            assert_eq!(st(&c[0]), Status::Fail);
+            assert!(c[0].outcome.detail.contains("removed this computer") && c[0].outcome.detail.contains("network is fine"), "{:?}", c[0].outcome);
+            assert!(c[0].outcome.fix.as_ref().unwrap().contains("one-mk forget bbbb-bbbb"));
+        }
+    }
+
+    /// A layout the pointer can't cross is a problem doctor names, not
+    /// "No problems found".
+    #[test]
+    fn a_layout_that_does_not_touch_is_reported() {
+        let mut s = status("aaaa-aaaa", 24900, &[("bbbb-bbbb", true)]);
+        assert!(layout_check(&Daemon::Running(Box::new(s.clone()))).is_none());
+        assert!(layout_check(&Daemon::NotRunning).is_none());
+        assert!(unrecognised_check(&Daemon::NotRunning).is_none());
+        assert!(unrecognised_check(&Daemon::Running(Box::new(s.clone()))).is_none());
+        let mut knocked = s.clone();
+        knocked.unrecognised = vec!["A computer this one doesn't recognise (id ab12-cd34, at 10.0.0.5) tried to connect.".into()];
+        let c = unrecognised_check(&Daemon::Running(Box::new(knocked))).unwrap();
+        assert_eq!(c.outcome.status, Status::Warn);
+        assert!(c.outcome.detail.contains("ab12-cd34") && c.outcome.fix.as_deref().is_some_and(|f| f.contains("never trusts")), "{c:?}");
+        s.layout.warnings = vec!["layout of desk does not overlap yours: none of its screens touches this computer's on its right, so the pointer can't cross to it".into()];
+        let c = layout_check(&Daemon::Running(Box::new(s))).unwrap();
+        assert_eq!(st(&c), Status::Warn);
+        assert!(c.outcome.detail.starts_with("Layout of desk does not overlap yours") && c.outcome.detail.ends_with("cross to it."), "{}", c.outcome.detail);
+        assert!(!render_text(&[c], false).contains("No problems found\n"));
     }
 
     /// Advice to connect directly names the port one-mk really uses.
@@ -2178,14 +2489,21 @@ mod tests {
             check("a", "Fine", Outcome::pass("all good")),
             check("b", "Broken", Outcome::fail("it broke", "turn it on")),
         ];
-        let t = render_text(&checks);
+        let t = render_text(&checks, false);
         assert!(t.contains("[ ok ] Fine: all good"));
         assert!(t.contains("[FAIL] Broken: it broke\n       Fix: turn it on\n"));
         assert!(t.contains("1 problem found"));
-        let fine = render_text(&checks[..1]);
+        let fine = render_text(&checks[..1], false);
         assert!(fine.contains("Everything looks fine"));
-        let warn = render_text(&[check("w", "W", Outcome::warn("hm", "look"))]);
+        let warn = render_text(&[check("w", "W", Outcome::warn("hm", "look"))], false);
         assert!(warn.contains("No problems found, but 1 thing is worth a look"));
+        // Checks that did not apply and ask nothing are left out, unless all.
+        let skipped = [check("s", "Quiet", Outcome::skip("nothing set")), check("p", "Start", Outcome { fix: Some("run it".into()), ..Outcome::skip("not running") })];
+        let short = render_text(&skipped, false);
+        assert!(!short.contains("Quiet") && short.contains("[skip] Start: not running\n       Fix: run it"), "{short}");
+        assert!(short.contains("1 check that did not apply here is left out; `one-mk doctor --all`"), "{short}");
+        let long = render_text(&skipped, true);
+        assert!(long.contains("[skip] Quiet: nothing set") && !long.contains("left out"), "{long}");
     }
 
     #[test]
@@ -2226,6 +2544,7 @@ mod tests {
         assert_eq!(st(&tuning_check(Some(&t(None, &[])))), Status::Skip);
         let ok = tuning_check(Some(&t(Some("Input tuning: 1 key rule."), &[])));
         assert_eq!((st(&ok), ok.id.as_str()), (Status::Pass, "input-tuning"));
+        assert_eq!(ok.outcome.detail, "1 key rule.", "the title says \"Input tuning\" already");
         let bad = tuning_check(Some(&t(Some("x"), &["a: conflict", "b: typo"])));
         assert_eq!(st(&bad), Status::Warn);
         assert_eq!(bad.outcome.detail, "a: conflict; b: typo.");

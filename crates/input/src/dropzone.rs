@@ -39,16 +39,25 @@ impl DropTarget for Handle {
     }
 }
 
-pub fn available_by_default() -> bool {
+/// Whether this desktop can offer an edge drop target at all: Windows,
+/// macOS, or a Linux session on X11. Wayland offers no way to place one.
+/// This is not a default: file edge drops are always off until switched on.
+pub fn supported() -> bool {
     cfg!(any(windows, target_os = "macos")) || (cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_some())
 }
 
+/// Words for people about where file edge drops work, and how well that is known.
 pub fn availability() -> &'static str {
-    if cfg!(windows) { "Available with the Windows OLE edge target (interactive desktop only)." }
-    else if cfg!(target_os = "macos") { "Available with the AppKit edge target (Accessibility/Input Monitoring permission required)." }
-    else if available_by_default() { "Available on X11." }
-    else { "File edge drops are not available on this desktop; use one-mk send or the file manager's Send to entry." }
+    if cfg!(windows) { "Experimental on Windows: built, but not yet tried on a real Windows desktop (interactive desktop only)." }
+    else if cfg!(target_os = "macos") { "Experimental on macOS: built, but not yet tried on a real Mac (needs Accessibility and Input Monitoring permission)." }
+    else if supported() { X11_NOTE }
+    else { UNAVAILABLE }
 }
+
+pub const X11_NOTE: &str = "Experimental on X11: tried with scripted drags, not yet with a file manager on a real desktop.";
+
+/// Why a Wayland (or other) desktop cannot have file edge drops.
+pub const UNAVAILABLE: &str = "File edge drops are not available on this desktop (they need X11, Windows or macOS; Wayland has no screen-edge drop target); use `one-mk send` or the file manager's Send to entry.";
 
 pub fn start(backend: &str) -> Result<(Handle, mpsc::Receiver<Drop>)> {
     let (zones, changed) = watch::channel(Vec::new());

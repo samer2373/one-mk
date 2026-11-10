@@ -1,5 +1,5 @@
 //! The window itself. On macOS there is no grey title bar: the close,
-//! minimise and zoom buttons sit inside the glass sidebar, and the window
+//! minimise and zoom buttons sit at the left of the top bar, and the window
 //! is see-through, with the desktop behind it blurred by the window server
 //! (as Terminal and the system's own sidebars do). The glass is then real
 //! glass: the wallpaper's colours come through every panel. Elsewhere the
@@ -29,14 +29,12 @@ pub fn reduce_transparency() -> bool {
 }
 
 /// Where the macOS window buttons go, in points from the window's top left:
-/// centred in this strip, the close button this far in, inside the
-/// sidebar's top corner beside the logo.
-pub const BUTTONS_Y: egui::Rangef = egui::Rangef { min: 0.0, max: 44.0 };
+/// centred in this strip (the top bar), the close button this far in,
+/// before the logo (which starts 78 points in, app/shell.rs `MAC_INSET`).
+pub const BUTTONS_Y: egui::Rangef = egui::Rangef { min: 0.0, max: 60.0 };
 pub const BUTTONS_X: f32 = 18.0;
-/// The buttons' width, margins included: the logo starts after them.
-pub const BUTTONS_W: f32 = 76.0;
 
-/// The window buttons sit inside the sidebar (macOS).
+/// The window buttons sit in the top bar (macOS).
 pub fn mac_frame() -> bool {
     cfg!(target_os = "macos") || fake::desktop()
 }
@@ -47,12 +45,10 @@ pub fn mac_frame() -> bool {
 /// dark tint over the blurred desktop instead, dark enough that grey text
 /// on it keeps 4.5:1 over a white wallpaper.
 pub fn paint_room(p: &egui::Painter, full: egui::Rect) {
-    use crate::style::{LAMP, ROOM, ROOM_TINT};
+    use crate::style::pal;
     #[cfg(any(debug_assertions, feature = "design-evidence"))]
     fake::paint_desktop(p, full);
-    p.rect_filled(full, 0.0, if see_through() { ROOM_TINT } else { ROOM });
-    // A quiet room: no lights of its own; the computers carry the colour.
-    let _ = LAMP;
+    p.rect_filled(full, 0.0, if see_through() { pal().room_tint } else { pal().bg });
 }
 
 /// A soft round light: full colour in the middle, gone at `radius`, eased
@@ -83,7 +79,7 @@ pub fn light(p: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Co
 
 /// What the window is cleared to before the room is painted.
 pub fn clear_color() -> [f32; 4] {
-    if see_through() { [0.0; 4] } else { crate::style::GROUND.to_normalized_gamma_f32() }
+    if see_through() { [0.0; 4] } else { crate::style::pal().bg.to_normalized_gamma_f32() }
 }
 
 /// The window options that make the frame: on macOS, content under a
@@ -92,7 +88,7 @@ pub fn viewport(b: egui::ViewportBuilder) -> egui::ViewportBuilder {
     if mac_frame() { b.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false) } else { b }
 }
 
-/// Every frame: put the window buttons back where the sidebar expects
+/// Every frame: put the window buttons back where the top bar expects
 /// them (AppKit moves them again on each layout).
 pub fn place_buttons(ctx: &egui::Context, frame: &eframe::Frame) {
     if mac_frame() {
@@ -216,7 +212,7 @@ mod fake {
             p.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("fake-desktop"), t.clone()));
             t
         });
-        p.image(tex.id(), full, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+        p.image(tex.id(), full, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), crate::style::UNTINTED);
     }
 
     /// The three window buttons, drawn where AppKit would put them.
@@ -226,8 +222,8 @@ mod fake {
             return;
         }
         let y = super::BUTTONS_Y.center();
-        for (k, c) in [(0xFF, 0x5F, 0x57), (0xFE, 0xBC, 0x2E), (0x28, 0xC8, 0x40)].into_iter().enumerate() {
-            p.circle(egui::pos2(super::BUTTONS_X + 6.0 + 20.0 * k as f32, y), 6.0, egui::Color32::from_rgb(c.0, c.1, c.2), egui::Stroke::new(0.5, egui::Color32::from_black_alpha(60)));
+        for (k, c) in crate::style::MAC_BUTTONS.into_iter().enumerate() {
+            p.circle(egui::pos2(super::BUTTONS_X + 6.0 + 20.0 * k as f32, y), 6.0, c, egui::Stroke::new(0.5, crate::style::black(60)));
         }
     }
 }

@@ -111,5 +111,15 @@ assert len(manifest["assets"]) == 6
 assert {asset["os"] for asset in manifest["assets"]} == {"linux", "windows", "macos", "any"}
 assert {asset["kind"] for asset in manifest["assets"]} == {"binary", "appimage", "metadata"}
 PY
-  echo 'Local publish passed: unsigned warning, signed verification, checksums, draft/upload/publish, immutable rerun and tamper refusal (stub gh only).'
+  # Withdrawing a bad release: revoked versions and a minimum version reach
+  # the manifest; nonsense, or revoking the release itself, is refused.
+  mkdir revoke-test
+  cp release-files/one-mk-x86_64-unknown-linux-gnu.bin revoke-test/
+  ONE_MK_REVOKED="0.1.10, 0.1.9" ONE_MK_MINIMUM_SUPPORTED_VERSION=0.1.5 bash scripts/make-update-manifest.sh revoke-test 5
+  python3 -c 'import json; m = json.load(open("revoke-test/update-manifest.json")); assert m["revoked"] == ["0.1.9", "0.1.10"] and m["minimum_supported_version"] == "0.1.5", m'
+  version=$(sh scripts/version.sh)
+  for bad in "ONE_MK_REVOKED=$version" "ONE_MK_REVOKED=latest" "ONE_MK_MINIMUM_SUPPORTED_VERSION=99.0.0" "ONE_MK_MINIMUM_SUPPORTED_VERSION=0.1"; do
+    if env "$bad" bash scripts/make-update-manifest.sh revoke-test 5 > revoke-output 2>&1; then echo "accepted $bad" >&2; exit 1; fi
+  done
+  echo 'Local publish passed: unsigned warning, signed verification, checksums, draft/upload/publish, immutable rerun, tamper refusal and revocation inputs (stub gh only).'
 )

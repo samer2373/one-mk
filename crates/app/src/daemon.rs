@@ -15,9 +15,60 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// How often the window looks at the daemon while it is open. A status
+/// How often the window looks at the daemon while it is in use. A status
 /// request is one small message over a local socket.
 const POLL: Duration = Duration::from_millis(250);
+/// ... while it is open but another window has the focus: a change still
+/// shows within half a second.
+const POLL_UNFOCUSED: Duration = Duration::from_millis(500);
+/// ... while it is minimised or hidden and nobody can see a change. The
+/// first frame after it comes back wakes the watcher at once.
+const POLL_HIDDEN: Duration = Duration::from_secs(3);
+/// While a graph shows, the window is redrawn at least this often (the
+/// graph scrolls a little with time) even when no reading changed.
+pub const GRAPH_IDLE_REDRAW: Duration = Duration::from_secs(10);
+/// ... and a reading that only reads as another number of milliseconds
+/// waits this long for its frame (a jittery link, a frame every 2 s).
+const GRAPH_VALUE_REDRAW: Duration = Duration::from_secs(2);
+/// A graph that has just come on screen is drawn for each of its first
+/// readings, so it fills in at once (it says nothing before
+/// [`crate::rtt::MIN_SAMPLES`]).
+const GRAPH_YOUNG_DRAWS: u32 = crate::rtt::MIN_SAMPLES as u32 + 1;
+
+/// How much attention the window gets, which sets how often it looks at
+/// the daemon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Attention {
+    /// On screen with the focus (or no way to tell).
+    #[default]
+    Active,
+    /// On screen, another window has the focus.
+    Background,
+    /// Minimised or hidden.
+    Hidden,
+}
+
+impl Attention {
+    /// From what the windowing system reports about the window.
+    pub fn of(minimized: Option<bool>, focused: Option<bool>) -> Self {
+        if minimized == Some(true) {
+            Attention::Hidden
+        } else if focused == Some(false) {
+            Attention::Background
+        } else {
+            Attention::Active
+        }
+    }
+
+    /// The pause between two looks at the daemon.
+    pub fn poll(self) -> Duration {
+        match self {
+            Attention::Active => POLL,
+            Attention::Background => POLL_UNFOCUSED,
+            Attention::Hidden => POLL_HIDDEN,
+        }
+    }
+}
 
 /// Whether a graph of the connections is on screen, so the window asks the
 /// daemon for round-trip times only then. The window stamps it on every
@@ -28,16 +79,40 @@ pub struct Showing {
     /// Milliseconds since `epoch` at the last frame with a graph; 0: none.
     stamp: Arc<AtomicU64>,
     epoch: Instant,
+    /// What the window last said about itself; a change wakes the watcher.
+    attention: Arc<(std::sync::Mutex<Attention>, std::sync::Condvar)>,
 }
 
-/// A stamp older than this says the graph is no longer on screen.
-const SHOWING_FOR: Duration = Duration::from_millis(3000);
+/// A stamp older than this says the graph is no longer on screen. A window
+/// with a steady graph draws once per [`GRAPH_IDLE_REDRAW`], so the stamp
+/// must outlive that.
+const SHOWING_FOR: Duration = Duration::from_millis(GRAPH_IDLE_REDRAW.as_millis() as u64 + 3000);
 /// How often the connections are sampled while a graph is on screen.
 const SAMPLE: Duration = Duration::from_millis((crate::rtt::EVERY * 1000.0) as u64);
 
 impl Showing {
     pub fn new() -> Self {
-        Self { stamp: Arc::default(), epoch: Instant::now() }
+        Self { stamp: Arc::default(), epoch: Instant::now(), attention: Arc::default() }
+    }
+
+    /// The window's state, said on every frame; the watcher is woken the
+    /// moment it changes (the window came back: look now).
+    pub fn attend(&self, attention: Attention) {
+        let (state, wake) = &*self.attention;
+        let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+        if *state != attention {
+            *state = attention;
+            wake.notify_all();
+        }
+    }
+
+    /// Waits out the pause between two looks, less when the window's state
+    /// changes meanwhile.
+    fn nap(&self) {
+        let (state, wake) = &*self.attention;
+        let state = state.lock().unwrap_or_else(|e| e.into_inner());
+        let seen = *state;
+        let _ = wake.wait_timeout_while(state, seen.poll(), |now| *now == seen);
     }
 
     fn ms(&self) -> u64 {
@@ -51,7 +126,12 @@ impl Showing {
 
     fn on_screen(&self) -> bool {
         let at = self.stamp.load(Ordering::Relaxed);
-        at != 0 && self.ms().saturating_sub(at) < SHOWING_FOR.as_millis() as u64
+        at != 0 && self.ms().saturating_sub(at) < SHOWING_FOR.as_millis() as u64 && !self.hidden()
+    }
+
+    /// The window says it is minimised or hidden.
+    fn hidden(&self) -> bool {
+        *self.attention.0.lock().unwrap_or_else(|e| e.into_inner()) == Attention::Hidden
     }
 }
 
@@ -62,7 +142,8 @@ pub enum Event {
     /// other event would otherwise be as large too.
     Status(Box<Option<Status>>),
     /// A round-trip sample of every connected computer, while a graph shows.
-    Links(Vec<(String, one_mk_ctl::status::LinkStats)>),
+    /// `Instant`: when it was taken (a frame may draw it later).
+    Links(Vec<(String, one_mk_ctl::status::LinkStats)>, Instant),
     ClipboardHistory(Result<Vec<HistoryItem>, String>),
     ClipboardReveal(u64, u64, Result<String, String>),
     Autostart(bool),
@@ -110,6 +191,8 @@ pub enum Job {
     /// Measuring the computer with this id.
     Measure(String),
     Open,
+    /// Opening oneMK's log.
+    ShowLog,
     /// `one-mk profile <verb> <name>`.
     Profile { verb: &'static str, name: String },
     /// Switching automatically to a profile on a Wi-Fi network (`None`: off).
@@ -124,6 +207,8 @@ pub enum Job {
     Clip { send: bool, id: String, name: String },
     /// A setting changed with `one-mk <args>`; `what` names it in a sentence.
     Set { what: String, args: Vec<String> },
+    /// Settings → Appearance saved by the window itself.
+    Appearance(crate::style::Appearance),
     Doctor,
     /// Input tuning changed with `one-mk keymap|pointer|scroll|buttons`;
     /// `what` names it, `area` is where its error shows, `n` tells two
@@ -250,9 +335,13 @@ impl Link {
                     plan: Some(one_mk_wallpaper::Plan { hash: "a".repeat(64), title: "Across the horizon.mp4".into(),
                         media: one_mk_wallpaper::Media { width: 3840, height: 1080, duration_ms: 10000, frame_rate: 30 }, canvas,
                         start_ms: 1, fit: Default::default(), computers: std::iter::once(status.id.clone()).chain(status.peers.iter().map(|peer| peer.id.clone())).collect(), pause_on_battery: true, paused: false, picture: false, asset_hash: None }),
-                    available: true, poster: Some(poster.into()), message: "Playing on 3 monitors on 2 computers".into(), computers: Default::default(), gnome: None,
+                    available: true, poster: Some(poster.into()), message: "Playing on 3 monitors on 2 computers".into(), computers: Default::default(), gnome: None, experimental: None,
                 });
                 if let Some(wallpaper) = &mut status.wallpaper && let Some(plan) = &wallpaper.plan { wallpaper.message = plan.playing_message(); }
+                // ONE_MK_APP_GNOME=1: the GNOME video setup block, for layout checks.
+                if std::env::var_os("ONE_MK_APP_GNOME").is_some() && let Some(wallpaper) = &mut status.wallpaper {
+                    wallpaper.gnome = Some(one_mk_wallpaper::GnomeSetup { stage: one_mk_wallpaper::GnomeStage::NotInstalled, message: one_mk_wallpaper::GNOME_PLAYBACK_UNAVAILABLE.into(), can_install: true, can_enable: false });
+                }
             }
             return Ok(status);
         }
@@ -274,6 +363,11 @@ impl Link {
             // every look: those go as samples, only while a graph shows.
             let mut last: Option<Option<Status>> = None;
             let mut sampled = Instant::now();
+            // What the window was last redrawn with, and when.
+            let mut drawn: Vec<(String, one_mk_ctl::status::LinkStats)> = Vec::new();
+            let mut redrawn = Instant::now();
+            // Readings drawn since the graph came on screen.
+            let mut young = 0u32;
             let mut gone = 0;
             let mut stamp = None;
             let opened = std::time::SystemTime::now();
@@ -300,16 +394,20 @@ impl Link {
                     link.update_status();
                 }
                 let Ok(now) = link.status() else {
-                    std::thread::sleep(POLL);
+                    link.showing.nap();
                     continue;
                 };
                 gone = if now.is_none() { gone + 1 } else { 0 };
                 let first = last.is_none();
                 if now.is_none() && gone < 2 && !first {
-                    std::thread::sleep(POLL);
+                    link.showing.nap();
                     continue;
                 }
                 let same = now.as_ref().map(Status::without_links);
+                let visible = link.showing.on_screen();
+                if !visible {
+                    young = 0;
+                }
                 if last.as_ref() != Some(&same) {
                     if link.tx.send(Event::Status(Box::new(now))).is_err() {
                         return;
@@ -319,21 +417,39 @@ impl Link {
                     sampled = Instant::now();
                 } else if let Some(s) = now.filter(|s| !s.links.is_empty())
                     && sampled.elapsed() >= SAMPLE
-                    && link.showing.on_screen()
+                    && visible
                 {
-                    if link.tx.send(Event::Links(s.links)).is_err() {
+                    // Every reading is kept, but a frame is only asked for
+                    // when the picture would change, or now and then so the
+                    // graph keeps scrolling: a steady line costs nothing.
+                    let draw = young < GRAPH_YOUNG_DRAWS || match crate::rtt::change(&drawn, &s.links) {
+                        crate::rtt::Change::Urgent => true,
+                        crate::rtt::Change::Value => redrawn.elapsed() >= GRAPH_VALUE_REDRAW,
+                        crate::rtt::Change::None => redrawn.elapsed() >= GRAPH_IDLE_REDRAW,
+                    };
+                    let links = s.links;
+                    if draw {
+                        drawn.clone_from(&links);
+                    }
+                    if link.tx.send(Event::Links(links, Instant::now())).is_err() {
                         return;
                     }
-                    link.ctx.request_repaint();
+                    if draw {
+                        redrawn = Instant::now();
+                        young = young.saturating_add(1);
+                        link.ctx.request_repaint();
+                    }
                     sampled = Instant::now();
                 }
-                std::thread::sleep(POLL);
+                link.showing.nap();
             }
         });
     }
 
-    fn prefs_stamp(&self) -> [Option<(std::time::SystemTime, u64)>; 3] {
-        let look = |f: &str| std::fs::metadata(self.dir.join(f)).ok().map(|m| (m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len()));
+    /// When each settings file changed, how long it is, and who may read it
+    /// (a file made readable again is read again, though its time is the same).
+    fn prefs_stamp(&self) -> [Option<(std::time::SystemTime, u64, u32)>; 3] {
+        let look = |f: &str| std::fs::metadata(self.dir.join(f)).ok().map(|m| (m.modified().unwrap_or(std::time::UNIX_EPOCH), m.len(), mode(&m)));
         [look("settings.toml"), look("profiles.toml"), look("update-state.json")]
     }
 
@@ -377,16 +493,62 @@ impl Link {
             if client::is_running(&l.dir) {
                 return Ok(());
             }
-            let mut args = vec!["run".to_owned()];
-            args.extend(l.home_args());
-            proc::spawn_detached(&l.daemon, &args, Some(&l.dir.join("daemon.log")))?;
-            let deadline = Instant::now() + Duration::from_secs(4);
-            while Instant::now() < deadline && !client::is_running(&l.dir) {
-                std::thread::sleep(Duration::from_millis(100));
+            l.start_service().map_err(anyhow::Error::msg)
+        });
+    }
+
+    /// oneMK's own log, where the service says what it is doing.
+    pub fn log_path(&self) -> PathBuf {
+        self.dir.join("daemon.log")
+    }
+
+    /// Starts the service and waits for it to answer. A service that stops
+    /// at once (its port taken, its settings unreadable) is reported as
+    /// soon as it stops, in its own words made plain; one that is slow to
+    /// start is given [`START_PATIENCE`].
+    fn start_service(&self) -> Result<(), String> {
+        let log = self.log_path();
+        let _ = one_mk_ctl::private::create_dir_all(&self.dir);
+        // Only what this start writes counts, not an older run's lines.
+        let from = std::fs::metadata(&log).map_or(0, |m| m.len());
+        let mut args = vec!["run".to_owned()];
+        args.extend(self.home_args());
+        let service = proc::spawn_watched(&self.daemon, &args, Some(&log)).map_err(|e| format!("The service program couldn't be started ({e}). Try reinstalling oneMK."))?;
+        let deadline = Instant::now() + START_PATIENCE;
+        loop {
+            if client::is_running(&self.dir) {
+                return Ok(());
             }
-            if !client::is_running(&l.dir) {
-                anyhow::bail!("It didn't answer within 4 seconds. Details are in {}.", l.dir.join("daemon.log").display());
+            if service.ended().is_some() {
+                // Another copy may have got there first and be answering now.
+                if client::is_running(&self.dir) {
+                    return Ok(());
+                }
+                return Err(start_failure(&log_since(&log, from)));
             }
+            if Instant::now() >= deadline {
+                return Err(format!("It is still starting after {} seconds. Wait a moment, or open Health to see what it is waiting for.", START_PATIENCE.as_secs()));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Opens oneMK's log in the system's viewer for it.
+    pub fn show_log(&self) {
+        self.job(Job::ShowLog, |l| {
+            let log = l.log_path();
+            if !log.exists() {
+                anyhow::bail!("There is no log yet: oneMK writes one once it has started from this window.");
+            }
+            let opener = if cfg!(target_os = "macos") {
+                "open"
+            } else if cfg!(windows) {
+                "notepad"
+            } else {
+                "xdg-open"
+            };
+            proc::spawn_detached(std::path::Path::new(opener), &[log.display().to_string()], None)
+                .map_err(|e| anyhow::anyhow!("{opener} didn't start ({e}). The log is {}", log.display()))?;
             Ok(())
         });
     }
@@ -455,7 +617,7 @@ impl Link {
         if let Some(action) = action { command.arg(action); }
         command.args(self.home_args()).stdin(Stdio::null()).stdout(Stdio::piped());
         let errors = self.dir.join("update-error.log");
-        let error_file = std::fs::File::create(&errors)?;
+        let error_file = one_mk_ctl::private::options().write(true).create(true).truncate(true).open(&errors)?;
         command.stderr(Stdio::from(error_file));
         let mut child = proc::hide_window(&mut command).spawn()?;
         let mut restarting = false;
@@ -604,6 +766,21 @@ impl Link {
         let id = peer.to_owned();
         let req = if send { Request::ClipSend(Some(id)) } else { Request::ClipGet(Some(id)) };
         self.job(Job::Clip { send, id: peer.into(), name: name.into() }, move |l| l.ask(req));
+    }
+
+    /// Saves Settings → Appearance in `settings.toml` from here: only the
+    /// window reads it, so it needs no `one-mk` (which may be missing, older
+    /// than this window, or not running). Saves run one at a time and each
+    /// writes the latest choice, so quick clicks end on the last one.
+    pub fn save_appearance(&self, appearance: crate::style::Appearance) {
+        static LATEST: std::sync::Mutex<Option<crate::style::Appearance>> = std::sync::Mutex::new(None);
+        static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        *LATEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(appearance);
+        self.job(Job::Appearance(appearance), move |l| {
+            let _turn = SAVING.lock().unwrap_or_else(|e| e.into_inner());
+            let latest = LATEST.lock().unwrap_or_else(|e| e.into_inner()).unwrap_or(appearance);
+            one_mk_ctl::settings_file::set_window_appearance(&l.dir, latest.key())
+        });
     }
 
     /// Changes a setting with `one-mk <args>`; `what` names it for an error.
@@ -818,12 +995,10 @@ impl Link {
         });
     }
 
-    /// Opens the folder received files go to.
+    /// Opens the folder received files go to (as `received_dir` finds it).
     pub fn open_downloads(&self) {
-        self.job(Job::Open, |l| {
-            let dir = directories::UserDirs::new()
-                .and_then(|u| u.download_dir().map(|d| d.join("one-mk")))
-                .unwrap_or_else(|| l.dir.clone());
+        self.job(Job::Open, |_| {
+            let dir = received_dir().ok_or_else(|| anyhow::anyhow!("no home folder to find Downloads in"))?;
             std::fs::create_dir_all(&dir)?;
             let opener = if cfg!(target_os = "macos") {
                 "open"
@@ -934,6 +1109,10 @@ impl one_mk_ctl::setup::Host for Link {
     }
 
     fn wait_running(&self) -> bool {
+        // Nothing was started that could answer: start it now instead.
+        if !install::starts_service_now() {
+            return false;
+        }
         let deadline = Instant::now() + Duration::from_secs(6);
         while Instant::now() < deadline {
             if client::is_running(&self.dir) {
@@ -945,24 +1124,204 @@ impl one_mk_ctl::setup::Host for Link {
     }
 
     fn start(&self) -> Result<(), String> {
-        let mut args = vec!["run".to_owned()];
-        args.extend(self.home_args());
-        proc::spawn_detached(&self.daemon, &args, Some(&self.dir.join("daemon.log"))).map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < deadline && !client::is_running(&self.dir) {
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        if client::is_running(&self.dir) {
-            Ok(())
-        } else {
-            Err(format!("It didn't answer within 4 seconds. Details are in {}.", self.dir.join("daemon.log").display()))
-        }
+        self.start_service()
     }
+}
+
+/// How long a service that is still running gets to answer before the
+/// window says it is still starting.
+const START_PATIENCE: Duration = Duration::from_secs(10);
+
+/// What `log` gained after its first `from` bytes (at most its last 16 KiB).
+fn log_since(log: &std::path::Path, from: u64) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(log) else { return String::new() };
+    let len = file.metadata().map_or(0, |m| m.len());
+    let from = if len < from { 0 } else { from.max(len.saturating_sub(16 * 1024)) };
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(from)).is_err() || file.read_to_end(&mut bytes).is_err() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Why the service stopped as soon as it started, in plain words with the
+/// one thing to do, from what it wrote to its log (`tail`).
+pub fn start_failure(tail: &str) -> String {
+    // The service's last word is its error: "one-mk: <what went wrong>".
+    let lines: Vec<&str> = tail.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let said = lines.iter().rev().find(|l| l.starts_with("one-mk:") || l.starts_with("one-mk ")).or(lines.last()).copied().unwrap_or("");
+    if let Some(port) = said.split("UDP port ").nth(1).filter(|_| said.contains("is busy")).and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next()).filter(|p| !p.is_empty()) {
+        return format!("Network port {port} is in use by another program, maybe another oneMK (from another settings folder or user). Quit it, then try again.");
+    }
+    if said.contains("already running") {
+        return "Another oneMK is already starting with these settings. Wait a few seconds; if it doesn't appear, restart this computer's session and try again.".into();
+    }
+    if said.contains("settings.toml") || said.contains("devices.toml") || said.contains("profiles.toml") {
+        return "One of its settings files can't be read. Open Health to see which one and how to fix it.".into();
+    }
+    if said.contains("ermission denied") {
+        return "It isn't allowed to use its settings folder. Check that the folder belongs to you, then try again.".into();
+    }
+    let reason = said.trim_start_matches("one-mk:").trim();
+    if reason.is_empty() {
+        return "It stopped right after starting without saying why. Show the log for more, or try again.".into();
+    }
+    // Its own words, without terminal advice, cut to a readable length.
+    let reason: String = reason.split(" (use --").next().unwrap_or(reason).replace("one-mk", "oneMK");
+    let mut short: String = reason.chars().take(160).collect();
+    if short.len() < reason.len() {
+        short.push('…');
+    }
+    format!("It stopped right after starting: {short}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_service_that_stops_at_once_is_explained_in_plain_words() {
+        // What the service really writes when its port is taken.
+        let busy = " WARN /tmp/x was accessible to others (mode 775); fixing\none-mk: UDP port 24900 is busy; is one-mk already running? (use --port): could not open UDP port 24900 (IPv6 [::]:24900: Address already in use (os error 98))\n";
+        let said = start_failure(busy);
+        assert!(said.contains("port 24900") && said.contains("another oneMK") && said.contains("Quit it, then try again"), "{said}");
+        assert!(!said.contains('`') && !said.contains("--port") && !said.contains('/'), "no terminal advice, no paths: {said}");
+        assert!(start_failure("one-mk: one-mk is already running (or starting, or `one-mk uninstall` is busy) with the settings folder /x").contains("already starting"));
+        assert!(start_failure("one-mk: reading /x/settings.toml: expected `=`").contains("settings files"));
+        assert!(start_failure("").contains("without saying why"));
+        // Something unforeseen: its own words, readable and not too long.
+        let other = start_failure("one-mk: something new went wrong in one-mk");
+        assert_eq!(other, "It stopped right after starting: something new went wrong in oneMK");
+        assert!(start_failure(&format!("one-mk: {}", "x".repeat(400))).chars().count() < 220);
+    }
+
+    #[test]
+    fn only_what_this_start_wrote_to_the_log_counts() {
+        let dir = std::env::temp_dir().join(format!("one-mk-app-log-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("daemon.log");
+        std::fs::write(&log, "one-mk: UDP port 24900 is busy\n").unwrap();
+        let from = std::fs::metadata(&log).unwrap().len();
+        std::fs::write(&log, "one-mk: UDP port 24900 is busy\none-mk: reading settings.toml failed\n").unwrap();
+        assert_eq!(log_since(&log, from), "one-mk: reading settings.toml failed\n");
+        // A log that was cleared in between is read from its start.
+        std::fs::write(&log, "fresh\n").unwrap();
+        assert_eq!(log_since(&log, from), "fresh\n");
+        assert_eq!(log_since(&dir.join("missing.log"), 0), "");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A stand-in for the service: `script` run by sh with the arguments
+    /// the window passes; returns the window's link for that folder.
+    #[cfg(unix)]
+    fn fake_service(name: &str, script: &str) -> (Link, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("one-mk-app-start-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let exe = base.join("one-mk");
+        std::fs::write(&exe, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut link = Link::new(Some(base.join("home")), tx, egui::Context::default()).unwrap();
+        link.daemon = exe;
+        (link, base)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_start_that_fails_says_why_as_soon_as_the_service_stops() {
+        let (link, base) = fake_service("busy", "echo 'one-mk: UDP port 24911 is busy; is one-mk already running? (use --port): in use' >&2; exit 1");
+        let started = Instant::now();
+        let error = link.start_service().unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(2), "not waited out: {:?}", started.elapsed());
+        assert!(error.contains("port 24911"), "{error}");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&link.dir), 0o700, "the settings folder is private from the start");
+        assert_eq!(mode(&link.log_path()), 0o600, "and so is the log");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_slow_start_that_succeeds_is_waited_for() {
+        // Answers on its control channel only after 1.5 seconds.
+        // The stand-in keeps running meanwhile, as the real service does.
+        let (link, base) = fake_service("slow", "sleep 4");
+        let dir = link.dir.clone();
+        let server = std::thread::spawn(move || {
+            use std::io::{BufRead, Write};
+            std::thread::sleep(Duration::from_millis(1500));
+            std::fs::create_dir_all(&dir).unwrap();
+            let listener = std::os::unix::net::UnixListener::bind(client::unix_socket_path(&dir)).unwrap();
+            // Answers whatever is asked with a status, as a running service does.
+            let (stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(&stream).read_line(&mut line).unwrap();
+            (&stream).write_all(b"one-mk is running\n").unwrap();
+        });
+        let started = Instant::now();
+        assert_eq!(link.start_service(), Ok(()));
+        assert!(started.elapsed() >= Duration::from_millis(1400), "it waited for the answer");
+        server.join().unwrap();
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_hidden_or_unfocused_window_looks_at_the_daemon_less_often() {
+        assert_eq!(Attention::of(None, None), Attention::Active);
+        assert_eq!(Attention::of(Some(false), Some(true)), Attention::Active);
+        assert_eq!(Attention::of(Some(false), Some(false)), Attention::Background);
+        assert_eq!(Attention::of(Some(true), Some(true)), Attention::Hidden);
+        assert_eq!(Attention::of(Some(true), Some(false)), Attention::Hidden);
+        assert!(Attention::Active.poll() <= Duration::from_millis(250));
+        assert!(Attention::Background.poll() > Attention::Active.poll());
+        assert!(Attention::Hidden.poll() >= Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_window_that_comes_back_wakes_the_watcher_at_once() {
+        let showing = Showing::new();
+        showing.attend(Attention::Hidden);
+        let watcher = showing.clone();
+        let napping = std::thread::spawn(move || {
+            let started = Instant::now();
+            watcher.nap();
+            started.elapsed()
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        showing.attend(Attention::Active);
+        let slept = napping.join().unwrap();
+        assert!(slept < Duration::from_secs(2), "slept the whole hidden pause: {slept:?}");
+    }
+
+    #[test]
+    fn a_graph_drawn_on_the_slow_redraw_still_counts_as_on_screen() {
+        // The window draws a steady graph once per GRAPH_IDLE_REDRAW: the
+        // watcher must not take the quiet between two frames for a hidden one.
+        assert!(SHOWING_FOR > GRAPH_IDLE_REDRAW);
+        let showing = Showing::new();
+        assert!(!showing.on_screen(), "nothing drawn yet");
+        showing.frame(true);
+        assert!(showing.on_screen());
+        showing.attend(Attention::Hidden);
+        assert!(!showing.on_screen(), "minimised: no more asking");
+        showing.attend(Attention::Active);
+        assert!(showing.on_screen());
+        showing.frame(false);
+        assert!(!showing.on_screen());
+    }
+
+    #[test]
+    fn the_unfocused_pause_runs_its_full_length_when_nothing_changes() {
+        let showing = Showing::new();
+        showing.attend(Attention::Background);
+        let started = Instant::now();
+        showing.nap();
+        assert!(started.elapsed() >= Duration::from_millis(450));
+    }
 
     #[test]
     fn settings_over_the_daemons_limit_are_unreadable_here_too() {
@@ -1062,4 +1421,21 @@ mod replaced_executable_tests {
         assert_eq!(without_deleted_suffix(PathBuf::from("/usr/bin/one-mk-app (deleted)")), PathBuf::from("/usr/bin/one-mk-app"));
         assert_eq!(without_deleted_suffix(PathBuf::from("/usr/bin/one-mk-app")), PathBuf::from("/usr/bin/one-mk-app"));
     }
+}
+
+/// Where the service saves received files: Downloads/one-mk, with
+/// `~/Downloads` when the desktop names no Downloads folder (as the service
+/// does: never the settings folder, which holds this computer's keys).
+pub fn received_dir() -> Option<PathBuf> {
+    let dirs = directories::UserDirs::new()?;
+    let downloads = dirs.download_dir().map_or_else(|| dirs.home_dir().join("Downloads"), std::path::Path::to_path_buf);
+    Some(downloads.join("one-mk"))
+}
+
+/// A file's permission bits (on Windows, just whether it is read-only).
+fn mode(m: &std::fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    return std::os::unix::fs::PermissionsExt::mode(&m.permissions());
+    #[cfg(not(unix))]
+    return u32::from(m.permissions().readonly());
 }

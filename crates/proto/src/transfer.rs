@@ -36,19 +36,44 @@ impl ClipFormat {
 /// carries, so an ordinary snapshot is byte-for-byte what it always was,
 /// and an older peer reads a pull as an empty snapshot and ignores it (the
 /// stream then ends with no answer, which the asker reports).
+///
+/// `concealed` (bit 1 of the same flags byte) says the sender's clipboard
+/// was marked sensitive by a password manager and was sent anyway because
+/// the person asked for exactly that. A receiver that understands it puts
+/// the content on its clipboard but never records it in its history or
+/// passes it on. Older receivers ignore the bit, so a sender never relies
+/// on it blindly: first it sends a [`ClipHeader::private_probe`] (the bit
+/// with no items), which a receiver that keeps marked copies private
+/// answers with [`ClipAck::Private`]. An older receiver reads the probe as
+/// an empty snapshot and answers nothing, and the sender then refuses to
+/// send the content at all.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClipHeader {
     pub items: Vec<(ClipFormat, u32)>,
     pub pull: bool,
+    pub concealed: bool,
 }
 
 impl ClipHeader {
     /// Bit 0 of the optional trailing flags byte.
     const PULL: u8 = 1;
+    /// Bit 1: the content is sensitive.
+    const CONCEALED: u8 = 2;
 
     /// Asks the peer for its clipboard.
     pub fn pull_request() -> Self {
-        Self { items: Vec::new(), pull: true }
+        Self { items: Vec::new(), pull: true, concealed: false }
+    }
+
+    /// Asks the peer whether it keeps a copy marked sensitive private
+    /// (answered with [`ClipAck::Private`]). Carries no content.
+    pub fn private_probe() -> Self {
+        Self { items: Vec::new(), pull: false, concealed: true }
+    }
+
+    /// Whether this is a [`private_probe`](Self::private_probe).
+    pub fn is_private_probe(&self) -> bool {
+        self.items.is_empty() && !self.pull && self.concealed
     }
 
     pub fn total(&self) -> u64 {
@@ -63,8 +88,9 @@ impl ClipHeader {
                 w.u8(*f as u8);
                 w.u32(*len);
             }
-            if self.pull {
-                w.u8(Self::PULL);
+            let flags = (u8::from(self.pull) * Self::PULL) | (u8::from(self.concealed) * Self::CONCEALED);
+            if flags != 0 {
+                w.u8(flags);
             }
         });
     }
@@ -80,8 +106,8 @@ impl ClipHeader {
             })
             .collect::<Result<_, _>>()?;
         // Optional flags; bits this version doesn't know are ignored.
-        let pull = !r.0.is_empty() && r.u8()? & Self::PULL != 0;
-        Ok(Self { items, pull })
+        let flags = if r.0.is_empty() { 0 } else { r.u8()? };
+        Ok(Self { items, pull: flags & Self::PULL != 0, concealed: flags & Self::CONCEALED != 0 })
     }
 }
 
@@ -98,6 +124,9 @@ pub enum ClipAck {
     FormatsOff = 1,
     /// Over the receiver's size limit.
     TooLarge = 2,
+    /// The answer to a [`ClipHeader::private_probe`]: this receiver keeps a
+    /// copy marked sensitive out of its history and never passes it on.
+    Private = 3,
 }
 
 impl ClipAck {
@@ -106,6 +135,7 @@ impl ClipAck {
             0 => Some(Self::Stored),
             1 => Some(Self::FormatsOff),
             2 => Some(Self::TooLarge),
+            3 => Some(Self::Private),
             _ => None,
         }
     }
@@ -247,7 +277,8 @@ mod tests {
     fn clip_header_round_trip() {
         for h in [
             ClipHeader::default(),
-            ClipHeader { items: vec![(ClipFormat::Text, 5), (ClipFormat::Html, 70), (ClipFormat::Png, u32::MAX)], pull: false },
+            ClipHeader { items: vec![(ClipFormat::Text, 5), (ClipFormat::Html, 70), (ClipFormat::Png, u32::MAX)], pull: false, concealed: false },
+            ClipHeader { items: vec![(ClipFormat::Text, 5)], pull: false, concealed: true },
             ClipHeader::pull_request(),
         ] {
             let mut buf = Vec::new();
@@ -262,7 +293,7 @@ mod tests {
     /// an empty snapshot plus one byte, so an old peer reads it as empty.
     #[test]
     fn clip_pull_is_additive() {
-        let snapshot = ClipHeader { items: vec![(ClipFormat::Text, 5)], pull: false };
+        let snapshot = ClipHeader { items: vec![(ClipFormat::Text, 5)], pull: false, concealed: false };
         let mut buf = Vec::new();
         snapshot.encode_frame(&mut buf);
         assert_eq!(buf, [6, 0, 1, 1, 5, 0, 0, 0]);
@@ -280,13 +311,41 @@ mod tests {
         assert!(ClipHeader::decode(&[1, 1, 3, 0, 0, 0, 1]).unwrap().pull);
     }
 
+    /// The sensitive flag is one more bit of the same trailing byte: an
+    /// ordinary snapshot is unchanged, and a pull does not carry it.
+    #[test]
+    fn clip_concealed_flag_is_additive() {
+        let marked = ClipHeader { items: vec![(ClipFormat::Text, 5)], pull: false, concealed: true };
+        let mut buf = Vec::new();
+        marked.encode_frame(&mut buf);
+        assert_eq!(buf, [7, 0, 1, 1, 5, 0, 0, 0, 2]);
+        assert!(ClipHeader::decode(&buf[2..]).unwrap().concealed);
+        // What an older decoder (it stops after the items) makes of it: an ordinary snapshot.
+        let old = ClipHeader::decode(&buf[2..buf.len() - 1]).unwrap();
+        assert!(!old.concealed && !old.pull);
+        assert!(!ClipHeader::pull_request().concealed);
+    }
+
     #[test]
     fn clip_ack_round_trip() {
-        for a in [ClipAck::Stored, ClipAck::FormatsOff, ClipAck::TooLarge] {
+        for a in [ClipAck::Stored, ClipAck::FormatsOff, ClipAck::TooLarge, ClipAck::Private] {
             assert_eq!(ClipAck::from_u8(a as u8), Some(a));
         }
-        assert_eq!(ClipAck::from_u8(3), None, "an unknown answer is not mistaken for a known one");
+        assert_eq!(ClipAck::from_u8(4), None, "an unknown answer is not mistaken for a known one");
         assert_eq!(ClipAck::from_u8(255), None);
+    }
+
+    /// The private probe is an empty snapshot to an older receiver (which
+    /// stores nothing and answers nothing), and is told apart from a pull.
+    #[test]
+    fn private_probe_is_an_empty_snapshot_to_older_receivers() {
+        let probe = ClipHeader::private_probe();
+        let mut buf = Vec::new();
+        probe.encode_frame(&mut buf);
+        let back = ClipHeader::decode(&buf[2..]).unwrap();
+        assert!(back.is_private_probe() && back.items.is_empty() && !back.pull);
+        assert!(!ClipHeader::pull_request().is_private_probe());
+        assert!(!ClipHeader { items: vec![(ClipFormat::Text, 5)], pull: false, concealed: true }.is_private_probe());
     }
 
     #[test]

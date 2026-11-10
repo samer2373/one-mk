@@ -7,17 +7,20 @@ mod cells;
 mod clipboard_history;
 mod keys;
 mod links;
+mod page_ui;
 mod pages;
 mod place;
+mod preview;
 mod shell;
 mod desk_cards;
-mod typing;
+mod desk_panel;
+mod settings_page;
 mod updates;
 mod settings_controls;
 mod palette;
 mod wallpaper;
 
-use crate::daemon::{Event, Job, Link};
+use crate::daemon::{self, Event, Job, Link};
 use crate::motion::{self, tween};
 use crate::pairing::{Pairing, Step};
 use crate::scene::{self, Cargo, Device, Kind, SPACING, Scene, v};
@@ -34,57 +37,48 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
-const TOP_H: f32 = 56.0;
-const PANEL_H: f32 = 196.0;
 /// Below this height (plus 22 pt for each other computer) the desk shows
 /// its computers as named chips: monitors any smaller can't carry names.
 const COMPACT_BELOW: f32 = 128.0;
-/// Inner padding of the panel's cells.
-const PAD: f32 = 20.0;
 const GHOST: &str = "\u{0}pairing";
 
 fn truncated_name_target(focused: Option<usize>, hovered: Option<usize>, truncated: &std::collections::HashSet<usize>) -> Option<(usize, bool)> {
     focused.filter(|index| truncated.contains(index)).map(|index| (index, true))
         .or_else(|| hovered.filter(|index| truncated.contains(index)).map(|index| (index, false)))
 }
-/// Wallpapers for paired computers: low chroma, about equal lightness.
-/// Each computer's wallpaper on the desk: a light colour and a deep one,
-/// as desktop pictures are (dusk violet, lagoon, ember, ocean); deep
-/// enough that white names on them stay readable.
-const WALLS: [[u32; 2]; 4] = [[0x7B68E0, 0x191338], [0x2E9F96, 0x08262D], [0xD9714A, 0x34101E], [0x3D7FE6, 0x0A1838]];
-const ME_WALL: [u32; 2] = [0x3D7FE6, 0x0A1838];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tab {
     Desk,
-    Layout,
+    Arrange,
     Files,
     Wallpaper,
     Keys,
     Health,
-    Advanced,
+    Settings,
 }
 /// Each tab, and a shorter name for narrow windows. Settings most people
-/// never change (Ctrl and Cmd, gaming mode, edge rules) live in Advanced.
+/// never change (Ctrl and Cmd, gaming mode, edge rules) live in Settings.
+/// Arrange is a page of its own in the top bar (shell::NAV gives the order).
 const TABS: [(Tab, &str, &str); 7] = [
     (Tab::Desk, "Desk", "Desk"),
-    (Tab::Layout, "Desk", "Desk"),
+    (Tab::Arrange, "Arrange", "Arrange"),
     (Tab::Files, "Clipboard & files", "Files"),
     (Tab::Wallpaper, "Wallpaper", "Wallpaper"),
     (Tab::Keys, "Keys & mouse", "Keys"),
     (Tab::Health, "Health", "Health"),
-    (Tab::Advanced, "Settings", "Settings"),
+    (Tab::Settings, "Settings", "Settings"),
 ];
 
 impl Tab {
-    /// Tabs that show the desk of computers (where they can be dragged
-    /// into place).
+    /// Tabs that take files let go over them themselves: the Desk (on a
+    /// computer) and Clipboard & files (its own drop area).
     fn desk(self) -> bool {
-        matches!(self, Tab::Desk | Tab::Files | Tab::Layout)
+        matches!(self, Tab::Desk | Tab::Files)
     }
     /// Tabs that mean something while oneMK is off.
     fn when_off(self) -> bool {
-        matches!(self, Tab::Desk | Tab::Files | Tab::Wallpaper | Tab::Keys | Tab::Health | Tab::Advanced)
+        matches!(self, Tab::Desk | Tab::Files | Tab::Wallpaper | Tab::Keys | Tab::Health | Tab::Settings)
     }
 }
 const PLACES: [(Side, &str); 4] = [(Side::Left, "Left"), (Side::Right, "Right"), (Side::Top, "Above"), (Side::Bottom, "Below")];
@@ -144,6 +138,8 @@ enum Act {
     Retry,
     Send(String),
     Forget(String, String),
+    /// Delete this saved layout (after the sheet asked).
+    DeleteProfile(String),
 }
 
 /// Everything the sheet shows, so it can be drawn again while it leaves.
@@ -172,31 +168,45 @@ struct Toast {
     life: f32,
     /// What failed, when doing it again is safe: "Try again" does that.
     retry: Option<Job>,
+    /// One more thing it offers to do about it.
+    act: Option<ToastAct>,
+    /// It offers "Open Health" (the checks and their fixes).
+    health: bool,
 }
 
-/// What a cell of the panel shows. When it changes, the old one fades
-/// out and the new one rises in.
-#[derive(Clone, PartialEq, Debug)]
-enum Cell {
-    Head(String, String),
-    Inspector(Option<String>),
-    /// This computer's switches.
-    Controls,
-    Arrange(Option<String>),
-    LineUp(Option<String>),
-    Profiles,
+/// What an error toast offers besides trying again.
+#[derive(Clone, Debug, PartialEq)]
+enum ToastAct {
+    /// Opens oneMK's log: the service's own account of what went wrong.
+    ShowLog,
+    /// Moves the computer with this id beside the nearest edge of ours.
+    Snap(String),
 }
 
-struct Slot {
-    cell: Option<(Cell, Rect)>,
-    was: Option<(Cell, Rect)>,
-    at: f64,
+impl ToastAct {
+    fn label(&self) -> &'static str {
+        match self {
+            ToastAct::ShowLog => "Show log",
+            ToastAct::Snap(_) => "Snap to an edge",
+        }
+    }
+
+    fn hint(&self) -> &'static str {
+        match self {
+            ToastAct::ShowLog => "Open oneMK's log",
+            ToastAct::Snap(_) => "Move it beside the nearest edge of your screens, so the pointer can cross",
+        }
+    }
 }
 
 pub struct App {
     glass: Glass,
-    /// A computer has been dragged into place: the drag hint goes.
-    dragged_once: bool,
+    /// Light or dark, following Settings → Appearance (and the system).
+    themer: crate::style::Themer,
+    /// The Desk's panel and toolbar (desk_panel.rs).
+    desk_ui: desk_panel::DeskUi,
+    /// Where the Desk fits its computers this frame (handoff 5.1's scale).
+    desk_stage: Option<Rect>,
     /// What was behind the glass last frame, and whether the desk moved.
     backdrop_was: u64,
     scene_moving: bool,
@@ -228,9 +238,17 @@ pub struct App {
     pending_drop: Option<(Vec<PathBuf>, f64)>,
     /// A computer (id, name) the sheet is asking whether to remove, and since when.
     removing: Option<(String, String, f64)>,
+    /// A saved layout the sheet is asking whether to delete, and since when.
+    deleting_profile: Option<(String, f64)>,
+    /// Settings: the category showing, and the row the palette took us to.
+    settings_cat: settings_page::Cat,
+    settings_jump: Option<settings_page::Jump>,
+    /// Health: the list of passed checks is open.
+    health_passed_open: bool,
     /// The sheet as last drawn, and when it started to leave.
     sheet_was: Option<(SheetView, f64)>,
-    sheet_top: Option<f32>,
+    /// Where the sheet is this frame (the toast keeps clear of it).
+    sheet_rect: Option<Rect>,
     sheet_key: String,
     toast: Option<Toast>,
     latency: HashSet<String>,
@@ -248,13 +266,21 @@ pub struct App {
     answered: Option<(String, Side)>,
     /// Computers placed where no screen of theirs touches ours.
     apart: HashSet<String>,
+    /// A computer being placed on Arrange's plan, by the pointer or the
+    /// arrow keys (place.rs).
+    plan: Option<place::PlanDrag>,
+    /// Arrange's "Place freely": let go anywhere, even apart.
+    plan_free: bool,
     /// The banner over the desk as drawn this frame (see `refresh_notice`).
     notice: desk_cards::NoticeHold,
-    /// Where the toast goes in the desk's band this frame (None: off the desk).
-    toast_slot: Option<Rect>,
-    /// How tall each short cell's contents were last drawn (cards are
-    /// sized to them, not stretched to the tallest).
-    cell_h: HashMap<&'static str, f32>,
+    /// Whether the window had the focus last frame (see `pointer_away`).
+    was_focused: bool,
+    /// While another computer is controlled: whether the pointer was seen
+    /// here all the same (oneMK couldn't hold it, or it came back unannounced).
+    pointer_here: bool,
+    /// When control of another computer began (input time), so a move
+    /// queued just before the pointer left isn't taken for it being here.
+    controlling_since: Option<f64>,
     pending_swap: HashMap<String, String>,
     /// A computer that should hop (not slide) to its new place.
     hop: Option<String>,
@@ -265,7 +291,6 @@ pub struct App {
     busy: Vec<Job>,
     /// The computer the panel describes (an id, or "me").
     selected: Option<String>,
-    slots: [Slot; 4],
     /// Whether the files were moving over the window (so the pointer
     /// position is real, not left over from before the drag).
     drop_pos_fresh: bool,
@@ -280,6 +305,12 @@ pub struct App {
     /// A fix just copied (its row), and when, to say so.
     copied: Option<(usize, f64)>,
     pending_lock: Option<(bool, f64)>,
+    /// What the last checks were made against: running, and which computers
+    /// were online (a change runs them again).
+    health_basis: Option<(bool, Vec<String>)>,
+    /// Settings → Appearance as chosen here, kept until `settings.toml`
+    /// says the same (or for the whole session if it can't be saved).
+    appearance_choice: crate::style::AppearanceChoice,
     /// Broadcast asked to start (true) or stop, and when: shown so until
     /// the daemon says, or 5 s pass.
     pending_broadcast: Option<(bool, f64)>,
@@ -297,7 +328,6 @@ pub struct App {
     size: egui::Vec2,
     now: f64,
     ctx: egui::Context,
-    lockup: egui::TextureHandle,
     /// The macOS permission guide (guide.rs); idle unless started.
     pub guide: crate::guide::Overlay,
 }
@@ -398,47 +428,6 @@ fn separate_crowded_slots(places: &mut HashMap<String, (scene::V3, f32)>, widths
 
 // ---------- the panel's painted rows ----------
 
-/// Status by shape, not colour: a filled dot when connected, a ring when
-/// not, no dot for this computer. Returns the width it took.
-fn chip(ui: &Ui, c: Rect, label: &str, dot: Option<bool>) -> f32 {
-    let p = ui.painter();
-    let mid = c.top() + 10.0;
-    let tw = text_width(ui, label, regular(T_META));
-    p.text(pos2(c.right(), mid), Align2::RIGHT_CENTER, label, regular(T_META), INK2);
-    let at = pos2(c.right() - tw - 9.0, mid);
-    match dot {
-        Some(true) => {
-            p.circle_filled(at, 3.0, OK);
-        }
-        Some(false) => {
-            p.circle_stroke(at, 2.6, Stroke::new(1.5, OFF));
-        }
-        None => {}
-    }
-    tw + if dot.is_some() { 22.0 } else { 10.0 }
-}
-
-/// A computer's name on the inspector's first row, shortened to fit.
-fn title_row(ui: &Ui, c: Rect, name: &str, room: f32) {
-    let font = semibold(T_TITLE);
-    let text = fit(ui.painter(), name, &font, c.width() - room);
-    ui.painter().text(pos2(c.left(), c.top() + 10.0), Align2::LEFT_CENTER, &text, font, INK);
-    if text != name {
-        ui.interact(Rect::from_min_size(c.min, vec2(c.width() - room, 20.0)), Id::unique(("title", name)), Sense::hover()).on_hover_text(name);
-    }
-}
-
-/// A key on the left and its value on the right, centred on `y`.
-fn info_row(ui: &Ui, c: Rect, y: f32, key: &str, val: &str, mono_val: bool, alpha: f32) {
-    let p = ui.painter();
-    p.text(pos2(c.left(), y), Align2::LEFT_CENTER, key, regular(T_BODY), INK2);
-    let font = if mono_val { mono(T_META) } else { regular(T_BODY) };
-    let val = fit(p, val, &font, c.width() - text_width(ui, key, regular(T_BODY)) - 12.0);
-    p.text(pos2(c.right(), y), Align2::RIGHT_CENTER, &val, font, INK.gamma_multiply(alpha));
-    let r = Rect::from_min_max(pos2(c.left(), y - 10.0), pos2(c.right(), y + 10.0));
-    a11y_text(ui, Id::unique(("row", key)), r, Role::Label, &format!("{key}: {val}"), None);
-}
-
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, home: Option<PathBuf>, size: [f32; 2]) -> anyhow::Result<Self> {
         crate::style::install(&cc.egui_ctx);
@@ -460,10 +449,10 @@ impl App {
         match std::env::var("ONE_MK_APP_TAB").as_deref() {
             Ok("files") => tab = Tab::Files,
             Ok("wallpaper") => tab = Tab::Wallpaper,
-            Ok("keyboard") => tab = Tab::Advanced,
-            Ok("layout") => tab = Tab::Layout,
+            Ok("keyboard") => tab = Tab::Settings,
+            Ok("arrange" | "layout") => tab = Tab::Arrange,
             Ok("health") => tab = Tab::Health,
-            Ok("advanced") => tab = Tab::Advanced,
+            Ok("settings" | "advanced") => tab = Tab::Settings,
             Ok("keys") => tab = Tab::Keys,
             _ => {}
         }
@@ -471,13 +460,13 @@ impl App {
         if let Some(z) = std::env::var("ONE_MK_APP_ZOOM").ok().and_then(|z| z.parse::<f32>().ok()) {
             cc.egui_ctx.set_zoom_factor(z);
         }
-        let slot = || Slot { cell: None, was: None, at: f64::NEG_INFINITY };
         let glass = Glass::default();
         widgets::set_glass(&cc.egui_ctx, glass.clone());
         Ok(Self {
             glass,
-            // Dragged once, or the hint already shown in full once: no hint.
-            dragged_once: link.dir.join(".window-dragged").exists() || link.dir.join(".window-hinted").exists(),
+            themer: crate::style::Themer::default(),
+            desk_ui: desk_panel::DeskUi::default(),
+            desk_stage: None,
             backdrop_was: 0,
             scene_moving: false,
             status_seen: 0,
@@ -503,8 +492,12 @@ impl App {
             pairing: None,
             pending_drop: None,
             removing: None,
+            deleting_profile: None,
+            settings_cat: settings_page::Cat::General,
+            settings_jump: None,
+            health_passed_open: false,
             sheet_was: None,
-            sheet_top: None,
+            sheet_rect: None,
             sheet_key: String::new(),
             toast: None,
             latency: HashSet::new(),
@@ -515,16 +508,18 @@ impl App {
             pending_side: HashMap::new(),
             answered: None,
             apart: HashSet::new(),
+            plan: None,
+            plan_free: false,
             notice: desk_cards::NoticeHold::default(),
-            toast_slot: None,
-            cell_h: HashMap::new(),
+            was_focused: true,
+            pointer_here: false,
+            controlling_since: None,
             pending_swap: HashMap::new(),
             hop: None,
             just_paired: None,
             active: "me".into(),
             busy: vec![],
             selected: None,
-            slots: [slot(), slot(), slot(), slot()],
             drop_pos_fresh: false,
             arrowed: false,
             arrow_down: false,
@@ -532,6 +527,8 @@ impl App {
             doctor: None,
             copied: None,
             pending_lock: None,
+            health_basis: None,
+            appearance_choice: Default::default(),
             pending_broadcast: None,
             keys: keys::KeysUi::new(),
             drafts: HashMap::new(),
@@ -543,7 +540,6 @@ impl App {
             size: vec2(size[0], size[1]),
             now: 0.0,
             ctx: cc.egui_ctx.clone(),
-            lockup: lockup_texture(&cc.egui_ctx),
             guide: crate::guide::Overlay::from_env(),
         })
     }
@@ -557,19 +553,40 @@ impl App {
     }
 
     fn toast(&mut self, text: impl Into<String>, now: f64) {
-        self.toast = Some(Toast { text: text.into(), detail: None, error: false, at: now, life: 3.5, retry: None });
+        self.toast = Some(Toast { text: text.into(), detail: None, error: false, at: now, life: 3.5, retry: None, act: None, health: false });
     }
 
     /// An error says what went wrong and what to do; the raw reason goes
     /// underneath. It stays until dismissed, or for ten seconds.
     fn toast_error(&mut self, text: impl Into<String>, detail: Option<String>, now: f64) {
         let detail = detail.map(|d| crate::view::window_issue(d.trim())).filter(|d| !d.is_empty());
-        self.toast = Some(Toast { text: text.into(), detail, error: true, at: now, life: 10.0, retry: None });
+        self.toast = Some(Toast { text: text.into(), detail, error: true, at: now, life: 10.0, retry: None, act: None, health: true });
+    }
+
+    /// The service didn't start: why, in plain words, with "Try again" and
+    /// its log one click away.
+    fn start_failed(&mut self, why: Option<String>, now: f64) {
+        self.toast_error("oneMK couldn't start.", why, now);
+        if let Some(t) = self.toast.as_mut() {
+            t.retry = Some(Job::Start);
+            t.act = Some(ToastAct::ShowLog);
+        }
+    }
+
+    /// A computer placed apart from ours on purpose: say what that means,
+    /// and offer to put it where the pointer can cross.
+    fn placed_apart(&mut self, id: &str, now: f64) {
+        let name = self.name_of(id);
+        self.toast_error(format!("{name} is placed apart from your screens."), Some("The pointer can't cross to it until their edges touch.".into()), now);
+        if let Some(t) = self.toast.as_mut() {
+            t.health = false;
+            t.act = Some(ToastAct::Snap(id.to_owned()));
+        }
     }
 
     /// Whether `job` can simply be run again from an error toast.
     fn retryable(job: &Job) -> bool {
-        matches!(job, Job::Layout { .. } | Job::Swap { .. } | Job::TakeBack | Job::Start | Job::Autostart(_) | Job::Set { .. } | Job::Open)
+        matches!(job, Job::Layout { .. } | Job::Swap { .. } | Job::TakeBack | Job::Start | Job::Autostart(_) | Job::Set { .. } | Job::Appearance(_) | Job::Open)
     }
 
     /// Runs a failed job again, as the control that asked for it did.
@@ -604,6 +621,7 @@ impl App {
                 self.busy.push(job);
                 self.link.open_downloads();
             }
+            Job::Appearance(_) => self.set_appearance(self.appearance()),
             _ => {}
         }
     }
@@ -638,19 +656,38 @@ impl App {
                     if let Some(st) = &s { self.guide.on_status(&st.input, now); }
                     self.status = Some(s);
                     if self.tab == Tab::Files && (changed || self.clipboard_history.is_none()) { self.link.history(); }
-                    let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).collect());
+                    // Names in any script: computers', and saved layouts'.
+                    let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).chain(st.layout.profiles.iter().cloned()).collect());
                     self.fonts.cover(&self.ctx, names.iter().map(String::as_str));
                     // A measurement belongs to one connection: once that
                     // computer goes offline (or oneMK stops) it means nothing.
                     let online: Vec<String> = self.running().map_or(vec![], |s| s.peers.iter().filter(|p| p.online).map(|p| p.id.clone()).collect());
                     self.latency.retain(|id| online.contains(id));
                     self.failed_measure.retain(|id| online.contains(id));
+                    // oneMK started or stopped, or a computer came or went:
+                    // checks made before say nothing now, so they run again
+                    // (Health and the top bar's "check Health" tell the truth).
+                    let mut basis = online;
+                    basis.sort();
+                    let basis = (self.running().is_some(), basis);
+                    // (While a check runs, the change waits for the next status.)
+                    if self.health_basis.as_ref() != Some(&basis) {
+                        if self.doctor.is_none() || self.health_basis.is_none() {
+                            self.health_basis = Some(basis);
+                        } else if !self.busy.contains(&Job::Doctor) {
+                            self.recheck();
+                            self.health_basis = Some(basis);
+                        }
+                    }
                     self.sync_scene();
                 }
-                Event::Links(links) if self.rtt_frozen.is_none() => self.rtts.record(now, &links),
-                Event::Links(_) => {}
+                // At the moment it was taken, not the frame that got to it.
+                Event::Links(links, taken) if self.rtt_frozen.is_none() => self.rtts.record(now - taken.elapsed().as_secs_f64(), &links),
+                Event::Links(..) => {}
                 Event::Autostart(on) => self.autostart = Some(on),
                 Event::Setup(report) => match report.problems().first() {
+                    // Not running matters most, and has its own way out.
+                    _ if report.service.failed().is_some() => self.start_failed(report.service.failed().map(str::to_owned), now),
                     Some(problem) => self.toast_error(format!("Setup didn't finish. {problem}"), None, now),
                     None if report.changed() => self.toast("oneMK is set up and starts when you log in.", now),
                     None => {}
@@ -675,6 +712,7 @@ impl App {
                     self.finished(what, error, now);
                 }
                 Event::Prefs(p) => {
+                    self.appearance_choice.read(p.appearance);
                     self.prefs = *p;
                     self.keys.check_due = true;
                     // What was being dragged or typed is saved now.
@@ -764,11 +802,19 @@ impl App {
                 let word = if on { "on" } else { "off" };
                 self.toast_error(format!("Couldn't turn {word} start at login."), e, now);
             }
-            Job::Start => self.toast_error("oneMK didn't start.", e, now),
+            Job::Start => self.start_failed(e, now),
+            Job::ShowLog => self.toast_error("Couldn't open the log.", e, now),
             Job::Forget(name) => self.toast_error(format!("Couldn't remove {name}. Try again."), e, now),
             Job::Stop => self.toast_error("Couldn't stop oneMK. If it was started before an update, quit it once from Activity Monitor or Task Manager; after that Stop works.", e, now),
             Job::Open => self.toast_error("Couldn't open the received files folder.", e, now),
             Job::Profile { verb, name } => {
+                // A name that couldn't be saved stays in its field to be fixed.
+                if verb == "save" {
+                    let draft = self.drafts.entry("profile-new".to_owned()).or_default();
+                    if draft.trim().is_empty() {
+                        draft.clone_from(&name);
+                    }
+                }
                 let what = match verb {
                     "save" => format!("save this layout as “{name}”"),
                     "delete" => format!("delete “{name}”"),
@@ -803,6 +849,8 @@ impl App {
                     self.toast_error(settings_controls::shortcut_error(e.as_deref().unwrap_or("")), None, now);
                 } else { self.toast_error(format!("Couldn't change {what}."), e, now); }
             }
+            // Kept on screen for this session all the same.
+            Job::Appearance(_) => self.toast_error("Couldn't save the appearance. This window keeps it until it closes.", e, now),
             Job::Doctor => {}
             // Shown where the change was made, not as a toast.
             Job::Tune { area, what, .. } => self.tuned(area, &what, e),
@@ -1033,7 +1081,9 @@ impl App {
     /// open tab: its system, or that files can go there.
     fn subtitle_for(&self, p: &PeerStatus) -> String {
         if !p.online {
-            return "Offline".into();
+            // It forgot this computer: waiting for it would be in vain.
+            let removed = self.status.as_ref().and_then(Option::as_ref).is_some_and(|s| s.removed_us(&p.id));
+            return if removed { "Removed you" } else { "Offline" }.into();
         }
         match self.tab {
             Tab::Files => "Drop here".into(),
@@ -1106,41 +1156,25 @@ impl App {
     }
 
     fn sheet_open(&self) -> bool {
-        self.pairing.is_some() || self.pending_drop.is_some() || self.removing.is_some()
+        self.pairing.is_some() || self.pending_drop.is_some() || self.removing.is_some() || self.deleting_profile.is_some()
     }
 }
 
-/// An image embedded by scripts/brand-assets.py: width and height (u32
-/// LE), then straight RGBA.
+/// Whether the pointer has left the window without the window being told:
+/// it is on another computer (`controlling`: oneMK holds it there, and the
+/// window hears no leave) unless it has been seen moving or clicking here
+/// since (`here`: then it is here, and its clicks must count), or the window
+/// just lost the focus to something in front of it. Moving over the window
+/// again brings hover back.
+fn pointer_away(controlling: bool, here: bool, was_focused: bool, focused: bool) -> bool {
+    (controlling && !here) || (was_focused && !focused)
+}
+
+/// A raw image embedded in the app (the format scripts/make-icons.py
+/// writes): width and height (u32 LE), then straight RGBA.
 pub fn embedded(bytes: &[u8]) -> ([usize; 2], &[u8]) {
     let n = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().expect("header")) as usize;
     ([n(0), n(4)], &bytes[8..])
-}
-
-/// The brand lockup (the Crossing mark and the oneMK wordmark), drawn at
-/// 2x for sharpness on high-density screens.
-pub fn lockup_texture(ctx: &egui::Context) -> egui::TextureHandle {
-    let (size, px) = embedded(include_bytes!("../assets/lockup.rgba"));
-    ctx.load_texture("lockup", egui::ColorImage::from_rgba_unmultiplied(size, px), egui::TextureOptions::LINEAR)
-}
-
-/// Where the ink sits in the lockup picture (its clear space around it),
-/// as fractions of its height: left edge, and the centre of the ink.
-const LOCKUP_INK_LEFT: f32 = 65.0 / 52.0;
-const LOCKUP_INK_MID: f32 = 21.5 / 52.0;
-
-/// The lockup with the left edge of its ink at `left_center`, the ink
-/// centred on it vertically, and the picture `height` points tall.
-pub fn draw_lockup(p: &Painter, tex: &egui::TextureHandle, left_center: Pos2, height: f32) {
-    let [w, h] = tex.size();
-    let min = left_center - vec2(LOCKUP_INK_LEFT * height, LOCKUP_INK_MID * height);
-    let rect = Rect::from_min_size(min, vec2(height * w as f32 / h as f32, height));
-    p.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-}
-
-/// How wide the lockup's ink is at `height`.
-pub fn lockup_ink_w(height: f32) -> f32 {
-    (213.0 - 65.0) / 52.0 * height
 }
 
 impl App {
@@ -1200,6 +1234,25 @@ impl App {
             }
         }
         self.sync_scene();
+    }
+
+    /// Whether the computer with this id is being dragged on the desk.
+    fn dragging(&self, id: &str) -> bool {
+        matches!(&self.drag, Some(Drag::Device { i, .. }) if self.scene.devices.get(*i).is_some_and(|d| d.id == id))
+    }
+
+    /// A computer placed apart, moved beside the nearest edge of ours (or
+    /// anywhere along its side, when no edge has room); it hops there.
+    fn snap(&mut self, id: &str) {
+        let Some((side, offset)) = self.place_of(id) else { return };
+        let Some(i) = self.scene.index(id) else { return };
+        let (mine, theirs) = (&self.scene.devices[0].screens, &self.scene.devices[i].screens);
+        let known = !mine.is_empty() && !theirs.is_empty();
+        let place = offset.filter(|_| known).and_then(|o| scene::snapped(&Desktop::new(mine.clone()), &Desktop::new(theirs.clone()), (side, o)));
+        match place {
+            Some((side, o)) => self.choose_place(id, side, Some(o), true),
+            None => self.choose_side(id, side, true),
+        }
     }
 
     /// Starts placing computer `i` by dragging it from `start`, when its
@@ -1395,20 +1448,28 @@ impl App {
             if let Some(Drag::Device { i, place, .. }) = &self.drag
                 && *i < self.scene.devices.len()
             {
-                let (i, offset) = (*i, place.as_ref().map(|pl| pl.now.1));
+                let i = *i;
                 let side = self.side_at(i);
+                // Where the screens touch, or beside the nearest edge of
+                // ours; never apart by accident.
+                let theirs = &self.scene.devices[i].screens;
+                let landing = match place.as_ref().filter(|_| !theirs.is_empty()) {
+                    Some(pl) => scene::landing(&pl.mine, &Desktop::new(theirs.clone()), (side, pl.now.1), false),
+                    None => scene::Landing::Along(side),
+                };
                 let d = &mut self.scene.devices[i];
                 d.lift.go(0.0, now, motion::space(0.16), motion::out_cubic);
                 d.pop.go(1.0, now, 0.16, motion::out_cubic);
                 let id = d.id.clone();
                 self.drag_side = None;
-                if !self.dragged_once {
-                    self.dragged_once = true;
-                    let _ = std::fs::write(self.drag_hint_file(), b"");
-                }
-                match offset {
-                    Some(o) => self.choose_place(&id, side, Some(o), false),
-                    None => self.choose_side(&id, side, false),
+                // Snapped: it glides from where it was let go to its place.
+                match landing {
+                    scene::Landing::Beside(side, o) => self.choose_place(&id, side, Some(o), false),
+                    scene::Landing::Apart(side, o) => {
+                        self.choose_place(&id, side, Some(o), false);
+                        self.placed_apart(&id, now);
+                    }
+                    scene::Landing::Along(side) => self.choose_side(&id, side, false),
                 }
             }
             self.drag = None;
@@ -1460,8 +1521,10 @@ impl App {
             Some(Drag::Device { i, .. }) => Some(i),
             _ => None,
         };
-        self.scene.raise.go(f32::from(self.sheet_open()), now, motion::space(0.38), motion::out_expo);
-        self.scene.sheet_top = self.sheet_top;
+        // The sheet is centred over the scrim (handoff 5.8): the desk stays
+        // where it is behind it, rather than making room below.
+        self.scene.raise.go(0.0, now, motion::space(0.38), motion::out_expo);
+        self.scene.sheet_top = None;
         self.scene.drop_preview.go(f32::from(self.tab == Tab::Files), now, motion::fade(0.28), motion::out_cubic);
         let several = self.scene.devices.iter().filter(|d| !d.leaving && d.id != GHOST).count() > 1;
         let shown = several && self.tab == Tab::Desk;
@@ -1473,7 +1536,8 @@ impl App {
         self.scene.empty_slot = false;
         let moving = self.scene.step(now, dragging);
         self.scene_moving = moving;
-        self.scene.fit = Some(rect);
+        // On the Desk the computers fit the handoff's box; elsewhere the area.
+        self.scene.fit = Some(self.desk_stage.filter(|_| self.tab == Tab::Desk).unwrap_or(rect));
         let painter = ui.painter_at(all);
         self.scene.paint(&painter, all);
         if moving || self.drag.is_some() {
@@ -1499,23 +1563,12 @@ impl App {
         };
         let (id, name) = (self.scene.devices[i].id.clone(), self.scene.devices[i].name.clone());
         let width = 180.0;
-        let p = ui.painter().clone();
-        let head = fit(&p, &format!("Where is {name}?"), &regular(T_META), width - 16.0);
-        let (r, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
-        p.text(r.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, head, regular(T_META), INK2);
+        let head = fit(ui.painter(), &format!("Where is {name}?"), &regular(T_META), width - 20.0);
+        widgets::menu_heading(ui, width, &head);
         let current = self.side_of(&id);
         for (side, label) in [(Side::Left, "On the left"), (Side::Right, "On the right"), (Side::Top, "Above"), (Side::Bottom, "Below")] {
-            let (r, resp) = ui.allocate_exact_size(vec2(width, 28.0), Sense::click());
-            let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered()), 0.12, motion::out_cubic);
-            p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, PILL, hover));
-            widgets::focus_ring(ui, &resp, r, 6);
-            let on = current == Some(side);
-            if on {
-                widgets::draw_check(&p, pos2(r.left() + 16.0, r.center().y), 10.0, INK, 1.0);
-            }
-            p.text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, label, regular(T_BODY), if on { INK } else { INK_HOVER });
-            widgets::a11y(&resp, Role::MenuItemRadio, &format!("{name}: {label}"), Some(on));
-            if resp.clicked() {
+            let full = format!("{name}: {label}");
+            if widgets::menu_item(ui, width, widgets::MenuItem::choice(label, &full, current == Some(side))).clicked() {
                 self.choose_side(&id, side, true);
                 ui.close();
             }
@@ -1523,27 +1576,6 @@ impl App {
     }
 
     // ---------- the top bar ----------
-
-    /// The page's title and the quieter words after it.
-    fn page_title(&self) -> (String, String) {
-        let name = if self.tab == Tab::Layout { "Arrange" } else { TABS.iter().find(|t| t.0 == self.tab).map_or("", |t| t.1) }.to_owned();
-        let sub = match (self.tab, self.status.as_ref()) {
-            (_, None) => String::new(),
-            (_, Some(None)) => "oneMK is off".to_owned(),
-            (Tab::Desk | Tab::Layout, Some(Some(s))) => match s.peers.len() {
-                0 => "nothing paired yet".to_owned(),
-                n => format!("{} of {n} connected", s.peers.iter().filter(|p| p.online).count()),
-            },
-            (Tab::Wallpaper, Some(Some(s))) => match s.wallpaper.as_ref().and_then(|w| Some((w, w.plan.as_ref()?))) {
-                Some((_, plan)) if plan.paused => "paused".to_owned(),
-                // Counted from what each computer said, as the page says it.
-                Some((wallpaper, plan)) => plan.playing_summary(&wallpaper.computers).to_lowercase(),
-                None => "one video across all your screens".to_owned(),
-            },
-            _ => String::new(),
-        };
-        (name, sub)
-    }
 
     /// Changes whenever what is drawn behind the glass may have changed.
     fn backdrop_sig(&self, full: Rect) -> u64 {
@@ -1560,24 +1592,25 @@ impl App {
         h.finish()
     }
 
+
     /// The top bar's button: what it says and does.
     fn action(&self) -> (String, Look, bool, Option<Job>) {
         let controlled = self.running().is_some_and(|s| s.controlled_by.is_some());
         let broadcasting = self.running().is_some_and(|s| !s.broadcast.is_empty());
-        let narrow = self.ctx.content_rect().width() < 1100.0;
+        // Shorter forms for a narrow bar: shell::action_label.
         let (label, look, enabled, job) = match self.status.as_ref() {
             Some(None) if self.busy.contains(&Job::Start) => ("Starting…", Look::Primary, false, None),
             Some(None) => ("Start oneMK", Look::Primary, true, Some(Job::Start)),
             _ if broadcasting && self.busy.contains(&Job::Broadcast(false)) => ("Stopping…", Look::Primary, false, None),
-            _ if broadcasting => (if narrow { "Keyboard stop" } else { "Use keyboard to stop" }, Look::Quiet, false, None),
+            _ if broadcasting => ("Use keyboard to stop", Look::Quiet, false, None),
             _ if controlled && self.busy.contains(&Job::TakeBack) => ("Taking back…", Look::Primary, false, None),
             _ if controlled => ("Take back", Look::Primary, true, Some(Job::TakeBack)),
-            _ if self.running().is_some_and(|s| !s.peers.is_empty()) => (if narrow { "Pair another" } else { "Pair another computer" }, Look::Quiet, true, None),
+            _ if self.running().is_some_and(|s| !s.peers.is_empty()) => ("Pair another computer", Look::Primary, true, None),
             _ => ("Pair a computer", Look::Primary, true, None),
         };
-        // On the desk, Start and Take back are offered where the eye is (in
-        // the card, in the banner) in Volt: here they step back to quiet,
-        // so one Volt action shows at a time.
+        // On the desk, Start, Take back and the first pairing are offered
+        // where the eye is (in the card, in the banner) in cobalt: here they
+        // step back to quiet, so one cobalt action shows at a time.
         let first_pair = job.is_none() && self.running().is_some_and(|s| s.peers.is_empty());
         let look = if look == Look::Primary && self.tab == Tab::Desk && (matches!(job, Some(Job::Start | Job::TakeBack)) || first_pair) { Look::Quiet } else { look };
         (label.to_owned(), look, enabled, job)
@@ -1616,7 +1649,7 @@ impl App {
         }
         if let Some(p) = &s.controlled_by {
             let sub = if cfg!(target_os = "linux") {
-                format!("Choose Take back, or stop sending input from {p}. Control comes back by itself after a minute without input from it.")
+                format!("Choose Take back, or stop sending input from {p}. Control comes back by itself after a while without input from it.")
             } else {
                 "Move this computer's mouse or press a key, or choose Take back.".into()
             };
@@ -1635,11 +1668,23 @@ impl App {
             1 => " 1 paired computer is offline.".into(),
             n => format!(" {n} paired computers are offline."),
         };
+        if online.is_empty() && let Some(p) = s.peers.iter().find(|p| s.removed_us(&p.id)) {
+            return (format!("{} removed this computer", p.name), "It no longer trusts this computer, so it refuses to connect. Remove it here too, or pair the two computers again.".into());
+        }
+        // Something keeps trying to connect and never gets in: say who and what to do.
+        if online.is_empty() && let Some(note) = s.unrecognised.first() {
+            return ("A computer can't get in".into(), note.clone());
+        }
         match online[..] {
             [] if s.peers.is_empty() => ("No computers paired yet".into(), "Choose Pair a computer, then do the same on the other computer.".into()),
             [] => (
                 "Waiting for your computers".into(),
                 "Paired computers appear here when oneMK is running on them and they're on the same network.".into(),
+            ),
+            // Carried away from our screens on the Computers view: it won't stay there.
+            [p] if self.apart.contains(&p.id) && self.tab == Tab::Desk && self.dragging(&p.id) => (
+                format!("Let go to place {}", p.name),
+                format!("It moves beside the nearest edge of your screens, where the pointer crosses.{away}"),
             ),
             [p] if self.apart.contains(&p.id) => (
                 format!("{} is apart from this computer", p.name),
@@ -1653,211 +1698,12 @@ impl App {
         }
     }
 
-    /// What each cell of the panel shows in this state, and where.
-    fn cells(&self, rect: Rect) -> Vec<(Cell, Rect)> {
-        let w = rect.width();
-        let x = match self.tab {
-            Tab::Layout => [0.0, w * 0.3, w * 0.6, w],
-            _ => [0.0, w * 0.34, w * 0.66, w],
-        };
-        let cell = |a: usize, b: usize| Rect::from_min_max(pos2(rect.left() + x[a] + PAD, rect.top() + PAD), pos2(rect.left() + x[b] - PAD, rect.bottom() - PAD));
-        let (t, s) = self.headline_text();
-        match self.tab {
-            // Off, there is nothing to inspect: the message takes the room.
-            Tab::Desk if self.off() => vec![(Cell::Head(t, s), cell(0, 2)), (Cell::Controls, cell(2, 3))],
-            // A small window has room for one card: the chosen computer's
-            // (this computer's switches show when it is the one chosen).
-            Tab::Desk if self.running().is_some_and(|status| status.peers.is_empty()) && w < 760.0 => vec![(Cell::Inspector(None), cell(0, 2)), (Cell::Controls, cell(2, 3))],
-            Tab::Desk if w < 760.0 => match self.selected_id() {
-                Some(id) if id != "me" => vec![(Cell::Inspector(Some(id)), cell(0, 3))],
-                _ => vec![(Cell::Inspector(None), cell(0, 1)), (Cell::Controls, cell(1, 3))],
-            },
-            Tab::Desk => vec![(Cell::Inspector(self.selected_id()), cell(0, 2)), (Cell::Controls, cell(2, 3))],
-            Tab::Layout => {
-                let sel = self.selected_id().filter(|id| id != "me");
-                vec![(Cell::Arrange(sel.clone()), cell(0, 1)), (Cell::LineUp(sel), cell(1, 2)), (Cell::Profiles, cell(2, 3))]
-            }
-            Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper | Tab::Files => vec![],
-        }
-    }
-
-    fn panel(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
-        if self.tab == Tab::Files {
-            self.files_panel(ui, rect);
-            return;
-        }
-        if self.tab == Tab::Layout && rect.width() < 760.0 {
-            self.layout_stacked(ui, rect, now);
-            return;
-        }
-        let cells = self.cells(rect);
-        // Each cell on a glass card of its own, the window's gap between.
-        for (cell, c) in &cells {
-            let mut card = Rect::from_min_max(c.min - vec2(PAD - M / 2.0, PAD), c.max + vec2(PAD - M / 2.0, PAD));
-            // A short cell's card ends a padding under what it holds.
-            if let Some(h) = cell_key(cell).and_then(|k| self.cell_h.get(k)).filter(|_| self.tab != Tab::Layout) {
-                card.max.y = card.max.y.min(c.top() + h + PAD + 2.0);
-            }
-            if card.left() < rect.left() + M {
-                card.min.x = rect.left();
-            }
-            if card.right() > rect.right() - M {
-                card.max.x = rect.right();
-            }
-            card.min.y = card.min.y.max(rect.top());
-            card.max.y = card.max.y.min(rect.bottom());
-            // Persistent content: a flat quiet group (no gradient, no
-            // shadow); only what floats is raised.
-            widgets::group(ui, card, R_PANEL);
-        }
-        let opening = self.scene.opening(now);
-        for k in 0..self.slots.len() {
-            let next = cells.get(k).cloned();
-            let slot = &mut self.slots[k];
-            if slot.cell.as_ref().map(|c| &c.0) != next.as_ref().map(|c| &c.0) {
-                let was = std::mem::replace(&mut slot.cell, next);
-                // On first sight nothing fades out; the panel just rises in.
-                slot.was = if opening { None } else { was };
-                slot.at = now;
-            } else if let (Some(c), Some(n)) = (&mut slot.cell, next) {
-                c.1 = n.1;
-            }
-        }
-        let out = motion::fade(0.09) as f64;
-        // Under a sheet the panel steps back.
-        let dim = tween(ui.ctx(), Id::unique("panel-dim"), if self.sheet_open() { 0.3 } else { 1.0 }, motion::fade(0.2), motion::out_cubic);
-        for k in 0..self.slots.len() {
-            let (at, was, cell) = (self.slots[k].at, self.slots[k].was.clone(), self.slots[k].cell.clone());
-            let t = now - at;
-            if let Some((c, r)) = was.filter(|_| t < out) {
-                ui.ctx().request_repaint();
-                let mut child = ui.new_child(UiBuilder::new().max_rect(r).id_salt(("was", k)));
-                child.set_clip_rect(rect);
-                child.disable();
-                child.set_opacity((1.0 - (t / out) as f32) * dim);
-                self.draw_cell(&mut child, &c, r, now);
-                continue;
-            }
-            let Some((c, r)) = cell else { continue };
-            // Staggered arrivals are movement too: with reduced motion the
-            // cells fade in together, at once.
-            let stagger = |secs: f32| f64::from(motion::space(secs));
-            let delay = if opening && at < 1.0 { stagger(0.25 + 0.04 * k as f32) } else if self.slots[k].was.is_some() { out + stagger(0.03 * k as f32) } else { 0.0 };
-            let e = motion::progress(now, at + delay, motion::fade(if opening { 0.2 } else { 0.18 }), motion::out_cubic);
-            if e < 1.0 {
-                ui.ctx().request_repaint();
-            }
-            let r2 = r.translate(vec2(0.0, motion::space(4.0) * (1.0 - e)));
-            let mut child = ui.new_child(UiBuilder::new().max_rect(r2).id_salt(("cell", k)));
-            child.set_clip_rect(rect);
-            child.set_opacity(e * dim);
-            let layer = child.layer_id();
-            let start = ui.ctx().graphics(|g| g.get(layer).map_or(0, |l| l.all_entries().len()));
-            self.draw_cell(&mut child, &c, r2, now);
-            // What it really took (its shapes' extent), for its card next frame.
-            if let Some(key) = cell_key(&c) {
-                let bottom = ui.ctx().graphics(|g| g.get(layer).map_or(r2.top(), |l| l.all_entries().skip(start).map(|e| e.shape.visual_bounding_rect()).filter(|b| b.is_finite()).fold(r2.top(), |m, b| m.max(b.bottom()))));
-                let h = (bottom - r2.top()).clamp(0.0, r2.height());
-                if (self.cell_h.get(key).copied().unwrap_or(f32::MAX) - h).abs() > 0.5 && e >= 1.0 {
-                    self.cell_h.insert(key, h);
-                    ui.ctx().request_repaint();
-                }
-            }
-        }
-    }
-
-    /// Layout in a narrow window: its three cards behind one tab row
-    /// (Position, Exact place, Profiles), each shown full width and full
-    /// height, so every one is a click away and nothing is shortened or cut.
-    fn layout_stacked(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
-        let sel = self.selected_id().filter(|id| id != "me");
-        let key = Id::unique("layout-tab");
-        #[allow(unused_mut)]
-        let mut chosen = ui.ctx().data(|d| d.get_temp::<usize>(key)).unwrap_or(0);
-        #[cfg(any(debug_assertions, feature = "design-evidence"))]
-        if let Some(k) = std::env::var("ONE_MK_APP_LAYOUT_TAB").ok().and_then(|v| v.parse::<usize>().ok()) {
-            chosen = k.min(2);
-        }
-        // An open profile's options belong to Profiles: show that tab.
-        if self.profile_scroll {
-            chosen = 2;
-        }
-        let height_key = Id::unique(("layout-position-height", &sel, rect.width().to_bits()));
-        let panel_height = if chosen == 0 { ui.ctx().data(|data| data.get_temp::<f32>(height_key)).unwrap_or(232.0).min(rect.height()) } else { rect.height() };
-        let rect = Rect::from_min_size(rect.min, vec2(rect.width(), panel_height));
-        widgets::group(ui, rect, R_PANEL);
-        let inner = rect.shrink(PAD);
-        let labels = ["Position", "Exact place", "Profiles"];
-        let track = Rect::from_min_size(inner.min, vec2(inner.width().min(420.0), 30.0));
-        let pills = Pills {
-            id: Id::unique("layout-tabs"),
-            track,
-            cells: Pills::even(track, 3, 2.0),
-            labels: &labels,
-            names: labels.iter().map(|l| format!("Layout: {l}")).collect(),
-            chosen: Some(chosen),
-            enabled: vec![true; 3],
-            role: Role::Tab,
-            font: T_BODY,
-        };
-        if let Some(k) = pills.show(ui, self.arrowed) {
-            chosen = k;
-        }
-        ui.ctx().data_mut(|d| d.insert_temp(key, chosen));
-        let body = Rect::from_min_max(pos2(inner.left(), track.bottom() + 16.0), inner.max);
-        let cell = match chosen {
-            0 => Cell::Arrange(sel),
-            1 => Cell::LineUp(sel),
-            _ => Cell::Profiles,
-        };
-        let mut child = ui.new_child(UiBuilder::new().max_rect(body).id_salt(("layout-tab-body", chosen)));
-        child.set_clip_rect(body.expand(4.0).intersect(ui.clip_rect()));
-        let layer = child.layer_id();
-        let start = ui.ctx().graphics(|graphics| graphics.get(layer).map_or(0, |list| list.all_entries().len()));
-        self.draw_cell(&mut child, &cell, body, now);
-        if chosen == 0 {
-            let bottom = ui.ctx().graphics(|graphics| graphics.get(layer).map_or(body.top(), |list| list.all_entries().skip(start).map(|entry| entry.shape.visual_bounding_rect()).filter(|bounds| bounds.is_finite()).fold(body.top(), |bottom, bounds| bottom.max(bounds.bottom()))));
-            let measured = (bottom + PAD - rect.top()).max(120.0);
-            if (measured - panel_height).abs() > 0.5 {
-                ui.ctx().data_mut(|data| data.insert_temp(height_key, measured));
-                ui.ctx().request_repaint();
-            }
-        }
-    }
-
-    fn draw_cell(&mut self, ui: &mut Ui, cell: &Cell, r: Rect, now: f64) {
-        match cell {
-            Cell::Head(title, sub) => {
-                let th = para(ui, r.left_top(), r.width(), title, semibold(T_TITLE), INK);
-                let sh = para(ui, r.left_top() + vec2(0.0, th + 6.0), r.width(), sub, regular(T_BODY), INK2);
-                let at = Rect::from_min_size(r.min, vec2(r.width(), th + sh + 6.0));
-                a11y_text(ui, Id::unique("headline"), at, Role::Status, &format!("{title}. {sub}"), Some(Live::Polite));
-                // Off: the way to turn it on, in the card that says so.
-                if self.off() && self.status.is_some() {
-                    let busy = self.busy.contains(&Job::Start);
-                    let label = if busy { "Starting…" } else { "Start oneMK" };
-                    let bw = button_width(ui, "Start oneMK") + 8.0;
-                    let b = Rect::from_min_size(pos2(r.left(), at.bottom() + 16.0), vec2(bw, 36.0));
-                    if button(ui, b, Id::unique("start-in-card"), label, Look::Primary, !busy && !self.sheet_open(), Some("Start oneMK on this computer")).clicked() {
-                        self.busy.push(Job::Start);
-                        self.link.start();
-                    }
-                }
-            }
-            Cell::Inspector(sel) => self.peer_card(ui, r, sel.clone(), now),
-            Cell::Controls => self.controls(ui, r),
-            Cell::Arrange(sel) => self.arrange_cell(ui, r, sel.clone()),
-            Cell::LineUp(sel) => self.line_up_cell(ui, r, sel.clone()),
-            Cell::Profiles => self.profiles_cell(ui, r),
-        }
-    }
-
     /// Ctrl and Cmd for every paired computer, a row each, from the top of
-    /// `c` (the Advanced card sizes itself to fit them).
+    /// `c` (the Settings card sizes itself to fit them).
     pub(super) fn swaps(&mut self, ui: &mut Ui, c: Rect) {
         let peers: Vec<_> = self.running().map(|s| s.peers.clone()).unwrap_or_default();
         if peers.is_empty() {
-            para(ui, c.left_top(), c.width(), "Pair a computer to choose how Ctrl and Cmd work when you type on it.", regular(T_BODY), INK2);
+            para(ui, c.left_top(), c.width(), "Pair a computer to choose how Ctrl and Cmd work when you type on it.", regular(T_BODY), pal().ink2);
             return;
         }
         let arrowed = self.arrowed;
@@ -1879,8 +1725,8 @@ impl App {
             let name_room = if stacked { row.width() } else { seg.left() - row.left() - 12.0 };
             let name = fit(&p, &peer.name, &regular(T_BODY), name_room - ow - 8.0);
             let nw = text_width(ui, &name, regular(T_BODY));
-            p.text(pos2(row.left(), name_y), Align2::LEFT_CENTER, &name, regular(T_BODY), INK);
-            p.text(pos2(row.left() + nw + 8.0, name_y), Align2::LEFT_CENTER, os_label, regular(T_META), INK2);
+            p.text(pos2(row.left(), name_y), Align2::LEFT_CENTER, &name, regular(T_BODY), pal().ink);
+            p.text(pos2(row.left() + nw + 8.0, name_y), Align2::LEFT_CENTER, os_label, regular(T_META), pal().ink2);
             if name != peer.name {
                 ui.interact(Rect::from_min_size(pos2(row.left(), name_y - 10.0), vec2(nw, 20.0)), Id::unique(("swap-name", &peer.id)), Sense::hover()).on_hover_text(&peer.name);
             }
@@ -1926,7 +1772,7 @@ impl App {
                 code: None,
                 check: None,
                 buttons,
-                focus: 1,
+                focus: 0,
                 appear: *at,
                 key: "drop".into(),
             });
@@ -1937,10 +1783,24 @@ impl App {
                 sub: "It stops sharing with this computer. To use it again, pair the two computers again.".into(),
                 code: None,
                 check: None,
-                buttons: vec![("Cancel".into(), Look::Quiet, Act::Close), ("Remove".into(), Look::Primary, Act::Forget(id.clone(), name.clone()))],
+                buttons: vec![("Cancel".into(), Look::Quiet, Act::Close), ("Remove".into(), Look::Destructive, Act::Forget(id.clone(), name.clone()))],
                 focus: 0,
                 appear: *at,
                 key: "remove".into(),
+            });
+        }
+        if let Some((name, at)) = &self.deleting_profile {
+            // Deleting a saved layout can't be undone: ask first. Cancel is
+            // where the keyboard starts, never the button that deletes.
+            return Some(SheetView {
+                title: format!("Delete the layout “{name}”?"),
+                sub: "It is removed from your saved layouts. The computers on the desk stay as they are now.".into(),
+                code: None,
+                check: None,
+                buttons: vec![("Cancel".into(), Look::Quiet, Act::Close), ("Delete".into(), Look::Destructive, Act::DeleteProfile(name.clone()))],
+                focus: 0,
+                appear: *at,
+                key: "delete-profile".into(),
             });
         }
         let pair = self.pairing.as_ref()?;
@@ -2001,7 +1861,13 @@ impl App {
         Some(SheetView { title, sub, code, check, buttons, focus, appear: pair.opened + motion::space(0.4) as f64, key })
     }
 
-    fn sheet(&mut self, ui: &mut Ui, desk: Rect, now: f64) {
+    /// The sheet (handoff 5.8): pairing, where dropped files go, and every
+    /// confirmation, one way: centred in the window over the dimmed window
+    /// (the scrim), `surface`, corner 16, padding 24, at least 440 wide. It
+    /// holds the keyboard while it is up (Tab goes round its own controls,
+    /// Esc is its way out, a click on the scrim too where that is safe), and
+    /// a body taller than the window scrolls inside it.
+    fn sheet(&mut self, ui: &mut Ui, now: f64) {
         let (view, leaving) = match self.sheet_view() {
             Some(v) => {
                 self.sheet_was = Some((v.clone(), now));
@@ -2011,12 +1877,12 @@ impl App {
                 Some((v, t)) if now - t < 0.16 => (v.clone(), Some(*t)),
                 _ => {
                     // Closed: the keyboard goes back to where the sheet was
-                    // opened from (the sidebar's action).
+                    // opened from (the top bar's action).
                     if self.sheet_was.is_some() && widgets::keyboard_focus(ui.ctx()) {
                         ui.memory_mut(|m| m.request_focus(Id::unique("action")));
                     }
                     self.sheet_was = None;
-                    self.sheet_top = None;
+                    self.sheet_rect = None;
                     self.sheet_key.clear();
                     return;
                 }
@@ -2025,16 +1891,17 @@ impl App {
         if leaving.is_none() && self.keys_on_sheet(ui) {
             return;
         }
-        let widest = view.buttons.iter().map(|(label, _, _)| button_width(ui, label) + 36.0).fold(440.0f32, f32::max);
-        let width = widest.min(desk.width() - 40.0);
-        let x = desk.center().x - width / 2.0 + 18.0;
-        let inner = width - 36.0;
+        let ctx = ui.ctx().clone();
+        let window = ctx.content_rect();
+        let pad = SHEET_PAD;
+        let widest = view.buttons.iter().map(|(label, _, _)| button_width(ui, label) + 2.0 * pad).fold(0.0f32, f32::max);
+        let width = sheet_width(window.width(), widest);
+        let inner = width - 2.0 * pad;
         let sub_g = {
-            let mut job = egui::text::LayoutJob::simple(view.sub.clone(), regular(T_BODY), INK2, inner);
+            let mut job = egui::text::LayoutJob::simple(view.sub.clone(), regular(T_BODY), pal().ink2, inner);
             job.sections[0].format.line_height = Some((T_BODY * LEADING).round());
             ui.painter().layout_job(job)
         };
-        let code_h = if view.code.is_some() { 60.0 } else { 0.0 };
         // Buttons in a row if they fit, else one under another with the
         // way out last.
         let row = view.buttons.iter().map(|(l, _, _)| button_width(ui, l) + 8.0).sum::<f32>() - 8.0 <= inner;
@@ -2044,15 +1911,17 @@ impl App {
             view.focus = view.focus.saturating_sub(1);
         }
         let widths: Vec<f32> = view.buttons.iter().map(|(l, _, _)| button_width(ui, l).min(inner)).collect();
-        let button_labels: Vec<_> = view.buttons.iter().map(|(label, _, _)| ui.painter().layout(label.clone(), regular(T_BODY), INK, inner - 28.0)).collect();
-        let button_heights: Vec<f32> = button_labels.iter().map(|label| (label.size().y + 16.0).max(34.0)).collect();
-        let btn_h = if view.buttons.is_empty() { 0.0 } else if row { 34.0 } else { button_heights.iter().sum::<f32>() + 8.0 * button_heights.len().saturating_sub(1) as f32 };
-        let title_g = ui.painter().layout(view.title.clone(), semibold(T_TITLE), INK, inner - if view.check.is_some() { 26.0 } else { 0.0 });
+        let button_labels: Vec<_> = view.buttons.iter().map(|(label, look, _)| ui.painter().layout(label.clone(), widgets::button_font(*look), pal().ink, inner - 28.0)).collect();
+        let button_heights: Vec<f32> = button_labels.iter().map(|label| (label.size().y + 18.0).max(SHEET_BUTTON_H)).collect();
+        let btn_h = if view.buttons.is_empty() { 0.0 } else if row { SHEET_BUTTON_H } else { button_heights.iter().sum::<f32>() + 8.0 * button_heights.len().saturating_sub(1) as f32 };
+        let title_g = ui.painter().layout(view.title.clone(), semibold(T_TITLE), pal().ink, inner - if view.check.is_some() { 26.0 } else { 0.0 });
         let title_h = title_g.size().y.max(22.0);
         let alternatives = leaving.is_none() && self.pairing.as_ref().is_some_and(|pair| matches!(pair.step, Step::Searching { .. } | Step::Hint));
-        let height = 18.0 + title_h + 4.0 + sub_g.size().y + code_h + if btn_h > 0.0 { 18.0 + btn_h } else { 0.0 } + 18.0 + if alternatives { 212.0 } else { 0.0 };
-        let rect = Rect::from_min_size(pos2(x - 18.0, desk.bottom() - height - 20.0), vec2(width, height));
-        self.sheet_top = Some(rect.top());
+        let alt_h = if alternatives { settings_controls::pairing_controls_h(ui, inner) } else { 0.0 };
+        let body = SheetBody { title: title_h, sub: sub_g.size().y, code: view.code.is_some(), alternatives: alt_h };
+        let fit = sheet_fit(window, width, body.height(), btn_h);
+        let rect = fit.rect;
+        self.sheet_rect = Some(rect);
 
         // In: rises 16 points and grows from 98%; out: fades and drops 8.
         let (o, dy, s) = match leaving {
@@ -2067,88 +1936,125 @@ impl App {
             }
         };
         if o < 1.0 || dy > 0.0 {
-            ui.ctx().request_repaint();
+            ctx.request_repaint();
         }
-        let layer = egui::LayerId::new(egui::Order::Foreground, Id::unique("sheet-layer"));
+        // The scrim: the window dimmed (light: black 20 %, dark: 50 %). It is
+        // egui's modal layer, so nothing behind it takes the pointer or the
+        // keyboard (Tab stays in the sheet), and a click on it is a "no"
+        // where that is safe.
+        let (scrim_area, sheet_area) = sheet_areas(window, rect);
+        let layer = sheet_area.layer();
+        hold_keyboard(&ctx, scrim_area.layer(), layer);
+        let scrim_clicked = scrim_area
+            .show(&ctx, |ui| {
+                ui.painter().rect_filled(window, 0.0, crate::style::scrim().gamma_multiply(o));
+                // Clicks, never the keyboard's focus.
+                ui.allocate_rect(window, Sense::CLICK).clicked()
+            })
+            .inner
+            && leaving.is_none()
+            && o >= 0.5;
         let c = rect.center();
-        ui.ctx().set_transform_layer(layer, egui::emath::TSTransform::new(c.to_vec2() * (1.0 - s) + vec2(0.0, dy), s));
-        let mut child = ui.new_child(UiBuilder::new().layer_id(layer).max_rect(rect));
-        child.set_opacity(o);
-        if leaving.is_some() || o < 0.5 {
-            child.disable();
-        }
-        // The sheet is modal: what is behind it doesn't get its clicks.
-        child.interact(rect, Id::unique("sheet-body"), Sense::CLICK | Sense::DRAG);
-        let p = child.painter().clone();
-        p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: Color32::from_black_alpha(115) }.as_shape(rect, CornerRadius::same(R_PANEL)));
-        p.rect(rect, CornerRadius::same(R_PANEL), POPOVER, Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
-        p.hline(rect.x_range().shrink(f32::from(R_PANEL)), rect.top() + 1.0, Stroke::new(1.0, Color32::from_white_alpha(28)));
-        let mut y = rect.top() + 18.0;
-        let mut tx = x;
-        if let Some(t0) = view.check {
-            // A tick drawn in, then it holds.
-            let k = motion::progress(now, t0, motion::fade(0.24), motion::out_cubic);
-            widgets::draw_check(&p, pos2(x + 8.0, y + title_h / 2.0), 16.0, INK, k);
-            tx += 26.0;
-            if k < 1.0 {
-                ui.ctx().request_repaint();
-            }
-        }
-        p.galley(pos2(tx, y), title_g, INK);
-        y += title_h + 4.0;
-        let sub_h = sub_g.size().y;
-        p.galley(pos2(x, y), sub_g, INK2);
-        y += sub_h;
-        a11y_text(&child, Id::unique("sheet-dialog"), rect, Role::Dialog, &format!("{}. {}", view.title, view.sub), Some(Live::Polite));
-        if let Some((code, _)) = &view.code {
-            // Digits rise in one by one, in the same rhythm as the other screen.
-            let font = mono_medium(28.0);
-            let adv = text_width(&child, "0", font.clone()) + 3.0;
-            let mut cx = x;
-            for (i, ch) in code.chars().enumerate() {
-                if i == 3 {
-                    cx += 12.0;
-                }
-                p.text(pos2(cx, y + 14.0), Align2::LEFT_TOP, ch, font.clone(), INK);
-                cx += adv;
-            }
-            let digits: Vec<String> = code.chars().map(String::from).collect();
-            let spoken = if digits.len() == 6 { format!("{}, {}", digits[..3].join(" "), digits[3..].join(" ")) } else { digits.join(" ") };
-            a11y_text(&child, Id::unique("sheet-code"), Rect::from_min_size(pos2(x, y), vec2(inner, code_h)), Role::Label, &format!("Pairing code {spoken}"), None);
-            y += code_h;
-        }
-        if alternatives { self.pairing_controls(&mut child, Rect::from_min_size(pos2(x, y + 12.0), vec2(inner, 200.0)), now); y += 212.0; }
-        if view.buttons.is_empty() {
-            return;
-        }
-        y += 18.0;
+        ctx.set_transform_layer(layer, egui::emath::TSTransform::new(c.to_vec2() * (1.0 - s) + vec2(0.0, dy), s));
         let mut clicked = None;
-        let mut bx = rect.right() - 18.0 - widths.iter().sum::<f32>() - 8.0 * widths.len().saturating_sub(1) as f32;
-        for (k, ((label, look, act), w)) in view.buttons.iter().zip(&widths).enumerate() {
-            let r = if row {
-                let r = Rect::from_min_size(pos2(bx, y), vec2(*w, 34.0));
-                bx += w + 8.0;
-                r
-            } else {
-                Rect::from_min_size(pos2(x, y + button_heights[..k].iter().sum::<f32>() + k as f32 * 8.0), vec2(inner, button_heights[k]))
+        sheet_area.show(&ctx, |child| {
+            child.set_opacity(o);
+            if leaving.is_some() || o < 0.5 {
+                child.disable();
+            }
+            // The sheet takes its own clicks: none reach the scrim.
+            let _ = child.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
+            let p = child.painter().clone();
+            for shape in widgets::overlay_shapes(rect, R_SHEET) {
+                p.add(shape);
+            }
+            a11y_text(child, Id::unique("sheet-dialog"), rect, Role::Dialog, &format!("{}. {}", view.title, view.sub), Some(Live::Polite));
+            let body_rect = Rect::from_min_size(rect.min + vec2(pad, pad), vec2(inner, fit.body));
+            // What the sheet says, from `at` down (in a list that scrolls
+            // when the window is too short for all of it).
+            let draw_body = |this: &mut Self, ui: &mut Ui, at: Pos2| {
+                let p = ui.painter().clone();
+                let mut y = at.y;
+                let mut tx = at.x;
+                if let Some(t0) = view.check {
+                    // A tick drawn in, then it holds.
+                    let k = motion::progress(now, t0, motion::fade(0.24), motion::out_cubic);
+                    widgets::draw_check(&p, pos2(at.x + 8.0, y + title_h / 2.0), 16.0, pal().ink, k);
+                    tx += 26.0;
+                    if k < 1.0 {
+                        ui.ctx().request_repaint();
+                    }
+                }
+                p.galley(pos2(tx, y), title_g.clone(), pal().ink);
+                y += title_h + SheetBody::GAP_SUB;
+                p.galley(pos2(at.x, y), sub_g.clone(), pal().ink2);
+                y += sub_g.size().y;
+                if let Some((code, _)) = &view.code {
+                    y += SheetBody::GAP;
+                    let block = Rect::from_min_size(pos2(at.x, y), vec2(inner, SheetBody::CODE_H));
+                    pairing_code(ui, block, code);
+                    y += SheetBody::CODE_H;
+                }
+                if alternatives {
+                    y += SheetBody::GAP;
+                    this.pairing_controls(ui, Rect::from_min_size(pos2(at.x, y), vec2(inner, alt_h)), now);
+                }
             };
-            let shown = if row { label.as_str() } else { "" };
-            let id = Id::unique(("sheet-btn", &view.key, k));
-            let resp = button(&mut child, r, id, shown, *look, true, Some(label));
-            widgets::a11y(&resp, Role::Button, label, None);
-            if !row {
-                p.galley(r.center() - button_labels[k].size() / 2.0, button_labels[k].clone(), if *look == Look::Primary { SIGNAL_INK } else { INK });
+            if fit.scrolls {
+                let mut list = child.new_child(UiBuilder::new().max_rect(body_rect));
+                egui::ScrollArea::vertical().id_salt("sheet-body").max_height(fit.body).auto_shrink([false, false]).show(&mut list, |ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(inner, body.height()), Sense::hover());
+                    draw_body(self, ui, r.min);
+                });
+            } else {
+                draw_body(self, child, body_rect.min);
             }
-            if k == view.focus && self.sheet_key != view.key && o >= 0.5 {
-                resp.request_focus();
-                self.sheet_key = view.key.clone();
+            if view.buttons.is_empty() {
+                return;
             }
-            if resp.clicked() {
-                clicked = Some(act.clone());
+            let y = rect.bottom() - pad - btn_h;
+            let mut bx = rect.right() - pad - widths.iter().sum::<f32>() - 8.0 * widths.len().saturating_sub(1) as f32;
+            for (k, ((label, look, act), w)) in view.buttons.iter().zip(&widths).enumerate() {
+                let r = if row {
+                    let r = Rect::from_min_size(pos2(bx, y), vec2(*w, SHEET_BUTTON_H));
+                    bx += w + 8.0;
+                    r
+                } else {
+                    Rect::from_min_size(pos2(rect.left() + pad, y + button_heights[..k].iter().sum::<f32>() + k as f32 * 8.0), vec2(inner, button_heights[k]))
+                };
+                let shown = if row { label.as_str() } else { "" };
+                let id = Id::unique(("sheet-btn", &view.key, k));
+                let resp = button(child, r, id, shown, *look, true, Some(label));
+                if !row {
+                    p.galley(r.center() - button_labels[k].size() / 2.0, button_labels[k].clone(), if matches!(*look, Look::Primary | Look::Destructive) { pal().on_accent } else { pal().ink });
+                }
+                // The keyboard starts on the safe button (never the one
+                // that confirms), each time the sheet's step changes.
+                if k == view.focus && self.sheet_key != view.key && o >= 0.5 {
+                    resp.request_focus();
+                    self.sheet_key = view.key.clone();
+                }
+                if resp.clicked() {
+                    clicked = Some(act.clone());
+                }
             }
+        });
+        if clicked.is_none() && scrim_clicked {
+            clicked = self.scrim_act();
         }
         if let Some(act) = clicked {
             self.sheet_act(act, now);
+        }
+    }
+
+    /// What a click on the scrim means: Cancel, except while two computers
+    /// compare codes, wait for each other or have just paired (a stray click
+    /// must not say "no" to the other computer).
+    fn scrim_act(&self) -> Option<Act> {
+        let confirm = self.pending_drop.is_some() || self.removing.is_some() || self.deleting_profile.is_some();
+        match self.pairing.as_ref().map(|p| &p.step) {
+            Some(Step::Code { .. } | Step::Waiting { .. } | Step::Paired { .. }) if !confirm => None,
+            _ => Some(Act::Close),
         }
     }
 
@@ -2170,10 +2076,18 @@ impl App {
 
     fn sheet_act(&mut self, act: Act, now: f64) {
         match act {
+            // Only the sheet showing goes (in `sheet_view`'s order): a
+            // confirmation over pairing leaves the pairing as it was.
             Act::Close => {
-                self.pairing = None;
-                self.pending_drop = None;
-                self.removing = None;
+                if self.pending_drop.take().is_none() && self.removing.take().is_none() && self.deleting_profile.take().is_none() {
+                    self.pairing = None;
+                }
+            }
+            Act::DeleteProfile(name) => {
+                self.deleting_profile = None;
+                self.profile_open = None;
+                self.busy.push(Job::Profile { verb: "delete", name: name.clone() });
+                self.link.profile("delete", &name);
             }
             Act::Forget(id, name) => {
                 self.removing = None;
@@ -2216,7 +2130,8 @@ impl App {
 
     // ---------- the toast ----------
 
-    fn toast_view(&mut self, ui: &mut Ui, desk: Rect, now: f64) {
+    /// The toast: bottom centre over the page, the banner's look.
+    fn toast_view(&mut self, ui: &mut Ui, page: Rect, now: f64) {
         let Some(t) = &self.toast else { return };
         let age = (now - t.at) as f32;
         let (enter, exit) = (motion::fade(0.22), motion::fade(0.16));
@@ -2226,53 +2141,61 @@ impl App {
         }
         let a_in = motion::out_expo(age / enter);
         let a = a_in.min(((t.life - age) / exit).clamp(0.0, 1.0));
-        // On the desk it takes its place in the band (the desk framed
-        // below it); on other pages it floats at the top, centred.
-        let slot = self.toast_slot.filter(|_| self.tab.desk());
-        let w_max = slot.map_or(520.0f32.min(desk.width() - 120.0) + 46.0, |r| r.width());
+        // It floats at the bottom, centred, and rises a little as it comes.
+        let w_max = 560.0f32.min(page.width() - 32.0);
         let (g, d, h) = desk_cards::toast_lay(ui, t, w_max);
-        let rect = match slot {
-            Some(r) => r.translate(vec2(0.0, -motion::space(6.0) * (1.0 - a_in))),
-            None => {
-                let w = g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x)) + 46.0 + if t.error { desk_cards::toast_action_w(t) } else { 0.0 };
-                let y = desk.top() + TOP_H + 10.0 + h / 2.0 - motion::space(8.0) * (1.0 - a_in);
-                Rect::from_center_size(pos2(desk.center().x, y), vec2(w, h))
-            }
-        };
+        let w = (g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x)) + 46.0 + if t.error { desk_cards::toast_action_w(ui, t) } else { 0.0 }).min(w_max);
+        // Clear of the sheet's buttons when one is up.
+        let bottom = toast_bottom(page, h, ui.ctx().content_rect(), self.sheet_rect.filter(|_| self.sheet_was.is_some()));
+        let y = bottom - h / 2.0 + motion::space(8.0) * (1.0 - a_in);
+        let rect = Rect::from_center_size(pos2(page.center().x, y), vec2(w, h));
         let layer = egui::LayerId::new(egui::Order::Tooltip, Id::unique("toast"));
         let mut child = ui.new_child(UiBuilder::new().layer_id(layer).max_rect(rect));
         child.set_opacity(a);
-        let body = if t.error { Rect::from_min_max(rect.min, pos2(rect.right() - desk_cards::toast_action_w(t), rect.bottom())) } else { rect };
+        let body = if t.error { Rect::from_min_max(rect.min, pos2(rect.right() - desk_cards::toast_action_w(ui, t), rect.bottom())) } else { rect };
         let resp = child.interact(body, Id::unique("toast-body"), Sense::CLICK);
         let p = child.painter().clone();
-        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(90) }.as_shape(rect, CornerRadius::same(12)));
-        p.rect(rect, CornerRadius::same(12), POPOVER, Stroke::new(1.0, Color32::from_white_alpha(16)), StrokeKind::Inside);
-        let dot = if t.error { ERROR } else { INK };
+        for shape in widgets::overlay_shapes(rect, 12) {
+            p.add(shape);
+        }
+        let dot = if t.error { pal().danger } else { pal().ink };
         let gh = g.size().y;
-        // Errors are one line, centred on the band.
-        let gy = if t.error { rect.center().y - g.size().y / 2.0 } else { rect.top() + 10.0 };
-        p.circle_filled(pos2(rect.left() + 17.0, gy + 9.0), 3.5, dot);
+        // An error that fits on one line is centred on the band; a longer
+        // one says why on the line below, as other messages do.
+        let gy = if t.error && d.is_none() { rect.center().y - g.size().y / 2.0 } else { rect.top() + 10.0 };
+        if t.error { widgets::status_mark(&p, pos2(rect.left() + 17.0, gy + 9.0), 7.0, widgets::Mark::Error); } else { p.circle_filled(pos2(rect.left() + 17.0, gy + 9.0), 3.5, dot); }
         if t.error && g.elided {
             resp.clone().on_hover_text(format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}"))));
         }
-        p.galley(pos2(rect.left() + 30.0, gy), g, INK);
+        p.galley(pos2(rect.left() + 30.0, gy), g, pal().ink);
         if let Some(d) = d {
-            p.galley(pos2(rect.left() + 30.0, rect.top() + 14.0 + gh), d, INK2);
+            p.galley(pos2(rect.left() + 30.0, rect.top() + 14.0 + gh), d, pal().ink2);
         }
-        // An error says where to look next: Health has the checks and fixes.
+        // An error says what to do next: try again (the first thing to try,
+        // first in Tab order too), its own way out, or Health's checks.
         let mut open_health = false;
         let mut try_again = false;
+        let mut act = None;
         if t.error {
-            let bw = button_width(&child, "Open Health");
-            let b = Rect::from_min_size(pos2(rect.right() - 12.0 - bw, rect.center().y - 15.0), vec2(bw, 30.0));
-            // What failed, done again: the first thing to try, first in
-            // Tab order too.
-            if t.retry.is_some() {
-                let tw = button_width(&child, "Try again");
-                let tb = Rect::from_min_size(pos2(b.left() - 8.0 - tw, b.top()), vec2(tw, 30.0));
-                try_again = button(&mut child, tb, Id::unique("toast-retry"), "Try again", Look::Quiet, true, Some("Do it again")).clicked();
+            let actions = desk_cards::toast_actions(t);
+            let mut x = rect.right() - 12.0 - actions.iter().map(|(label, _)| button_width(&child, label)).sum::<f32>() - 8.0 * actions.len().saturating_sub(1) as f32;
+            for (label, which) in actions {
+                let bw = button_width(&child, label);
+                let b = Rect::from_min_size(pos2(x, rect.center().y - 15.0), vec2(bw, 30.0));
+                x += bw + 8.0;
+                let hint = match which {
+                    desk_cards::ToastButton::Retry => "Do it again",
+                    desk_cards::ToastButton::Act => t.act.as_ref().map_or("", ToastAct::hint),
+                    desk_cards::ToastButton::Health => "Open Health to see what went wrong",
+                };
+                if button(&mut child, b, Id::unique(("toast-action", label)), label, Look::Quiet, true, Some(hint)).clicked() {
+                    match which {
+                        desk_cards::ToastButton::Retry => try_again = true,
+                        desk_cards::ToastButton::Act => act = t.act.clone(),
+                        desk_cards::ToastButton::Health => open_health = true,
+                    }
+                }
             }
-            open_health = button(&mut child, b, Id::unique("toast-health"), "Open Health", Look::Quiet, true, Some("Open Health to see what went wrong")).clicked();
         }
         let (role, live) = if t.error { (Role::Alert, Live::Assertive) } else { (Role::Status, Live::Polite) };
         let label = format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}")));
@@ -2287,8 +2210,15 @@ impl App {
         if try_again && let Some(job) = self.toast.as_mut().and_then(|t| t.retry.take()) {
             self.retry(job);
         }
+        // The log opens beside it: the advice stays up to follow.
+        let acted = matches!(act, Some(ToastAct::Snap(_)));
+        match act {
+            Some(ToastAct::ShowLog) => self.link.show_log(),
+            Some(ToastAct::Snap(id)) => self.snap(&id),
+            None => {}
+        }
         let t = self.toast.as_mut().expect("shown above");
-        if (dismiss || open_health || try_again) && age < t.life - exit {
+        if (dismiss || open_health || try_again || acted) && age < t.life - exit {
             t.life = age + exit;
         } else if resp.hovered() && age > enter && age < t.life - exit {
             // Held while the pointer is on it, so it can be read.
@@ -2305,7 +2235,7 @@ impl App {
 
     // ---------- keys ----------
 
-    /// Ctrl+1 to 6 switch tabs (Cmd on a Mac).
+    /// Ctrl+1 to 7 switch tabs (Cmd on a Mac).
     fn shortcuts(&mut self, ui: &Ui) {
         if widgets::locked(ui) || self.keys_grab(ui.ctx()) || ui.ctx().data(|data| data.get_temp::<usize>(Id::unique("shortcut-recorder")).is_some() || data.get_temp::<bool>(Id::unique("gesture-recording")).unwrap_or(false)) {
             return;
@@ -2319,9 +2249,11 @@ impl App {
         if self.palette.open {
             return;
         }
-        // One key per page, as the sidebar shows them: ⌘1 Desk, ⌘2
-        // Wallpaper, ⌘3 Clipboard & files, ⌘4 Keys & mouse, ⌘, Settings.
-        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num2, Tab::Wallpaper), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Num5, Tab::Health), (Key::Comma, Tab::Advanced)] {
+        // One key per page, in the bar's order: ⌘1 Desk, ⌘2 Arrange, ⌘3
+        // Wallpaper, ⌘4 Clipboard & files, ⌘5 Keys & mouse, ⌘6 Health, ⌘7
+        // Settings (and ⌘, as everywhere).
+        for key in shell::PAGE_KEYS {
+            let Some(tab) = shell::tab_for_key(key) else { continue };
             if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || tab.when_off()) {
                 self.set_tab(tab);
             }
@@ -2330,21 +2262,148 @@ impl App {
 }
 
 /// The sheet grows from 98% as it arrives.
-/// Cells whose card fits what they hold (the others fill their column).
-fn cell_key(c: &Cell) -> Option<&'static str> {
-    match c {
-        Cell::Controls => Some("controls"),
-        Cell::Head(..) => Some("head"),
-        // Layout's three cards share one height (a row of equals).
-        Cell::Inspector(None) => Some("me"),
-        Cell::Inspector(Some(_)) => Some("peer"),
-        Cell::LineUp(_) => Some("lineup"),
-        _ => None,
+fn lerp_scale(t: f32) -> f32 {
+    if motion::reduced() { 1.0 } else { 0.98 + 0.02 * t }
+}
+
+/// The sheet's two layers: the scrim over the whole `window`, and the
+/// sheet at `rect` over it.
+fn sheet_areas(window: Rect, rect: Rect) -> (egui::Area, egui::Area) {
+    let area = |id: &str, at: Pos2| {
+        egui::Area::new(Id::unique(id)).order(egui::Order::Foreground).fixed_pos(at).constrain(false).movable(false).interactable(true).fade_in(false)
+    };
+    (area("sheet-scrim", window.min), area("sheet-layer", rect.min))
+}
+
+/// While a sheet is up: the scrim is egui's modal layer (nothing behind it
+/// takes the pointer, or a place in the Tab order: the keyboard stays in
+/// the sheet), and the sheet is always over its scrim.
+fn hold_keyboard(ctx: &egui::Context, scrim: egui::LayerId, sheet: egui::LayerId) {
+    ctx.memory_mut(|m| {
+        m.set_modal_layer(scrim);
+        m.areas_mut().move_to_top(scrim);
+        m.areas_mut().move_to_top(sheet);
+    });
+}
+
+/// A sheet's buttons: 36 tall (handoff 6's middle size).
+const SHEET_BUTTON_H: f32 = 36.0;
+
+/// The heights in a sheet's body (handoff 5.8): the title, the sentence
+/// under it, then the pairing code's block or pairing's other ways in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SheetBody {
+    title: f32,
+    sub: f32,
+    code: bool,
+    /// Pairing's other ways in (0: none).
+    alternatives: f32,
+}
+
+impl SheetBody {
+    const GAP_SUB: f32 = 6.0;
+    const GAP: f32 = 16.0;
+    /// The pairing code's `surface2` block.
+    const CODE_H: f32 = 72.0;
+
+    fn height(&self) -> f32 {
+        self.title + Self::GAP_SUB + self.sub
+            + if self.code { Self::GAP + Self::CODE_H } else { 0.0 }
+            + if self.alternatives > 0.0 { Self::GAP + self.alternatives } else { 0.0 }
     }
 }
 
-fn lerp_scale(t: f32) -> f32 {
-    if motion::reduced() { 1.0 } else { 0.98 + 0.02 * t }
+/// A sheet's width in a window `window_w` wide: 440 at least, wider for a
+/// button that needs it (`widest`, with its padding), never closer than 16
+/// to the window's sides.
+fn sheet_width(window_w: f32, widest: f32) -> f32 {
+    widest.max(SHEET_MIN_W).min((window_w - 2.0 * SHEET_MARGIN).max(0.0))
+}
+
+/// Where a sheet goes: centred in the window, `body` tall inside its
+/// padding and above its `buttons` row; when the window is too short for
+/// all of it, the body scrolls (`scrolls`) and shows `body` of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SheetFit {
+    rect: Rect,
+    body: f32,
+    scrolls: bool,
+}
+
+fn sheet_fit(window: Rect, width: f32, body: f32, buttons: f32) -> SheetFit {
+    let chrome = 2.0 * SHEET_PAD + if buttons > 0.0 { SHEET_PAD + buttons } else { 0.0 };
+    let room = (window.height() - 2.0 * SHEET_MARGIN - chrome).max(48.0);
+    let shown = body.min(room);
+    SheetFit { rect: Rect::from_center_size(window.center(), vec2(width, chrome + shown)), body: shown, scrolls: shown < body }
+}
+
+/// The pairing code (handoff 5.8): JetBrains Mono 500 at 32, spaced 0.08 em,
+/// in two groups of three, centred on a `surface2` block.
+fn pairing_code(ui: &Ui, block: Rect, code: &str) {
+    const SIZE: f32 = 32.0;
+    let p = ui.painter();
+    p.rect_filled(block, CornerRadius::same(R_INNER), pal().surface2);
+    let font = mono_medium(SIZE);
+    let digits: Vec<char> = code.chars().collect();
+    // Each digit on a tile of its own (as a code field is), three and three;
+    // set close (0.08 em) when the sheet is too narrow for tiles.
+    let glyph = text_width(ui, "0", font.clone());
+    let (cell_w, gap) = (glyph + 18.0, 6.0);
+    let group = if digits.len() == 6 { 14.0 } else { 0.0 };
+    let cell_h = (block.height() - 16.0).clamp(24.0, 52.0);
+    let tiled = cell_w * digits.len() as f32 + gap * digits.len().saturating_sub(1) as f32 + group;
+    let tiles = tiled <= block.width() - 16.0;
+    let adv = if tiles { cell_w + gap } else { glyph + 0.08 * SIZE };
+    let total = if tiles { tiled } else { adv * digits.len() as f32 - 0.08 * SIZE + group };
+    let mut x = block.center().x - total / 2.0;
+    for (i, ch) in digits.iter().enumerate() {
+        if i == 3 {
+            x += group;
+        }
+        if tiles {
+            let cell = Rect::from_min_size(pos2(x, block.center().y - cell_h / 2.0), vec2(cell_w, cell_h));
+            p.rect(cell, CornerRadius::same(8), pal().raised, Stroke::new(1.0, pal().line2), StrokeKind::Inside);
+            p.text(cell.center(), Align2::CENTER_CENTER, ch, font.clone(), pal().ink);
+        } else {
+            p.text(pos2(x, block.center().y), Align2::LEFT_CENTER, ch, font.clone(), pal().ink);
+        }
+        x += adv;
+    }
+    let spoken: Vec<String> = digits.iter().map(char::to_string).collect();
+    let spoken = if spoken.len() == 6 { format!("{}, {}", spoken[..3].join(" "), spoken[3..].join(" ")) } else { spoken.join(" ") };
+    a11y_text(ui, Id::unique("sheet-code"), block, Role::Label, &format!("Pairing code {spoken}"), None);
+}
+
+/// The room a toast sits at the bottom of: the desk's side of the window
+/// (`desk`: its scene, and whether its panel is stacked under it), the
+/// whole content otherwise. Under a small window's desk the panel holds
+/// what the toast is about (its buttons, its name): the toast stands just
+/// over the panel's top edge, on the foot of the desk.
+fn toast_room(content: Rect, desk: Option<(Rect, bool)>) -> Rect {
+    match desk {
+        Some((scene, false)) => scene.shrink2(vec2(desk_panel::EDGE, 0.0)),
+        Some((scene, true)) => Rect::from_min_max(scene.min, pos2(scene.max.x, scene.max.y + 12.0)).shrink2(vec2(desk_panel::EDGE, 0.0)),
+        None => content,
+    }
+}
+
+/// Where a toast `h` tall ends: 16 above the foot of `room`, unless a
+/// `sheet` is there; then under the sheet if there is room, else over it,
+/// else (a window too short for both) over the sheet's title, never on its
+/// buttons.
+fn toast_bottom(room: Rect, h: f32, window: Rect, sheet: Option<Rect>) -> f32 {
+    let bottom = room.bottom() - 16.0;
+    let Some(sheet) = sheet else { return bottom };
+    if bottom - h > sheet.bottom() + 8.0 {
+        return bottom;
+    }
+    if sheet.bottom() + 12.0 + h <= window.bottom() - 8.0 {
+        sheet.bottom() + 12.0 + h
+    } else if sheet.top() - 12.0 - h >= window.top() + 8.0 {
+        sheet.top() - 12.0
+    } else {
+        sheet.top() + 8.0 + h
+    }
 }
 
 impl eframe::App for App {
@@ -2354,6 +2413,8 @@ impl eframe::App for App {
         let ui_started = std::time::Instant::now();
         let now = ui.input(|i| i.time);
         self.now = now;
+        // The theme first: everything below paints with it.
+        self.themer.frame(ui.ctx(), self.appearance(), now);
         if self.size.x > 0.0 {
             // Some desktops (GNOME on Wayland) ignore the size asked for at
             // start; asking again once the window is mapped works.
@@ -2368,6 +2429,8 @@ impl eframe::App for App {
         }
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         debug::hooks(self, now);
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        debug::place_xy(self, now);
         widgets::track_focus_mode(ui.ctx());
         self.arrowed = self.arrow_down;
         // Only along a row: Up and Down move between rows without choosing.
@@ -2387,10 +2450,9 @@ impl eframe::App for App {
         crate::chrome::paint_room(ui.painter(), full);
         let f = shell::frame(full);
         let content = f.content;
-        let head = Rect::from_min_size(content.min, vec2(content.width(), shell::HEAD_H));
-        let with_cards = !matches!(self.tab, Tab::Health | Tab::Advanced | Tab::Keys | Tab::Wallpaper | Tab::Files);
-        let cards = Rect::from_min_max(pos2(content.left(), content.bottom() - if with_cards { self.panel_h() } else { 0.0 }), content.max);
-        let desk = Rect::from_min_max(pos2(content.left(), head.bottom()), pos2(content.right(), if with_cards { cards.top() - M } else { content.bottom() }));
+        // The Desk: the desk left of (or above) its panel (desk_panel.rs).
+        let desk_lay = (self.tab == Tab::Desk).then(|| desk_panel::desk_layout(full, f.bar.bottom()));
+        let desk = desk_lay.as_ref().map_or(content, |l| l.scene);
         // Files let go over a page without the desk: ask where they go.
         if !self.tab.desk() && self.tab != Tab::Wallpaper {
             let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
@@ -2411,44 +2473,54 @@ impl eframe::App for App {
             child
         };
         self.refresh_notice(ui, now);
-        // Layout learning's question has a strip of its own under the desk.
-        let card = self.suggestion_card(ui, desk);
-        let scene = card.as_ref().map_or(desk, |c| Rect::from_min_max(desk.min, pos2(desk.right(), c.rect.top() - 6.0)));
+        let scene = desk;
         // The computers are framed below a banner over the desk, and below
         // the transfer where a small window puts it at the top.
         let mut frame = scene;
         let mut compact = false;
-        if self.tab.desk() && self.tab != Tab::Files {
-            // A band at the desk's top holds the banner, the toast and (in a
-            // small window) the transfer; the desk is framed below it and
-            // above what floats along its bottom, never under either. The
-            // band eases open so the desk glides rather than jumps.
-            let band = tween(ui.ctx(), Id::unique("desk-band"), self.band_h(ui, scene.width()), motion::space(0.22), motion::out_cubic);
-            // The view switch and toolbar row is never drawn over: the
-            // monitors start below it (the camera adds its 12-point inset).
-            frame.min.y += band + if self.desk_views_shown() { desk_cards::DESK_VIEWS_H } else { 0.0 };
-            frame.max.y -= self.desk_foot_h(scene.width());
-            // Too little room left for monitors anyone could read: the
-            // computers as a row of named chips instead.
-            // On Clipboard & files the desk is only where files go: in a
-            // narrow window, chips (drop targets with names) always.
-            let files_narrow = self.tab == Tab::Files && scene.width() < 780.0;
-            compact = (frame.height() < COMPACT_BELOW || files_narrow) && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Layout | Tab::Files);
+        let mut tools = None;
+        let mut ask_row = None;
+        if self.tab == Tab::Desk {
+            // The banner on top, the toolbar under it, the hint along the
+            // foot; the computers fit the handoff's box in what is left.
+            let band = tween(ui.ctx(), Id::unique("desk-band"), self.band_h(ui, scene.width() - 2.0 * desk_panel::EDGE), motion::space(0.22), motion::out_cubic);
+            let (free, row, ask) = self.desk_room(scene, band, full.width() < desk_panel::STACK_BELOW);
+            tools = row;
+            ask_row = ask;
+            frame = free;
+            self.desk_stage = Some(desk_panel::desk_stage(scene, free));
+            // Too little room for monitors anyone could read: named chips.
+            compact = (scene.height() < COMPACT_BELOW || frame.height() < 100.0) && self.running().is_some_and(|s| !s.peers.is_empty());
         }
-        // The sidebar and the toolbar are made before the desk, so Tab meets
-        // them first (search, pages, the toolbar left to right, then the
-        // computers, then the card); they are painted on a layer above it.
+        // The top bar and the toolbar are made before the desk, so Tab meets
+        // them first (the pages, the bar's right side, the toolbar left to
+        // right, then the computers, then the card); they are painted on a
+        // layer above it.
         {
             let over = egui::LayerId::new(egui::Order::Middle, Id::unique("chrome-layer"));
             let mut top = ui.new_child(UiBuilder::new().layer_id(over).max_rect(full).id_salt("chrome"));
-            self.sidebar(&mut top, &f, now);
-            self.desk_actions(&mut top, head.translate(vec2(0.0, shell::HEAD_H)));
+            self.top_bar(&mut top, f.bar, now);
+            if let Some(row) = tools {
+                let narrow = full.width() < desk_panel::STACK_BELOW;
+                self.desk_toolbar(&mut top, row, narrow);
+                // A narrow window: layout learning's question in a row of
+                // its own over the desk, beside the toolbar's column.
+                if let Some(ask) = ask_row {
+                    self.suggestion_row(&mut top, ask);
+                }
+            }
         }
-        if self.tab.desk() && self.tab != Tab::Files {
+        if self.tab == Tab::Desk {
             if compact {
                 self.desk_chips(ui, frame);
             } else {
                 self.desk(ui, frame, full, now);
+                // oneMK off: the desk steps back to 40 % (the ground laid
+                // over it at 60 %, so no face shows through another).
+                let k = tween(ui.ctx(), Id::unique("desk-off-dim"), if self.off() { 0.6 } else { 0.0 }, motion::fade(0.2), motion::out_cubic);
+                if k > 0.0 {
+                    ui.painter().rect_filled(scene, 0.0, pal().bg.gamma_multiply(k));
+                }
             }
         }
         // Behind the glass changed: blur again (else each panel keeps its blur).
@@ -2457,15 +2529,38 @@ impl eframe::App for App {
             self.backdrop_was = sig;
             self.glass.changed();
         }
-        if self.tab.desk() && self.tab != Tab::Files {
+        if self.tab == Tab::Desk {
             let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
-            self.desk_overlay(ui, scene, hovering);
+            // Chips can't be dragged: the hint is for the 3D desk.
+            if !compact {
+                self.desk_hint(ui, scene);
+            }
+            self.desk_overlay(ui, Rect::from_min_max(scene.min + vec2(desk_panel::EDGE, desk_panel::EDGE), scene.max - vec2(desk_panel::EDGE, 8.0)), hovering);
         }
-        let body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
+        // Every page draws its own title (page_ui::head; Keys & mouse its
+        // header row): its content starts at the top.
+        let mut body = content;
+        // Broadcasting is said on every page (the desk says it in its band).
+        if self.tab != Tab::Desk {
+            // Keys & mouse draws its own title row (handoff 5.5) from the
+            // top of the content: a banner goes above it, not under a title.
+            if self.tab == Tab::Keys {
+                body.min.y = content.top() + 12.0;
+            }
+            let banner = self.page_banner(ui, body);
+            body.min.y += banner;
+            if self.tab == Tab::Keys && banner == 0.0 {
+                body.min.y = content.top();
+            }
+        }
         match self.tab {
             Tab::Files => {
                 let mut child = page(ui, body, "files");
                 self.files_panel(&mut child, body);
+            }
+            Tab::Arrange => {
+                let mut child = page(ui, body, "arrange");
+                self.arrange_page(&mut child, body);
             }
             Tab::Wallpaper => {
                 let mut child = page(ui, body, "wallpaper");
@@ -2475,9 +2570,9 @@ impl eframe::App for App {
                 let mut child = page(ui, body, "health");
                 self.health(&mut child, body, now);
             }
-            Tab::Advanced => {
-                let mut child = page(ui, body, "advanced");
-                self.advanced(&mut child, body);
+            Tab::Settings => {
+                let mut child = page(ui, body, "settings");
+                self.settings(&mut child, body);
             }
             Tab::Keys => {
                 let mut child = page(ui, body, "keys");
@@ -2485,34 +2580,35 @@ impl eframe::App for App {
             }
             _ => {}
         }
-        let (title, sub) = self.page_title();
-        self.page_head(ui, head, &title, &sub);
-        if with_cards {
-            self.panel(ui, cards, now);
-        }
-        if let Some(card) = card {
-            self.suggestion_banner(ui, card);
+        if let Some(l) = &desk_lay {
+            self.desk_panel(ui, l.panel, now);
         }
         widgets::set_locked(ui.ctx(), false);
-        // The sheet sits over the panel, leaving the desk room to show
-        // what is being paired.
-        self.sheet(ui, content, now);
-        self.toast_view(ui, desk, now);
+        // The sheet: centred in the window, over everything but the toast
+        // and the palette.
+        self.sheet(ui, now);
+        self.toast_view(ui, toast_room(content, desk_lay.as_ref().map(|l| (l.scene, l.stacked))), now);
         self.palette(ui.ctx(), now);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
-        crate::chrome::paint_fake_buttons(ui.painter());
+        crate::chrome::paint_fake_buttons(&ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("fake-window-buttons"))));
         self.guide.show(ui.ctx());
         self.update_notice(ui.ctx());
         // Tell the link whether a graph was drawn: it asks the daemon for
         // round trips only then (a minimised window draws nothing).
-        let hidden = ui.input(|i| i.viewport().minimized == Some(true));
-        self.link.showing.frame(self.graph_wanted() && !hidden);
+        let (minimized, focused) = ui.input(|i| (i.viewport().minimized, i.viewport().focused));
+        let attention = daemon::Attention::of(minimized, focused);
+        self.link.showing.frame(self.graph_wanted() && attention != daemon::Attention::Hidden);
+        self.link.showing.attend(attention);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if std::env::var_os("ONE_MK_APP_BENCH").is_some() {
             // The UI thread's own work this frame (laying out and painting
             // shapes), apart from waiting for the display.
             let ms = ui_started.elapsed().as_secs_f64() * 1000.0;
             ui.ctx().data_mut(|d| d.get_temp_mut_or_default::<std::sync::Arc<std::sync::Mutex<Vec<f64>>>>(Id::unique("bench-ui")).lock().unwrap().push(ms));
+        }
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        if crate::gallery::wanted() {
+            crate::gallery::show(ui);
         }
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         debug::tab_walk(ui.ctx(), now);
@@ -2522,10 +2618,36 @@ impl eframe::App for App {
         widgets::targets::flush();
     }
 
-    #[cfg(any(debug_assertions, feature = "design-evidence"))]
-    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        debug::tab_press(ctx, raw_input);
-        debug::point_at(ctx, raw_input);
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        {
+            debug::tab_press(_ctx, raw_input);
+            debug::point_at(_ctx, raw_input);
+            debug::press_enter(_ctx, raw_input);
+            debug::plan_drag(_ctx, raw_input);
+            debug::plan_keys(self, _ctx, raw_input);
+        }
+        // Text typed or pasted in any script shows in its own letters (a
+        // layout named in Chinese), not as boxes.
+        let typed: Vec<&str> = raw_input.events.iter().filter_map(|e| match e { egui::Event::Text(t) | egui::Event::Paste(t) => Some(t.as_str()), egui::Event::Ime(egui::ImeEvent::Commit(t) | egui::ImeEvent::Preedit { text: t, .. }) => Some(t.as_str()), _ => None }).collect();
+        if !typed.is_empty() {
+            self.fonts.cover(_ctx, typed.into_iter());
+        }
+        // Nothing here is under a pointer that has gone elsewhere: no
+        // tooltip or highlight is left standing over the window.
+        let controlling = self.running().is_some_and(|s| s.controlling.is_some());
+        let t = raw_input.time.unwrap_or(0.0);
+        let since = *self.controlling_since.get_or_insert(t);
+        if !controlling {
+            self.controlling_since = None;
+        }
+        let seen = raw_input.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. }));
+        // Seen here a moment after control began: here until control ends.
+        self.pointer_here = controlling && (self.pointer_here || (seen && t - since > 0.3));
+        if pointer_away(controlling, self.pointer_here, self.was_focused, raw_input.focused) {
+            raw_input.events.push(egui::Event::PointerGone);
+        }
+        self.was_focused = raw_input.focused;
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -2544,11 +2666,13 @@ impl eframe::App for App {
 /// - `ONE_MK_APP_DROP=n` drops n files where it's unclear who gets them;
 /// - `ONE_MK_APP_DRAG=1` carries the first other computer across this one;
 /// - `ONE_MK_APP_FOCUS=1` puts the keyboard on the position control;
+///   `ONE_MK_APP_FOCUS_BAR=Wallpaper|search|action|update-pill|health-line`
+///   on that control of the top bar;
 /// - `ONE_MK_APP_TOAST=1` shows an error toast; `ONE_MK_APP_AUTOSTART=1`
 ///   shows start at login as on;
 /// - `ONE_MK_APP_CONFIRM=1` says the codes match a second after they
 ///   show, and keeps the "paired" sheet up.
-/// - `ONE_MK_APP_TAB=layout|health|advanced|wallpaper` (and files, keyboard);
+/// - `ONE_MK_APP_TAB=arrange|health|settings|wallpaper` (and files, keyboard);
 ///   `ONE_MK_APP_WALLPAPER=poster.png` supplies a fake playing video when
 ///   combined with `ONE_MK_APP_STATUS` for wallpaper screenshots.
 ///   `ONE_MK_APP_PROFILE=name` opens a profile's options;
@@ -2563,10 +2687,31 @@ impl eframe::App for App {
 ///   with "hold for another key" open, `ONE_MK_APP_KEY_CAPTURE=1` waiting
 ///   for a key, `ONE_MK_APP_KEY_PICK=query` with the list open);
 ///   `ONE_MK_APP_KEY_CHOOSE=esc` makes the opened key that, as a click
-///   would; `ONE_MK_APP_BUTTON=4` opens a mouse button; `ONE_MK_APP_KEY_TEST=
+///   would; `ONE_MK_APP_KEY_LATER=capslock` chooses that key at
+///   `ONE_MK_APP_KEY_AT` seconds (default 1.5), for films of the zoom glide;
+///   `ONE_MK_APP_BUTTON=4` opens a mouse button; `ONE_MK_APP_KEY_TEST=
 ///   58d0,58u85` types into the test box (code, down/up, ms).
+/// - `ONE_MK_APP_COMPUTERS_MENU=1` opens the Desk's Choose computer menu
+///   (5 computers or more);
 /// - `ONE_MK_APP_BROADCAST=1` turns broadcast on (or off), as the Desk's
 ///   switch does.
+/// - `ONE_MK_APP_THEME=light|dark|system` paints with that theme whatever
+///   Settings → Appearance says; `ONE_MK_APP_THEME_FLIP=secs` turns to the
+///   other theme that many seconds in (the cross-fade) (style.rs `Themer`).
+/// - `ONE_MK_APP_GALLERY=1` draws every shared control in every state, in
+///   both themes, over the window (gallery.rs).
+/// - `ONE_MK_APP_FILM=dir` saves every frame from `ONE_MK_APP_FILM_FROM`
+///   for `ONE_MK_APP_FILM_FOR` seconds, each named by its time, then quits
+///   (motion evidence: the intro, a drag, the Keys zoom).
+/// - Overlays: `ONE_MK_APP_MENU=swap|timer|key-more|navigator|natural|chooser`
+///   opens that popover (widgets::debug_open_menu); `ONE_MK_APP_REMOVE=name`
+///   asks whether to remove that computer; `ONE_MK_APP_TOAST=info` a plain
+///   toast; `ONE_MK_APP_PAIR_STATE=searching|hint|code|waiting|paired|ended`
+///   with `ONE_MK_APP_INVITE=link` (the invitation came) or
+///   `ONE_MK_APP_JOIN=text` (typed to join); `ONE_MK_APP_TIP=1` a tooltip held
+///   open; `ONE_MK_APP_PALETTE=query` the palette.
+/// - `ONE_MK_APP_SSID=name` stands in for the Wi-Fi network on Arrange
+///   (screenshots must not show the real one).
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
 #[cfg(any(debug_assertions, feature = "design-evidence"))]
 mod debug {
@@ -2600,6 +2745,25 @@ mod debug {
             && let Ok(status) = serde_json::from_str(&status)
         {
             app.update_ui.status = Some(status);
+        }
+        // ONE_MK_APP_SETTINGS=edges|power|games|shortcuts|commands|typing|pointer|general:
+        // Settings opens on that category. ONE_MK_APP_HEALTH_PASSED=1: the
+        // passed checks of Health are open. ONE_MK_APP_DELETE_PROFILE=name:
+        // the sheet that asks whether to delete that layout is up.
+        if let Some(slug) = var("ONE_MK_APP_SETTINGS")
+            && once(&ctx, "settings-cat")
+            && let Some(cat) = settings_page::Cat::from_slug(&slug)
+        {
+            app.settings_cat = cat;
+        }
+        if var("ONE_MK_APP_HEALTH_PASSED").is_some() && once(&ctx, "health-passed") {
+            app.health_passed_open = true;
+        }
+        if let Some(name) = var("ONE_MK_APP_DELETE_PROFILE")
+            && now > 0.5
+            && once(&ctx, "delete-profile")
+        {
+            app.deleting_profile = Some((name, now));
         }
         // ONE_MK_APP_MINIMIZE=1: minimised two seconds in (idle measurements).
         if var("ONE_MK_APP_MINIMIZE").is_some() && now > 2.0 && once(&ctx, "minimize") {
@@ -2710,7 +2874,32 @@ mod debug {
         if ready && now > 1.0 && let Some(n) = var("ONE_MK_APP_DROP").and_then(|n| n.parse::<usize>().ok()) && once(&ctx, "drop") {
             app.pending_drop = Some(((0..n).map(|i| PathBuf::from(format!("/tmp/file{i}"))).collect(), now));
         }
-        if ready && var("ONE_MK_APP_TOAST").is_some() && now > 1.0 && once(&ctx, "toast") {
+        // ONE_MK_APP_TOAST=info: a plain message instead of an error.
+        if ready && var("ONE_MK_APP_TOAST").as_deref() == Some("info") && now > 1.0 && once(&ctx, "toast") {
+            app.toast("Sent 3 files to Studio PC.", now);
+        }
+        // ONE_MK_APP_REMOVE=name: the sheet that asks whether to remove that computer.
+        if ready && now > 0.5 && let Some(name) = var("ONE_MK_APP_REMOVE") && once(&ctx, "remove") {
+            let id = app.running().and_then(|s| s.peers.iter().find(|p| p.name == name)).map_or_else(|| "1111-2222".to_owned(), |p| p.id.clone());
+            app.removing = Some((id, name, now));
+        }
+        // ONE_MK_APP_INVITE=link: pairing's private invitation link has come;
+        // ONE_MK_APP_JOIN=text: that typed into "Join with a link".
+        if let Some(link) = var("ONE_MK_APP_INVITE") {
+            ctx.data_mut(|data| data.insert_temp(Id::unique("invitation-link"), link));
+        }
+        if let Some(text) = var("ONE_MK_APP_JOIN") && once(&ctx, "join") {
+            app.drafts.insert("join-link".into(), text);
+        }
+        // ONE_MK_APP_TIP=1: a tooltip held open (over the search button),
+        // as the pointer resting there would show it.
+        if var("ONE_MK_APP_TIP").is_some() && now > 1.0 {
+            let at = pos2(ctx.content_rect().center().x, 56.0);
+            egui::Tooltip::always_open(ctx.clone(), egui::LayerId::background(), Id::unique("debug-tip"), egui::PopupAnchor::Position(at)).show(|ui| {
+                ui.label("Search: open the command palette  Ctrl K");
+            });
+        }
+        if ready && var("ONE_MK_APP_TOAST").is_some_and(|t| t != "info") && now > 1.0 && once(&ctx, "toast") {
             app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was.", Some("oneMK didn't answer within 3 seconds".into()), now);
             let peer = app.running().and_then(|s| s.peers.first().map(|p| (p.id.clone(), p.name.clone())));
             if let (Some(t), Some((id, name))) = (app.toast.as_mut(), peer) {
@@ -2720,6 +2909,13 @@ mod debug {
         if ready && var("ONE_MK_APP_BROADCAST").is_some() && now > 1.0 && once(&ctx, "broadcast") {
             let on = !app.broadcasting();
             app.ask_broadcast(on);
+        }
+        // ONE_MK_APP_FOCUS_BAR=Wallpaper|search|action|update-pill|health-line:
+        // the keyboard on that control of the top bar (a page by its name).
+        if let Some(name) = var("ONE_MK_APP_FOCUS_BAR") && now > 1.0 {
+            ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
+            let id = if matches!(name.as_str(), "search" | "action" | "update-pill" | "health-line") { Id::unique(name.as_str()) } else { Id::unique(("nav", name.as_str())) };
+            ctx.memory_mut(|m| m.request_focus(id));
         }
         if ready && app.tab != Tab::Keys && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 {
             ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
@@ -2771,6 +2967,15 @@ mod debug {
                 ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
                 ctx.memory_mut(|m| m.request_focus(Id::unique(("cap", app.keys.focus_key))));
             }
+        }
+        // ONE_MK_APP_KEY_LATER=capslock (at ONE_MK_APP_KEY_AT seconds, default 1.5):
+        // that key is chosen then, as a click would, so a film shows the zoom glide.
+        if app.tab == Tab::Keys
+            && let Some(code) = var("ONE_MK_APP_KEY_LATER").and_then(|k| one_mk_proto::keynames::parse_key(&k).ok())
+            && now > var("ONE_MK_APP_KEY_AT").and_then(|t| t.parse::<f64>().ok()).unwrap_or(1.5)
+            && once(&ctx, "key-later")
+        {
+            app.select_key(code as u16, None);
         }
         if app.tab == Tab::Keys && now > 1.0 && let Some(spec) = var("ONE_MK_APP_KEY_TEST") && once(&ctx, "key-test") {
             app.debug_type(&ctx, &spec);
@@ -2826,6 +3031,119 @@ mod debug {
         ctx.data_mut(|d| d.insert_temp(id, (done + 1, now)));
     }
 
+    /// `ONE_MK_APP_PALETTE_ENTER=secs`: that many seconds in, presses Return
+    /// once (a real key event): with `ONE_MK_APP_PALETTE=query` it chooses
+    /// the first result, as the person would.
+    pub fn press_enter(ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(at) = var("ONE_MK_APP_PALETTE_ENTER").and_then(|v| v.parse::<f64>().ok()) else { return };
+        if raw.time.unwrap_or(0.0) >= at && once(ctx, "palette-enter") {
+            raw.events.push(egui::Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        }
+    }
+
+    /// `ONE_MK_APP_PLAN_DRAG=Name;dx,dy[;alt][;hold]` (with
+    /// `ONE_MK_APP_TARGETS`, on Arrange): real pointer events pick up that
+    /// computer's block on the plan (or the control of that name, such as
+    /// a computer on the desk) at 1.5 s, carry it dx, dy points over
+    /// 0.8 s (Alt held with `alt`) and let go at 2.5 s (not with `hold`:
+    /// a screenshot of the drag).
+    pub fn plan_drag(ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(spec) = var("ONE_MK_APP_PLAN_DRAG") else { return };
+        let mut parts = spec.split(';');
+        let (Some(name), Some(d)) = (parts.next(), parts.next()) else { return };
+        let Some((dx, dy)) = d.split_once(',').and_then(|(x, y)| Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))) else { return };
+        let flags: Vec<&str> = parts.collect();
+        let (alt, hold) = (flags.contains(&"alt"), flags.contains(&"hold"));
+        let t = raw.time.unwrap_or(0.0);
+        if t < 3.5 {
+            ctx.request_repaint_after_secs(0.03);
+        }
+        if t < 1.5 {
+            return;
+        }
+        let key = Id::unique("plan-drag-from");
+        let Some(from) = ctx.data(|d| d.get_temp::<Pos2>(key)).or_else(|| widgets::targets::rect_of(&format!("plan {name}")).or_else(|| widgets::targets::rect_of(name)).map(|r| r.center())) else { return };
+        ctx.data_mut(|d| d.insert_temp(key, from));
+        let modifiers = if alt { Modifiers::ALT } else { Modifiers::NONE };
+        let step = Id::unique("plan-drag-step");
+        let done = ctx.data(|d| d.get_temp::<u8>(step).unwrap_or(0));
+        if done == 0 {
+            raw.events.push(egui::Event::ModifiersChanged(modifiers));
+            raw.events.push(egui::Event::PointerMoved(from));
+            raw.events.push(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers });
+            ctx.data_mut(|d| d.insert_temp(step, 1u8));
+            return;
+        }
+        let k = ((t - 1.55) / 0.8).clamp(0.0, 1.0) as f32;
+        let at = from + vec2(dx, dy) * k;
+        if done == 1 {
+            raw.events.push(egui::Event::PointerMoved(at));
+        }
+        if done == 1 && t > 2.5 && !hold {
+            raw.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers });
+            ctx.data_mut(|d| d.insert_temp(step, 2u8));
+        }
+    }
+
+    /// `ONE_MK_APP_PLAN_KEYS=Name;Right,Down+,Enter` (on Arrange): at 1.5 s
+    /// the keyboard goes to that computer's first block on the plan, then a
+    /// key every 0.15 s (real key events; `+` holds Shift).
+    pub fn plan_keys(app: &App, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(spec) = var("ONE_MK_APP_PLAN_KEYS") else { return };
+        let Some((name, keys)) = spec.split_once(';') else { return };
+        let t = raw.time.unwrap_or(0.0);
+        if t < 4.0 {
+            ctx.request_repaint_after_secs(0.03);
+        }
+        let Some(peer) = app.running().and_then(|s| s.peers.iter().find(|p| p.name == name)).cloned() else { return };
+        if t < 1.5 {
+            return;
+        }
+        // The window has the keyboard (a bare Xvfb has no window manager to say so).
+        raw.focused = true;
+        let keys: Vec<&str> = keys.split(',').collect();
+        let id = Id::unique("plan-keys-done");
+        let (done, last) = ctx.data(|d| d.get_temp::<(usize, f64)>(id)).unwrap_or((0, 1.5));
+        if done == 0 {
+            ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
+            ctx.memory_mut(|m| m.request_focus(Id::unique(("plan-screen", &peer.id, &format!("{} · 1", peer.name)))));
+            if t < 1.8 {
+                return;
+            }
+        }
+        if done >= keys.len() || t < last + 0.15 {
+            return;
+        }
+        let k = keys[done];
+        let shift = k.ends_with('+');
+        let key = match k.trim_end_matches('+') {
+            "Left" => Key::ArrowLeft,
+            "Right" => Key::ArrowRight,
+            "Up" => Key::ArrowUp,
+            "Down" => Key::ArrowDown,
+            "Esc" => Key::Escape,
+            _ => Key::Enter,
+        };
+        let modifiers = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+        raw.events.push(egui::Event::ModifiersChanged(modifiers));
+        raw.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+        raw.events.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+        ctx.data_mut(|d| d.insert_temp(id, (done + 1, t)));
+    }
+
+    /// `ONE_MK_APP_PLACE_XY=x,y` (on Arrange): at one second, Exact place
+    /// of the chosen computer holds that X and Y, as if typed.
+    pub fn place_xy(app: &mut App, now: f64) {
+        let Some(xy) = var("ONE_MK_APP_PLACE_XY") else { return };
+        let Some((x, y)) = xy.split_once(',') else { return };
+        if now > 1.0 && app.tab == Tab::Arrange && once(&app.ctx.clone(), "place-xy")
+            && let Some(id) = app.selected_id()
+        {
+            app.drafts.insert(format!("place-x:{id}"), x.to_owned());
+            app.drafts.insert(format!("place-y:{id}"), y.to_owned());
+        }
+    }
+
     /// `ONE_MK_APP_POINT_AT=<control name>` (with `ONE_MK_APP_TARGETS`):
     /// from 1.5 s the pointer rests on that control (hover);
     /// `ONE_MK_APP_PRESS=1` also holds the button down on it (pressed).
@@ -2846,6 +3164,12 @@ mod debug {
             raw.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
             ctx.data_mut(|d| d.insert_temp(id, true));
         }
+        // `ONE_MK_APP_PRESS=click`: let go 0.3 s later, a whole click.
+        let released = Id::unique("point-at-released");
+        if var("ONE_MK_APP_PRESS").is_some_and(|v| v == "click") && raw.time.unwrap_or(0.0) > 2.1 && !ctx.data(|d| d.get_temp::<bool>(released).unwrap_or(false)) {
+            raw.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            ctx.data_mut(|d| d.insert_temp(released, true));
+        }
     }
 
     pub fn tab_walk(ctx: &egui::Context, _now: f64) {
@@ -2854,7 +3178,31 @@ mod debug {
         }
     }
 
+    /// `ONE_MK_APP_FILM=dir` (with `ONE_MK_APP_FILM_FROM` and `_FOR`, in
+    /// seconds): every frame in that window saved as `dir/<time>.ppm`, then
+    /// quits; motion evidence (each file named by when it was drawn).
+    fn film(ctx: &egui::Context, now: f64) {
+        let Some(dir) = std::env::var_os("ONE_MK_APP_FILM") else { return };
+        let num = |name: &str, or: f64| std::env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(or);
+        let (from, span) = (num("ONE_MK_APP_FILM_FROM", 1.0), num("ONE_MK_APP_FILM_FOR", 2.0));
+        ctx.request_repaint();
+        if now > from + span + 0.5 {
+            std::process::exit(0);
+        }
+        if now < from || now > from + span {
+            return;
+        }
+        let path = std::path::PathBuf::from(dir).join(format!("{now:08.3}.ppm"));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |img| {
+            let Ok(mut f) = std::fs::File::create(&path) else { return };
+            let _ = writeln!(f, "P6 {} {} 255", img.size[0], img.size[1]);
+            let rgb: Vec<u8> = img.pixels.iter().flat_map(|p| [p.r(), p.g(), p.b()]).collect();
+            let _ = f.write_all(&rgb);
+        })));
+    }
+
     pub fn shot(ctx: &egui::Context, now: f64) {
+        film(ctx, now);
         let Some(path) = std::env::var_os("ONE_MK_APP_SHOT") else { return };
         let after: f64 = std::env::var("ONE_MK_APP_SHOT_AFTER").ok().and_then(|s| s.parse().ok()).unwrap_or(3.0);
         let asked = ctx.data(|d| d.get_temp::<bool>(Id::unique("shot-asked")).unwrap_or(false));
@@ -2883,6 +3231,38 @@ mod tests {
         assert_eq!(truncated_name_target(Some(1), Some(2), &truncated), Some((1, true)));
         assert_eq!(truncated_name_target(Some(0), Some(2), &truncated), Some((2, false)));
         assert_eq!(truncated_name_target(None, Some(0), &truncated), None);
+    }
+
+    #[test]
+    fn hover_ends_when_the_pointer_goes_elsewhere_unannounced() {
+        // On another computer: every frame, whatever the focus.
+        assert!(pointer_away(true, false, true, true));
+        assert!(pointer_away(true, false, false, false));
+        // ...unless it is seen here after all (oneMK couldn't hold it):
+        // then hover and clicks work (Switch back here must be clickable).
+        assert!(!pointer_away(true, true, true, true));
+        // Focus lost: once, at that moment; moving back over it hovers again.
+        assert!(pointer_away(false, false, true, false));
+        assert!(!pointer_away(false, false, false, false));
+        assert!(!pointer_away(false, false, true, true));
+        assert!(!pointer_away(false, false, false, true));
+        // egui drops a tooltip once the pointer is gone.
+        let tip_shown = |events: Vec<egui::Event>| {
+            let ctx = egui::Context::default();
+            let mut shown = false;
+            for frame in 0..30 {
+                let input = egui::RawInput { events: if frame == 0 { vec![egui::Event::PointerMoved(pos2(20.0, 20.0))] } else if frame == 20 { events.clone() } else { vec![] }, time: Some(f64::from(frame) * 0.1), ..Default::default() };
+                let mut out = ctx.run_ui(input, |ui| {
+                    let r = ui.interact(Rect::from_min_size(pos2(0.0, 0.0), vec2(100.0, 100.0)), Id::unique("tip"), Sense::hover());
+                    shown = r.hovered();
+                    r.on_hover_text("Edges lead nowhere while this is on.");
+                });
+                out.textures_delta.clear();
+            }
+            shown
+        };
+        assert!(tip_shown(vec![]), "hovered while the pointer stays");
+        assert!(!tip_shown(vec![egui::Event::PointerGone]), "not after it is gone");
     }
 
     #[test]
@@ -2938,6 +3318,102 @@ mod tests {
         let s = slots((-29.0, 29.0), &[("b".into(), Side::Bottom, 29.0)]);
         assert!(s["b"].0.z > 0.0, "in front");
         assert!(s["b"].0.x.abs() > 20.0, "but to one side");
+    }
+
+    #[test]
+    fn a_sheet_fits_the_smallest_window_centred_and_scrolls_inside_when_it_must() {
+        let small = Rect::from_min_size(Pos2::ZERO, vec2(820.0, 540.0));
+        // 440 at least, wider for a long button, never closer than 16 to the sides.
+        assert_eq!(sheet_width(820.0, 0.0), SHEET_MIN_W);
+        assert_eq!(sheet_width(820.0, 500.0), 500.0);
+        assert_eq!(sheet_width(820.0, 2000.0), 820.0 - 2.0 * SHEET_MARGIN);
+        // The pairing code: title, sentence, the 72-point block of digit tiles, buttons.
+        let code = SheetBody { title: 22.0, sub: 19.0, code: true, alternatives: 0.0 };
+        assert_eq!(code.height(), 22.0 + 6.0 + 19.0 + 16.0 + 72.0);
+        // Looking for a computer, with the other ways in: fits 820 × 540 whole.
+        let looking = SheetBody { title: 22.0, sub: 38.0, code: false, alternatives: 181.0 };
+        let fit = sheet_fit(small, sheet_width(820.0, 0.0), looking.height(), SHEET_BUTTON_H);
+        assert!(!fit.scrolls);
+        assert_eq!(fit.rect.center(), small.center());
+        assert_eq!(fit.rect.width(), 440.0);
+        assert!(small.shrink(SHEET_MARGIN).contains_rect(fit.rect), "{:?}", fit.rect);
+        assert_eq!(fit.rect.height(), 2.0 * SHEET_PAD + looking.height() + SHEET_PAD + SHEET_BUTTON_H);
+        // More than the window holds: the sheet stops 16 from the edges and
+        // its body scrolls; the buttons stay.
+        let fit = sheet_fit(small, 440.0, 900.0, SHEET_BUTTON_H);
+        assert!(fit.scrolls);
+        assert_eq!(fit.rect.height(), 540.0 - 2.0 * SHEET_MARGIN);
+        assert_eq!(fit.body, 540.0 - 2.0 * SHEET_MARGIN - 3.0 * SHEET_PAD - SHEET_BUTTON_H);
+        // No buttons (paired): no room kept for them.
+        assert_eq!(sheet_fit(small, 440.0, 50.0, 0.0).rect.height(), 2.0 * SHEET_PAD + 50.0);
+    }
+
+    #[test]
+    fn a_toast_keeps_clear_of_a_sheets_buttons() {
+        let window = Rect::from_min_size(Pos2::ZERO, vec2(820.0, 540.0));
+        // No sheet: 16 above the foot of its room.
+        assert_eq!(toast_bottom(window, 52.0, window, None), 524.0);
+        // A short sheet: under it.
+        let sheet = Rect::from_center_size(window.center(), vec2(440.0, 160.0));
+        let b = toast_bottom(window, 52.0, window, Some(sheet));
+        assert!(b - 52.0 >= sheet.bottom() && b <= window.bottom() - 8.0, "{b}");
+        // A tall one: above it, or over its title, never on its buttons
+        // (the sheet's last 24 + 36 + 24).
+        for h in [380.0, 420.0, 508.0] {
+            let sheet = Rect::from_center_size(window.center(), vec2(440.0, h));
+            let b = toast_bottom(window, 52.0, window, Some(sheet));
+            let buttons_top = sheet.bottom() - SHEET_PAD - SHEET_BUTTON_H;
+            assert!(b <= buttons_top || b - 52.0 >= sheet.bottom(), "{h}: {b}");
+            assert!(b - 52.0 >= window.top() && b <= window.bottom(), "{h}: {b} on screen");
+        }
+        // The Desk in a small window: just over the panel (4 under the
+        // scene), clear of it by 8.
+        let scene = Rect::from_min_max(pos2(0.0, 60.0), pos2(820.0, 260.0));
+        assert_eq!(toast_bottom(toast_room(window, Some((scene, true))), 52.0, window, None), scene.bottom() - 4.0);
+        assert_eq!(toast_room(window, Some((scene, false))).bottom(), scene.bottom());
+    }
+
+    /// The focus check Xvfb screenshots can't show: with a sheet up, Tab
+    /// goes round the sheet's own buttons and never reaches what is behind
+    /// it; without the hold, it would.
+    #[test]
+    fn the_keyboard_stays_in_the_sheet() {
+        let tab_round = |hold: bool| {
+            let ctx = egui::Context::default();
+            let window = Rect::from_min_size(Pos2::ZERO, vec2(820.0, 540.0));
+            let rect = Rect::from_center_size(window.center(), vec2(440.0, 160.0));
+            let (mut behind, mut ours) = (vec![], vec![]);
+            for frame in 0..12 {
+                let tab = egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+                let input = egui::RawInput { screen_rect: Some(window), events: if frame > 0 { vec![tab] } else { vec![] }, time: Some(f64::from(frame) * 0.1), ..Default::default() };
+                let mut ids = (vec![], vec![]);
+                let mut out = ctx.run_ui(input, |ui| {
+                    ids.0.push(ui.add(egui::Button::new("A control behind")).id);
+                    ids.0.push(ui.add(egui::Button::new("Another")).id);
+                    let (scrim, sheet) = sheet_areas(window, rect);
+                    if hold {
+                        hold_keyboard(ui.ctx(), scrim.layer(), sheet.layer());
+                    }
+                    scrim.show(ui.ctx(), |ui| {
+                        ui.allocate_rect(window, Sense::CLICK);
+                    });
+                    sheet.show(ui.ctx(), |ui| {
+                        ids.1.push(ui.add(egui::Button::new("Cancel")).id);
+                        ids.1.push(ui.add(egui::Button::new("Remove")).id);
+                    });
+                });
+                out.textures_delta.clear();
+                if let Some(f) = ctx.memory(|m| m.focused()) {
+                    if ids.0.contains(&f) { behind.push(f) } else if ids.1.contains(&f) { ours.push(f) }
+                }
+            }
+            (behind, ours)
+        };
+        let (behind, ours) = tab_round(true);
+        assert!(behind.is_empty(), "Tab reached the window behind the sheet");
+        assert_eq!(ours.iter().collect::<HashSet<_>>().len(), 2, "Tab goes round both buttons: {ours:?}");
+        let (behind, _) = tab_round(false);
+        assert!(!behind.is_empty(), "without the hold Tab would leave the sheet (the check is real)");
     }
 
     #[test]
