@@ -68,6 +68,12 @@ const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
 const DIAL_INTERVAL: Duration = Duration::from_secs(2);
 const DIAL_MAX: Duration = Duration::from_secs(30);
 const DIAL_TIMEOUT: Duration = Duration::from_secs(3);
+/// The wait before dialing again a computer that closed our only link to it
+/// as a duplicate: it says it has a better one, which is either about to
+/// reach us or a link to an earlier run of this program (killed, crashed or
+/// restarted at once) that it holds until its idle timeout (4 s). Dialing
+/// again at once would only be refused again, hundreds of times a second.
+const DUPLICATE_RETRY: Duration = Duration::from_secs(1);
 /// A paired computer that refused this one (it forgot us) is tried again
 /// only this often, or when something here changes (`Request::Reload`:
 /// a pairing, a forget), or it is discovered after this.
@@ -1124,6 +1130,12 @@ async fn establish(
         }
         Err(e) => tracing::warn!(%addr, "handshake failed: {e:#}"),
     }
+}
+
+/// The peer closed this link because it keeps a better one between the two
+/// computers (`on_connected`).
+fn closed_as_duplicate(conn: &quinn::Connection) -> bool {
+    matches!(conn.close_reason(), Some(quinn::ConnectionError::ApplicationClosed(close)) if &close.reason[..] == b"duplicate")
 }
 
 /// The peer closed the connection because it doesn't trust this computer
@@ -2199,7 +2211,12 @@ impl App {
                 let shown = if shown.is_empty() { sanitize_name(&peer.name) } else { shown };
                 if self.trust.is_trusted(&fp) { println!("{shown} disconnected; reconnecting automatically."); }
                 else { println!("{shown} disconnected (no longer paired)."); }
-                self.redial_soon();
+                if closed_as_duplicate(&peer.conn) {
+                    tracing::debug!(peer = %shown, "it keeps another link to this computer; dialing again in a moment");
+                    self.dial_at = Some(Instant::now() + DUPLICATE_RETRY);
+                } else {
+                    self.redial_soon();
+                }
                 if let Some(clip) = &self.services.clip {
                     clip.forget(fp);
                 }
@@ -3572,6 +3589,65 @@ mod tests {
         stop.send(true).unwrap();
         a.await.unwrap().unwrap();
         b.await.unwrap().unwrap();
+        let _ = std::fs::remove_dir_all(da);
+        let _ = std::fs::remove_dir_all(db);
+    }
+
+    /// B keeps a link to an earlier run of A (A was killed and started again
+    /// within B's idle timeout), so it closes every new link from A as a
+    /// duplicate. A must not dial again at once each time: the rig saw a
+    /// thousand handshakes and log lines in five seconds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_link_refused_as_duplicate_is_not_redialed_in_a_tight_loop() {
+        let (da, db) = (temp_dir("dup-a"), temp_dir("dup-b"));
+        let ib = Arc::new(Identity::load_or_create(&db).unwrap());
+        trust(&da, &ib, Side::Right);
+        let pb = free_port();
+        let mut t = TrustStore::load(&da).unwrap();
+        t.get_mut(&ib.fingerprint).unwrap().addrs = vec![format!("127.0.0.1:{pb}")];
+        t.save().unwrap();
+        // B: completes each link's handshake, then says it has a better one.
+        let node = Node::bind(ib.clone(), format!("127.0.0.1:{pb}").parse().unwrap()).unwrap();
+        let refused = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (n, b_refused) = (node.clone(), refused.clone());
+        tokio::spawn(async move {
+            while let Some(Ok(peer)) = n.accept().await {
+                let (n, b_refused) = (n.clone(), b_refused.clone());
+                tokio::spawn(async move {
+                    let Ok((StreamKind::Control, send, recv)) = peer.accept_stream().await else { return };
+                    let conn = peer.conn.clone();
+                    if let Ok(link) = crate::link::handshake(peer, (send, recv), n.identity(), vec![Rect::new(0, 0, 800, 600)], "a").await {
+                        b_refused.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        // As a daemon does (`on_connected`), once A has the link too.
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        conn.close(2u32.into(), b"duplicate");
+                        drop(link);
+                    }
+                });
+            }
+        });
+        let (ba, _ha) = one_mk_input::null(Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]));
+        let (stop, stop_rx) = watch::channel(false);
+        let opts = Options {
+            backend: one_mk_input::Kind::Null,
+            port: free_port(),
+            connect: vec![],
+            discovery: false,
+            clipboard: None,
+            downloads: da.join("downloads"),
+            start_locked: false,
+            power: Some(one_mk_input::fake_power().0),
+        };
+        let a = tokio::spawn(serve(da.clone(), opts, ba, async move {
+            let mut rx = stop_rx;
+            let _ = rx.wait_for(|s| *s).await;
+        }));
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let n = refused.load(std::sync::atomic::Ordering::SeqCst);
+        assert!((1..=6).contains(&n), "A connected {n} times in 3 s although B refused each link as a duplicate");
+        stop.send(true).unwrap();
+        a.await.unwrap().unwrap();
+        node.close();
         let _ = std::fs::remove_dir_all(da);
         let _ = std::fs::remove_dir_all(db);
     }
