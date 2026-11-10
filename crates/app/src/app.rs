@@ -1391,7 +1391,8 @@ impl App {
             self.drop_pos_fresh |= ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO);
         }
         let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
-        if !dropped.is_empty() {
+        // On Clipboard & files the page decides (a row, the desk, or ask).
+        if !dropped.is_empty() && self.tab != Tab::Files {
             // Some systems don't move the pointer during a drag from
             // another app; then where it was before means nothing.
             let at = if self.drop_pos_fresh { ui.input(|i| i.pointer.latest_pos()) } else { None };
@@ -2626,6 +2627,7 @@ impl eframe::App for App {
             debug::press_enter(_ctx, raw_input);
             debug::plan_drag(_ctx, raw_input);
             debug::plan_keys(self, _ctx, raw_input);
+            debug::drop_on(self, _ctx, raw_input);
         }
         // Text typed or pasted in any script shows in its own letters (a
         // layout named in Chinese), not as boxes.
@@ -2664,6 +2666,8 @@ impl eframe::App for App {
 ///   history, one reading a second in ms (`+n`: n packets lost), and stops
 ///   live samples; the id is the computer's id in the status;
 /// - `ONE_MK_APP_DROP=n` drops n files where it's unclear who gets them;
+/// - `ONE_MK_APP_FILES_DESK=1` shows the desk on Clipboard & files, and
+///   `ONE_MK_APP_DROP_ON=Name[;hold]` drops a file on that computer there;
 /// - `ONE_MK_APP_DRAG=1` carries the first other computer across this one;
 /// - `ONE_MK_APP_FOCUS=1` puts the keyboard on the position control;
 ///   `ONE_MK_APP_FOCUS_BAR=Wallpaper|search|action|update-pill|health-line`
@@ -3088,6 +3092,49 @@ mod debug {
     /// `ONE_MK_APP_PLAN_KEYS=Name;Right,Down+,Enter` (on Arrange): at 1.5 s
     /// the keyboard goes to that computer's first block on the plan, then a
     /// key every 0.15 s (real key events; `+` holds Shift).
+    /// A file "dropped" by a hook: only its path.
+    #[derive(Debug)]
+    struct FakeFile(PathBuf);
+
+    impl egui::DroppedFile for FakeFile {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            Err("not read".into())
+        }
+    }
+
+    /// `ONE_MK_APP_DROP_ON=Name[;hold]` (on Clipboard & files, with the desk
+    /// shown): a file dragged in from another app (`ONE_MK_APP_DROP_FILE`,
+    /// else /tmp/file0) hovers over that computer on the desk from when it
+    /// shows (at 1.5 s at the soonest) and is let go 0.7 s later (not with
+    /// `hold`: a screenshot of the hover).
+    pub fn drop_on(app: &App, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(spec) = var("ONE_MK_APP_DROP_ON") else { return };
+        let (name, hold) = spec.split_once(';').map_or((spec.as_str(), false), |(n, f)| (n, f == "hold"));
+        let t = raw.time.unwrap_or(0.0);
+        let (seen, done) = (Id::unique("drop-on-seen"), Id::unique("drop-on-done"));
+        if ctx.data(|d| d.get_temp::<bool>(done).is_some()) {
+            return;
+        }
+        ctx.request_repaint_after_secs(0.03);
+        if t < 1.5 {
+            return;
+        }
+        let Some(at) = app.scene.devices.iter().position(|d| d.name == name && d.online).and_then(|i| app.scene.bounds(i)).map(|b| b.center()) else { return };
+        let t0 = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(seen, || t));
+        let file = var("ONE_MK_APP_DROP_FILE").map_or_else(|| PathBuf::from("/tmp/file0"), PathBuf::from);
+        // Moving in (so its place counts as fresh), then over it.
+        raw.events.push(egui::Event::PointerMoved(if t < t0 + 0.3 { at - vec2(12.0, 0.0) } else { at }));
+        if hold || t < t0 + 0.7 {
+            raw.hovered_files = vec![egui::HoveredFile { path: Some(file), ..Default::default() }];
+        } else {
+            raw.dropped_files = vec![std::sync::Arc::new(FakeFile(file))];
+            ctx.data_mut(|d| d.insert_temp(done, true));
+        }
+    }
+
     pub fn plan_keys(app: &App, ctx: &egui::Context, raw: &mut egui::RawInput) {
         let Some(spec) = var("ONE_MK_APP_PLAN_KEYS") else { return };
         let Some((name, keys)) = spec.split_once(';') else { return };
