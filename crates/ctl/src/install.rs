@@ -404,10 +404,35 @@ fn gui_domain() -> String {
     format!("gui/{}", uid.as_deref().map_or("501", str::trim))
 }
 
-/// Writes a LaunchAgent and, if `load_now`, (re)loads it.
-fn mac_agent(home: &Path, label: &str, exe: &Path, args: &[String], log: &Path, keep_alive: bool, load_now: bool) -> Result<PathBuf> {
+/// The account's own home folder, from the user database: `$HOME` may point
+/// elsewhere (a test run, a throwaway folder) while launchd does not.
+fn account_home() -> Option<PathBuf> {
+    let user = Command::new("id").arg("-un").output().ok()?;
+    let user = String::from_utf8(user.stdout).ok()?;
+    let read = Command::new("dscl").args([".", "-read", &format!("/Users/{}", user.trim()), "NFSHomeDirectory"]).output().ok()?;
+    dscl_home(&String::from_utf8_lossy(&read.stdout))
+}
+
+/// `NFSHomeDirectory: /Users/me` (a path with spaces comes on the next line).
+fn dscl_home(said: &str) -> Option<PathBuf> {
+    let home = said.split_once("NFSHomeDirectory:")?.1.trim();
+    (!home.is_empty()).then(|| PathBuf::from(home))
+}
+
+/// launchd holds one job per label for the whole login session, whatever
+/// `$HOME` says. Loading or unloading from any other home folder would stop
+/// or replace the installed oneMK, so only the account's own one may.
+fn launchd_owns(home: &Path, account: Option<&Path>) -> bool {
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    account.is_some_and(|account| real(home) == real(account))
+}
+
+/// Writes a LaunchAgent and, if `load_now` and `home` is the account's own,
+/// (re)loads it; whether it did.
+fn mac_agent(home: &Path, label: &str, exe: &Path, args: &[String], log: &Path, keep_alive: bool, load_now: bool) -> Result<(PathBuf, bool)> {
     let plist = plist_path(home, label);
     write(&plist, &launch_agent(label, exe, args, log, keep_alive))?;
+    let load_now = load_now && launchd_owns(home, account_home().as_deref());
     if load_now {
         let domain = gui_domain();
         ok("launchctl", &["bootout", &format!("{domain}/{label}")]); // replace an older copy
@@ -415,22 +440,22 @@ fn mac_agent(home: &Path, label: &str, exe: &Path, args: &[String], log: &Path, 
             bail!("wrote {} but `launchctl bootstrap {domain}` failed", plist.display());
         }
     }
-    Ok(plist)
+    Ok((plist, load_now))
 }
 
 fn install_macos(l: &Launch) -> Result<String> {
     let home = home_dir()?;
     let log = home.join("Library/Logs/one-mk.log");
-    let plist = mac_agent(&home, LABEL, &l.exe, &l.args(), &log, true, l.start_now)?;
+    let (plist, started) = mac_agent(&home, LABEL, &l.exe, &l.args(), &log, true, l.start_now)?;
     let mut msg = format!(
         "one-mk will now start whenever you log in{}.\n  LaunchAgent: {}\n  log:         {}\n  macOS will ask for Accessibility and Input Monitoring permission the first time; allow one-mk.\n",
-        if l.start_now { ", and is starting now" } else { " (it is already running now)" },
+        if started { ", and is starting now" } else if l.start_now { " (not started now: $HOME is not your home folder)" } else { " (it is already running now)" },
         plist.display(),
         log.display()
     );
     if let Some(tray) = &l.tray {
         let tray_log = home.join("Library/Logs/one-mk-tray.log");
-        let p = mac_agent(&home, TRAY_LABEL, tray, &l.tray_args(false), &tray_log, false, false)?;
+        let (p, _) = mac_agent(&home, TRAY_LABEL, tray, &l.tray_args(false), &tray_log, false, false)?;
         msg += &format!("  the menu bar icon will start at login too: {}\n", p.display());
     }
     msg += "  to undo:     one-mk uninstall";
@@ -439,11 +464,14 @@ fn install_macos(l: &Launch) -> Result<String> {
 
 fn uninstall_macos() -> Result<bool> {
     let home = home_dir()?;
+    let owns = launchd_owns(&home, account_home().as_deref());
     let mut did = false;
     for label in [LABEL, TRAY_LABEL] {
         let plist = plist_path(&home, label);
         if plist.exists() {
-            ok("launchctl", &["bootout", &format!("{}/{label}", gui_domain())]);
+            if owns {
+                ok("launchctl", &["bootout", &format!("{}/{label}", gui_domain())]);
+            }
             did |= remove(&plist)?;
         }
     }
@@ -557,6 +585,26 @@ mod tests {
 
     fn launch(home: Option<&str>) -> Launch {
         Launch { exe: "/opt/my apps/one-mk".into(), tray: None, home: home.map(PathBuf::from), start_now: true }
+    }
+
+    /// A run with `$HOME` elsewhere must never load or unload the installed
+    /// oneMK's launchd job (one per label for the whole login session).
+    #[test]
+    fn only_the_account_home_drives_launchd() {
+        assert_eq!(dscl_home("NFSHomeDirectory: /Users/me\n"), Some(PathBuf::from("/Users/me")));
+        assert_eq!(dscl_home("NFSHomeDirectory:\n /Users/Jane Doe\n"), Some(PathBuf::from("/Users/Jane Doe")));
+        assert_eq!(dscl_home("No such key: NFSHomeDirectory\n"), None);
+        let account = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        assert!(launchd_owns(account.path(), Some(account.path())));
+        assert!(!launchd_owns(other.path(), Some(account.path())));
+        assert!(!launchd_owns(account.path(), None), "unknown account home: hands off");
+        #[cfg(unix)]
+        {
+            let link = other.path().join("same");
+            std::os::unix::fs::symlink(account.path(), &link).unwrap();
+            assert!(launchd_owns(&link, Some(account.path())), "the same folder by another path");
+        }
     }
 
     #[test]
