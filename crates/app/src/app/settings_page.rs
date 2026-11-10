@@ -205,8 +205,10 @@ impl App {
         // Every row's height, as it is now: a row that has nothing to show is 0.
         let heights: Vec<Vec<f32>> = groups(cat).iter().map(|g| g.rows.iter().map(|k| self.setting_h(ui, k, inner_w)).collect()).collect();
         let rows_h = |hs: &Vec<f32>| hs.iter().sum::<f32>();
-        let credit_h = 40.0;
-        let total = groups(cat).iter().zip(&heights).map(|(_, hs)| GROUP_LABEL + rows_h(hs) + GROUP_GAP).sum::<f32>() + credit_h;
+        let credit_h = 56.0;
+        // A short category still ends at the window's foot: the credit sits
+        // there, under a hairline, as the other pages' footers do.
+        let total = (groups(cat).iter().zip(&heights).map(|(_, hs)| GROUP_LABEL + rows_h(hs) + GROUP_GAP).sum::<f32>() + credit_h).max(area.height() - 1.0);
 
         let mut child = ui.new_child(UiBuilder::new().max_rect(area));
         child.set_clip_rect(area.expand2(vec2(0.0, 2.0)));
@@ -241,7 +243,8 @@ impl App {
             // Credits for what the window draws and isn't ours: last on the
             // page, and last in Tab order.
             let credit = "The 3D mouse is “Logitech G502 x lightspeed” by Okopchi, CC BY 4.0, changed for oneMK.";
-            let credit_at = pos2(x0 + 2.0, all.bottom() - 18.0);
+            let credit_at = pos2(x0, all.bottom() - 22.0);
+            widgets::hairline(ui.painter(), egui::Rangef::new(x0, x0 + col_w), (credit_at.y - 22.0).round() - 0.5);
             let shown = fit(ui.painter(), credit, &regular(T_META), col_w - 4.0);
             let link = ui.interact(widgets::hit_rect(Rect::from_min_size(credit_at - vec2(0.0, 9.0), vec2(text_width(ui, &shown, regular(T_META)), 18.0))), Id::unique("credit-mouse"), Sense::click());
             let lr = link.rect;

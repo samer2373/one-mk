@@ -338,7 +338,9 @@ impl App {
         let mut recheck = false;
         let mut toggle = false;
         let copied = self.copied;
-        let open = self.health_passed_open;
+        // Passed checks: as the person last chose; until then, open when
+        // the window has room for them (a full page, not half of one).
+        let chosen_open = ui.data(|d| d.get_temp::<bool>(Id::unique("health-passed-user")));
         let sub = self.health_sub();
         page_ui::scroll("health-page").show_viewport(ui, |ui, _| {
             // The pages' head, then the banner across the page, then the
@@ -412,17 +414,34 @@ impl App {
             }
             // Nothing to the left: the cards keep to one column, as wide as it.
             let right_col = usize::from(!left.is_empty());
-            let mut lines: Vec<(Line, f32)> = (0..peers.len()).map(|k| (Line::Peer(k), links::ROW_H)).collect();
+            let inner = page.width_of(right_col) - 2.0 * page_ui::CARD_PAD - 26.0;
+            let passed: Vec<(Line, f32)> = works.iter().map(|i| (Line::Passed(i), passed_height(ui, i, inner))).collect();
+            // Is there room for all of it? Each card is its label, rows and a gap.
+            let card_h = |rows: f32| CARD_LABEL + rows + page_ui::GAP;
+            let left_h: f32 = left.iter().map(|c| card_h(c.lines.iter().map(|l| l.1).sum())).sum();
+            let conn_h = if peers.is_empty() { 0.0 } else { card_h(peers.len() as f32 * links::ROW_H) };
+            let passed_h = if works.is_empty() { 0.0 } else { card_h(ROW + passed.iter().map(|l| l.1).sum::<f32>()) };
+            let stacked = !page.two || right_col == 0;
+            let need = if stacked { left_h + conn_h + passed_h } else { left_h.max(conn_h + passed_h) };
+            let view_bottom = origin.y + rect.height();
+            let spare = view_bottom - FOOTER_ROOM - (page.below() + need);
+            let open = chosen_open.unwrap_or(self.health_passed_open || spare >= 0.0);
+            // Still room: the connections get taller rows.
+            let peer_h = if open && spare >= peers.len() as f32 * 12.0 + 24.0 { links::ROW_H + 12.0 } else { links::ROW_H };
+            let lines: Vec<(Line, f32)> = (0..peers.len()).map(|k| (Line::Peer(k), peer_h)).collect();
+            let mut checks: Vec<(Line, f32)> = vec![];
             if !works.is_empty() {
-                lines.push((Line::Toggle(works.len()), ROW));
+                checks.push((Line::Toggle(works.len()), ROW));
                 if open {
-                    let inner = page.width_of(right_col) - 2.0 * page_ui::CARD_PAD - 26.0;
-                    lines.extend(works.iter().map(|i| (Line::Passed(i), passed_height(ui, i, inner))));
+                    checks.extend(passed);
                 }
             }
             if !lines.is_empty() {
-                let (title, extra) = if peers.is_empty() { ("Passed", None) } else { ("Connections", Some(format!("last {}", rtt::span_words()))) };
-                right.push(Card { title, extra, lines });
+                right.push(Card { title: "Connections", extra: Some(format!("last {}", rtt::span_words())), lines });
+            }
+            // The passed checks, a group of their own.
+            if !checks.is_empty() {
+                right.push(Card { title: "Passed", extra: None, lines: checks });
             }
             let placed = left.iter().map(|c| (0, c)).chain(right.iter().map(|c| (right_col, c)));
             for (col, card) in placed {
@@ -522,11 +541,16 @@ impl App {
                 }
                 page.finish(ui, c);
             }
+            // When it last checked, and what it runs, at the foot.
+            if !sub.is_empty() {
+                page.footer(ui, view_bottom, &format!("{sub} · the same checks as `one-mk doctor`"));
+            }
             ui.allocate_space(vec2(rect.width(), page.height()));
+            if toggle {
+                ui.data_mut(|d| d.insert_temp(Id::unique("health-passed-user"), !open));
+                self.health_passed_open = !open;
+            }
         });
-        if toggle {
-            self.health_passed_open = !self.health_passed_open;
-        }
         if recheck {
             self.recheck();
         }
@@ -552,6 +576,11 @@ impl App {
         }
     }
 }
+
+/// What a card's label takes above it (`page_ui`'s).
+const CARD_LABEL: f32 = 30.0;
+/// The room a page footer takes under the cards.
+const FOOTER_ROOM: f32 = 84.0;
 
 /// Where the banner's words start (after its verdict tile).
 const BANNER_TEXT_X: f32 = 64.0;
