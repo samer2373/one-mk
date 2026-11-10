@@ -15,7 +15,7 @@ cookie or tracker.
 
 | path | what |
 |---|---|
-| `index.html` | the page: hero with the 3D desk, how it works, features, Keys (second 3D view), the window tour, security, platforms, install, FAQ, closing call |
+| `index.html` | the page: hero with the 3D desk, how it works, features, Keys (second 3D view), the window tour, security, platforms, install, FAQ, closing call, the Bigfoot Technology band, footer |
 | `css/site.css` | all styles; colour, type and radius tokens from the app (`crates/app/src/style.rs`, `docs/brand/tokens.json`), light and dark |
 | `js/site.js` | theme toggle, download button by operating system, tabs, the scroll story, entrances, copy buttons, and the loader for the 3D views |
 | `js/desk.js` | the 3D desk and keyboard (three.js): procedural monitors, laptop and keycaps, the app's wallpapers, the pointer crossing screens |
@@ -25,6 +25,7 @@ cookie or tracker.
 | `assets/img/shots/`, `assets/img/crops/` | window screenshots at 2x, light and dark, as AVIF, WebP and a PNG fallback |
 | `assets/img/poster-*.webp` | the hero without WebGL or with reduced motion |
 | `assets/img/og.png` | the 1200 x 630 social card |
+| `assets/brand/bigfoot/` | Bigfoot Technology's logos (theirs, see the README there); every mention links to bigfootjo.com in a new tab |
 | `assets/brand/`, `favicon.*`, `apple-touch-icon.png`, `site.webmanifest` | icons, copied from `docs/brand/` |
 | `robots.txt`, `sitemap.xml` | for search engines (edit the address, see Deploying) |
 | `tools/` | scripts that made the assets; not needed at run time |
@@ -69,7 +70,7 @@ python3 -I site/tools/build-images.py /tmp/shots site/assets/img
 python3 -I site/tools/expand-images.py site/index.html     # rewrites the <!--img ...--> blocks in place
 
 # 3. The hero posters and the social card (headless Chrome with SwiftShader).
-node site/tools/render-posters.mjs      # then convert, see the script's header
+node site/tools/render-posters.mjs      # poster-light/dark(.webp, @2x.webp)
 node site/tools/render-og.mjs
 
 # 4. The 3D mouse, three.js and the fonts (only when they change).
@@ -87,6 +88,18 @@ node site/tools/sheets.mjs /tmp/sheets 360,768,1024,1440,1920 light,dark   # who
 ```
 
 It prints the page height per width, any horizontal overflow and every console error or failed request.
+
+```sh
+node site/tools/checks.mjs /tmp/checks
+```
+
+Checks the first-load weight, that no request leaves the host, no console errors, the poster without
+WebGL, reduced motion (no 3D, no three.js, no marquee), `file://` and a `/one-mk/` sub-path, the skip link
+and the tabs' arrow keys.
+
+`css/fonts-file.css` holds the fonts as data URIs for `file://` only (Chrome refuses font files from
+disk); the head script loads it there and nowhere else. Rebuild it after changing a font with
+`python3 -I site/tools/inline-fonts.py site`.
 
 ## Deploying
 
@@ -111,4 +124,6 @@ address in those four places.
 - Inter, JetBrains Mono and Unbounded, SIL Open Font License 1.1 (`assets/fonts/OFL-*.txt`).
 - The wallpapers on the 3D screens are drawn by the page with the app's own wallpaper code and colours;
   the dusk picture in the Wallpaper screenshots is drawn by `tools/make-wallpaper.py`. No third-party art.
+- The Bigfoot Technology logos belong to Bigfoot Technology (https://bigfootjo.com/), who make oneMK;
+  they are not under oneMK's licence (`assets/brand/bigfoot/README.md`).
 - Everything else here is part of oneMK, MIT or Apache-2.0.

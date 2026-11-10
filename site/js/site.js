@@ -155,9 +155,10 @@
 
   // ---------------------------------------- Bigfoot: a gentle 3D tilt --
   var tilt = $("[data-tilt]");
-  if (tilt && !reduce.matches && matchMedia("(hover: hover)").matches) {
+  if (tilt && !reduce.matches) {
     var fig = $(".maker__figure", tilt), card = tilt.closest(".maker__card") || tilt;
     card.addEventListener("pointermove", function (e) {
+      if (e.pointerType === "touch") return;
       var r = tilt.getBoundingClientRect(), x = (e.clientX - r.left) / r.width - 0.5, y = (e.clientY - r.top) / r.height - 0.5;
       fig.style.transform = "rotateY(" + (x * 16).toFixed(2) + "deg) rotateX(" + (-y * 10).toFixed(2) + "deg) translateZ(20px)";
     });
@@ -178,8 +179,9 @@
     return;
   }
   // Light pool on the floor follows the visitor's pointer.
-  if (hero && matchMedia("(hover: hover)").matches) {
+  if (hero) {
     hero.addEventListener("pointermove", function (e) {
+      if (e.pointerType === "touch") return;
       var r = hero.getBoundingClientRect();
       hero.style.setProperty("--spot-x", ((e.clientX - r.left) / r.width * 100).toFixed(1) + "%");
       hero.style.setProperty("--spot-y", ((e.clientY - r.top) / r.height * 100).toFixed(1) + "%");
@@ -215,12 +217,14 @@
       if (!window.OMKDesk) return;
       var labels = $("[data-labels]");
       var setChips = function (i) { chips.forEach(function (c) { c.setAttribute("aria-pressed", +c.dataset.go === i ? "true" : "false"); }); };
-      var desk = window.OMKDesk.create(heroCanvas, { mode: "hero", theme: theme(), labels: labels, onActive: setChips });
+      var desk = window.OMKDesk.create(heroCanvas, { mode: "hero", theme: theme(), labels: labels, onActive: setChips,
+        onFirstFrame: function () { heroCanvas.classList.add("is-live"); if (labels) labels.classList.add("is-live"); } });
       themeListeners.push(desk.setTheme);
       chips.forEach(function (c) { c.addEventListener("click", function () { desk.goTo(+c.dataset.go); }); });
       var frame = heroCanvas.parentNode;
-      if (matchMedia("(hover: hover)").matches) {
+      {
         frame.addEventListener("pointermove", function (e) {
+          if (e.pointerType === "touch") return;
           var r = frame.getBoundingClientRect(), fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
           desk.follow((fx - 0.08) / 0.84, (fy - 0.12) / 0.5);
           if (hint) hint.textContent = "The pointer crosses at the same height, like oneMK does.";
@@ -235,14 +239,13 @@
       };
       window.addEventListener("scroll", onS, { passive: true }); onS();
       visibleRunner(heroCanvas, desk);
-      requestAnimationFrame(function () { heroCanvas.classList.add("is-live"); if (labels) labels.classList.add("is-live"); });
     }).catch(function () { if (controls) controls.hidden = true; });
   });
 
   if (keysCanvas) whenNear(keysCanvas, function () {
     load().then(fontsReady).then(function () {
       if (!window.OMKDesk) return;
-      var keys = window.OMKDesk.create(keysCanvas, { mode: "keys", theme: theme(), remap: "caps" });
+      var keys = window.OMKDesk.create(keysCanvas, { mode: "keys", theme: theme(), remap: "caps", onFirstFrame: function () { keysCanvas.classList.add("is-live"); } });
       themeListeners.push(keys.setTheme);
       var TEXT = { caps: "Caps Lock: tap for Esc, hold for Ctrl.", altsuper: "Alt and Super trade places.", ctrlcmd: "Ctrl and Cmd trade places.", hjkl: "Hold Alt: H, J, K and L move like the arrow keys." };
       presets.forEach(function (b) {
@@ -263,7 +266,6 @@
         keys.look((e.clientX - r.left) / r.width * 2 - 1, (e.clientY - r.top) / r.height * 2 - 1);
       });
       visibleRunner(keysCanvas, keys);
-      requestAnimationFrame(function () { keysCanvas.classList.add("is-live"); });
       if (status) status.textContent = TEXT.caps;
     }).catch(function () { if (presetBox) presetBox.hidden = true; });
   });

@@ -12,13 +12,13 @@
   var PAL = {
     light: {
       keyCase: 0xDCDBD7, keyPlate: 0xC9C8C4, cap: "#F7F6F3", capMod: "#D1D4D9", legend: "#2B2D33", legendMod: "#3A3E47",
-      changed: "#2443C9", accent: "#2F54EB", accentCap: "#2F54EB", onAccent: "#FFFFFF",
+      changed: "#2443C9", changedCap: "#DCE3FF", accent: "#2F54EB", accentCap: "#2F54EB", onAccent: "#FFFFFF",
       mouse: [0xDDDCD7, 0xF3F2EE, 0x34363D, 0x8B8E95], stand: 0xBEC2C8, laptop: 0xC5C8CE, well: 0x2A2C31,
       bezel: 0x0C0D0F, hemiSky: 0xFFFFFF, hemiGround: 0xD9D6CF, hemi: 1.15, key: 2.2, env: 0.75, shadow: 0.16, blob: 0.34
     },
     dark: {
       keyCase: 0x2A2C31, keyPlate: 0x141518, cap: "#34373E", capMod: "#282B31", legend: "#E8EAEE", legendMod: "#C9CED8",
-      changed: "#C4CFFF", accent: "#4D6DFF", accentCap: "#3A5AF2", onAccent: "#FFFFFF",
+      changed: "#DDE4FF", changedCap: "#2A3870", accent: "#4D6DFF", accentCap: "#3A5AF2", onAccent: "#FFFFFF",
       mouse: [0x303339, 0x40434B, 0x1A1B1F, 0x1E2024], stand: 0x7C818A, laptop: 0x80848C, well: 0x121316,
       bezel: 0x08090B, hemiSky: 0xB8C0D8, hemiGround: 0x1A1B20, hemi: 0.75, key: 1.6, env: 0.42, shadow: 0.5, blob: 0.62
     }
@@ -185,14 +185,14 @@
     for (var i = 0; i < this.list.length; i++) {
       var k = this.list[i], x = k.x0 * sx, y = k.z0 * sy, w = k.w * sx, h = k.d * sy;
       var changed = this.remap && this.remap[k.id];
-      var bg = k.kind === "acc" ? p.accentCap : (k.kind === "mod" || k.kind === "fn") ? p.capMod : p.cap;
+      var bg = changed ? p.changedCap : k.kind === "acc" ? p.accentCap : (k.kind === "mod" || k.kind === "fn") ? p.capMod : p.cap;
       g.fillStyle = bg; g.fillRect(x, y, w, h);
       // A soft dish on the top, lighter toward the middle.
       var inset = 0.2 * u * sx, grd = g.createLinearGradient(0, y + inset, 0, y + h - inset);
       grd.addColorStop(0, "rgba(255,255,255,.10)"); grd.addColorStop(1, "rgba(0,0,0,.06)");
       g.fillStyle = grd; roundRect(g, x + inset, y + inset * 0.8, w - 2 * inset, h - 2 * inset, 0.12 * u * sx); g.fill();
       if (changed) {
-        g.lineWidth = 0.06 * u * sx; g.strokeStyle = p.accent;
+        g.lineWidth = 0.09 * u * sx; g.strokeStyle = p.accent;
         roundRect(g, x + inset * 0.7, y + inset * 0.55, w - 1.4 * inset, h - 1.4 * inset, 0.14 * u * sx); g.stroke();
       }
       var legend = changed ? changed[0] : k.legend, sub = changed ? changed[1] : null;
@@ -609,9 +609,9 @@
         dist *= 1 + scrollP * 0.06;
       } else {
         focus.lerp(focusT, Math.min(1, dt * 2.5));
-        target.x += focus.x * 0.35; target.z += focus.z * 0.25;
+        target.x += focus.x * 0.15; target.z += focus.z * 0.15;
         yaw = (scrollP - 0.5) * 0.55 + look.x * 0.06; pitch += -scrollP * 0.12 + look.y * 0.04;
-        dist *= 1 - focusAmt * 0.22;
+        dist *= 1 - focusAmt * 0.12;
       }
       aim(target, yaw, pitch, dist);
     }
@@ -647,7 +647,7 @@
     }
 
     // -------------------------------------------------------------- loop --
-    var running = false, raf = 0, last = 0, dirty = true, frames = 0, slow = 0, start = performance.now();
+    var shown = false, running = false, raf = 0, last = 0, dirty = true, frames = 0, slow = 0, start = performance.now();
     function frame(now) {
       raf = 0;
       if (!running) return;
@@ -659,6 +659,7 @@
       placeCamera(dt);
       renderer.render(scene, camera);
       placeLabels();
+      if (!shown) { shown = true; if (opts.onFirstFrame) requestAnimationFrame(opts.onFirstFrame); }
       // Fewer pixels if this machine struggles (once, after a warm-up).
       frames++;
       if (frames > 30 && frames < 150) { if (dt > 0.024) slow++; if (frames === 149 && slow > 70 && quality > 0.7) { quality = 0.7; width = 0; } }

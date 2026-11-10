@@ -207,7 +207,7 @@ kbd {
 .stage__labels.is-live li { opacity: 1; }
 .stage__labels li small { font: 400 12px/1 var(--sans); color: var(--ink2); }
 .stage__labels li.is-on { background: var(--accent-fill); color: #fff; border-color: transparent; }
-.stage__labels li.is-on small { color: rgba(255,255,255,.82); }
+.stage__labels li.is-on small { color: rgba(255,255,255,.94); }
 .stage__labels li i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
 .stage__labels li.is-on i { background: #fff; }
 .stage__controls { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px; margin-top: 8px; }
