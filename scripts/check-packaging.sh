@@ -13,8 +13,8 @@
 #     like the release's, no placeholder left;
 #   - the macOS installer window's artwork and settings (scripts/dmg/check.sh;
 #     needs Python 3 with Pillow);
-#   - the brand tokens (docs/brand/tokens.json, tokens.css, the README table)
-#     still match the window's style (scripts/brand-tokens.py --check).
+#   - every icon (app icon sets, tray icons, the window icon) is what
+#     scripts/make-icons.py builds from the brand SVGs now (needs Pillow).
 #   - the licence files every package carries (scripts/copy-notices.sh) and
 #     THIRD-PARTY-NOTICES is current (scripts/third-party-notices.py --check);
 # Optional tools (dpkg-deb, desktop-file-validate, appstreamcli, ruby, Pillow) are
@@ -184,10 +184,11 @@ if python3 -c 'import PIL' 2>/dev/null; then
     else cat "$scratch/dmg-check.txt"; bad "macOS installer window artwork and settings"; fi
 else skip "macOS installer window checks: Python 3 with Pillow not installed"; fi
 
-# The brand tokens are written from crates/app/src/style.rs; the DMG artwork
-# reads them, so a style change must regenerate them.
-if python3 "$ROOT/scripts/brand-tokens.py" --check >"$scratch/tokens.txt" 2>&1; then ok "brand tokens match the window's style"
-else cat "$scratch/tokens.txt"; bad "brand tokens are out of date: run python3 scripts/brand-tokens.py"; fi
+# Every icon the packages and the app embed is built from docs/brand/logo/*.svg.
+if python3 -c 'import PIL' 2>/dev/null; then
+    if python3 -I "$ROOT/scripts/make-icons.py" --check >"$scratch/icons.txt" 2>&1; then ok "icons match the brand SVGs ($(tail -n1 "$scratch/icons.txt"))"
+    else cat "$scratch/icons.txt"; bad "icons are out of date: run python3 scripts/make-icons.py"; fi
+else skip "icon check: Python 3 with Pillow not installed"; fi
 
 # Every package carries the same licence files; the crate list must match Cargo.lock.
 check "copy-notices.sh puts the four licence files in a folder" sh -c "sh '$ROOT/scripts/copy-notices.sh' '$scratch/n' && [ \$(ls '$scratch/n' | wc -l) = 4 ]"

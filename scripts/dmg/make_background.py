@@ -5,9 +5,11 @@
   python3 scripts/dmg/make_background.py --check    # validate everything, write a preview (see check.sh)
 
 Needs Python 3 and Pillow only. The picture is drawn from the brand files in
-docs/brand (colours from tokens.json, Inter from crates/app/fonts, the
-horizontal logo) and from the window numbers in settings.py, so the icons Finder
-draws land exactly on the glows, the arrow and the name plates painted here.
+docs/brand (the dark theme's colours from tokens.json, Inter from
+crates/app/fonts, the lockup from logo/onemk-lockup-on-dark.svg, drawn by
+scripts/brand_render.py) and from the window numbers in settings.py, so the
+icons Finder draws land exactly on the glows, the arrow and the name plates
+painted here.
 
 Why the PNGs are checked in: the release must not depend on a font renderer,
 on Pillow's version or on the network, and a reviewer can see the artwork in a
@@ -24,6 +26,9 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+import brand_render  # noqa: E402
+
 BRAND = os.path.join(ROOT, "docs", "brand")
 FONTS = os.path.join(ROOT, "crates", "app", "fonts")
 SETTINGS = os.path.join(HERE, "settings.py")
@@ -31,10 +36,10 @@ OUT_1X = os.path.join(HERE, "background.png")
 OUT_2X = os.path.join(HERE, "background@2x.png")
 SUPERSAMPLE = 4   # drawn at 4x the final pixel size, then reduced: smooth edges and text
 
-# Mid slate. Finder draws an icon's name in black in light mode and white in
+# Mid grey. Finder draws an icon's name in black in light mode and white in
 # dark mode, and cannot be told otherwise, so the names sit on plates this
-# colour: the one grey that gives both at least 4.5:1 (see contrast_ok).
-PLATE = "#6C7683"
+# colour: the one grey that gives both at least 4.5:1 (see the contrast check).
+PLATE = "#757575"
 PLATE_W, PLATE_H = 116, 26
 # Finder puts the name's centre this far below the icon's bottom edge.
 PLATE_DY = 15
@@ -58,9 +63,9 @@ SETTINGS_LOCAL = {"os", "app", "app_name"}
 
 
 def tokens():
+    """The dark theme's colours (docs/brand/tokens.json), as hex strings."""
     with open(os.path.join(BRAND, "tokens.json"), encoding="utf-8") as f:
-        c = json.load(f)["color"]
-    return {k: c[k]["value"] for k in c}
+        return json.load(f)["themes"]["dark"]
 
 
 def rgb(hexstr):
@@ -89,8 +94,9 @@ def load_settings(defines=None):
     return ns
 
 
-def font(name, px):
-    return ImageFont.truetype(os.path.join(FONTS, name), px)
+def font(weight, px):
+    """Inter at 'regular' or 'semi' (the window's type)."""
+    return ImageFont.truetype(os.path.join(FONTS, "Inter-%s.ttf" % ("SemiBold" if weight == "semi" else "Regular")), px)
 
 
 def vertical_gradient_glow(size, centre, radius, strength):
@@ -106,20 +112,8 @@ def vertical_gradient_glow(size, centre, radius, strength):
 def draw_segments(d, x, baseline, segs, scale=1):
     """Draws message_segments() left to right from x and returns the end x
     (d=None only measures)."""
-    for kind, a, b, c in segs:
-        if kind == "dot":   # the interpunct is the brand's amber square, not a glyph
-            size, colour = a, b
-            sc = size / 1000.0
-            gap, side = 118 * sc, 150 * sc
-            xh = 534 * sc
-            mid = baseline - xh / 2 - 8 * sc
-            x += gap - 14 * sc
-            if d is not None:
-                d.rounded_rectangle((x, mid - side / 2, x + side, mid + side / 2), radius=6 * sc, fill=colour)
-            x += side + gap - 14 * sc
-            continue
-        text, fname, px, colour = a, b, c[0], c[1]
-        f = font(fname, round(px * scale))
+    for text, weight, px, colour in segs:
+        f = font(weight, round(px * scale))
         if d is not None:
             d.text((x, baseline), text, font=f, fill=colour, anchor="ls")
         x += f.getlength(text)
@@ -130,18 +124,17 @@ def segments_width(segs, scale):
     return draw_segments(None, 0, 0, segs, scale)
 
 
-def message_segments(scale, ink, ink2, signal, pt=15):
+def message_segments(scale, ink, ink2, pt=15):
     """'Drag oneMK to Applications, then open it. Setup takes a minute.'
     pt is the type size in points (the brand's 15 px body size); sizes in the
     result are in drawn pixels, so draw it with draw_segments(..., scale=1)."""
     px = pt * scale
-    semi, reg = "Inter-SemiBold.ttf", "Inter-Regular.ttf"
     return [
-        ("t", "Drag ", reg, (px, ink2)),
-        ("t", "oneMK", semi, (px, ink)),
-        ("t", " to ", reg, (px, ink2)),
-        ("t", "Applications", semi, (px, ink)),
-        ("t", ", then open it. Setup takes a minute.", reg, (px, ink2)),
+        ("Drag ", "regular", px, ink2),
+        ("oneMK", "semi", px, ink),
+        (" to ", "regular", px, ink2),
+        ("Applications", "semi", px, ink),
+        (", then open it. Setup takes a minute.", "regular", px, ink2),
     ]
 
 
@@ -157,12 +150,12 @@ def draw_background(cfg, scale):
     W, H = cfg["WIDTH"], cfg["HEIGHT"]
     k = scale * SUPERSAMPLE
     size = (W * k, H * k)
-    ground = rgb(t["ground"])
-    ink, ink2, signal = rgb(t["ink"]), rgb(t["ink2"]), rgb(t["signal"])
+    ground = rgb(t["bg"])
+    ink, ink2, accent = rgb(t["ink"]), rgb(t["ink2"]), rgb(t["accent"])
 
     # Ground, with a faint light from above (the app icon's tile does the same).
     im = Image.new("RGB", size, ground)
-    top = Image.new("RGB", size, rgb("#1A2029"))
+    top = Image.new("RGB", size, rgb(t["surface"]))
     mask = Image.new("L", size, 0)
     md = ImageDraw.Draw(mask)
     md.ellipse((-W * k * 0.25, -H * k * 1.15, W * k * 1.25, H * k * 0.62), fill=255)
@@ -173,7 +166,7 @@ def draw_background(cfg, scale):
     icon_r = cfg["icon_size"] / 2
     for cx in (cfg["APP_X"], cfg["APPS_X"]):
         glow = vertical_gradient_glow(size, (cx * k, cfg["ICONS_Y"] * k), icon_r * 1.55 * k, 1.0)
-        im = Image.composite(Image.new("RGB", size, rgb("#29323F")), im, glow)
+        im = Image.composite(Image.new("RGB", size, rgb(t["surface2"])), im, glow)
 
     d = ImageDraw.Draw(im, "RGBA")
 
@@ -183,29 +176,28 @@ def draw_background(cfg, scale):
         box = ((cx - PLATE_W / 2) * k, (py - PLATE_H / 2) * k, (cx + PLATE_W / 2) * k, (py + PLATE_H / 2) * k)
         d.rounded_rectangle(box, radius=PLATE_H / 2 * k, fill=rgb(PLATE))
 
-    # The arrow: a calm amber line from one icon toward the other, round caps.
+    # The arrow: a calm cobalt line from one icon toward the other, round caps.
     y = cfg["ICONS_Y"] * k
     x0 = (cfg["APP_X"] + icon_r + ARROW_GAP) * k
     x1 = (cfg["APPS_X"] - icon_r - ARROW_GAP) * k
     w = 3 * k
     head, spread = 13 * k, math.radians(42)
-    d.line((x0, y, x1 - head * 0.55, y), fill=signal, width=int(w))
+    d.line((x0, y, x1 - head * 0.55, y), fill=accent, width=int(w))
     for sgn in (-1, 1):
-        d.line((x1 - head * math.cos(spread), y + sgn * head * math.sin(spread), x1, y), fill=signal, width=int(w))
+        d.line((x1 - head * math.cos(spread), y + sgn * head * math.sin(spread), x1, y), fill=accent, width=int(w))
     for px_, py_ in ((x0, y), (x1, y),
                      (x1 - head * math.cos(spread), y - head * math.sin(spread)),
                      (x1 - head * math.cos(spread), y + head * math.sin(spread))):
-        d.ellipse((px_ - w / 2, py_ - w / 2, px_ + w / 2, py_ + w / 2), fill=signal)
+        d.ellipse((px_ - w / 2, py_ - w / 2, px_ + w / 2, py_ + w / 2), fill=accent)
 
     # The logo, centred at the top.
-    logo = Image.open(os.path.join(BRAND, "logo", "png", "onemk-lockup-horizontal-reversed.png")).convert("RGBA")
+    # (the SVG has 5 of its 234 units of clear space either side of the ink)
+    logo = brand_render.render(os.path.join(BRAND, "logo", "onemk-lockup-on-dark.svg"), round(LOGO_W * k * 234 / 224), supersample=2)
     logo = logo.crop(logo.getbbox())
-    lw = LOGO_W * k
-    logo = logo.resize((lw, round(logo.height * lw / logo.width)), Image.LANCZOS)
-    im.paste(logo, (round((size[0] - lw) / 2), round(LOGO_Y * k - logo.height / 2)), logo)
+    im.paste(logo, (round((size[0] - logo.width) / 2), round(LOGO_Y * k - logo.height / 2)), logo)
 
     # The one line of instruction, centred.
-    segs = message_segments(k, ink, ink2, signal)
+    segs = message_segments(k, ink, ink2)
     tw = segments_width(segs, 1)
     draw_segments(d, (size[0] - tw) / 2, TEXT_BASELINE * k, segs, 1)
 
@@ -221,7 +213,7 @@ def sans(px, bold=False):
               "/System/Library/Fonts/Helvetica.ttc", "C:/Windows/Fonts/arial.ttf"):
         if os.path.exists(p):
             return ImageFont.truetype(p, px)
-    return font("Inter-SemiBold.ttf" if bold else "Inter-Regular.ttf", px)
+    return font("semi" if bold else "regular", px)
 
 
 def stand_in_folder(px):
@@ -339,9 +331,9 @@ def checks(cfg, out_preview):
     ground = bg.getpixel((W // 2, H - 4))
     for name in ("ink", "ink2"):
         ok(contrast(rgb(t[name]), ground) >= 4.5, "instruction text colour %s %.1f:1 on the ground" % (name, contrast(rgb(t[name]), ground)))
-    # the amber arrow
-    ok(contrast(rgb(t["signal"]), bg.getpixel((W // 2, int(ay) - 24))) >= 3.0, "arrow is at least 3:1 against the background")
-    seg_w = segments_width(message_segments(1, rgb(t["ink"]), rgb(t["ink2"]), rgb(t["signal"])), 1)
+    # the cobalt arrow
+    ok(contrast(rgb(t["accent"]), bg.getpixel((W // 2, int(ay) - 24))) >= 3.0, "arrow is at least 3:1 against the background")
+    seg_w = segments_width(message_segments(1, rgb(t["ink"]), rgb(t["ink2"])), 1)
     ok(seg_w <= W - 2 * 60, "the instruction line (%d points) fits with at least 60 points either side" % seg_w)
 
     # the preview

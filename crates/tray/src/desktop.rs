@@ -30,11 +30,12 @@ enum Ev {
 }
 
 fn icon(state: IconState) -> Icon {
-    Icon::from_rgba(icon::rgba(32, state), 32, 32).expect("a 32x32 RGBA buffer")
+    Icon::from_rgba(icon::rgba(32, state, icon::bar()), 32, 32).expect("a 32x32 RGBA buffer")
 }
 
 /// Sets the icon. On macOS the plain states are a template image (the menu
-/// bar recolours it); the lit (Volt) ones keep their colour.
+/// bar recolours it); the ones with the lit cobalt pointer keep their colour
+/// and are drawn in white or black ink to suit the bar (see `icon::bar`).
 fn set_icon(tray: &TrayIcon, state: IconState) {
     #[cfg(target_os = "macos")]
     if let Some(t) = icon::template_rgba(state) {

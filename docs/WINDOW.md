@@ -124,6 +124,13 @@ on macOS). oneMK works the same without it. Start it by running `one-mk-tray` (o
   (when it is not running), **Pair a computer…** (when none is paired) and **Start at login**;
 - **Quit tray**, which closes only the tray.
 
+The icon is the oneMK keycap with the pointer on its top, in white ink for a dark bar and black
+for a light one (macOS and Windows follow the system's dark or light mode, read when the icon
+changes; Linux panels cannot say, so it is white there). Four states, told apart by shape as
+well as colour: a dim hollow key when oneMK is not running; a solid key when it runs with no
+computer online; a solid key with a cobalt pointer when one is connected; a hollow key with a
+cobalt pointer while this computer controls another (or is controlled).
+
 On Windows `one-mk install` starts the tray at login and the tray starts oneMK hidden, so no
 console window appears (without the tray, the login entry runs `one-mk run` and shows one). On
 Linux and macOS `one-mk install` also starts the tray at login if it is installed.
