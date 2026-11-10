@@ -110,9 +110,12 @@ def make_app_icons(out):
     for name, px in sets.items():
         cache.setdefault(px, master if px == 1024 else master.resize((px, px), Image.LANCZOS))
         out.png(rel("docs/brand/app-icon/macos/onemk.iconset", name), cache[px])
-    # icns entry types for PNG data: icp4 16, icp5 32, ic11 16@2x, ic12 32@2x, ic07 128, ic13 128@2x,
+    # icns entry types for PNG data: icp4 16, ic11 16@2x, ic12 32@2x, ic07 128, ic13 128@2x,
     # ic08 256, ic14 256@2x, ic09 512, ic10 512@2x (1024).
-    entries = [("icp4", 16), ("icp5", 32), ("ic11", 32), ("ic12", 64), ("ic07", 128), ("ic13", 256),
+    # No icp5 (32 px at 1x): with it, macOS (found on 15 and 26) draws every 16 pt icon of the app as
+    # coloured noise (Login Items, Privacy lists, Finder at the smallest sizes): ic11 holds the same 32 px
+    # and the 32 pt slot is made from ic12.
+    entries = [("icp4", 16), ("ic11", 32), ("ic12", 64), ("ic07", 128), ("ic13", 256),
                ("ic08", 256), ("ic14", 512), ("ic09", 512), ("ic10", 1024)]
     body = b""
     for code, px in entries:
