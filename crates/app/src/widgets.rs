@@ -936,7 +936,7 @@ pub fn card_shadow(rect: Rect, radius: CornerRadius) -> Vec<egui::Shape> {
 }
 
 /// The content layer: a group of rows on a quiet fill and a hairline. Not
-/// glass: glass is for what floats above the content (the sidebar, the
+/// glass: glass is for what floats above the content (the top bar, the
 /// panels over the desk, the toolbar), as the system uses it.
 pub fn group(ui: &Ui, rect: Rect, radius: u8) {
     for s in group_shapes(rect, radius) {
@@ -969,7 +969,6 @@ pub struct GlassKind {
 }
 
 pub const PANEL_GLASS: GlassKind = GlassKind { glass: false, bend: 1.0, shadow: true };
-pub const CONTROL_GLASS: GlassKind = GlassKind { glass: false, bend: 1.6, shadow: false };
 
 /// The command palette: the one piece of real glass, over a dimmed window.
 pub const PALETTE_GLASS: GlassKind = GlassKind { glass: true, bend: 0.8, shadow: true };
@@ -1284,7 +1283,7 @@ mod tests {
     /// Pressed differs from rest and from hover, for the fills that have one.
     #[test]
     fn pressed_is_its_own_look() {
-        for fill in [pal().surface2, pal().surface2_hover, mix(pal().sidebar, pal().surface2, 0.5), pal().surface2] {
+        for fill in [pal().surface2, pal().surface2_hover, pal().bg] {
             let down = pressed(fill, 1.0);
             assert_ne!(down, fill);
             assert!(down.r() <= fill.r() && down.g() <= fill.g(), "pressed goes deeper, not lighter");

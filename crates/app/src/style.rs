@@ -142,8 +142,9 @@ palette! {
     shadow_ink,
 
     // ---- worked out from the tokens ----
-    /// The sidebar: a step off the ground.
-    sidebar,
+    /// The flat keycap symbol in the top bar (handoff section 2): the key,
+    /// its top and the pointer on it.
+    logo_cap, logo_top, logo_pointer,
     /// A row or control under the pointer: an overlay.
     hover,
     /// Between ink2 and ink: a hovered label.
@@ -236,7 +237,9 @@ impl Palette {
             grid: rgba(0x16171A, 0.07),
             focus: rgb(0x2F54EB),
             shadow_ink: ink,
-            sidebar: mix(bg, surface, 0.45),
+            logo_cap: rgb(0x16171A),
+            logo_top: rgb(0x34363C),
+            logo_pointer: rgb(0x7E97FF),
             hover: rgba(0x16171A, 0.05),
             ink_hover: mix(ink2, ink, 0.55),
             accent_hover: mix(accent, black, 0.06),
@@ -289,7 +292,9 @@ impl Palette {
             grid: rgba(0xFFFFFF, 0.06),
             focus: rgb(0x7E97FF),
             shadow_ink: black,
-            sidebar: mix(bg, surface, 0.45),
+            logo_cap: rgb(0xD6D4CD),
+            logo_top: rgb(0xF6F5F1),
+            logo_pointer: rgb(0x2F54EB),
             hover: rgba(0xFFFFFF, 0.07),
             ink_hover: mix(ink2, ink, 0.55),
             accent_hover: mix(accent, black, 0.06),
@@ -560,13 +565,11 @@ pub const T_BODY: f32 = 13.0;
 /// Captions, chips, keys, system names, values (12).
 pub const T_META: f32 = 12.0;
 /// Mono chips (11).
-#[allow(dead_code)] // The new layout (top bar, panels) uses it.
 pub const T_CHIP: f32 = 11.0;
 /// A big number, as the latency (36/500 mono).
 #[allow(dead_code)] // The new layout (top bar, panels) uses it.
 pub const T_BIG: f32 = 36.0;
 /// The wordmark beside the 24-point symbol (Unbounded Bold 15).
-#[allow(dead_code)] // The new layout (top bar, panels) uses it.
 pub const T_WORDMARK: f32 = 15.0;
 /// Paragraph line height, as a multiple of the size.
 pub const LEADING: f32 = 1.45;
@@ -592,7 +595,6 @@ pub fn mono_medium(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("mono-medium".into()))
 }
 /// Unbounded Bold: the wordmark, and nothing else.
-#[allow(dead_code)] // The new layout (top bar, panels) uses it.
 pub fn wordmark(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("wordmark".into()))
 }
@@ -845,8 +847,6 @@ mod tests {
                 ("ink on a hovered quiet button", p.ink, p.surface2_hover),
                 ("accent text on accent soft", p.accent_text, p.accent_soft),
 
-                ("ink on the sidebar", p.ink, p.sidebar),
-                ("ink2 on the sidebar", p.ink2, p.sidebar),
                 ("ink on the warning fill", p.ink, p.warn_soft),
             ];
             for (what, fg, bg) in cases {

@@ -503,7 +503,7 @@ impl App {
             48.0 + 96.0 + 14.0,
             48.0 + 260.0 + 14.0,
             self.updates_card_h(ui, col_w),
-            48.0 + HELP_ROW - 6.0 + 14.0,
+            48.0 + 2.0 * HELP_ROW - 6.0 + 14.0,
         ];
         // Two columns: crossing, power, games, pointer and layout, and
         // updates on the left; keys and commands on the right. One column
@@ -511,7 +511,7 @@ impl App {
         let mut at = [(0usize, 0.0f32); 10];
         let mut ys = [0.0f32; 2];
         // Updates first: it is the one card people come to Settings for;
-        // then Appearance, the rest of General.
+        // then the rest of General (Appearance, and oneMK itself: Stop).
         for k in [8, 9, 0, 1, 2, 3, 4, 5, 6, 7] {
             let h = &heights[k];
             let col = if two { usize::from((3..7).contains(&k)) } else { 0 };
@@ -529,8 +529,9 @@ impl App {
             let r = |k: usize| Rect::from_min_size(pos2(all.left() + at[k].0 as f32 * (col_w + gap), all.top() + at[k].1), vec2(col_w, heights[k]));
             // Updates first: first on the page, first in Tab order.
             self.updates_card(ui, r(8));
-            let c = card(ui, r(9), "Appearance");
+            let c = card(ui, r(9), "General");
             self.appearance_row(ui, Rect::from_min_size(pos2(c.left(), c.top() - 6.0), vec2(c.width(), HELP_ROW)));
+            self.service_row(ui, Rect::from_min_size(pos2(c.left(), c.top() - 6.0 + HELP_ROW), vec2(c.width(), HELP_ROW)));
             self.edges_card(ui, r(0));
             self.power_card(ui, r(1));
             let c = card(ui, r(2), "Games");
@@ -560,6 +561,37 @@ impl App {
                 ui.ctx().open_url(egui::OpenUrl::new_tab("https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40"));
             }
         });
+    }
+
+    /// Whether oneMK runs here (as the status line says it) and the way to
+    /// stop it, or to start it again.
+    fn service_row(&mut self, ui: &mut Ui, row: Rect) {
+        ui.painter().hline(row.x_range(), row.top(), Stroke::new(1.0, pal().line));
+        let (tone, text) = self.status_line();
+        let running = self.running().is_some();
+        let busy = self.busy.contains(&Job::Stop) || self.busy.contains(&Job::Start);
+        let (label, name) = match (running, busy) {
+            (true, true) => ("Stopping…", "Stopping oneMK"),
+            (true, false) => ("Stop", "Stop oneMK: turn off sharing on this computer"),
+            (false, true) => ("Starting…", "Starting oneMK"),
+            (false, false) => ("Start oneMK", "Start oneMK"),
+        };
+        let bw = button_width(ui, label);
+        widgets::status_mark(ui.painter(), pos2(row.left() + 3.5, row.center().y), 7.0, widgets::Mark::of(tone));
+        let shown = fit(ui.painter(), &text, &regular(T_BODY), row.width() - bw - 30.0);
+        ui.painter().text(pos2(row.left() + 16.0, row.center().y), Align2::LEFT_CENTER, shown, regular(T_BODY), pal().ink);
+        a11y_text(ui, Id::unique("service-state"), Rect::from_min_max(row.min, pos2(row.right() - bw - 12.0, row.bottom())), Role::Label, &text, None);
+        let b = Rect::from_min_size(pos2(row.right() - bw, row.center().y - 16.0), vec2(bw, 32.0));
+        let can = self.status.is_some() && !busy && !self.sheet_open();
+        if button(ui, b, Id::unique("stop"), label, Look::Quiet, can, Some(name)).clicked() {
+            if running {
+                self.busy.push(Job::Stop);
+                self.link.stop();
+            } else {
+                self.busy.push(Job::Start);
+                self.link.start();
+            }
+        }
     }
 
     /// Room under "Stay in fullscreen windows" for what this desktop can't do.

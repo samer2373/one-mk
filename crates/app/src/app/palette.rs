@@ -120,15 +120,15 @@ fn score(text: &str, query: &str) -> u32 {
 impl App {
     fn palette_entries(&self) -> Vec<Entry> {
         let mut out = vec![];
-        let k = shell::cmd();
-        let tab = |t: Tab, title: &str, hint: String| Entry { group: "Go to", title: title.into(), hint, act: Act::Tab(t) };
-        out.push(tab(Tab::Desk, "Desk", format!("{k}1")));
-        out.push(tab(Tab::Arrange, "Arrange computers", "Desk".into()));
-        out.push(tab(Tab::Wallpaper, "Wallpaper", format!("{k}2")));
-        out.push(tab(Tab::Files, "Clipboard & files", format!("{k}3")));
-        out.push(tab(Tab::Keys, "Keys & mouse", format!("{k}4")));
-        out.push(tab(Tab::Settings, "Settings", format!("{k},")));
-        out.push(tab(Tab::Health, "Health", format!("{k}5")));
+        // The pages in the bar's order, each with its shortcut.
+        let tab = |t: Tab, title: &str| Entry { group: "Go to", title: title.into(), hint: shell::shortcut(t), act: Act::Tab(t) };
+        out.push(tab(Tab::Desk, "Desk"));
+        out.push(tab(Tab::Arrange, "Arrange computers"));
+        out.push(tab(Tab::Wallpaper, "Wallpaper"));
+        out.push(tab(Tab::Files, "Clipboard & files"));
+        out.push(tab(Tab::Keys, "Keys & mouse"));
+        out.push(tab(Tab::Health, "Health"));
+        out.push(tab(Tab::Settings, "Settings"));
         let act = |title: String, hint: &str, act: Act| Entry { group: "Actions", title, hint: hint.into(), act };
         match self.status.as_ref() {
             Some(None) => out.push(act("Start oneMK".into(), "", Act::Start)),
@@ -169,7 +169,7 @@ impl App {
             out.push(Entry { group: "Settings", title: format!("Appearance: {}", a.label()), hint: hint.into(), act: Act::Appearance(a) });
         }
         for (title, t) in SETTINGS {
-            let page = if *t == Tab::Arrange { "Desk" } else { TABS.iter().find(|x| x.0 == *t).map_or("", |x| x.1) };
+            let page = TABS.iter().find(|x| x.0 == *t).map_or("", |x| x.1);
             out.push(Entry { group: "Settings", title: (*title).into(), hint: page.into(), act: Act::Tab(*t) });
         }
         out

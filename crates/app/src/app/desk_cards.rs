@@ -8,8 +8,8 @@ use super::*;
 use crate::icons::{self, Icon};
 use crate::rtt::{Quality, Ring};
 
-/// How wide the band's banner and toast are at most: the desk's width, so
-/// their right edges line up with the cards and the toolbar.
+/// How wide the band's banner is at most: the desk's width, so its right
+/// edge lines up with the cards and the toolbar.
 pub(super) const BAND_W: f32 = f32::INFINITY;
 
 pub(super) struct NoticeLay {
@@ -18,6 +18,9 @@ pub(super) struct NoticeLay {
     pub h: f32,
     pub w: f32,
     pub take_back: bool,
+    /// Something needs the user (being controlled, a permission, a
+    /// computer that refuses this one): the attention fill.
+    pub attention: bool,
 }
 
 /// A toast laid out `w` wide: its message, its detail, and its height
@@ -69,15 +72,15 @@ pub(super) fn toast_action_w(ui: &Ui, t: &Toast) -> f32 {
     24.0 + actions.iter().map(|(label, _)| button_width(ui, label)).sum::<f32>() + 8.0 * (actions.len() - 1) as f32
 }
 
-/// The row the Computers / Arrange switch takes at the desk's top.
+/// The toolbar's row at the desk's top (Choose computer, typing on every
+/// computer, Timer, Lock every screen).
 pub(super) const DESK_VIEWS_H: f32 = 46.0;
 
-fn desk_view_rect(head: Rect) -> Rect {
-    Rect::from_min_size(pos2(head.left(), head.center().y - 15.0), vec2(if head.width() < 630.0 { 160.0 } else { 200.0 }, 30.0))
-}
-
-fn crowded_menu_rect(head: Rect, width: f32, computers: usize) -> Option<Rect> {
-    (computers >= 5).then(|| Rect::from_min_size(pos2(desk_view_rect(head).right() + 8.0, head.center().y - 17.0), vec2(width, 34.0)))
+/// Choose computer, at the toolbar's left: every computer by name, with
+/// whether it is connected and how fast it answers (what the old sidebar's
+/// list said), wherever they sit on the desk.
+fn computers_menu_rect(head: Rect, width: f32) -> Rect {
+    Rect::from_min_size(pos2(head.left(), head.center().y - 17.0), vec2(width, 34.0))
 }
 
 fn compact_desk_actions(head: Rect, menu: Option<Rect>, full_width: f32) -> bool {
@@ -412,37 +415,19 @@ impl App {
     /// The page's actions for every computer at once, at the right of its
     /// title: typing on all of them, and locking every screen.
     pub(super) fn desk_actions(&mut self, ui: &mut Ui, head: Rect) {
-        // The Desk's two views: the computers, and arranging them (Arrange).
-        if self.desk_views_shown() {
-            let labels = ["Computers", "Arrange"];
-            let track = desk_view_rect(head);
-            let pills = Pills {
-                id: Id::unique("desk-view"),
-                track,
-                cells: Pills::even(track, 2, 2.0),
-                labels: &labels,
-                names: vec!["Desk: your computers".into(), "Desk: arrange where each computer sits".into()],
-                chosen: Some(usize::from(self.tab == Tab::Arrange)),
-                enabled: vec![true, true],
-                role: Role::Tab,
-                font: T_BODY,
-            };
-            if let Some(k) = pills.show(ui, self.arrowed) {
-                self.set_tab(if k == 1 { Tab::Arrange } else { Tab::Desk });
-            }
-        }
-        if self.tab != Tab::Desk || self.running().is_none_or(|s| s.peers.is_empty()) {
+        if !self.desk_views_shown() {
             return;
         }
         // Laid out from the right edge, then made left to right, so Tab
-        // reaches them in reading order: broadcast, Timer, Lock.
+        // reaches them in reading order: Choose computer, broadcast, Timer,
+        // Lock.
         let y = head.center().y - 17.0;
         let online = self.running().is_some_and(|s| s.peers.iter().any(|p| p.online));
         let on = self.broadcasting();
         let tiny = head.width() < 630.0;
         let menu_label = if tiny { "Computers" } else { "Choose computer" };
         let menu_width = text_width(ui, menu_label, semibold(T_BODY)) + 40.0;
-        let menu = crowded_menu_rect(head, menu_width, self.running().map_or(0, |status| status.peers.len() + 1));
+        let menu = Some(computers_menu_rect(head, menu_width));
         let timer_width = if tiny { 34.0 } else { text_width(ui, "Timer", semibold(T_BODY)) + 46.0 };
         let bc_label = "Type on every computer";
         let broadcast_width = text_width(ui, bc_label, semibold(T_BODY)) + 34.0 + 58.0;
@@ -470,7 +455,7 @@ impl App {
             let center = pos2(rect.right() - 14.0, rect.center().y);
             painter.line_segment([center + vec2(-3.0, -1.5), center + vec2(0.0, 1.5)], Stroke::new(1.5, pal().ink2));
             painter.line_segment([center + vec2(0.0, 1.5), center + vec2(3.0, -1.5)], Stroke::new(1.5, pal().ink2));
-            if let Some(id) = shell::computers_menu(&response, &status, self.selected_id().as_deref()) {
+            if let Some(id) = self.computers_menu(&response, &status, self.selected_id().as_deref()) {
                 self.select(id);
             }
         }
@@ -550,39 +535,12 @@ impl App {
         }
         // What needs saying right now (broadcasting, being controlled,
         // waiting for permission...): a banner over the desk, read out.
-        // Under the Computers / Arrange switch, which sits at the desk's top.
+        // Under the toolbar's row, which sits at the desk's top.
         let mut top = desk.top() + if self.desk_views_shown() { DESK_VIEWS_H } else { 0.0 };
         if let Some(n) = self.notice_lay(ui, desk.width()) {
             let r = Rect::from_min_size(pos2(desk.left(), top), vec2(n.w, n.h));
-            widgets::glass_panel(ui, "notice", r, 14);
-            let title_h = n.title.size().y;
-            // Volt only while something is on (typing on every computer);
-            // a plain notice (waiting, being controlled) gets a neutral dot.
-            let dot = if self.broadcasting() { pal().accent } else { pal().ink2 };
-            p.circle_filled(pos2(r.left() + 18.0, r.top() + 14.0 + title_h / 2.0), 4.0, dot);
-            let label = format!("{}. {}", n.title.text(), n.sub.text());
-            p.galley(pos2(r.left() + 32.0, r.top() + 14.0), n.title, pal().ink);
-            p.galley(pos2(r.left() + 32.0, r.top() + 14.0 + title_h + 4.0), n.sub, pal().ink2);
-            if n.take_back {
-                // Being controlled: the way back, named, where the eye already is.
-                let bw = button_width(ui, "Take back");
-                let b = Rect::from_min_size(pos2(r.right() - 14.0 - bw, r.center().y - 16.0), vec2(bw, 32.0));
-                let busy = self.busy.contains(&Job::TakeBack);
-                if button(ui, b, Id::unique("notice-take-back"), "Take back", Look::Primary, !busy && !self.sheet_open(), Some("Take back control of this computer")).clicked() {
-                    self.busy.push(Job::TakeBack);
-                    self.link.take_back();
-                }
-            }
-            a11y_text(ui, Id::unique("headline"), r, Role::Status, &label, Some(Live::Polite));
+            self.paint_notice(ui, r, n);
             top = r.bottom() + 8.0;
-        }
-        // The toast, when there is one, comes next in the band (drawn by
-        // `toast_view`, which keeps its timing).
-        if let Some(h) = self.toast_band_h(ui, desk.width()) {
-            self.toast_slot = Some(Rect::from_min_size(pos2(desk.left(), top), vec2(BAND_W.min(desk.width()), h)));
-            top += h + 8.0;
-        } else {
-            self.toast_slot = None;
         }
         if let Some(t) = self.running().and_then(|s| s.transfers.first()).cloned() {
             let (title, detail, frac) = crate::view::transfer_lines(&t);
@@ -594,7 +552,7 @@ impl App {
             // a banner is there already.
             let y = top;
             let r = Rect::from_min_size(pos2(desk.left(), y), vec2(w, 52.0));
-            widgets::glass_panel(ui, "transfer", r, 14);
+            banner_ground(&p, r, false);
             p.text(pos2(r.left() + 14.0, r.top() + 16.0), Align2::LEFT_CENTER, fit(&p, &title, &regular(T_BODY), w - 28.0), regular(T_BODY), pal().ink);
             p.text(pos2(r.left() + 14.0, r.top() + 33.0), Align2::LEFT_CENTER, fit(&p, &detail, &regular(T_META), w - 28.0), regular(T_META), pal().ink2);
             let bar = Rect::from_min_size(pos2(r.left() + 14.0, r.bottom() - 9.0), vec2(w - 28.0, 3.0));
@@ -639,16 +597,58 @@ impl App {
         };
         let (title, sub) = (job(&title, semibold(T_BODY), pal().ink), job(&sub, regular(T_META), pal().ink2));
         let h = (14.0 + title.size().y + 4.0 + sub.size().y + 14.0).max(if take_back { 56.0 } else { 0.0 });
-        Some(NoticeLay { title, sub, h, w, take_back })
+        // Being controlled, a permission still missing, a computer that no
+        // longer trusts this one: these need the user.
+        let attention = self.running().is_some_and(|s| s.controlled_by.is_some() || (!s.input.is_empty() && !s.peers.is_empty()) || s.peers.iter().any(|p| !p.online && s.removed_us(&p.id)));
+        Some(NoticeLay { title, sub, h, w, take_back, attention })
     }
 
-    /// How tall the toast is in the desk's band, if one shows.
-    pub(super) fn toast_band_h(&self, ui: &Ui, desk_w: f32) -> Option<f32> {
-        let t = self.toast.as_ref()?;
-        Some(toast_lay(ui, t, BAND_W.min(desk_w)).2)
+    /// A banner (handoff 4.3): `surface` with a hairline edge, corner 12;
+    /// what needs the user on `warn_soft` with a ◆. The title, what to do,
+    /// and Take back at its right while this computer is controlled.
+    pub(super) fn paint_notice(&mut self, ui: &mut Ui, r: Rect, n: NoticeLay) {
+        let p = ui.painter().clone();
+        banner_ground(&p, r, n.attention);
+        let title_h = n.title.size().y;
+        let mark = pos2(r.left() + 18.0, r.top() + 14.0 + title_h / 2.0);
+        // Cobalt only while something is on (typing on every computer); a
+        // plain notice (waiting, controlling another) gets a neutral dot.
+        if n.attention {
+            widgets::status_mark(&p, mark, 8.0, widgets::Mark::Warn);
+        } else {
+            p.circle_filled(mark, 4.0, if self.broadcasting() { pal().accent } else { pal().ink2 });
+        }
+        let label = format!("{}. {}", n.title.text(), n.sub.text());
+        p.galley(pos2(r.left() + 32.0, r.top() + 14.0), n.title, pal().ink);
+        p.galley(pos2(r.left() + 32.0, r.top() + 14.0 + title_h + 4.0), n.sub, pal().ink2);
+        if n.take_back {
+            // Being controlled: the way back, named, where the eye already is.
+            let bw = button_width(ui, "Take back");
+            let b = Rect::from_min_size(pos2(r.right() - 14.0 - bw, r.center().y - 16.0), vec2(bw, 32.0));
+            let busy = self.busy.contains(&Job::TakeBack);
+            if button(ui, b, Id::unique("notice-take-back"), "Take back", Look::Primary, !busy && !self.sheet_open(), Some("Take back control of this computer")).clicked() {
+                self.busy.push(Job::TakeBack);
+                self.link.take_back();
+            }
+        }
+        a11y_text(ui, Id::unique("headline"), r, Role::Status, &label, Some(Live::Polite));
     }
 
-    /// The band over the desk (banner, toast, a small window's transfer),
+    /// On a page without the desk: the banner while typing goes to every
+    /// computer (with how to stop it), at the page's top. Returns the room
+    /// it takes.
+    pub(super) fn page_banner(&mut self, ui: &mut Ui, body: Rect) -> f32 {
+        if !self.broadcasting() {
+            return 0.0;
+        }
+        let Some(n) = self.notice_lay(ui, body.width()) else { return 0.0 };
+        let r = Rect::from_min_size(body.min, vec2(n.w, n.h));
+        let h = n.h;
+        self.paint_notice(ui, r, n);
+        h + 12.0
+    }
+
+    /// The band over the desk (banner, a small window's transfer),
     /// with its gaps: the desk is framed below it, never under it.
     pub(super) fn band_h(&self, ui: &Ui, desk_w: f32) -> f32 {
         // Only the Desk and Arrange views draw the band.
@@ -659,9 +659,7 @@ impl App {
         if let Some(n) = self.notice_lay(ui, desk_w) {
             h += n.h + 8.0;
         }
-        if let Some(t) = self.toast_band_h(ui, desk_w) {
-            h += t + 8.0;
-        }
+
         if self.running().is_some_and(|s| !s.transfers.is_empty()) {
             h += 52.0 + 8.0;
         }
@@ -763,8 +761,9 @@ impl App {
         }
     }
 
-    /// Whether the Computers / Arrange switch is on the desk's top row.
-    pub(super) fn desk_views_shown(&self) -> bool { matches!(self.tab, Tab::Desk | Tab::Arrange) && !self.off() }
+    /// Whether the toolbar's row is at the desk's top: on the Desk, once a
+    /// computer is paired.
+    pub(super) fn desk_views_shown(&self) -> bool { self.tab == Tab::Desk && self.running().is_some_and(|s| !s.peers.is_empty()) }
 
     /// Decides the banner for this frame (see [`NoticeHold`]).
     pub(super) fn refresh_notice(&mut self, ui: &Ui, now: f64) {
@@ -797,6 +796,12 @@ impl App {
     pub(super) fn drag_hint_file(&self) -> std::path::PathBuf {
         self.link.dir.join(".window-dragged")
     }
+}
+
+/// A banner's ground (handoff 4.3): `surface`, or `warn_soft` when it needs
+/// the user, a hairline edge, corner 12.
+pub(super) fn banner_ground(p: &Painter, r: Rect, attention: bool) {
+    p.rect(r, CornerRadius::same(12), if attention { pal().warn_soft } else { pal().surface }, Stroke::new(1.0, pal().line), StrokeKind::Inside);
 }
 
 /// The banner over the desk. It takes room from the computers below it,
@@ -841,19 +846,19 @@ impl NoticeHold {
 
 #[cfg(test)]
 mod notice_tests {
-    use super::{NoticeHold, compact_desk_actions, crowded_menu_rect, desk_view_rect};
+    use super::{NoticeHold, compact_desk_actions, computers_menu_rect};
     use egui::{Rect, pos2, vec2};
 
     #[test]
-    fn crowded_computer_menu_never_overlaps_other_actions() {
+    fn the_computer_menu_starts_the_toolbar() {
         let head = Rect::from_min_size(pos2(100.0, 20.0), vec2(700.0, 46.0));
-        let menu = crowded_menu_rect(head, 130.0, 5).expect("crowded computer menu");
-        assert_eq!(menu.left(), desk_view_rect(head).right() + 8.0);
-        assert!(crowded_menu_rect(head, 130.0, 4).is_none());
+        let menu = computers_menu_rect(head, 130.0);
+        assert_eq!(menu.left(), head.left());
+        assert_eq!(menu.height(), 34.0);
     }
 
     #[test]
-    fn crowded_menu_keeps_its_place_when_actions_expand() {
+    fn the_computer_menu_never_overlaps_the_other_actions() {
         let context = egui::Context::default();
         crate::style::install(&context);
         let mut output = context.run_ui(Default::default(), |ui| {
@@ -863,12 +868,12 @@ mod notice_tests {
             let broadcast_width = label_width("Type on every computer") + 92.0;
             let full_width = label_width("Lock every screen") + 46.0 + timer_width + broadcast_width + 16.0;
             let compact_width = label_width("Lock screens") + 46.0 + timer_width + 34.0 + 16.0;
-            for width in [600.0, 760.0, 820.0, 950.0, 1200.0, 1500.0] {
+            for width in [820.0, 950.0, 1100.0, 1200.0, 1440.0, 1920.0] {
                 let frame = super::shell::frame(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 675.0)));
                 let head = Rect::from_min_size(frame.content.min, vec2(frame.content.width(), 46.0));
                 let tiny = head.width() < 630.0;
                 let menu_width = if tiny { label_width("Computers") + 40.0 } else { menu_width };
-                let menu = crowded_menu_rect(head, menu_width, 6).expect("menu at every supported width");
+                let menu = computers_menu_rect(head, menu_width);
                 let compact = compact_desk_actions(head, Some(menu), full_width);
                 let actions_width = if tiny { 3.0 * 34.0 + 16.0 } else if compact { compact_width } else { full_width };
                 assert!(menu.right() + 8.0 <= head.right() - actions_width, "menu overlaps actions at {width}");

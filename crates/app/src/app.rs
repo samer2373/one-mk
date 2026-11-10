@@ -34,7 +34,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
-const TOP_H: f32 = 56.0;
 const PANEL_H: f32 = 196.0;
 /// Below this height (plus 22 pt for each other computer) the desk shows
 /// its computers as named chips: monitors any smaller can't carry names.
@@ -60,8 +59,7 @@ enum Tab {
 }
 /// Each tab, and a shorter name for narrow windows. Settings most people
 /// never change (Ctrl and Cmd, gaming mode, edge rules) live in Settings.
-/// Arrange is not a sidebar page: it is the Desk's second view (Computers
-/// and Arrange), so it carries its own name here, never "Desk".
+/// Arrange is a page of its own in the top bar (shell::NAV gives the order).
 const TABS: [(Tab, &str, &str); 7] = [
     (Tab::Desk, "Desk", "Desk"),
     (Tab::Arrange, "Arrange", "Arrange"),
@@ -277,8 +275,6 @@ pub struct App {
     apart: HashSet<String>,
     /// The banner over the desk as drawn this frame (see `refresh_notice`).
     notice: desk_cards::NoticeHold,
-    /// Where the toast goes in the desk's band this frame (None: off the desk).
-    toast_slot: Option<Rect>,
     /// Whether the window had the focus last frame (see `pointer_away`).
     was_focused: bool,
     /// How tall each short cell's contents were last drawn (cards are
@@ -326,7 +322,6 @@ pub struct App {
     size: egui::Vec2,
     now: f64,
     ctx: egui::Context,
-    lockup: egui::TextureHandle,
     /// The macOS permission guide (guide.rs); idle unless started.
     pub guide: crate::guide::Overlay,
 }
@@ -546,7 +541,6 @@ impl App {
             answered: None,
             apart: HashSet::new(),
             notice: desk_cards::NoticeHold::default(),
-            toast_slot: None,
             was_focused: true,
             cell_h: HashMap::new(),
             pending_swap: HashMap::new(),
@@ -574,7 +568,6 @@ impl App {
             size: vec2(size[0], size[1]),
             now: 0.0,
             ctx: cc.egui_ctx.clone(),
-            lockup: lockup_texture(&cc.egui_ctx),
             guide: crate::guide::Overlay::from_env(),
         })
     }
@@ -1183,32 +1176,6 @@ pub fn embedded(bytes: &[u8]) -> ([usize; 2], &[u8]) {
     ([n(0), n(4)], &bytes[8..])
 }
 
-/// The brand lockup (the Crossing mark and the oneMK wordmark), drawn at
-/// 2x for sharpness on high-density screens.
-pub fn lockup_texture(ctx: &egui::Context) -> egui::TextureHandle {
-    let (size, px) = embedded(include_bytes!("../assets/lockup.rgba"));
-    ctx.load_texture("lockup", egui::ColorImage::from_rgba_unmultiplied(size, px), egui::TextureOptions::LINEAR)
-}
-
-/// Where the ink sits in the lockup picture (its clear space around it),
-/// as fractions of its height: left edge, and the centre of the ink.
-const LOCKUP_INK_LEFT: f32 = 65.0 / 52.0;
-const LOCKUP_INK_MID: f32 = 21.5 / 52.0;
-
-/// The lockup with the left edge of its ink at `left_center`, the ink
-/// centred on it vertically, and the picture `height` points tall.
-pub fn draw_lockup(p: &Painter, tex: &egui::TextureHandle, left_center: Pos2, height: f32) {
-    let [w, h] = tex.size();
-    let min = left_center - vec2(LOCKUP_INK_LEFT * height, LOCKUP_INK_MID * height);
-    let rect = Rect::from_min_size(min, vec2(height * w as f32 / h as f32, height));
-    p.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), pal().tint_ink);
-}
-
-/// How wide the lockup's ink is at `height`.
-pub fn lockup_ink_w(height: f32) -> f32 {
-    (213.0 - 65.0) / 52.0 * height
-}
-
 impl App {
     /// The chosen computer, or the one that matters most right now.
     fn selected_id(&self) -> Option<String> {
@@ -1657,30 +1624,25 @@ impl App {
         h.finish()
     }
 
-    /// The Desk's own card has the Start button (off, on the Desk page):
-    /// the sidebar does not offer a second one.
-    fn start_in_card(&self) -> bool {
-        self.tab == Tab::Desk && self.off() && self.status.is_some()
-    }
 
     /// The top bar's button: what it says and does.
     fn action(&self) -> (String, Look, bool, Option<Job>) {
         let controlled = self.running().is_some_and(|s| s.controlled_by.is_some());
         let broadcasting = self.running().is_some_and(|s| !s.broadcast.is_empty());
-        let narrow = self.ctx.content_rect().width() < 1100.0;
+        // Shorter forms for a narrow bar: shell::action_label.
         let (label, look, enabled, job) = match self.status.as_ref() {
             Some(None) if self.busy.contains(&Job::Start) => ("Starting…", Look::Primary, false, None),
             Some(None) => ("Start oneMK", Look::Primary, true, Some(Job::Start)),
             _ if broadcasting && self.busy.contains(&Job::Broadcast(false)) => ("Stopping…", Look::Primary, false, None),
-            _ if broadcasting => (if narrow { "Keyboard stop" } else { "Use keyboard to stop" }, Look::Quiet, false, None),
+            _ if broadcasting => ("Use keyboard to stop", Look::Quiet, false, None),
             _ if controlled && self.busy.contains(&Job::TakeBack) => ("Taking back…", Look::Primary, false, None),
             _ if controlled => ("Take back", Look::Primary, true, Some(Job::TakeBack)),
-            _ if self.running().is_some_and(|s| !s.peers.is_empty()) => (if narrow { "Pair another" } else { "Pair another computer" }, Look::Quiet, true, None),
+            _ if self.running().is_some_and(|s| !s.peers.is_empty()) => ("Pair another computer", Look::Primary, true, None),
             _ => ("Pair a computer", Look::Primary, true, None),
         };
-        // On the desk, Start and Take back are offered where the eye is (in
-        // the card, in the banner) in Volt: here they step back to quiet,
-        // so one Volt action shows at a time.
+        // On the desk, Start, Take back and the first pairing are offered
+        // where the eye is (in the card, in the banner) in cobalt: here they
+        // step back to quiet, so one cobalt action shows at a time.
         let first_pair = job.is_none() && self.running().is_some_and(|s| s.peers.is_empty());
         let look = if look == Look::Primary && self.tab == Tab::Desk && (matches!(job, Some(Job::Start | Job::TakeBack)) || first_pair) { Look::Quiet } else { look };
         (label.to_owned(), look, enabled, job)
@@ -2122,7 +2084,7 @@ impl App {
                 Some((v, t)) if now - t < 0.16 => (v.clone(), Some(*t)),
                 _ => {
                     // Closed: the keyboard goes back to where the sheet was
-                    // opened from (the sidebar's action).
+                    // opened from (the top bar's action).
                     if self.sheet_was.is_some() && widgets::keyboard_focus(ui.ctx()) {
                         ui.memory_mut(|m| m.request_focus(Id::unique("action")));
                     }
@@ -2327,7 +2289,8 @@ impl App {
 
     // ---------- the toast ----------
 
-    fn toast_view(&mut self, ui: &mut Ui, desk: Rect, now: f64) {
+    /// The toast: bottom centre over the page, the banner's look.
+    fn toast_view(&mut self, ui: &mut Ui, page: Rect, now: f64) {
         let Some(t) = &self.toast else { return };
         let age = (now - t.at) as f32;
         let (enter, exit) = (motion::fade(0.22), motion::fade(0.16));
@@ -2337,27 +2300,22 @@ impl App {
         }
         let a_in = motion::out_expo(age / enter);
         let a = a_in.min(((t.life - age) / exit).clamp(0.0, 1.0));
-        // On the desk it takes its place in the band (the desk framed
-        // below it); on other pages it floats at the top, centred.
-        let slot = self.toast_slot.filter(|_| self.tab.desk());
-        let w_max = slot.map_or(520.0f32.min(desk.width() - 120.0) + 46.0, |r| r.width());
+        // It floats at the bottom, centred, and rises a little as it comes.
+        let w_max = 560.0f32.min(page.width() - 32.0);
         let (g, d, h) = desk_cards::toast_lay(ui, t, w_max);
-        let rect = match slot {
-            Some(r) => r.translate(vec2(0.0, -motion::space(6.0) * (1.0 - a_in))),
-            None => {
-                let w = g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x)) + 46.0 + if t.error { desk_cards::toast_action_w(ui, t) } else { 0.0 };
-                let y = desk.top() + TOP_H + 10.0 + h / 2.0 - motion::space(8.0) * (1.0 - a_in);
-                Rect::from_center_size(pos2(desk.center().x, y), vec2(w, h))
-            }
-        };
+        let w = (g.size().x.max(d.as_ref().map_or(0.0, |d| d.size().x)) + 46.0 + if t.error { desk_cards::toast_action_w(ui, t) } else { 0.0 }).min(w_max);
+        let y = page.bottom() - 16.0 - h / 2.0 + motion::space(8.0) * (1.0 - a_in);
+        let rect = Rect::from_center_size(pos2(page.center().x, y), vec2(w, h));
         let layer = egui::LayerId::new(egui::Order::Tooltip, Id::unique("toast"));
         let mut child = ui.new_child(UiBuilder::new().layer_id(layer).max_rect(rect));
         child.set_opacity(a);
         let body = if t.error { Rect::from_min_max(rect.min, pos2(rect.right() - desk_cards::toast_action_w(ui, t), rect.bottom())) } else { rect };
         let resp = child.interact(body, Id::unique("toast-body"), Sense::CLICK);
         let p = child.painter().clone();
-        p.add(egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: pal().shadow(90) }.as_shape(rect, CornerRadius::same(12)));
-        p.rect(rect, CornerRadius::same(12), pal().surface, Stroke::new(1.0, pal().line2), StrokeKind::Inside);
+        for shape in widgets::card_shadow(rect, CornerRadius::same(12)) {
+            p.add(shape);
+        }
+        p.rect(rect, CornerRadius::same(12), pal().surface, Stroke::new(1.0, pal().line), StrokeKind::Inside);
         let dot = if t.error { pal().danger } else { pal().ink };
         let gh = g.size().y;
         // An error that fits on one line is centred on the band; a longer
@@ -2435,7 +2393,7 @@ impl App {
 
     // ---------- keys ----------
 
-    /// Ctrl+1 to 6 switch tabs (Cmd on a Mac).
+    /// Ctrl+1 to 7 switch tabs (Cmd on a Mac).
     fn shortcuts(&mut self, ui: &Ui) {
         if widgets::locked(ui) || self.keys_grab(ui.ctx()) || ui.ctx().data(|data| data.get_temp::<usize>(Id::unique("shortcut-recorder")).is_some() || data.get_temp::<bool>(Id::unique("gesture-recording")).unwrap_or(false)) {
             return;
@@ -2449,9 +2407,11 @@ impl App {
         if self.palette.open {
             return;
         }
-        // One key per page, as the sidebar shows them: ⌘1 Desk, ⌘2
-        // Wallpaper, ⌘3 Clipboard & files, ⌘4 Keys & mouse, ⌘, Settings.
-        for (key, tab) in [(Key::Num1, Tab::Desk), (Key::Num2, Tab::Wallpaper), (Key::Num3, Tab::Files), (Key::Num4, Tab::Keys), (Key::Num5, Tab::Health), (Key::Comma, Tab::Settings)] {
+        // One key per page, in the bar's order: ⌘1 Desk, ⌘2 Arrange, ⌘3
+        // Wallpaper, ⌘4 Clipboard & files, ⌘5 Keys & mouse, ⌘6 Health, ⌘7
+        // Settings (and ⌘, as everywhere).
+        for key in shell::PAGE_KEYS {
+            let Some(tab) = shell::tab_for_key(key) else { continue };
             if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, key)) && (!off || tab.when_off()) {
                 self.set_tab(tab);
             }
@@ -2567,13 +2527,14 @@ impl eframe::App for App {
             let files_narrow = self.tab == Tab::Files && scene.width() < 780.0;
             compact = (frame.height() < COMPACT_BELOW || files_narrow) && self.running().is_some_and(|s| !s.peers.is_empty()) && matches!(self.tab, Tab::Desk | Tab::Arrange | Tab::Files);
         }
-        // The sidebar and the toolbar are made before the desk, so Tab meets
-        // them first (search, pages, the toolbar left to right, then the
-        // computers, then the card); they are painted on a layer above it.
+        // The top bar and the toolbar are made before the desk, so Tab meets
+        // them first (the pages, the bar's right side, the toolbar left to
+        // right, then the computers, then the card); they are painted on a
+        // layer above it.
         {
             let over = egui::LayerId::new(egui::Order::Middle, Id::unique("chrome-layer"));
             let mut top = ui.new_child(UiBuilder::new().layer_id(over).max_rect(full).id_salt("chrome"));
-            self.sidebar(&mut top, &f, now);
+            self.top_bar(&mut top, f.bar, now);
             self.desk_actions(&mut top, head.translate(vec2(0.0, shell::HEAD_H)));
         }
         if self.tab.desk() && self.tab != Tab::Files {
@@ -2593,7 +2554,11 @@ impl eframe::App for App {
             let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
             self.desk_overlay(ui, scene, hovering);
         }
-        let body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
+        let mut body = Rect::from_min_max(pos2(content.left(), head.bottom() + 4.0), content.max);
+        // Broadcasting is said on every page (the desk says it in its band).
+        if !matches!(self.tab, Tab::Desk | Tab::Arrange) {
+            body.min.y += self.page_banner(ui, body);
+        }
         match self.tab {
             Tab::Files => {
                 let mut child = page(ui, body, "files");
@@ -2629,10 +2594,10 @@ impl eframe::App for App {
         // The sheet sits over the panel, leaving the desk room to show
         // what is being paired.
         self.sheet(ui, content, now);
-        self.toast_view(ui, desk, now);
+        self.toast_view(ui, content, now);
         self.palette(ui.ctx(), now);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
-        crate::chrome::paint_fake_buttons(ui.painter());
+        crate::chrome::paint_fake_buttons(&ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("fake-window-buttons"))));
         self.guide.show(ui.ctx());
         self.update_notice(ui.ctx());
         // Tell the link whether a graph was drawn: it asks the daemon for
@@ -2691,6 +2656,8 @@ impl eframe::App for App {
 /// - `ONE_MK_APP_DROP=n` drops n files where it's unclear who gets them;
 /// - `ONE_MK_APP_DRAG=1` carries the first other computer across this one;
 /// - `ONE_MK_APP_FOCUS=1` puts the keyboard on the position control;
+///   `ONE_MK_APP_FOCUS_BAR=Wallpaper|search|action|update-pill|health-line`
+///   on that control of the top bar;
 /// - `ONE_MK_APP_TOAST=1` shows an error toast; `ONE_MK_APP_AUTOSTART=1`
 ///   shows start at login as on;
 /// - `ONE_MK_APP_CONFIRM=1` says the codes match a second after they
@@ -2719,6 +2686,9 @@ impl eframe::App for App {
 ///   other theme that many seconds in (the cross-fade) (style.rs `Themer`).
 /// - `ONE_MK_APP_GALLERY=1` draws every shared control in every state, in
 ///   both themes, over the window (gallery.rs).
+/// - `ONE_MK_APP_FILM=dir` saves every frame from `ONE_MK_APP_FILM_FROM`
+///   for `ONE_MK_APP_FILM_FOR` seconds, each named by its time, then quits
+///   (motion evidence: the intro, a drag, the Keys zoom).
 /// - `ONE_MK_REDUCE_MOTION=1` works in every build (see `motion`).
 #[cfg(any(debug_assertions, feature = "design-evidence"))]
 mod debug {
@@ -2873,6 +2843,13 @@ mod debug {
             let on = !app.broadcasting();
             app.ask_broadcast(on);
         }
+        // ONE_MK_APP_FOCUS_BAR=Wallpaper|search|action|update-pill|health-line:
+        // the keyboard on that control of the top bar (a page by its name).
+        if let Some(name) = var("ONE_MK_APP_FOCUS_BAR") && now > 1.0 {
+            ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
+            let id = if matches!(name.as_str(), "search" | "action" | "update-pill" | "health-line") { Id::unique(name.as_str()) } else { Id::unique(("nav", name.as_str())) };
+            ctx.memory_mut(|m| m.request_focus(id));
+        }
         if ready && app.tab != Tab::Keys && var("ONE_MK_APP_FOCUS").is_some() && now > 1.0 {
             ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
             if let Some(id) = app.selected_id() {
@@ -3006,7 +2983,31 @@ mod debug {
         }
     }
 
+    /// `ONE_MK_APP_FILM=dir` (with `ONE_MK_APP_FILM_FROM` and `_FOR`, in
+    /// seconds): every frame in that window saved as `dir/<time>.ppm`, then
+    /// quits; motion evidence (each file named by when it was drawn).
+    fn film(ctx: &egui::Context, now: f64) {
+        let Some(dir) = std::env::var_os("ONE_MK_APP_FILM") else { return };
+        let num = |name: &str, or: f64| std::env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(or);
+        let (from, span) = (num("ONE_MK_APP_FILM_FROM", 1.0), num("ONE_MK_APP_FILM_FOR", 2.0));
+        ctx.request_repaint();
+        if now > from + span + 0.5 {
+            std::process::exit(0);
+        }
+        if now < from || now > from + span {
+            return;
+        }
+        let path = std::path::PathBuf::from(dir).join(format!("{now:08.3}.ppm"));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::ScreenshotCallback::new(move |img| {
+            let Ok(mut f) = std::fs::File::create(&path) else { return };
+            let _ = writeln!(f, "P6 {} {} 255", img.size[0], img.size[1]);
+            let rgb: Vec<u8> = img.pixels.iter().flat_map(|p| [p.r(), p.g(), p.b()]).collect();
+            let _ = f.write_all(&rgb);
+        })));
+    }
+
     pub fn shot(ctx: &egui::Context, now: f64) {
+        film(ctx, now);
         let Some(path) = std::env::var_os("ONE_MK_APP_SHOT") else { return };
         let after: f64 = std::env::var("ONE_MK_APP_SHOT_AFTER").ok().and_then(|s| s.parse().ok()).unwrap_or(3.0);
         let asked = ctx.data(|d| d.get_temp::<bool>(Id::unique("shot-asked")).unwrap_or(false));

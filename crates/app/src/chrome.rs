@@ -1,5 +1,5 @@
 //! The window itself. On macOS there is no grey title bar: the close,
-//! minimise and zoom buttons sit inside the glass sidebar, and the window
+//! minimise and zoom buttons sit at the left of the top bar, and the window
 //! is see-through, with the desktop behind it blurred by the window server
 //! (as Terminal and the system's own sidebars do). The glass is then real
 //! glass: the wallpaper's colours come through every panel. Elsewhere the
@@ -29,14 +29,12 @@ pub fn reduce_transparency() -> bool {
 }
 
 /// Where the macOS window buttons go, in points from the window's top left:
-/// centred in this strip, the close button this far in, inside the
-/// sidebar's top corner beside the logo.
-pub const BUTTONS_Y: egui::Rangef = egui::Rangef { min: 0.0, max: 44.0 };
+/// centred in this strip (the top bar), the close button this far in,
+/// before the logo (which starts 78 points in, app/shell.rs `MAC_INSET`).
+pub const BUTTONS_Y: egui::Rangef = egui::Rangef { min: 0.0, max: 60.0 };
 pub const BUTTONS_X: f32 = 18.0;
-/// The buttons' width, margins included: the logo starts after them.
-pub const BUTTONS_W: f32 = 76.0;
 
-/// The window buttons sit inside the sidebar (macOS).
+/// The window buttons sit in the top bar (macOS).
 pub fn mac_frame() -> bool {
     cfg!(target_os = "macos") || fake::desktop()
 }
@@ -90,7 +88,7 @@ pub fn viewport(b: egui::ViewportBuilder) -> egui::ViewportBuilder {
     if mac_frame() { b.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false) } else { b }
 }
 
-/// Every frame: put the window buttons back where the sidebar expects
+/// Every frame: put the window buttons back where the top bar expects
 /// them (AppKit moves them again on each layout).
 pub fn place_buttons(ctx: &egui::Context, frame: &eframe::Frame) {
     if mac_frame() {

@@ -37,15 +37,15 @@ impl App {
             self.begin_update();
         }
         let _ = ctx;
-        // What to show lives in the sidebar's foot (shell.rs, update_box),
-        // and the choices in Settings.
+        // The top bar says an update waits (a pill, shell.rs); what it is
+        // and the choices are in Settings (updates_card).
     }
 }
 
-/// What the update box in the sidebar shows.
+/// Where an update stands: the top bar's pill, and the box in Settings.
 pub(super) enum UpdateBox {
-    /// A newer version, and whether this install can replace itself.
-    Ready { version: String, can: bool, advice: String, password: bool },
+    /// A newer version waits (the card says how it installs here).
+    Ready,
     /// Running from the disk image (or translocated): move it first.
     MoveFirst,
     /// Downloading or installing: how far (0–1, when known) and what now.
@@ -68,8 +68,7 @@ impl App {
         if status.is_some_and(|s| s.move_to_applications) {
             return Some(UpdateBox::MoveFirst);
         }
-        let version = self.update_available.clone()?;
-        Some(UpdateBox::Ready { version, can: status.is_none_or(|s| s.can_update), advice: status.map(|s| s.advice.clone()).unwrap_or_default(), password: status.is_some_and(|s| s.needs_password) })
+        self.update_available.as_ref().map(|_| UpdateBox::Ready)
     }
 }
 
@@ -77,7 +76,82 @@ impl App {
     pub(super) fn updates_card_h(&self, ui: &Ui, width: f32) -> f32 {
         let rollback = self.update_ui.status.as_ref().is_some_and(|s| s.rollback_available);
         let note_h = self.update_ui.status.as_ref().map_or(26.0, |status| ui.painter().layout(update_note(status).to_owned(), regular(T_META), pal().ink3, (width - 36.0).max(1.0)).size().y);
-        48.0 + 2.0 * 36.0 + 44.0 + if rollback { 44.0 } else { 0.0 } + note_h.max(26.0) + 14.0
+        48.0 + 2.0 * 36.0 + 44.0 + if rollback { 44.0 } else { 0.0 } + self.update_box_h(ui, width - 36.0) + note_h.max(26.0) + 14.0
+    }
+
+    /// What the old sidebar's update box said that the card's own lines don't
+    /// (its note already says how a ready update goes): how far it is,
+    /// moving the app first, or what went wrong. Its height `w` wide.
+    fn update_box_h(&self, ui: &Ui, w: f32) -> f32 {
+        let para_h = |text: &str, rows: usize| {
+            let mut job = egui::text::LayoutJob::simple(text.to_owned(), regular(T_META), pal().ink2, w.max(1.0));
+            job.wrap.max_rows = rows;
+            ui.painter().layout_job(job).size().y
+        };
+        match self.update_box() {
+            Some(UpdateBox::MoveFirst) => 24.0 + 44.0,
+            Some(UpdateBox::Working { .. }) => 16.0,
+            Some(UpdateBox::Failed { said }) => 24.0 + para_h(if said.is_empty() { FAILED_FALLBACK } else { &said }, 3) + 10.0 + 44.0,
+            _ => 0.0,
+        }
+    }
+
+    /// The update box's lines in the card, from `y`; returns where it ends.
+    fn update_box_rows(&mut self, ui: &mut Ui, c: Rect, mut y: f32) -> f32 {
+        let line = |ui: &Ui, y: f32, text: &str, font: egui::FontId, col: Color32| {
+            ui.painter().text(pos2(c.left(), y + 9.0), Align2::LEFT_CENTER, fit(ui.painter(), text, &font, c.width()), font, col);
+        };
+        let locked = self.sheet_open();
+        match self.update_box() {
+            Some(UpdateBox::MoveFirst) => {
+                line(ui, y, "Move to Applications", semibold(T_BODY), pal().ink);
+                ui.painter().text(pos2(c.left() + text_width(ui, "Move to Applications", semibold(T_BODY)) + 10.0, y + 9.0), Align2::LEFT_CENTER, "It's running from the disk image", regular(T_META), pal().ink2);
+                let b = Rect::from_min_size(pos2(c.left(), y + 24.0), vec2(button_width(ui, "Move to Applications"), 32.0));
+                if button(ui, b, Id::unique("update-move"), "Move to Applications", Look::Quiet, !locked, None).clicked() {
+                    self.update_ui.failed = false;
+                    self.busy.push(Job::Update);
+                    self.link.move_to_applications();
+                }
+                y += 24.0 + 44.0;
+            }
+            Some(UpdateBox::Working { done, said }) => {
+                // A bar that fills; without a percentage, a short bead that
+                // travels along it.
+                let track = Rect::from_min_size(pos2(c.left(), y + 4.0), vec2(c.width(), 5.0));
+                let p = ui.painter();
+                p.rect_filled(track, CornerRadius::same(3), pal().surface2);
+                let fill = match done {
+                    Some(k) => Rect::from_min_size(track.min, vec2(track.width() * k.clamp(0.04, 1.0), track.height())),
+                    None => {
+                        let t = if motion::reduced() { 0.5 } else { (self.now * 0.8).fract() as f32 };
+                        let bw = track.width() * 0.28;
+                        Rect::from_min_size(pos2(track.left() + (track.width() - bw) * t, track.top()), vec2(bw, track.height()))
+                    }
+                };
+                p.rect_filled(fill, CornerRadius::same(3), pal().accent);
+                if done.is_none() && !motion::reduced() {
+                    ui.ctx().request_repaint_after_secs(1.0 / 30.0);
+                }
+                widgets::a11y_text(ui, Id::unique("update-progress"), track, Role::ProgressIndicator, &said, Some(Live::Polite));
+                y += 16.0;
+            }
+            Some(UpdateBox::Failed { said }) => {
+                line(ui, y, "The update didn't finish", semibold(T_BODY), pal().ink);
+                let shown = if said.is_empty() { FAILED_FALLBACK } else { said.as_str() };
+                let mut job = egui::text::LayoutJob::simple(shown.to_owned(), regular(T_META), pal().ink2, c.width().max(1.0));
+                job.wrap.max_rows = 3;
+                let g = ui.painter().layout_job(job);
+                let gh = g.size().y;
+                ui.painter().galley(pos2(c.left(), y + 24.0), g, pal().ink2);
+                let b = Rect::from_min_size(pos2(c.left(), y + 24.0 + gh + 10.0), vec2(button_width(ui, "Download"), 32.0));
+                if button(ui, b, Id::unique("update-download"), "Download", Look::Quiet, !locked, Some("Open the download page")).clicked() {
+                    self.link.download_update();
+                }
+                y += 24.0 + gh + 10.0 + 44.0;
+            }
+            _ => {}
+        }
+        y
     }
 
     /// Settings > Updates: whether to look for new versions (at most once
@@ -139,11 +213,15 @@ impl App {
             }
             y += 44.0;
         }
+        let y = self.update_box_rows(ui, c, y);
         // The last check failed (offline, or a release without its signed
         // list): say so rather than look up to date.
         para(ui, pos2(c.left(), y), c.width(), update_note(&status), regular(T_META), pal().ink3);
     }
 }
+
+/// What a failed update says when it said nothing itself.
+const FAILED_FALLBACK: &str = "Get the new version from the download page.";
 
 /// Whether the note under the button is the one about a failed check.
 fn failure_note_shown(status: &UpdateStatus) -> bool {
