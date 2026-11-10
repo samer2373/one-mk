@@ -40,14 +40,17 @@ fn compact(ui: &Ui) -> bool {
 pub(super) fn head(ui: &Ui, origin: Pos2, width: f32, title: &str, sub: &str) -> f32 {
     let x = origin.x + INSET;
     let w = (width - 2.0 * INSET).max(200.0);
+    // The type scale's headline (28/600, set a little tight), then its
+    // sentence a step larger than the body and quieter (14, `ink2`).
     let p = ui.painter();
-    p.text(pos2(x, origin.y + 36.0), Align2::LEFT_CENTER, fit(p, title, &semibold(T_PAGE), w), semibold(T_PAGE), pal().ink);
-    let sub_h = if sub.is_empty() { 0.0 } else { para(ui, pos2(x, origin.y + 52.0), w, sub, regular(T_BODY), pal().ink2).max(19.0) };
-    a11y_text(ui, Id::unique(("page-title", title)), Rect::from_min_size(pos2(x, origin.y + 18.0), vec2(w, 36.0)), Role::Heading, title, None);
+    widgets::title_text(p, pos2(x, origin.y + 38.0), Align2::LEFT_CENTER, title, T_PAGE, w);
+    let sub_y = origin.y + 60.0;
+    let sub_h = if sub.is_empty() { 0.0 } else { para(ui, pos2(x, sub_y), w, sub, regular(T_LEAD), pal().ink2).max(20.0) };
+    a11y_text(ui, Id::unique(("page-title", title)), Rect::from_min_size(pos2(x, origin.y + 20.0), vec2(w, 36.0)), Role::Heading, title, None);
     if !sub.is_empty() {
-        a11y_text(ui, Id::unique(("page-sub", title)), Rect::from_min_size(pos2(x, origin.y + 52.0), vec2(w, sub_h)), Role::Label, sub, None);
+        a11y_text(ui, Id::unique(("page-sub", title)), Rect::from_min_size(pos2(x, sub_y), vec2(w, sub_h)), Role::Label, sub, None);
     }
-    origin.y + 52.0 + sub_h + 16.0
+    sub_y + sub_h + 20.0
 }
 
 /// A page being laid out.
@@ -165,7 +168,7 @@ impl Card {
     fn start(ui: &Ui, x: f32, y: f32, w: f32, label: &str, col: Option<usize>) -> Card {
         let p = ui.painter();
         if !label.is_empty() {
-            p.text(pos2(x, y + 10.0), Align2::LEFT_CENTER, fit(p, label, &semibold(T_BODY), w), semibold(T_BODY), pal().ink2);
+            widgets::section_label(p, pos2(x + 2.0, y + 10.0), Align2::LEFT_CENTER, label, w);
             a11y_text(ui, Id::unique(("card-label", label)), Rect::from_min_size(pos2(x, y), vec2(w, LABEL_H)), Role::Heading, label, None);
         }
         let top = y + if label.is_empty() { 0.0 } else { LABEL_H };
@@ -352,7 +355,10 @@ pub(super) fn text_h(ui: &Ui, text: &str, width: f32, font: FontId) -> f32 {
 pub(super) fn banner_frame(ui: &Ui, rect: Rect, attention: bool) {
     let p = ui.painter();
     let fill = if attention { pal().warn_soft } else { pal().surface };
-    p.rect(rect, CornerRadius::same(12), fill, Stroke::new(1.0, pal().line), StrokeKind::Inside);
+    for s in widgets::card_shadow(rect, CornerRadius::same(12)) {
+        p.add(s);
+    }
+    p.rect(rect, CornerRadius::same(12), fill, Stroke::new(1.0, pal().card_edge), StrokeKind::Inside);
 }
 
 #[cfg(test)]

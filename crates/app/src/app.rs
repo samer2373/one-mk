@@ -1733,7 +1733,7 @@ impl App {
                 sub: "It stops sharing with this computer. To use it again, pair the two computers again.".into(),
                 code: None,
                 check: None,
-                buttons: vec![("Cancel".into(), Look::Quiet, Act::Close), ("Remove".into(), Look::Primary, Act::Forget(id.clone(), name.clone()))],
+                buttons: vec![("Cancel".into(), Look::Quiet, Act::Close), ("Remove".into(), Look::Destructive, Act::Forget(id.clone(), name.clone()))],
                 focus: 0,
                 appear: *at,
                 key: "remove".into(),
@@ -1747,7 +1747,7 @@ impl App {
                 sub: "It is removed from your saved layouts. The computers on the desk stay as they are now.".into(),
                 code: None,
                 check: None,
-                buttons: vec![("Cancel".into(), Look::Quiet, Act::Close), ("Delete".into(), Look::Primary, Act::DeleteProfile(name.clone()))],
+                buttons: vec![("Cancel".into(), Look::Quiet, Act::Close), ("Delete".into(), Look::Destructive, Act::DeleteProfile(name.clone()))],
                 focus: 0,
                 appear: *at,
                 key: "delete-profile".into(),
@@ -1915,9 +1915,9 @@ impl App {
             // The sheet takes its own clicks: none reach the scrim.
             let _ = child.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
             let p = child.painter().clone();
-            let radius = CornerRadius::same(R_SHEET);
-            p.add(egui::epaint::Shadow { offset: [0, 18], blur: 40, spread: 0, color: pal().shadow(115) }.as_shape(rect, radius));
-            p.rect(rect, radius, pal().surface, Stroke::new(1.0, pal().line2), StrokeKind::Inside);
+            for shape in widgets::overlay_shapes(rect, R_SHEET) {
+                p.add(shape);
+            }
             a11y_text(child, Id::unique("sheet-dialog"), rect, Role::Dialog, &format!("{}. {}", view.title, view.sub), Some(Live::Polite));
             let body_rect = Rect::from_min_size(rect.min + vec2(pad, pad), vec2(inner, fit.body));
             // What the sheet says, from `at` down (in a list that scrolls
@@ -1976,7 +1976,7 @@ impl App {
                 let id = Id::unique(("sheet-btn", &view.key, k));
                 let resp = button(child, r, id, shown, *look, true, Some(label));
                 if !row {
-                    p.galley(r.center() - button_labels[k].size() / 2.0, button_labels[k].clone(), if *look == Look::Primary { pal().on_accent } else { pal().ink });
+                    p.galley(r.center() - button_labels[k].size() / 2.0, button_labels[k].clone(), if matches!(*look, Look::Primary | Look::Destructive) { pal().on_accent } else { pal().ink });
                 }
                 // The keyboard starts on the safe button (never the one
                 // that confirms), each time the sheet's step changes.
@@ -2105,10 +2105,9 @@ impl App {
         let body = if t.error { Rect::from_min_max(rect.min, pos2(rect.right() - desk_cards::toast_action_w(ui, t), rect.bottom())) } else { rect };
         let resp = child.interact(body, Id::unique("toast-body"), Sense::CLICK);
         let p = child.painter().clone();
-        for shape in widgets::card_shadow(rect, CornerRadius::same(12)) {
+        for shape in widgets::overlay_shapes(rect, 12) {
             p.add(shape);
         }
-        p.rect(rect, CornerRadius::same(12), pal().surface, Stroke::new(1.0, pal().line), StrokeKind::Inside);
         let dot = if t.error { pal().danger } else { pal().ink };
         let gh = g.size().y;
         // An error that fits on one line is centred on the band; a longer
@@ -2255,7 +2254,7 @@ impl SheetBody {
     const GAP_SUB: f32 = 6.0;
     const GAP: f32 = 16.0;
     /// The pairing code's `surface2` block.
-    const CODE_H: f32 = 64.0;
+    const CODE_H: f32 = 72.0;
 
     fn height(&self) -> f32 {
         self.title + Self::GAP_SUB + self.sub
@@ -2295,16 +2294,29 @@ fn pairing_code(ui: &Ui, block: Rect, code: &str) {
     let p = ui.painter();
     p.rect_filled(block, CornerRadius::same(R_INNER), pal().surface2);
     let font = mono_medium(SIZE);
-    let adv = text_width(ui, "0", font.clone()) + 0.08 * SIZE;
     let digits: Vec<char> = code.chars().collect();
-    let group = if digits.len() == 6 { 12.0 } else { 0.0 };
-    let total = adv * digits.len() as f32 - 0.08 * SIZE + group;
+    // Each digit on a tile of its own (as a code field is), three and three;
+    // set close (0.08 em) when the sheet is too narrow for tiles.
+    let glyph = text_width(ui, "0", font.clone());
+    let (cell_w, gap) = (glyph + 18.0, 6.0);
+    let group = if digits.len() == 6 { 14.0 } else { 0.0 };
+    let cell_h = (block.height() - 16.0).clamp(24.0, 52.0);
+    let tiled = cell_w * digits.len() as f32 + gap * digits.len().saturating_sub(1) as f32 + group;
+    let tiles = tiled <= block.width() - 16.0;
+    let adv = if tiles { cell_w + gap } else { glyph + 0.08 * SIZE };
+    let total = if tiles { tiled } else { adv * digits.len() as f32 - 0.08 * SIZE + group };
     let mut x = block.center().x - total / 2.0;
     for (i, ch) in digits.iter().enumerate() {
         if i == 3 {
             x += group;
         }
-        p.text(pos2(x, block.center().y), Align2::LEFT_CENTER, ch, font.clone(), pal().ink);
+        if tiles {
+            let cell = Rect::from_min_size(pos2(x, block.center().y - cell_h / 2.0), vec2(cell_w, cell_h));
+            p.rect(cell, CornerRadius::same(8), pal().raised, Stroke::new(1.0, pal().line2), StrokeKind::Inside);
+            p.text(cell.center(), Align2::CENTER_CENTER, ch, font.clone(), pal().ink);
+        } else {
+            p.text(pos2(x, block.center().y), Align2::LEFT_CENTER, ch, font.clone(), pal().ink);
+        }
         x += adv;
     }
     let spoken: Vec<String> = digits.iter().map(char::to_string).collect();
@@ -3248,9 +3260,9 @@ mod tests {
         assert_eq!(sheet_width(820.0, 0.0), SHEET_MIN_W);
         assert_eq!(sheet_width(820.0, 500.0), 500.0);
         assert_eq!(sheet_width(820.0, 2000.0), 820.0 - 2.0 * SHEET_MARGIN);
-        // The pairing code: title, sentence, the 64-point block, buttons.
+        // The pairing code: title, sentence, the 72-point block of digit tiles, buttons.
         let code = SheetBody { title: 22.0, sub: 19.0, code: true, alternatives: 0.0 };
-        assert_eq!(code.height(), 22.0 + 6.0 + 19.0 + 16.0 + 64.0);
+        assert_eq!(code.height(), 22.0 + 6.0 + 19.0 + 16.0 + 72.0);
         // Looking for a computer, with the other ways in: fits 820 × 540 whole.
         let looking = SheetBody { title: 22.0, sub: 38.0, code: false, alternatives: 181.0 };
         let fit = sheet_fit(small, sheet_width(820.0, 0.0), looking.height(), SHEET_BUTTON_H);

@@ -128,25 +128,69 @@ pub(super) fn pointer_mark(p: &Painter, tip: Pos2, h: f32, col: Color32) {
 
 /// A quiet line of the last two minutes in `r`: the accent, amber while it
 /// stalls; lost packets as amber ticks.
+/// Its ground is a faint dotted baseline across the whole span, so a line
+/// only seconds old reads as the start of the graph, not a stray mark; the
+/// line keeps 3 points clear of the top and bottom, and the latest reading
+/// is a dot.
 fn sparkline(p: &Painter, r: Rect, ring: &crate::rtt::Ring, now: f64, q: Option<Quality>) {
-    let t = ring.trace(now, r.width(), r.height());
+    let inner = r.shrink2(vec2(0.0, 3.0));
+    let t = ring.trace(now, inner.width(), inner.height());
     let col = if matches!(q, Some(Quality::Stalls | Quality::Slow)) { pal().warn } else { pal().accent };
+    let base = r.bottom() - 0.5;
+    let mut x = r.left();
+    while x < r.right() {
+        p.hline(egui::Rangef::new(x, (x + 2.0).min(r.right())), base, Stroke::new(1.0, pal().line2));
+        x += 5.0;
+    }
+    let mut last = None;
     for line in &t.lines {
-        let pts: Vec<Pos2> = line.iter().map(|[x, y]| r.min + vec2(*x, *y)).collect();
+        let pts: Vec<Pos2> = line.iter().map(|[x, y]| inner.min + vec2(*x, *y)).collect();
         match pts[..] {
             [] => {}
             [one] => {
                 p.circle_filled(one, 1.5, col);
             }
             _ => {
-                p.add(egui::Shape::line(desk_cards::smooth(&pts), Stroke::new(1.5, col)));
+                let curve = desk_cards::smooth(&pts);
+                // A wash under the line, down to the baseline.
+                let mut m = egui::Mesh::default();
+                let wash = col.gamma_multiply(0.10);
+                for (k, q) in curve.iter().enumerate() {
+                    m.colored_vertex(*q, wash);
+                    m.colored_vertex(pos2(q.x, base), col.gamma_multiply(0.0));
+                    if k > 0 {
+                        let i = (2 * k) as u32;
+                        m.add_triangle(i - 2, i - 1, i);
+                        m.add_triangle(i - 1, i + 1, i);
+                    }
+                }
+                p.add(egui::Shape::mesh(m));
+                p.add(egui::Shape::line(curve, Stroke::new(1.5, col)));
             }
         }
+        last = line.last().map(|[x, y]| inner.min + vec2(*x, *y)).or(last);
+    }
+    if let Some(at) = last {
+        p.circle_filled(at, 3.5, pal().surface);
+        p.circle_filled(at, 2.25, col);
     }
     for x in &t.losses {
         let x = r.left() + x;
         p.line_segment([pos2(x, r.top() + 4.0), pos2(x, r.bottom())], Stroke::new(1.0, pal().warn.gamma_multiply(0.6)));
         p.circle_stroke(pos2(x, r.top() + 2.5), 2.5, Stroke::new(1.0, pal().warn));
+    }
+}
+
+/// A toolbar chip's ground: `surface` (on, `accent_soft` in the accent's
+/// edge) on a 1-point contact shadow, corner 9.
+fn tool_ground(p: &Painter, r: Rect, lit: bool) {
+    let radius = CornerRadius::same(widgets::button_radius(TOOL_H));
+    let lift = if pal().theme == Theme::Light { 0.06 } else { 0.4 };
+    p.add(egui::epaint::Shadow { offset: [0, 1], blur: 2, spread: 0, color: pal().shadow_ink.gamma_multiply(lift) }.as_shape(r, radius));
+    let (fill, edge) = if lit { (pal().accent_soft, Stroke::new(1.5, pal().accent)) } else { (pal().surface, Stroke::new(1.0, pal().card_edge)) };
+    p.rect(r, radius, fill, edge, StrokeKind::Inside);
+    if !lit && pal().theme == Theme::Dark {
+        p.add(widgets::top_light(r, widgets::button_radius(TOOL_H)));
     }
 }
 
@@ -234,16 +278,17 @@ impl App {
             r
         };
         let tool = |ui: &mut Ui, r: Rect, id: &str, icon: Icon, label: &str, lit: bool, enabled: bool, name: &str| {
-            let resp = button(ui, r, Id::unique(id), "", Look::Quiet, enabled, Some(name));
+            // Chips that float on the floor: `surface` in a card's edge on a
+            // 1-point contact shadow (a quiet fill on the ground reads muddy);
+            // the button over it brings hover, press and focus.
+            tool_ground(ui.painter(), r, lit);
+            let resp = button(ui, r, Id::unique(id), "", Look::Text, enabled, Some(name));
             let p = ui.painter();
             let ink = if lit { pal().accent } else if enabled { pal().ink2 } else { pal().ink3 };
             let icon_at = if label.is_empty() { Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(16.0, 16.0)) } else { Rect::from_min_size(pos2(r.left() + 12.0, r.center().y - 8.0), vec2(16.0, 16.0)) };
             icons::draw(p, icon, icon_at, ink);
             if !label.is_empty() {
                 p.text(pos2(r.left() + 34.0, r.center().y), Align2::LEFT_CENTER, label, medium(T_BODY), if enabled || lit { pal().ink } else { pal().ink3 });
-            }
-            if lit {
-                p.rect_stroke(r, CornerRadius::same(widgets::button_radius(TOOL_H)), Stroke::new(1.5, pal().accent), StrokeKind::Inside);
             }
             resp
         };
@@ -315,6 +360,16 @@ impl App {
                 }
             }
         }
+        // Beside the desk the panel is as tall as what it holds (no void
+        // under its last row), easing to a new height when that changes;
+        // under the desk (a narrow window) it keeps its band.
+        let rect = if rect.width() <= 420.0 && self.desk_ui.content_h > 0.0 {
+            let want = (self.desk_ui.content_h + 2.0 * PANEL_PAD).min(rect.height());
+            let h = tween(ui.ctx(), Id::unique("desk-panel-h"), want, motion::space(0.18), motion::out_cubic);
+            Rect::from_min_size(rect.min, vec2(rect.width(), h.min(rect.height())))
+        } else {
+            rect
+        };
         widgets::panel(ui, rect);
         let inner = rect.shrink(PANEL_PAD);
         // A new computer described: its contents fade in, rising a little.
@@ -372,17 +427,35 @@ impl App {
         th + 6.0 + sh
     }
 
+    /// An empty state's emblem: the icon on a soft tile (`accent_soft` for
+    /// a first step, `surface2` for a stop), 44 square; its height and gap.
+    fn emblem(&self, ui: &Ui, c: Rect, icon: Icon, lit: bool) -> f32 {
+        let p = ui.painter();
+        let tile = Rect::from_min_size(c.min, vec2(44.0, 44.0));
+        let (fill, ink) = if lit { (pal().accent_soft, pal().accent_text) } else { (pal().surface2, pal().ink2) };
+        p.rect(tile, CornerRadius::same(R_INNER), fill, Stroke::new(1.0, pal().line), StrokeKind::Inside);
+        icons::draw(p, icon, Rect::from_center_size(tile.center(), vec2(22.0, 22.0)), ink);
+        tile.height() + SP_4
+    }
+
+    /// The panel's footer: a hairline across the panel, then `draw` below it.
+    fn footer_rule(&self, ui: &Ui, c: Rect, y: f32) -> f32 {
+        ui.painter().hline(egui::Rangef::new(c.left() - PANEL_PAD + 1.0, c.right() + PANEL_PAD - 1.0), y + 0.5, Stroke::new(1.0, pal().line));
+        y + SP_2
+    }
+
     /// oneMK is off: what that means, and Start oneMK.
     fn off_panel(&mut self, ui: &mut Ui, c: Rect) -> f32 {
         let (title, sub) = self.headline_text();
-        let mut y = c.top() + self.panel_words(ui, c, &title, &sub, "off") + GAP;
+        let top = c.top() + self.emblem(ui, c, Icon::Power, false);
+        let mut y = top + self.panel_words(ui, Rect::from_min_max(pos2(c.left(), top), c.max), &title, &sub, "off") + GAP;
         let busy = self.busy.contains(&Job::Start);
         let b = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), 38.0));
         if button(ui, b, Id::unique("start-in-card"), if busy { "Starting…" } else { "Start oneMK" }, Look::Primary, !busy && !self.sheet_open(), Some("Start oneMK on this computer")).clicked() {
             self.busy.push(Job::Start);
             self.link.start();
         }
-        y = b.bottom() + GAP - 12.0;
+        y = self.footer_rule(ui, c, b.bottom() + GAP);
         y = self.autostart_row(ui, c, y, false);
         y - c.top()
     }
@@ -390,13 +463,14 @@ impl App {
     /// Nothing paired: the first step, with its one action.
     fn first_panel(&mut self, ui: &mut Ui, c: Rect, _status: &Status) -> f32 {
         let text = "Open oneMK on both computers on the same network. Compare the six-digit codes to pair securely.";
-        let mut y = c.top() + self.panel_words(ui, c, "Pair your first computer", text, "first") + GAP;
+        let top = c.top() + self.emblem(ui, c, Icon::Plus, true);
+        let mut y = top + self.panel_words(ui, Rect::from_min_max(pos2(c.left(), top), c.max), "Pair your first computer", text, "first") + GAP;
         let b = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), 38.0));
         if button(ui, b, Id::unique("pair-in-card"), "Pair a computer", Look::Primary, !self.sheet_open(), None).clicked() {
             let now = self.now;
             self.start_pairing(now);
         }
-        y = b.bottom() + GAP - 12.0;
+        y = self.footer_rule(ui, c, b.bottom() + GAP);
         y = self.autostart_row(ui, c, y, true);
         y = self.received_row(ui, c, y, false);
         y - c.top()
@@ -408,6 +482,7 @@ impl App {
         let p = ui.painter();
         let h = 42.0;
         let sw = Rect::from_min_size(pos2(c.left(), c.top() + (h - 31.0) / 2.0), vec2(46.0, 31.0));
+        p.add(egui::epaint::Shadow { offset: [0, 1], blur: 3, spread: 0, color: pal().shadow_ink.gamma_multiply(if pal().theme == Theme::Light { 0.12 } else { 0.5 }) }.as_shape(sw, CornerRadius::same(6)));
         p.rect_filled(sw, CornerRadius::same(6), crate::style::BEZEL);
         // Its screen as the desk shows it: its wallpaper, or dark while it is away.
         let device = self.scene.index(id).map(|i| &self.scene.devices[i]);
@@ -449,7 +524,7 @@ impl App {
             }
             y = b.bottom() + GAP;
         }
-        y -= 12.0;
+        y -= SP_2;
         y = self.autostart_row(ui, c, y, true);
         // Keep the pointer here.
         let locked = self.pointer_locked();
@@ -562,11 +637,16 @@ impl App {
             y = self.latency_line(ui, c, y, status, peer, now) + GAP;
             y = self.peer_actions(ui, c, y, status, peer) + GAP;
         } else {
-            y += para(ui, pos2(c.left(), y), c.width(), OFFLINE, regular(T_BODY), pal().ink2) + GAP;
+            // Away: why, in a quiet well, with the "off" mark.
+            let th = widgets::para_code_h(ui, c.width() - 42.0, OFFLINE, regular(T_BODY));
+            let well = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), th + 2.0 * 14.0));
+            widgets::well(ui.painter(), well);
+            widgets::status_mark(ui.painter(), pos2(well.left() + 18.0, well.top() + 14.0 + 9.0), 8.0, widgets::Mark::Off);
+            para(ui, pos2(well.left() + 30.0, well.top() + 14.0), c.width() - 42.0, OFFLINE, regular(T_BODY), pal().ink2);
+            y = well.bottom() + GAP;
         }
         // Where it sits: set here without dragging.
-        let p = ui.painter();
-        p.text(pos2(c.left(), y + 7.0), Align2::LEFT_CENTER, "Sits", regular(T_META), pal().ink2);
+        widgets::section_label(ui.painter(), pos2(c.left(), y), Align2::LEFT_TOP, "Sits", c.width());
         let track = Rect::from_min_size(pos2(c.left(), y + 22.0), vec2(c.width(), 34.0));
         let side = self.side_shown(&peer.id, peer.side);
         let labels: Vec<&str> = PLACES.iter().map(|(_, l)| *l).collect();
@@ -584,7 +664,7 @@ impl App {
         if let Some(k) = pills.show(ui, self.arrowed) {
             self.choose_side(&peer.id, PLACES[k].0, true);
         }
-        y = track.bottom() + GAP - 12.0;
+        y = track.bottom() + SP_2;
         // Ctrl and Cmd: chosen from a menu.
         let current = self.pending_swap.get(&peer.id).cloned().unwrap_or_else(|| peer.swap.clone());
         let words = SWAPS.iter().find(|(v, _)| *v == current).map_or("Auto", |(_, l)| *l);
@@ -626,12 +706,13 @@ impl App {
         if r.clicked() {
             self.wallpaper_command(Command::Computer { id: peer.id.clone(), enabled: !on });
         }
-        y = row.bottom() + GAP;
-        // Destructive, at the foot: a danger text button (it asks first).
+        // Destructive, in the footer under a hairline: a danger text button
+        // (it asks first), right after the rows (the panel ends there).
+        y = self.footer_rule(ui, c, row.bottom() + SP_2);
         let label = "Remove this computer";
         let w = text_width(ui, label, widgets::button_font(Look::Danger)) + 26.0;
         // Its text flush with the panel's left edge.
-        let b = Rect::from_min_size(pos2(c.left() - 13.0, y.max(c.bottom() - 30.0)), vec2(w, 30.0));
+        let b = Rect::from_min_size(pos2(c.left() - 13.0, y), vec2(w, 30.0));
         if widgets::content_button(ui, b, Id::unique(("remove", &peer.id)), label, Look::Danger, !self.sheet_open(), Some(&format!("Remove {} (asks first)", peer.name))).clicked() {
             self.removing = Some((peer.id.clone(), peer.name.clone(), now));
         }
@@ -641,61 +722,70 @@ impl App {
     /// The round trip now (36 mono), what it means, and the last two
     /// minutes as a small line; Measure again beside the words.
     fn latency_line(&mut self, ui: &mut Ui, c: Rect, y: f32, status: &Status, peer: &PeerStatus, now: f64) -> f32 {
-        let h = 36.0;
-        let r = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), h));
+        // A readout well: the number (32 mono) and its word on one baseline,
+        // Measure again at the right; under them, once there are readings
+        // enough, the last two minutes across the well's whole width.
         let summary = self.summary_of(&peer.id);
         let q = summary.and_then(|s| s.quality());
+        let ring = self.rtts.of(&peer.id).filter(|_| summary.is_some_and(|s| s.count >= rtt::MIN_SAMPLES));
+        let graphed = ring.is_some();
+        let well = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), if graphed { 100.0 } else { 64.0 }));
+        widgets::well(ui.painter(), well);
+        let c = well.shrink2(vec2(14.0, 0.0));
+        let r = Rect::from_min_size(pos2(c.left(), well.top() + 14.0), vec2(c.width(), 36.0));
+        let measure = self.latency.contains(&peer.id) || self.failed_measure.contains(&peer.id);
+        let room = r.width() - if measure { 32.0 } else { 0.0 };
         let p = ui.painter().clone();
         let mut x = r.left();
         match summary {
             Some(s) => {
                 let n = rtt::ms_number(s.now_us);
-                let big = mono_medium(T_BIG);
-                let g = p.layout_no_wrap(n, big, pal().ink);
+                let g = p.layout_no_wrap(n, mono_medium(T_BIG), pal().ink);
                 // The number's baseline at the row's foot.
                 p.galley(pos2(x, r.bottom() - g.size().y + 4.0), g.clone(), pal().ink);
                 x += g.size().x + 10.0;
                 let word = latency_word(q);
                 let col = if matches!(q, Some(Quality::Stalls | Quality::Slow)) { pal().warn } else { pal().ink2 };
+                let word = fit(&p, &word, &mono(T_BODY), (r.left() + room - x).max(20.0));
                 let wg = p.layout_no_wrap(word, mono(T_BODY), col);
                 p.galley(pos2(x, r.bottom() - wg.size().y - 2.0), wg.clone(), col);
                 x += wg.size().x + 6.0;
             }
             None => {
                 let text = if !status.broadcast.is_empty() { "Latency unavailable during broadcast" } else { "No samples yet" };
-                p.text(pos2(x, r.center().y), Align2::LEFT_CENTER, fit(&p, text, &regular(T_BODY), c.width() - 40.0), regular(T_BODY), pal().ink2);
-                x += text_width(ui, text, regular(T_BODY)).min(c.width() - 40.0) + 6.0;
+                let shown = fit(&p, text, &regular(T_BODY), room);
+                p.text(pos2(x, r.center().y), Align2::LEFT_CENTER, &shown, regular(T_BODY), pal().ink2);
+                x += text_width(ui, &shown, regular(T_BODY)) + 6.0;
+                if shown != text {
+                    ui.interact(Rect::from_min_size(r.min, vec2(room, r.height())), Id::unique(("peer-latency-cut", &peer.id)), Sense::hover()).on_hover_text(text);
+                }
             }
         }
-        let spark = Rect::from_min_size(pos2(r.right() - 90.0, r.bottom() - 26.0), vec2(90.0, 26.0));
-        let graphed = summary.is_some_and(|s| s.count >= rtt::MIN_SAMPLES) && x + 30.0 < spark.left();
-        if graphed && let Some(ring) = self.rtts.of(&peer.id) {
+        let spark = Rect::from_min_max(pos2(c.left(), r.bottom() + 10.0), pos2(c.right(), well.bottom() - 12.0));
+        if let Some(ring) = ring {
             sparkline(&p, spark, ring, self.rtt_now(), q);
         }
-        if self.latency.contains(&peer.id) || self.failed_measure.contains(&peer.id) {
+        if measure {
             let busy = self.measuring.is_some();
-            let room = if graphed { spark.left() - 6.0 } else { r.right() };
-            if x + 24.0 <= room {
-                let b = Rect::from_min_size(pos2(x, r.bottom() - 24.0), vec2(24.0, 24.0));
-                let spin = if self.measuring.as_ref() == Some(&peer.id) && !motion::reduced() {
-                    ui.ctx().request_repaint();
-                    (now * 5.0) as f32
-                } else {
-                    0.0
-                };
-                if widgets::icon_button(ui, b, Id::unique(("measure", &peer.id)), if busy { "Measuring…" } else { "Measure again" }, !busy, |pp, rr, col| widgets::draw_refresh(pp, rr, col, spin)).clicked() {
-                    self.measure(&peer.id);
-                }
+            let b = Rect::from_min_size(pos2(r.right() - 24.0, r.center().y - 10.0), vec2(24.0, 24.0));
+            let spin = if self.measuring.as_ref() == Some(&peer.id) && !motion::reduced() {
+                ui.ctx().request_repaint();
+                (now * 5.0) as f32
+            } else {
+                0.0
+            };
+            if widgets::icon_button(ui, b, Id::unique(("measure", &peer.id)), if busy { "Measuring…" } else { "Measure again" }, !busy, |pp, rr, col| widgets::draw_refresh(pp, rr, col, spin)).clicked() {
+                self.measure(&peer.id);
             }
         }
         // The graph and the number, as words (on hover and for screen readers).
         let words = self.latency_words(peer);
         a11y_text(ui, Id::unique(("peer-latency", &peer.id)), r, Role::Label, &words, None);
-        ui.interact(Rect::from_min_max(r.min, pos2(x, r.max.y)), Id::unique(("peer-latency-tip", &peer.id)), Sense::hover()).on_hover_text(&words);
+        ui.interact(Rect::from_min_max(r.min, pos2(x.min(r.left() + room), r.max.y)), Id::unique(("peer-latency-tip", &peer.id)), Sense::hover()).on_hover_text(&words);
         if graphed {
             ui.interact(spark, Id::unique(("peer-spark-tip", &peer.id)), Sense::hover()).on_hover_text(format!("Round trip, last {}", rtt::span_words()));
         }
-        r.bottom()
+        well.bottom()
     }
 
     /// Switch to it (the one primary action), then Send files and Get

@@ -788,15 +788,11 @@ fn draw_card(
     }
     let p = ui.painter().clone();
     // Shadow, body, hairline.
-    let shadow = egui::epaint::Shadow {
-        offset: [0, 10],
-        blur: 28,
-        spread: 0,
-        color: pal().shadow((120.0 * alpha) as u8),
-    };
-    p.add(shadow.as_shape(card, CornerRadius::same(RADIUS)));
-    p.rect_filled(card, CornerRadius::same(RADIUS), pal().surface.gamma_multiply(alpha));
-    p.rect_stroke(card, CornerRadius::same(RADIUS), Stroke::new(1.0, pal().line2.gamma_multiply(alpha)), StrokeKind::Inside);
+    // The overlays' look (a sheet's): their layered shadow, `raised`, a
+    // `line2` edge and the light along the top, faded in with the card.
+    for shape in crate::widgets::overlay_shapes(card, RADIUS) {
+        p.add(crate::widgets::faded(shape, alpha));
+    }
 
     let pointing = matches!(v.phase, Phase::Waiting) && v.settings.is_some();
     if let Some((dir, tip)) = arrow {

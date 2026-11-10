@@ -173,7 +173,22 @@ palette! {
     /// white on the dark floor, ink on the light one. See [`Palette::tint`].
     tint_ink,
     /// What pressing moves a fill toward.
-    press_toward;
+    press_toward,
+
+    // ---- elevation (the polish pass) ----
+    /// What floats over everything (sheets, the palette, toasts, popovers):
+    /// white in light; a step above `surface` in dark, so page < card <
+    /// overlay read as three layers.
+    raised,
+    /// A card's and the panel's edge: a touch firmer than `line`.
+    card_edge,
+    /// The light along a card's top edge (dark: a faint lift; light: none
+    /// to speak of, the shadow does the work).
+    edge_hi,
+    /// The chosen tab in the top bar: a lifted capsule.
+    tab_on,
+    /// The fill of a button that confirms something destructive (white on it).
+    danger_fill;
     /// How far pressing moves a fill toward `press_toward`.
     press_amount,
     /// How strong shadows are: 1 is the dark theme's, as before.
@@ -256,6 +271,11 @@ impl Palette {
             ring: rgba(0x2F54EB, 0.18),
             tint_ink: ink,
             press_toward: ink,
+            raised: rgb(0xFFFFFF),
+            card_edge: rgba(0x16171A, 0.085),
+            edge_hi: rgba(0xFFFFFF, 0.65),
+            tab_on: rgb(0xFFFFFF),
+            danger_fill: rgb(0xC0392B),
             press_amount: 0.10,
             shadow_k: 0.35,
             card_shadow: 1.0,
@@ -304,13 +324,18 @@ impl Palette {
             field_edge_lit: rgba(0xFFFFFF, 0.28),
             switch_off_lit: mix(rgb(0x3A3B41), ink, 0.08),
             key_edge: ink3,
-            glass_top: rgba(0x1A1B1F, 0.96),
-            glass: rgba(0x1A1B1F, 0.96),
+            glass_top: rgba(0x202126, 0.96),
+            glass: rgba(0x202126, 0.96),
             room_tint: rgba(0x111214, 0.88),
             glass_edge: rgba(0xFFFFFF, 0.22),
             ring: rgba(0x4D6DFF, 0.18),
             tint_ink: white,
             press_toward: black,
+            raised: rgb(0x202126),
+            card_edge: rgba(0xFFFFFF, 0.085),
+            edge_hi: rgba(0xFFFFFF, 0.055),
+            tab_on: rgb(0x26272C),
+            danger_fill: rgb(0xC4443A),
             press_amount: 0.3,
             shadow_k: 1.0,
             card_shadow: 0.0,
@@ -556,6 +581,19 @@ pub const R_GROUP: u8 = 14;
 /// The gap round and between panels.
 pub const M: f32 = 12.0;
 
+/// The spacing scale (an 8-point rhythm with a 4 for tight pairs): use
+/// these for gaps between parts, rather than numbers of their own.
+#[allow(dead_code)] // The whole scale, for every page to draw from.
+pub const SP_1: f32 = 4.0;
+pub const SP_2: f32 = 8.0;
+#[allow(dead_code)]
+pub const SP_3: f32 = 12.0;
+pub const SP_4: f32 = 16.0;
+#[allow(dead_code)]
+pub const SP_5: f32 = 24.0;
+#[allow(dead_code)]
+pub const SP_6: f32 = 32.0;
+
 // ---- Overlays (handoff 5.8): the sheet, the palette, popovers and menus.
 
 /// A sheet's and the command palette's corner.
@@ -578,10 +616,18 @@ pub const PALETTE_ROW: f32 = 40.0;
 // shortcut, key name and command, Unbounded only in the wordmark. The scale
 // is the handoff's (tokens.json `type.scale`).
 
-/// A page's title (22/600).
-pub const T_PAGE: f32 = 22.0;
-/// A section's title, as Keys & mouse's (20/600).
-pub const T_SECTION: f32 = 20.0;
+/// A page's title (28/600; the polish pass gave pages a real headline).
+pub const T_PAGE: f32 = 28.0;
+/// A stage view's title, as Keys & mouse's (22/600).
+pub const T_SECTION: f32 = 22.0;
+/// The sentence under a page's title: calmer than the body, a step larger.
+pub const T_LEAD: f32 = 14.0;
+/// A group's label above its card, and a panel's section label (12/600,
+/// `ink2`, tracked [`TRACK_LABEL`]).
+pub const T_LABEL: f32 = 12.0;
+pub const TRACK_LABEL: f32 = 0.3;
+/// Titles are set a little tight (−0.02 em at 28).
+pub const TRACK_TITLE: f32 = -0.5;
 /// Panel titles and the sheet title (16/600).
 pub const T_TITLE: f32 = 16.0;
 /// Body, row labels, tabs, buttons (13; buttons 500, the primary 600).
@@ -590,8 +636,8 @@ pub const T_BODY: f32 = 13.0;
 pub const T_META: f32 = 12.0;
 /// Mono chips (11).
 pub const T_CHIP: f32 = 11.0;
-/// A big number, as the latency (36/500 mono).
-pub const T_BIG: f32 = 36.0;
+/// A big number, as the latency (32/500 mono, in its readout well).
+pub const T_BIG: f32 = 32.0;
 /// The wordmark beside the 24-point symbol (Unbounded Bold 15).
 pub const T_WORDMARK: f32 = 15.0;
 /// Paragraph line height, as a multiple of the size.
@@ -659,7 +705,7 @@ pub fn apply_visuals(ctx: &egui::Context) {
         let v = &mut style.visuals;
         *v = if p.theme == Theme::Light { egui::Visuals::light() } else { egui::Visuals::dark() };
         v.panel_fill = p.bg;
-        v.window_fill = p.surface;
+        v.window_fill = p.raised;
         v.faint_bg_color = p.surface2;
         v.extreme_bg_color = p.surface;
         v.code_bg_color = p.surface2;
@@ -668,7 +714,8 @@ pub fn apply_visuals(ctx: &egui::Context) {
         // Popovers, menus and tooltips (handoff 5.8): `surface`, a 1-point
         // `line2`, corner 10, and a soft shadow straight below (not egui's
         // offset one), so they read as lifted over a panel of the same fill.
-        v.popup_shadow = egui::epaint::Shadow { offset: [0, 6], blur: 20, spread: 0, color: p.shadow(46) };
+        let lift = if p.theme == Theme::Light { p.shadow_ink.gamma_multiply(0.12) } else { p.shadow_ink.gamma_multiply(0.5) };
+        v.popup_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: lift };
         v.window_corner_radius = CornerRadius::same(12);
         v.menu_corner_radius = CornerRadius::same(R_POPOVER);
         v.selection.bg_fill = p.accent_soft;
@@ -867,7 +914,7 @@ mod tests {
     #[test]
     fn both_palettes_are_complete() {
         let (l, d) = (Palette::light(), Palette::dark());
-        let translucent = ["line", "line2", "floor", "grid", "hover", "well", "field_edge_lit", "glass_top", "glass", "room_tint", "glass_edge", "ring"];
+        let translucent = ["line", "line2", "floor", "grid", "hover", "well", "field_edge_lit", "glass_top", "glass", "room_tint", "glass_edge", "ring", "card_edge", "edge_hi"];
         for p in [l, d] {
             for (name, c) in p.colours() {
                 assert_ne!(c, Color32::PLACEHOLDER, "{name}");
@@ -895,6 +942,8 @@ mod tests {
                 ("ink on bg", p.ink, p.bg),
                 ("ink2 on bg", p.ink2, p.bg),
                 ("ink on surface2", p.ink, p.surface2),
+                ("ink2 on an overlay", p.ink2, p.raised),
+                ("ink2 on the chosen tab", p.ink2, p.tab_on),
                 ("ink on the chosen segment", p.ink, p.seg_on),
                 ("ink on a hovered quiet button", p.ink, p.surface2_hover),
                 ("accent text on accent soft", p.accent_text, p.accent_soft),
@@ -908,6 +957,7 @@ mod tests {
             // White on the accent: 4.5:1 in light; the handoff's dark accent
             // (#4D6DFF) gives white 4.24:1, so the dark primary button's
             // label is held to 4.2 (it is semibold).
+            assert!(contrast(p.on_accent, p.danger_fill) >= 4.5, "{:?}: white on the destructive fill", p.theme);
             for (what, bg) in [("on-accent on accent", p.accent), ("on-accent on hovered accent", p.accent_hover), ("on-accent on pressed accent", p.accent_press)] {
                 let c = contrast(p.on_accent, bg);
                 assert!(c >= if p.theme == Theme::Light { 4.5 } else { 4.2 }, "{:?}: {what}: {c:.2}:1", p.theme);

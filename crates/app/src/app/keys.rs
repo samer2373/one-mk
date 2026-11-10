@@ -270,7 +270,7 @@ mod gesture_tests {
     #[test]
     fn compact_setup_surface_is_scoped_to_keyboard() {
         for hover in [0.0, 0.5, 1.0] {
-            assert_eq!(setup_fill(false, hover, false), mix(Color32::TRANSPARENT, pal().hover, hover));
+            assert_eq!(setup_fill(false, hover, false), mix(pal().surface, pal().surface2_hover, hover));
             assert_eq!(setup_fill(true, hover, false), mix(pal().accent_soft, pal().pressed(pal().accent_soft, 0.4), hover));
             assert_ne!(setup_fill(false, hover, true), setup_fill(false, hover, false));
         }
@@ -475,7 +475,7 @@ const PANEL_GAP: f32 = 18.0;
 fn card_begin(ui: &Ui, top: Pos2, w: f32, title: &str) -> Card {
     let p = ui.painter();
     widgets::hairline(p, egui::Rangef::new(top.x, top.x + w), top.y);
-    p.text(pos2(top.x, top.y + PANEL_GAP + 8.0), Align2::LEFT_CENTER, title, regular(T_META), pal().ink2);
+    widgets::section_label(p, pos2(top.x, top.y + PANEL_GAP + 8.0), Align2::LEFT_CENTER, title, w);
     a11y_text(ui, Id::unique(("card", title)), Rect::from_min_size(top + vec2(0.0, PANEL_GAP), vec2(w, 16.0)), Role::Heading, title, None);
     Card { top, inner: Rect::from_min_max(top + vec2(0.0, PANEL_GAP + 22.0), pos2(top.x + w, f32::INFINITY)) }
 }
@@ -505,13 +505,15 @@ fn flow(ui: &Ui, left: f32, top: f32, width: f32, labels: &[&str]) -> (Vec<Rect>
 }
 
 /// A chip that is on or off: a quick setup (the handoff's chip: on, the
-/// accent's edge on `accent_soft`; off, a `line2` edge). In the compact
-/// panel an off chip is a quiet fill.
+/// accent's edge on `accent_soft`; off, `surface` in a `line2` edge). In
+/// the compact panel an off chip is a quiet fill.
 fn setup_fill(on: bool, hover: f32, compact: bool) -> Color32 {
     match (compact, on) {
         (_, true) => mix(pal().accent_soft, pal().pressed(pal().accent_soft, 0.4), hover),
-        (true, false) => mix(pal().surface, pal().surface2_hover, hover),
-        (false, false) => mix(Color32::TRANSPARENT, pal().hover, hover),
+        // In the panel (on `surface`), a quiet fill; on the stage's floor,
+        // a `surface` chip that lifts off it.
+        (true, false) => mix(pal().surface2, pal().surface2_hover, hover),
+        (false, false) => mix(pal().surface, pal().surface2_hover, hover),
     }
 }
 
@@ -727,7 +729,14 @@ fn small_button(ui: &mut Ui, rect: Rect, id: Id, label: &str, a11y_label: Option
     let press = tween(ui.ctx(), id.with("press"), f32::from(r.is_pointer_button_down_on()), 0.08, motion::out_cubic);
     let radius = CornerRadius::same(widgets::button_radius(rect.height()));
     let p = ui.painter();
-    p.rect_filled(rect, radius, widgets::pressed(mix(pal().surface2, pal().surface2_hover, hover), press));
+    // It floats on the stage's floor: `surface` in a card's edge on a
+    // 1-point contact shadow (a quiet fill on the ground reads muddy).
+    let lift = if pal().theme == crate::style::Theme::Light { 0.06 } else { 0.4 };
+    p.add(egui::epaint::Shadow { offset: [0, 1], blur: 2, spread: 0, color: pal().shadow_ink.gamma_multiply(lift * (1.0 - press)) }.as_shape(rect, radius));
+    p.rect(rect, radius, widgets::pressed(mix(pal().surface, pal().surface2_hover, hover), press), Stroke::new(1.0, pal().card_edge), StrokeKind::Inside);
+    if pal().theme == crate::style::Theme::Dark {
+        p.add(widgets::top_light(rect, radius.nw));
+    }
     if !label.is_empty() {
         p.text(rect.center(), Align2::CENTER_CENTER, fit(p, label, &medium(T_META), rect.width() - 12.0), medium(T_META), pal().ink);
     }
@@ -745,7 +754,7 @@ fn kbd_fit(p: &Painter, at: Pos2, anchor: Align2, text: &str, max_w: f32) -> Rec
     let shown = fit(p, text, &mono(T_META), (max_w - 16.0).max(10.0));
     let g = p.layout_no_wrap(shown, mono(T_META), pal().ink);
     let rect = anchor.anchor_size(at, g.size() + vec2(16.0, 8.0));
-    p.rect_filled(rect, CornerRadius::same(6), pal().surface2);
+    p.rect(rect, CornerRadius::same(6), pal().surface2, Stroke::new(1.0, pal().line), StrokeKind::Inside);
     p.galley(rect.center() - g.size() / 2.0, g, pal().ink);
     rect
 }
@@ -1030,16 +1039,14 @@ impl App {
         self.keys_panel(ui, lay.panel, lay.compact, now);
     }
 
-    /// Title (20/600), Keyboard | Mouse, and "For: All computers ▾" at the right.
+    /// Title (22/600), Keyboard | Mouse, and "For: All computers ▾" at the right.
     fn keys_header(&mut self, ui: &mut Ui, r: Rect, now: f64) {
         let title = "Keys & mouse";
-        let font = semibold(T_SECTION);
-        let tw = text_width(ui, title, font.clone());
-        ui.painter().text(r.left_center(), Align2::LEFT_CENTER, title, font, pal().ink);
+        let tw = widgets::title_text(ui.painter(), r.left_center(), Align2::LEFT_CENTER, title, T_SECTION, r.width()).width();
         a11y_text(ui, Id::unique(("page", title)), Rect::from_min_size(r.min, vec2(tw, r.height())), Role::Heading, title, None);
         let labels = ["Keyboard", "Mouse"];
         let widths: Vec<f32> = labels.iter().map(|l| text_width(ui, l, semibold(T_BODY)) + 28.0).collect();
-        let track = Rect::from_min_size(pos2(r.left() + tw + 14.0, r.center().y - 17.0), vec2(widths.iter().sum::<f32>() + 8.0, 34.0));
+        let track = Rect::from_min_size(pos2(r.left() + tw + 18.0, r.center().y - 17.0), vec2(widths.iter().sum::<f32>() + 8.0, 34.0));
         let mut x = track.left() + 3.0;
         let cells = widths.iter().map(|w| {
             let cell = Rect::from_min_size(pos2(x, track.top() + 3.0), vec2(*w, 28.0));
@@ -1637,8 +1644,18 @@ impl App {
             None => {}
         }
         if n == 0 {
+            // An empty state that looks meant: the keys' icon on a soft tile
+            // beside the sentence, in a quiet well.
             let text = "No keys are changed yet. Click a key above, or start with a quick setup.";
-            return y + para(ui, pos2(left, y), width, text, regular(T_BODY), pal().ink2);
+            let tw = width - 28.0 - 48.0;
+            let th = widgets::para_code_h(ui, tw, text, regular(T_BODY));
+            let well = Rect::from_min_size(pos2(left, y), vec2(width, (th + 28.0).max(64.0)));
+            widgets::well(ui.painter(), well);
+            let tile = Rect::from_min_size(pos2(well.left() + 14.0, well.top() + 14.0), vec2(36.0, 36.0));
+            ui.painter().rect(tile, CornerRadius::same(10), pal().accent_soft, Stroke::new(1.0, pal().line), StrokeKind::Inside);
+            crate::icons::draw(ui.painter(), crate::icons::Icon::Keys, Rect::from_center_size(tile.center(), vec2(18.0, 18.0)), pal().accent_text);
+            para(ui, pos2(tile.right() + 12.0, well.center().y - th / 2.0), tw, text, regular(T_BODY), pal().ink2);
+            return well.bottom();
         }
         let busy = self.tuning_busy();
         let chosen = self.keys.selected.and_then(|code| self.own_rule(code)).map(|(i, _)| i);
@@ -2103,7 +2120,7 @@ impl App {
     /// is sent and no action runs. Returns how tall it is.
     fn test_card(&mut self, ui: &mut Ui, at: Pos2, w: f32, now: f64) -> f32 {
         let p = ui.painter().clone();
-        p.text(pos2(at.x, at.y + 8.0), Align2::LEFT_CENTER, "Test it", regular(T_META), pal().ink2);
+        widgets::section_label(&p, pos2(at.x, at.y + 8.0), Align2::LEFT_CENTER, "Test it", w);
         let has = self.keys.tester.as_ref().is_some_and(|(t, ..)| !t.pressed.chips.is_empty() || t.note.is_some());
         let clear = Rect::from_center_size(pos2(at.x + w - 10.0, at.y + 8.0), vec2(22.0, 22.0));
         if has && widgets::icon_button(ui, clear, Id::unique("test-clear"), "Clear the test box", true, draw_cross).clicked()

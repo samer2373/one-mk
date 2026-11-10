@@ -322,7 +322,14 @@ impl App {
 /// A banner's ground (handoff 4.3): `surface`, or `warn_soft` when it needs
 /// the user, a hairline edge, corner 12.
 pub(super) fn banner_ground(p: &Painter, r: Rect, attention: bool) {
-    p.rect(r, CornerRadius::same(12), if attention { pal().warn_soft } else { pal().surface }, Stroke::new(1.0, pal().line), StrokeKind::Inside);
+    // A card's elevation (it floats over the floor), its fill per need.
+    for s in widgets::card_shadow(r, CornerRadius::same(12)) {
+        p.add(s);
+    }
+    p.rect(r, CornerRadius::same(12), if attention { pal().warn_soft } else { pal().surface }, Stroke::new(1.0, pal().card_edge), StrokeKind::Inside);
+    if !attention && pal().theme == Theme::Dark {
+        p.add(widgets::top_light(r, 12));
+    }
 }
 
 /// The banner over the desk. It takes room from the computers below it,

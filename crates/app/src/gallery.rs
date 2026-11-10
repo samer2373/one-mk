@@ -50,7 +50,7 @@ fn column(p: &Painter, r: Rect, title: &str) {
         p.text(pos2(x0 + 70.0 + k as f32 * cell + 4.0, y), Align2::LEFT_CENTER, *name, regular(T_META), pal().ink3);
     }
     y += 16.0;
-    for (look, word) in [(Look::Primary, "Primary"), (Look::Quiet, "Secondary"), (Look::Text, "Text"), (Look::Danger, "Danger")] {
+    for (look, word) in [(Look::Primary, "Primary"), (Look::Quiet, "Secondary"), (Look::Text, "Text"), (Look::Danger, "Danger"), (Look::Destructive, "Destructive")] {
         p.text(pos2(x0, y + 18.0), Align2::LEFT_CENTER, word, regular(T_META), pal().ink2);
         for (k, (_, s)) in STATES.iter().enumerate() {
             let b = Rect::from_min_size(pos2(x0 + 70.0 + k as f32 * cell, y), vec2(cell - 10.0, 36.0));

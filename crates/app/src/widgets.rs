@@ -206,6 +206,9 @@ pub enum Look {
     Text,
     /// A destructive link: no fill, the danger colour.
     Danger,
+    /// The button that confirms something destructive (a sheet's Remove,
+    /// Delete): filled with `danger_fill`, its label in `on_accent`.
+    Destructive,
 }
 
 /// How a control is being touched, 0..1 each (tweened by its caller).
@@ -230,7 +233,7 @@ pub fn button_radius(height: f32) -> u8 {
 /// A button's label face: 600 for the primary and links, 500 otherwise.
 pub fn button_font(look: Look) -> FontId {
     match look {
-        Look::Primary | Look::Text | Look::Danger => semibold(T_BODY),
+        Look::Primary | Look::Text | Look::Danger | Look::Destructive => semibold(T_BODY),
         Look::Quiet => medium(T_BODY),
     }
 }
@@ -244,19 +247,30 @@ pub fn paint_button(p: &Painter, rect: Rect, label: &str, look: Look, s: State) 
     let pal = pal();
     let fg = match look {
         _ if !s.enabled => pal.ink3,
-        Look::Primary => pal.on_accent,
+        Look::Primary | Look::Destructive => pal.on_accent,
         Look::Quiet => pal.ink,
         Look::Text => pal.accent_text,
         Look::Danger => pal.danger,
     };
     match look {
-        Look::Primary | Look::Quiet if !s.enabled => {
+        Look::Primary | Look::Quiet | Look::Destructive if !s.enabled => {
             p.rect_filled(rr, radius, pal.surface2);
         }
         // Flat, solid accent: no gradient, no rim, no glow; 6 % deeper under
         // the pointer, 10 % deeper pressed.
         Look::Primary => {
+            // A 1-point contact shadow and a faint light along the top: the
+            // one primary action sits on the surface, it isn't printed on it.
+            let lift = if pal.theme == Theme::Light { 0.14 } else { 0.5 };
+            p.add(egui::epaint::Shadow { offset: [0, 1], blur: 2, spread: 0, color: pal.shadow_ink.gamma_multiply(lift * (1.0 - s.press)) }.as_shape(rr, radius));
             p.rect_filled(rr, radius, mix(mix(pal.accent, pal.accent_hover, s.hover), pal.accent_press, s.press));
+            let inset = f32::from(radius.nw) * 0.8;
+            p.hline(egui::Rangef::new(rr.left() + inset, rr.right() - inset), rr.top() + 0.75, Stroke::new(1.0, pal.on_accent.gamma_multiply(0.16 * (1.0 - s.press))));
+        }
+        Look::Destructive => {
+            let lift = if pal.theme == Theme::Light { 0.14 } else { 0.5 };
+            p.add(egui::epaint::Shadow { offset: [0, 1], blur: 2, spread: 0, color: pal.shadow_ink.gamma_multiply(lift * (1.0 - s.press)) }.as_shape(rr, radius));
+            p.rect_filled(rr, radius, pressed(mix(pal.danger_fill, pal.press_toward, 0.08 * s.hover), s.press));
         }
         // Quiet: `surface2`, the `line2` overlay under the pointer.
         Look::Quiet => {
@@ -573,6 +587,7 @@ impl Pills<'_> {
             // The chosen one lifts out of the track on a 1-point shadow.
             p.add(egui::epaint::Shadow { offset: [0, 1], blur: 2, spread: 0, color: pal().shadow((60.0 * shown) as u8) }.as_shape(pill, CornerRadius::same(round(pill))));
             p.rect_filled(pill, CornerRadius::same(round(pill)), pal().seg_on.gamma_multiply(shown));
+            p.rect_stroke(pill, CornerRadius::same(round(pill)), Stroke::new(1.0, pal().line.gamma_multiply(shown)), StrokeKind::Inside);
         }
         let mut picked = None;
         // egui moves focus with the arrows but doesn't report it as gained,
@@ -760,7 +775,7 @@ pub fn kbd(p: &Painter, at: Pos2, anchor: Align2, text: &str) -> Rect {
     let font = if covered { mono(T_META) } else { regular(T_META) };
     let g = p.layout_no_wrap(text.to_owned(), font, pal().ink2);
     let rect = anchor.anchor_size(at, g.size() + vec2(16.0, 8.0));
-    p.rect_filled(rect, CornerRadius::same(6), pal().surface2);
+    p.rect(rect, CornerRadius::same(6), pal().surface2, Stroke::new(1.0, pal().line), StrokeKind::Inside);
     p.galley(rect.center() - g.size() / 2.0, g, pal().ink2);
     rect
 }
@@ -1009,18 +1024,68 @@ pub fn raised_shapes(rect: Rect, r: f32, shadow: bool) -> Vec<egui::Shape> {
     out
 }
 
-/// The theme's shadow under panels and cards: in light, 0 1 2 at 4 % and
-/// 0 8 24 at 5 % of ink; in dark, none (the surfaces' contrast is enough).
+/// The theme's shadow under panels and cards. Light: three soft layers of
+/// ink (a 1-point contact, a 4-point near, a wide ambient one), as paper
+/// lifts off paper. Dark: black, deeper, so a card lifts off the ground
+/// (the surfaces' contrast alone is too slight there).
 pub fn card_shadow(rect: Rect, radius: CornerRadius) -> Vec<egui::Shape> {
     let p = pal();
     if p.card_shadow <= 0.0 {
         return vec![];
     }
     let ink = |a: f32| p.shadow_ink.gamma_multiply(a * p.card_shadow);
-    vec![
-        egui::epaint::Shadow { offset: [0, 1], blur: 2, spread: 0, color: ink(0.04) }.as_shape(rect, radius).into(),
-        egui::epaint::Shadow { offset: [0, 8], blur: 24, spread: 0, color: ink(0.05) }.as_shape(rect, radius).into(),
-    ]
+    let layers: [([i8; 2], u8, f32); 3] = if p.theme == Theme::Light {
+        [([0, 1], 2, 0.06), ([0, 3], 8, 0.035), ([0, 12], 28, 0.05)]
+    } else {
+        [([0, 1], 2, 0.45), ([0, 4], 10, 0.22), ([0, 14], 32, 0.30)]
+    };
+    layers.iter().map(|(offset, blur, a)| egui::epaint::Shadow { offset: *offset, blur: *blur, spread: 0, color: ink(*a) }.as_shape(rect, radius).into()).collect()
+}
+
+/// What floats over everything (a sheet, the palette's fallback, a toast):
+/// a deeper shadow than a card's, `raised`, a `line2` edge and the top light.
+pub fn overlay_shapes(rect: Rect, radius: u8) -> Vec<egui::Shape> {
+    let p = pal();
+    let cr = CornerRadius::same(radius);
+    let mut out = overlay_shadow(rect, cr);
+    out.push(egui::Shape::Rect(egui::epaint::RectShape::new(rect, cr, p.raised, Stroke::new(1.0, p.line2), StrokeKind::Inside)));
+    out.push(top_light(rect, radius));
+    out
+}
+
+/// An overlay's shadow: three layers, deeper than a card's.
+pub fn overlay_shadow(rect: Rect, cr: CornerRadius) -> Vec<egui::Shape> {
+    let p = pal();
+    let k = if p.theme == Theme::Light { 1.0 } else { 2.2 };
+    let ink = |a: f32| p.shadow_ink.gamma_multiply((a * k).min(0.9));
+    [([0i8, 1i8], 3u8, 0.08), ([0, 8], 20, 0.08), ([0, 24], 56, 0.14)]
+        .iter()
+        .map(|(offset, blur, a)| egui::epaint::Shadow { offset: *offset, blur: *blur, spread: 0, color: ink(*a) }.as_shape(rect, cr).into())
+        .collect()
+}
+
+/// `shape` at `alpha` (a rectangle's fill and edge, a line's colour), for
+/// a surface that fades in as a whole.
+pub fn faded(shape: egui::Shape, alpha: f32) -> egui::Shape {
+    if alpha >= 1.0 {
+        return shape;
+    }
+    match shape {
+        egui::Shape::Rect(mut r) => {
+            r.fill = r.fill.gamma_multiply(alpha);
+            r.stroke.color = r.stroke.color.gamma_multiply(alpha);
+            egui::Shape::Rect(r)
+        }
+        egui::Shape::LineSegment { points, stroke } => egui::Shape::LineSegment { points, stroke: Stroke::new(stroke.width, stroke.color.gamma_multiply(alpha)) },
+        other => other,
+    }
+}
+
+/// The light along a surface's top edge, just inside its hairline: a lift
+/// in the dark theme, all but nothing in the light one.
+pub fn top_light(rect: Rect, radius: u8) -> egui::Shape {
+    let inset = f32::from(radius) * 0.7;
+    egui::Shape::hline(egui::Rangef::new(rect.left() + inset, rect.right() - inset), rect.top() + 1.5, Stroke::new(1.0, pal().edge_hi))
 }
 
 /// The content layer: a group of rows on a quiet fill and a hairline. Not
@@ -1032,11 +1097,52 @@ pub fn group(ui: &Ui, rect: Rect, radius: u8) {
     }
 }
 
-/// A card: `surface`, a 1-point `line`, the theme's shadow.
+/// A card: the theme's shadow, `surface` in a 1-point `card_edge`, and the
+/// light along its top.
 pub fn group_shapes(rect: Rect, radius: u8) -> Vec<egui::Shape> {
     let mut out = card_shadow(rect, CornerRadius::same(radius));
-    out.push(egui::Shape::Rect(egui::epaint::RectShape::new(rect, CornerRadius::same(radius), pal().surface, Stroke::new(1.0, pal().line), StrokeKind::Inside)));
+    out.push(egui::Shape::Rect(egui::epaint::RectShape::new(rect, CornerRadius::same(radius), pal().surface, Stroke::new(1.0, pal().card_edge), StrokeKind::Inside)));
+    if pal().theme == Theme::Dark {
+        out.push(top_light(rect, radius));
+    }
     out
+}
+
+/// An inset well inside a card (a readout, a callout): the window's ground
+/// in a hairline, corner 12.
+pub fn well_shapes(rect: Rect) -> Vec<egui::Shape> {
+    vec![egui::Shape::Rect(egui::epaint::RectShape::new(rect, CornerRadius::same(R_INNER), pal().bg, Stroke::new(1.0, pal().line), StrokeKind::Inside))]
+}
+
+pub fn well(p: &Painter, rect: Rect) {
+    for s in well_shapes(rect) {
+        p.add(s);
+    }
+}
+
+/// A section label inside a panel or above a card: 12/600 `ink2`, tracked.
+/// Returns its rectangle.
+pub fn section_label(p: &Painter, at: Pos2, align: Align2, text: &str, max_w: f32) -> Rect {
+    let font = semibold(T_LABEL);
+    let shown = fit(p, text, &font, max_w);
+    let mut job = egui::text::LayoutJob::default();
+    job.append(&shown, 0.0, egui::TextFormat { font_id: font, color: pal().ink2, extra_letter_spacing: TRACK_LABEL, ..Default::default() });
+    let g = p.layout_job(job);
+    let rect = align.anchor_size(at, g.size());
+    p.galley(rect.min, g, pal().ink2);
+    rect
+}
+
+/// A title set a little tight (pages' and stage views' headlines).
+pub fn title_text(p: &Painter, at: Pos2, align: Align2, text: &str, size: f32, max_w: f32) -> Rect {
+    let font = semibold(size);
+    let shown = fit(p, text, &font, max_w);
+    let mut job = egui::text::LayoutJob::default();
+    job.append(&shown, 0.0, egui::TextFormat { font_id: font, color: pal().ink, extra_letter_spacing: TRACK_TITLE * size / T_PAGE, ..Default::default() });
+    let g = p.layout_job(job);
+    let rect = align.anchor_size(at, g.size());
+    p.galley(rect.min, g, pal().ink);
+    rect
 }
 
 /// The right-hand panel's corner (handoff 4.2).
@@ -1083,15 +1189,16 @@ pub fn glass_shapes_as(ctx: &egui::Context, key: u64, rect: Rect, r: f32, kind: 
     // it `surface` at 96 % over the blurred window (solid `surface` where the
     // blur can't be made). No lit edge: no glows.
     if kind.shadow {
-        out.extend(card_shadow(rect, radius));
+        out.extend(overlay_shadow(rect, radius));
     }
     if g.works() {
         let [top, bottom] = [pal().glass_top, pal().glass];
         g.backdrop_shapes(&mut out, key, rect, r, crate::glass::Look { top, bottom, bend: kind.bend });
     } else {
-        out.push(egui::Shape::Rect(egui::epaint::RectShape::filled(rect, radius, pal().surface)));
+        out.push(egui::Shape::Rect(egui::epaint::RectShape::filled(rect, radius, pal().raised)));
     }
     out.push(egui::Shape::Rect(egui::epaint::RectShape::stroke(rect, radius, Stroke::new(1.0, pal().line2), StrokeKind::Inside)));
+    out.push(top_light(rect, radius.nw));
     out
 }
 

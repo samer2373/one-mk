@@ -404,9 +404,12 @@ impl App {
             let id = Id::unique("search");
             let resp = ui.interact(widgets::hit_rect(search_r), id, widgets::sense(&ui, Sense::click()));
             let hover = tween(ui.ctx(), id.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
-            let fill = if resp.is_pointer_button_down_on() { widgets::pressed(pal().surface2_hover, 1.0) } else { mix(pal().surface2, pal().surface2_hover, hover) };
+            // A field-like well: `surface` in a `line2` edge that lights
+            // under the pointer (it opens a real field, the palette's).
+            let down = resp.is_pointer_button_down_on();
+            let fill = if down { widgets::pressed(pal().surface, 0.4) } else { pal().surface };
             let radius = widgets::button_radius(CONTROL_H);
-            p.rect_filled(search_r, CornerRadius::same(radius), fill);
+            p.rect(search_r, CornerRadius::same(radius), fill, Stroke::new(1.0, mix(pal().line2, pal().field_edge_lit, hover)), StrokeKind::Inside);
             let ink = mix(pal().ink2, pal().ink, hover);
             icons::search(&p, pos2(search_r.left() + 10.0 + 7.5, cy), ink);
             let mut sx = search_r.left() + 10.0 + 15.0;
@@ -417,7 +420,7 @@ impl App {
             if bar.search_chip {
                 let g = p.layout_no_wrap(search_chip().to_owned(), mono(T_CHIP), pal().ink2);
                 let chip = Rect::from_min_size(pos2(sx + 8.0, cy - (g.size().y + 4.0) / 2.0), g.size() + vec2(12.0, 4.0));
-                p.rect_filled(chip, CornerRadius::same(5), pal().surface);
+                p.rect(chip, CornerRadius::same(5), pal().surface2, Stroke::new(1.0, pal().line), StrokeKind::Inside);
                 p.galley(chip.center() - g.size() / 2.0, g, pal().ink2);
             }
             ring(&ui, &resp, search_r, radius);
@@ -466,7 +469,15 @@ impl App {
         let p = ui.painter();
         let radius = CornerRadius::same(widgets::button_radius(CONTROL_H));
         if look.chosen {
-            p.rect_filled(r, radius, if down { widgets::pressed(pal().surface2, 0.5) } else { pal().surface2 });
+            // The chosen page: a lifted capsule (a hairline, a 1-point
+            // contact shadow and, in dark, the light along its top).
+            let fill = if down { widgets::pressed(pal().tab_on, 0.5) } else { pal().tab_on };
+            let lift = if pal().theme == crate::style::Theme::Light { 0.07 } else { 0.4 };
+            p.add(egui::epaint::Shadow { offset: [0, 1], blur: 2, spread: 0, color: pal().shadow_ink.gamma_multiply(lift) }.as_shape(r, radius));
+            p.rect(r, radius, fill, Stroke::new(1.0, pal().card_edge), StrokeKind::Inside);
+            if pal().theme == crate::style::Theme::Dark {
+                p.add(widgets::top_light(r, widgets::button_radius(CONTROL_H)));
+            }
         } else if down {
             p.rect_filled(r, radius, widgets::pressed(pal().surface2, 0.3));
         } else if hover > 0.01 {
@@ -482,7 +493,11 @@ impl App {
         };
         p.text(r.center(), Align2::CENTER_CENTER, label, font, col);
         if look.dot {
-            p.circle_filled(pos2(r.right() - 4.0 - 3.0, r.top() + 7.0 + 3.0), 3.0, pal().warn);
+            // Cut out of what is under it by a ring of the ground, so it reads
+            // crisp on the chosen capsule and on the bar alike.
+            let at = pos2(r.right() - 7.0, r.top() + 9.0);
+            p.circle_filled(at, 4.5, if look.chosen { pal().tab_on } else { pal().bg });
+            p.circle_filled(at, 3.0, pal().warn);
         }
         widgets::focus_ring(ui, &resp, r, widgets::button_radius(CONTROL_H));
         if resp.hovered() && look.enabled {
