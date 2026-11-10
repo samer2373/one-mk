@@ -36,6 +36,9 @@ pub(super) fn recorded(events: &[egui::Event], jump: bool) -> Option<Result<Stri
         if let egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } = event {
             if *key == Key::Escape { return Some(Err(())); }
             if *key == Key::Backspace { return Some(Ok("none".into())); }
+            // egui reports Ctrl, Alt, Shift and Super as keys of their own,
+            // pressed first: they belong to the chord, which the next key ends.
+            if matches!(key, Key::ControlLeft | Key::ControlRight | Key::ShiftLeft | Key::ShiftRight | Key::AltLeft | Key::AltRight | Key::SuperLeft | Key::SuperRight) { continue; }
             let Some(code) = crate::tune::evdev_of(*key) else { continue };
             let name = one_mk_proto::keynames::key_name(u32::from(code));
             let mut parts = Vec::new();
@@ -336,5 +339,12 @@ mod tests {
             });
             output.textures_delta.clear();
         }
+        // Ctrl+Shift+J as a keyboard sends it: Ctrl, then Shift, then J.
+        let mods = |ctrl, shift| egui::Modifiers { ctrl, shift, ..Default::default() };
+        let press = |key, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers };
+        let chord = [press(Key::ControlLeft, mods(true, false)), press(Key::ShiftLeft, mods(true, true)), press(Key::J, mods(true, true))];
+        assert_eq!(recorded(&chord[..1], false), None, "Ctrl alone is not a shortcut yet");
+        assert_eq!(recorded(&chord[..2], false), None);
+        assert_eq!(recorded(&chord, false), Some(Ok("ctrl+shift+j".to_owned())));
     }
 }
