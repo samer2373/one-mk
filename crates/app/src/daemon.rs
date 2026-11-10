@@ -993,12 +993,10 @@ impl Link {
         });
     }
 
-    /// Opens the folder received files go to.
+    /// Opens the folder received files go to (as `received_dir` finds it).
     pub fn open_downloads(&self) {
-        self.job(Job::Open, |l| {
-            let dir = directories::UserDirs::new()
-                .and_then(|u| u.download_dir().map(|d| d.join("one-mk")))
-                .unwrap_or_else(|| l.dir.clone());
+        self.job(Job::Open, |_| {
+            let dir = received_dir().ok_or_else(|| anyhow::anyhow!("no home folder to find Downloads in"))?;
             std::fs::create_dir_all(&dir)?;
             let opener = if cfg!(target_os = "macos") {
                 "open"
@@ -1421,4 +1419,21 @@ mod replaced_executable_tests {
         assert_eq!(without_deleted_suffix(PathBuf::from("/usr/bin/one-mk-app (deleted)")), PathBuf::from("/usr/bin/one-mk-app"));
         assert_eq!(without_deleted_suffix(PathBuf::from("/usr/bin/one-mk-app")), PathBuf::from("/usr/bin/one-mk-app"));
     }
+}
+
+/// Where the service saves received files: Downloads/one-mk, with
+/// `~/Downloads` when the desktop names no Downloads folder (as the service
+/// does: never the settings folder, which holds this computer's keys).
+pub fn received_dir() -> Option<PathBuf> {
+    let dirs = directories::UserDirs::new()?;
+    let downloads = dirs.download_dir().map_or_else(|| dirs.home_dir().join("Downloads"), std::path::Path::to_path_buf);
+    Some(downloads.join("one-mk"))
+}
+
+/// A file's permission bits (on Windows, just whether it is read-only).
+fn mode(m: &std::fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    return std::os::unix::fs::PermissionsExt::mode(&m.permissions());
+    #[cfg(not(unix))]
+    return u32::from(m.permissions().readonly());
 }

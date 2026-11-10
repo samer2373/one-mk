@@ -395,7 +395,7 @@ fn received_dir() -> Option<&'static str> {
     static DIR: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     DIR.get_or_init(|| {
         let dirs = directories::UserDirs::new()?;
-        let dir = dirs.download_dir()?.join("one-mk");
+        let dir = crate::daemon::received_dir()?;
         Some(match dir.strip_prefix(dirs.home_dir()) {
             Ok(rest) if !cfg!(windows) => format!("~/{}", rest.display()),
             _ => dir.display().to_string(),
