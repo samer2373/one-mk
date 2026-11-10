@@ -381,6 +381,9 @@ fn launch_agent(label: &str, exe: &Path, args: &[String], log: &Path, keep_alive
         .map(|a| format!("    <string>{}</string>\n", xml_escape(&a)))
         .collect();
     let log = xml_escape(&log.display().to_string());
+    // Login Items shows the entry as the app (its name and icon) when it knows which one it belongs to;
+    // for a bare program inside the bundle it would say "one-mk" with the program's own icon.
+    let associated = if exe.to_string_lossy().contains(".app/Contents/MacOS/") { "  <key>AssociatedBundleIdentifiers</key>\n  <array>\n    <string>com.one-mk.app</string>\n  </array>\n" } else { "" };
     let keep_alive = if keep_alive { "  <key>KeepAlive</key>\n  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n" } else { "" };
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
@@ -391,6 +394,7 @@ fn launch_agent(label: &str, exe: &Path, args: &[String], log: &Path, keep_alive
          \x20 <key>ProgramArguments</key>\n  <array>\n{args}  </array>\n\
          \x20 <key>RunAtLoad</key>\n  <true/>\n\
          {keep_alive}\
+         {associated}\
          \x20 <key>ProcessType</key>\n  <string>Interactive</string>\n\
          \x20 <key>StandardOutPath</key>\n  <string>{log}</string>\n\
          \x20 <key>StandardErrorPath</key>\n  <string>{log}</string>\n\
@@ -697,7 +701,11 @@ mod tests {
         assert!(plist.contains("<string>/Users/me/Library/Logs/one-mk.log</string>"));
         assert_eq!(plist.matches("<dict>").count(), plist.matches("</dict>").count());
         let tray = launch_agent(TRAY_LABEL, Path::new("/t"), &[], Path::new("/l"), false);
-        assert!(!tray.contains("KeepAlive"));
+        assert!(!tray.contains("KeepAlive") && !tray.contains("AssociatedBundleIdentifiers"), "a bare program belongs to no app");
+        // Inside the app bundle: Login Items names and draws it as the app.
+        let in_app = launch_agent(LABEL, Path::new("/Applications/one-mk.app/Contents/MacOS/one-mk"), &[], Path::new("/l"), true);
+        assert!(in_app.contains("<key>AssociatedBundleIdentifiers</key>\n  <array>\n    <string>com.one-mk.app</string>\n  </array>"), "{in_app}");
+        assert_eq!(in_app.matches("<array>").count(), in_app.matches("</array>").count());
     }
 
     #[test]
