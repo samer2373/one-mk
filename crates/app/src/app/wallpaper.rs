@@ -322,7 +322,7 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
         let radius = CornerRadius::same(8);
         let glass = screen.shrink(BEZEL_W);
         p.rect_filled(screen, radius, BEZEL);
-        p.rect_filled(glass, CornerRadius::same(5), SCREEN_PLATE);
+        p.rect_filled(glass, CornerRadius::same(5), if pal().theme == crate::style::Theme::Light { SCREEN_BLANK } else { SCREEN_PLATE });
         if let (Some(texture), Some(image_rect)) = (poster, image_rect) {
             // Each screen shows the part of the picture that falls on it.
             let picture = image_rect;

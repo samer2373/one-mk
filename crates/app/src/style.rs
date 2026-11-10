@@ -473,6 +473,9 @@ pub const SCREEN_INK2: Color32 = rgb(0x9DA6B1);
 pub const SCREEN_INK_SUB: Color32 = rgb(0xC4CAD2);
 /// The plate the pairing code sits on, inside a screen.
 pub const SCREEN_PLATE: Color32 = rgb(0x0E1115);
+/// A screen with nothing on it, in the Wallpaper preview: a slate that reads
+/// as a blank display on the light page (near black would be a hole in it).
+pub const SCREEN_BLANK: Color32 = rgb(0x464B54);
 /// A screen's thin frame, and the pointer's outline on it.
 pub const SCREEN_EDGE: Color32 = rgb(0x30353E);
 pub const POINTER_EDGE: Color32 = rgb(0x111111);
