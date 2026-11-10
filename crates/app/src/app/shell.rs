@@ -13,9 +13,6 @@ use egui::FontId;
 
 /// The top bar's height.
 pub(super) const BAR_H: f32 = 60.0;
-/// The page's title row under the bar (until each page's own step gives
-/// it its new header).
-pub(super) const HEAD_H: f32 = 44.0;
 /// Narrower than this the window is compact: short page names, "Pair".
 pub(super) const COMPACT_BELOW: f32 = 1000.0;
 /// From this wide the status line shows in the bar.
@@ -43,13 +40,6 @@ pub(super) const NAV: [(Tab, &str); 7] = [
     (Tab::Health, "6"),
     (Tab::Settings, "7"),
 ];
-
-/// Whether a page draws its own title (22, 600, with its sentence under
-/// it) in place of the compact title row: the pages of cards, and Keys &
-/// mouse's header row. The Desk has no title: its panel says it.
-pub(super) fn own_head(tab: Tab) -> bool {
-    matches!(tab, Tab::Desk | Tab::Arrange | Tab::Wallpaper | Tab::Files | Tab::Keys)
-}
 
 /// The shortcut's modifier as this system writes it.
 pub(super) fn cmd() -> &'static str {
@@ -543,25 +533,6 @@ impl App {
             });
         });
         selected
-    }
-
-    /// A page's title row: the title, a quieter word after it, and the
-    /// room left on the right for the page's own actions.
-    pub(super) fn page_head(&self, ui: &Ui, content: Rect, title: &str, sub: &str) -> Rect {
-        let r = Rect::from_min_size(content.min + vec2(4.0, 0.0), vec2(content.width() - 4.0, HEAD_H));
-        let p = ui.painter();
-        // Compact, as a tool's title bar: the page, and what is true now
-        // beside it, quieter.
-        let big = semibold(T_TITLE);
-        let tw = text_width(ui, title, big.clone());
-        p.text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, title, big, pal().ink);
-        if !sub.is_empty() {
-            let small = regular(T_BODY);
-            let room = (r.width() * 0.6 - tw - 12.0).max(0.0);
-            p.text(pos2(r.left() + tw + 10.0, r.center().y + 0.5), Align2::LEFT_CENTER, fit(p, sub, &small, room), small, pal().ink3);
-        }
-        a11y_text(ui, Id::unique(("page", title)), r, Role::Heading, &format!("{title} {sub}"), None);
-        r
     }
 }
 

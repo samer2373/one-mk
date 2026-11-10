@@ -141,12 +141,6 @@ struct Card<'a> {
     lines: Vec<(Line<'a>, f32)>,
 }
 
-impl Card<'_> {
-    fn height(&self) -> f32 {
-        self.lines.iter().map(|(_, h)| h).sum()
-    }
-}
-
 /// How the banner at the top of Health looks.
 #[derive(Clone, Copy, PartialEq)]
 enum Tone {
@@ -339,80 +333,37 @@ impl App {
             (bold, rest, if fails > 0 { Tone::Danger } else { Tone::Warn })
         };
 
-        let full = (rect.width() - 8.0 - 14.0).clamp(300.0, 1440.0);
-        let x = rect.left() + 4.0;
-        let compact = full < 900.0;
-        let gap = 24.0;
-        let bw = button_width(ui, "Check again");
-        let text_w = full - 52.0 - bw - 20.0 - 20.0;
-        let galley = {
-            let wrap = egui::text::TextWrapping { max_width: text_w.max(80.0), max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
-            let mut job = egui::text::LayoutJob { wrap, ..Default::default() };
-            let fmt = |font: egui::FontId| egui::TextFormat { font_id: font, color: pal().ink, line_height: Some(21.0), ..Default::default() };
-            job.append(&bold, 0.0, fmt(semibold(T_BODY + 1.0)));
-            if !rest.is_empty() {
-                job.append(&format!(" {rest}"), 0.0, fmt(regular(T_BODY + 1.0)));
-            }
-            ui.painter().layout_job(job)
-        };
-        let banner_h = (galley.size().y + 32.0).max(68.0);
-
-        // ---- the cards: left (Needs you, Pending), right (Connections, Passed) ----
-        let mut left: Vec<Card> = vec![];
-        let mut right: Vec<Card> = vec![];
-        // A single column: as wide as the left one would be, no wider.
-        let (lw, rw) = if compact { (full, full) } else { let unit = (full - gap) / 2.2; (unit * 1.2, unit * 1.0) };
-        for (title, list) in [("Needs you", &problems), ("Pending", &pending)] {
-            if list.is_empty() {
-                continue;
-            }
-            let inner = lw - 36.0;
-            let lines = list.iter().map(|i| {
-                let bw = fix_button_w(ui, i);
-                let room = inner - 22.0 - if bw > 0.0 { bw + 16.0 } else { 0.0 };
-                (Line::Need(i), need_height(ui, i, room))
-            }).collect();
-            left.push(Card { title, extra: None, lines });
-        }
-        let mut lines: Vec<(Line, f32)> = (0..peers.len()).map(|k| (Line::Peer(k), links::ROW_H)).collect();
-        if !works.is_empty() {
-            lines.push((Line::Toggle(works.len()), ROW));
-            if self.health_passed_open {
-                let inner = rw - 36.0 - 26.0;
-                lines.extend(works.iter().map(|i| (Line::Passed(i), passed_height(ui, i, inner))));
-            }
-        }
-        if !lines.is_empty() {
-            let (title, extra) = if peers.is_empty() { ("Passed", None) } else { ("Connections", Some(format!("last {}", rtt::span_words()))) };
-            right.push(Card { title, extra, lines });
-        }
-        // Nothing to the left: the cards keep to one column, as wide as it.
-        let single = left.is_empty();
-        let columns: Vec<(f32, Vec<&Card>)> = if compact || single {
-            vec![(x, left.iter().chain(right.iter()).collect())]
-        } else {
-            vec![(x, left.iter().collect()), (x + lw + gap, right.iter().collect())]
-        };
-        let col_h = |cards: &Vec<&Card>| cards.iter().map(|c| GROUP_LABEL + c.height() + 18.0).sum::<f32>();
-        let cards_h = columns.iter().map(|(_, c)| col_h(c)).fold(0.0, f32::max);
-        let widths: Vec<f32> = if compact || single { vec![lw.min(full)] } else { vec![lw, rw] };
-        let total = banner_h + 20.0 + cards_h + 12.0;
-
-        let area = Rect::from_min_max(pos2(rect.left(), rect.top() + 8.0), rect.max - vec2(0.0, 8.0));
-        let mut child = ui.new_child(UiBuilder::new().max_rect(area));
-        child.set_clip_rect(area);
         let mut fix_now = None;
         let mut copy = None;
         let mut recheck = false;
         let mut toggle = false;
         let copied = self.copied;
         let open = self.health_passed_open;
-        egui::ScrollArea::vertical().id_salt("health-page").auto_shrink([false, false]).show(&mut child, |ui| {
-            let (all, _) = ui.allocate_exact_size(vec2(area.width(), total), Sense::hover());
+        let sub = self.health_sub();
+        page_ui::scroll("health-page").show_viewport(ui, |ui, _| {
+            // The pages' head, then the banner across the page, then the
+            // cards in a 1.2 : 1 grid (one column when compact).
+            let origin = ui.cursor().min;
+            let mut page = page_ui::Page::begin(ui, origin, rect.width(), "Health", &sub);
+            page.split(1.2);
+            let (x, full) = (page.x, page.w);
+            let bw = button_width(ui, "Check again");
+            let text_w = full - 52.0 - bw - 20.0 - 20.0;
+            let galley = {
+                let wrap = egui::text::TextWrapping { max_width: text_w.max(80.0), max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
+                let mut job = egui::text::LayoutJob { wrap, ..Default::default() };
+                let fmt = |font: egui::FontId| egui::TextFormat { font_id: font, color: pal().ink, line_height: Some(21.0), ..Default::default() };
+                job.append(&bold, 0.0, fmt(semibold(T_BODY + 1.0)));
+                if !rest.is_empty() {
+                    job.append(&format!(" {rest}"), 0.0, fmt(regular(T_BODY + 1.0)));
+                }
+                ui.painter().layout_job(job)
+            };
+            let banner_h = (galley.size().y + 32.0).max(68.0);
             let p = ui.painter().clone();
 
             // The banner.
-            let b = Rect::from_min_size(pos2(x, all.top()), vec2(full, banner_h));
+            let b = Rect::from_min_size(pos2(x, page.below() + 4.0), vec2(full, banner_h));
             let warm = matches!(tone, Tone::Warn | Tone::Danger);
             if warm {
                 p.rect_filled(b, CornerRadius::same(R_GROUP), pal().warn_soft);
@@ -439,114 +390,136 @@ impl App {
                 recheck = true;
             }
             a11y_text(ui, Id::unique("health-summary"), b, Role::Status, &format!("{bold} {rest}"), Some(Live::Polite));
+            page.skip_to(b.bottom() + 18.0);
 
-            // The cards.
-            let top = b.bottom() + 20.0;
-            for ((cx, cards), cw) in columns.iter().zip(&widths) {
-                let mut y = top;
-                for card in cards {
-                    let rows = group_card(ui, pos2(*cx, y), *cw, card.title, card.height());
-                    if let Some(extra) = &card.extra {
-                        p.text(pos2(cx + cw - 2.0, y + 12.0), Align2::RIGHT_CENTER, extra, regular(T_META), pal().ink3);
-                    }
-                    let mut ry = rows.top();
-                    for (n, (line, h)) in card.lines.iter().enumerate() {
-                        let row = Rect::from_min_size(pos2(rows.left(), ry), vec2(rows.width(), *h));
-                        if n > 0 {
-                            widgets::hairline(&p, row.x_range(), row.top());
-                        }
-                        match line {
-                            Line::Need(i) => {
-                                let bw = fix_button_w(ui, i);
-                                let text_w = row.width() - 22.0 - if bw > 0.0 { bw + 16.0 } else { 0.0 };
-                                widgets::status_mark(&p, pos2(row.left() + 5.0, row.top() + 23.0), 8.0, verdict_mark(i.verdict));
-                                let tx = row.left() + 22.0;
-                                let mut ty = row.top() + 14.0;
-                                if !i.title.is_empty() {
-                                    p.text(pos2(tx, ty + 8.0), Align2::LEFT_CENTER, &i.title, regular(T_META), pal().ink3);
-                                    ty += 18.0;
-                                }
-                                // What is wrong, in ink at 600; what to do, quieter, under it.
-                                ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, semibold(T_BODY), pal().ink);
-                                if let Some(f) = i.fix.clone().filter(|_| shows_fix_text(&i.here)) {
-                                    widgets::para_code(ui, pos2(tx, ty + 4.0), text_w, &f, regular(T_BODY), pal().ink2);
-                                }
-                                let br = Rect::from_min_size(pos2(row.right() - bw, row.center().y - 15.0), vec2(bw, 30.0));
-                                if let Some((label, job)) = &i.here {
-                                    let resp = button(ui, br, Id::unique(("fix-here", i.k, n, card.title)), label, Look::Primary, !running, None);
-                                    if matches!(job, Fix::DesktopGuide) {
-                                        // The desktop's own dialog: the steps, beside the button.
-                                        egui::Popup::menu(&resp).width(320.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
-                                            ui.set_max_width(320.0);
-                                            let steps = [
-                                                "1. Look for your desktop's sharing window (“Remote desktop” or “Input capture”). It can be behind other windows; check the taskbar.",
-                                                "2. Choose Allow (or Share). oneMK only asks for the mouse and keyboard.",
-                                                "3. Back here, choose Check again. Dismissed it? Stop and start oneMK to be asked again.",
-                                            ];
-                                            for t in steps {
-                                                ui.add(egui::Label::new(egui::RichText::new(t).font(regular(T_BODY)).color(pal().ink_hover)).wrap());
-                                                ui.add_space(4.0);
-                                            }
-                                        });
-                                    } else if resp.clicked() {
-                                        fix_now = Some(*job);
-                                    }
-                                } else if let Some(f) = &i.fix {
-                                    let (cmd, is_cmd) = view::fix_command(f);
-                                    if is_cmd {
-                                        let word = if copied.as_ref().is_some_and(|(k, t)| *k == i.k && now - t < 1.5) { "Copied" } else { "Copy command" };
-                                        if button(ui, br, Id::unique(("copy-fix", i.k)), word, Look::Primary, true, Some(&format!("Copy the fix for {}: {cmd}", i.title))).clicked() {
-                                            copy = Some((i.k, cmd));
-                                        }
-                                    }
-                                }
-                                let state = if card.title == "Pending" { "is waiting" } else { "needs attention" };
-                                let fix = i.fix.as_deref().filter(|_| shows_fix_text(&i.here)).map_or(String::new(), |f| format!(" {}", f.replace('`', "")));
-                                let label = if i.title.is_empty() { format!("{}{fix}", i.detail) } else { format!("{} {state}. {}{fix}", i.title, i.detail) };
-                                a11y_text(ui, Id::unique(("need", card.title, n)), row, Role::ListItem, &label, None);
-                            }
-                            Line::Peer(k) => self.connection_row(ui, &peers[*k], row),
-                            Line::Toggle(count) => {
-                                let id = Id::unique("health-passed");
-                                let resp = ui.interact(widgets::hit_rect(row), id, widgets::sense(ui, Sense::click()));
-                                let hover = tween(ui.ctx(), id.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
-                                widgets::status_mark(&p, pos2(row.left() + 4.0, row.center().y), 8.0, widgets::Mark::Ok);
-                                let checks_word = if *count == 1 { "check" } else { "checks" };
-                                let what = if needs.is_empty() { format!("{count} {checks_word}") } else { format!("{count} other {checks_word}") };
-                                p.text(pos2(row.left() + 22.0, row.center().y), Align2::LEFT_CENTER, &what, regular(T_BODY), pal().ink);
-                                // "Passed" and a chevron: down to open, up when open.
-                                let c = pos2(row.right() - 6.0, row.center().y);
-                                let tint = mix(pal().ink2, pal().ink, hover);
-                                let dy = if open { 2.0 } else { -2.0 };
-                                p.add(egui::Shape::line(vec![c + vec2(-4.0, dy), c + vec2(0.0, -dy), c + vec2(4.0, dy)], Stroke::new(1.5, tint)));
-                                p.text(pos2(row.right() - 20.0, row.center().y), Align2::RIGHT_CENTER, "Passed", regular(T_BODY), pal().ink2);
-                                widgets::focus_ring(ui, &resp, row.shrink2(vec2(-8.0, -2.0)), 10);
-                                widgets::a11y(&resp, Role::Button, &format!("{what} passed. {}", if open { "Hide them" } else { "Show them" }), None);
-                                if resp.hovered() {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                }
-                                if resp.clicked() {
-                                    toggle = true;
-                                }
-                            }
-                            Line::Passed(i) => {
-                                let tx = row.left() + 22.0;
-                                let text_w = row.width() - 26.0;
-                                widgets::status_mark(&p, pos2(row.left() + 4.0, row.top() + if i.title.is_empty() { 23.0 } else { 22.0 }), 8.0, widgets::Mark::Ok);
-                                if i.title.is_empty() {
-                                    widgets::para_code(ui, pos2(tx, row.top() + 14.0), text_w, &i.detail, regular(T_BODY), pal().ink);
-                                } else {
-                                    p.text(pos2(tx, row.top() + 22.0), Align2::LEFT_CENTER, &i.title, regular(T_BODY), pal().ink);
-                                    widgets::para_code(ui, pos2(tx, row.top() + 32.0), text_w, &i.detail, regular(T_META), pal().ink3);
-                                }
-                                a11y_text(ui, Id::unique(("works", n)), row, Role::ListItem, &if i.title.is_empty() { i.detail.clone() } else { format!("{} passed. {}", i.title, i.detail) }, None);
-                            }
-                        }
-                        ry += h;
-                    }
-                    y += GROUP_LABEL + card.height() + 18.0;
+            // ---- the cards: left (Needs you, Pending), right (Connections, Passed) ----
+            let mut left: Vec<Card> = vec![];
+            let mut right: Vec<Card> = vec![];
+            for (title, list) in [("Needs you", &problems), ("Pending", &pending)] {
+                if list.is_empty() {
+                    continue;
+                }
+                let inner = page.width_of(0) - 2.0 * page_ui::CARD_PAD;
+                let lines = list.iter().map(|i| {
+                    let bw = fix_button_w(ui, i);
+                    let room = inner - 22.0 - if bw > 0.0 { bw + 16.0 } else { 0.0 };
+                    (Line::Need(i), need_height(ui, i, room))
+                }).collect();
+                left.push(Card { title, extra: None, lines });
+            }
+            // Nothing to the left: the cards keep to one column, as wide as it.
+            let right_col = usize::from(!left.is_empty());
+            let mut lines: Vec<(Line, f32)> = (0..peers.len()).map(|k| (Line::Peer(k), links::ROW_H)).collect();
+            if !works.is_empty() {
+                lines.push((Line::Toggle(works.len()), ROW));
+                if open {
+                    let inner = page.width_of(right_col) - 2.0 * page_ui::CARD_PAD - 26.0;
+                    lines.extend(works.iter().map(|i| (Line::Passed(i), passed_height(ui, i, inner))));
                 }
             }
+            if !lines.is_empty() {
+                let (title, extra) = if peers.is_empty() { ("Passed", None) } else { ("Connections", Some(format!("last {}", rtt::span_words()))) };
+                right.push(Card { title, extra, lines });
+            }
+            let placed = left.iter().map(|c| (0, c)).chain(right.iter().map(|c| (right_col, c)));
+            for (col, card) in placed {
+                let mut c = page.card(ui, col, card.title);
+                if let Some(extra) = &card.extra {
+                    p.text(c.label_right() - vec2(2.0, 0.0), Align2::RIGHT_CENTER, extra, regular(T_META), pal().ink3);
+                }
+                for (n, (line, h)) in card.lines.iter().enumerate() {
+                    let row = c.row(ui, *h);
+                    match line {
+                        Line::Need(i) => {
+                            let bw = fix_button_w(ui, i);
+                            let text_w = row.width() - 22.0 - if bw > 0.0 { bw + 16.0 } else { 0.0 };
+                            widgets::status_mark(&p, pos2(row.left() + 5.0, row.top() + 23.0), 8.0, verdict_mark(i.verdict));
+                            let tx = row.left() + 22.0;
+                            let mut ty = row.top() + 14.0;
+                            if !i.title.is_empty() {
+                                p.text(pos2(tx, ty + 8.0), Align2::LEFT_CENTER, &i.title, regular(T_META), pal().ink3);
+                                ty += 18.0;
+                            }
+                            // What is wrong, in ink at 600; what to do, quieter, under it.
+                            ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, semibold(T_BODY), pal().ink);
+                            if let Some(f) = i.fix.clone().filter(|_| shows_fix_text(&i.here)) {
+                                widgets::para_code(ui, pos2(tx, ty + 4.0), text_w, &f, regular(T_BODY), pal().ink2);
+                            }
+                            let br = Rect::from_min_size(pos2(row.right() - bw, row.center().y - 15.0), vec2(bw, 30.0));
+                            if let Some((label, job)) = &i.here {
+                                let resp = button(ui, br, Id::unique(("fix-here", i.k, n, card.title)), label, Look::Primary, !running, None);
+                                if matches!(job, Fix::DesktopGuide) {
+                                    // The desktop's own dialog: the steps, beside the button.
+                                    egui::Popup::menu(&resp).width(320.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
+                                        ui.set_max_width(320.0);
+                                        let steps = [
+                                            "1. Look for your desktop's sharing window (“Remote desktop” or “Input capture”). It can be behind other windows; check the taskbar.",
+                                            "2. Choose Allow (or Share). oneMK only asks for the mouse and keyboard.",
+                                            "3. Back here, choose Check again. Dismissed it? Stop and start oneMK to be asked again.",
+                                        ];
+                                        for t in steps {
+                                            ui.add(egui::Label::new(egui::RichText::new(t).font(regular(T_BODY)).color(pal().ink_hover)).wrap());
+                                            ui.add_space(4.0);
+                                        }
+                                    });
+                                } else if resp.clicked() {
+                                    fix_now = Some(*job);
+                                }
+                            } else if let Some(f) = &i.fix {
+                                let (cmd, is_cmd) = view::fix_command(f);
+                                if is_cmd {
+                                    let word = if copied.as_ref().is_some_and(|(k, t)| *k == i.k && now - t < 1.5) { "Copied" } else { "Copy command" };
+                                    if button(ui, br, Id::unique(("copy-fix", i.k)), word, Look::Primary, true, Some(&format!("Copy the fix for {}: {cmd}", i.title))).clicked() {
+                                        copy = Some((i.k, cmd));
+                                    }
+                                }
+                            }
+                            let state = if card.title == "Pending" { "is waiting" } else { "needs attention" };
+                            let fix = i.fix.as_deref().filter(|_| shows_fix_text(&i.here)).map_or(String::new(), |f| format!(" {}", f.replace('`', "")));
+                            let label = if i.title.is_empty() { format!("{}{fix}", i.detail) } else { format!("{} {state}. {}{fix}", i.title, i.detail) };
+                            a11y_text(ui, Id::unique(("need", card.title, n)), row, Role::ListItem, &label, None);
+                        }
+                        Line::Peer(k) => self.connection_row(ui, &peers[*k], row),
+                        Line::Toggle(count) => {
+                            let id = Id::unique("health-passed");
+                            let resp = ui.interact(widgets::hit_rect(row), id, widgets::sense(ui, Sense::click()));
+                            let hover = tween(ui.ctx(), id.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
+                            widgets::status_mark(&p, pos2(row.left() + 4.0, row.center().y), 8.0, widgets::Mark::Ok);
+                            let checks_word = if *count == 1 { "check" } else { "checks" };
+                            let what = if needs.is_empty() { format!("{count} {checks_word}") } else { format!("{count} other {checks_word}") };
+                            p.text(pos2(row.left() + 22.0, row.center().y), Align2::LEFT_CENTER, &what, regular(T_BODY), pal().ink);
+                            // "Passed" and a chevron: down to open, up when open.
+                            let c = pos2(row.right() - 6.0, row.center().y);
+                            let tint = mix(pal().ink2, pal().ink, hover);
+                            let dy = if open { 2.0 } else { -2.0 };
+                            p.add(egui::Shape::line(vec![c + vec2(-4.0, dy), c + vec2(0.0, -dy), c + vec2(4.0, dy)], Stroke::new(1.5, tint)));
+                            p.text(pos2(row.right() - 20.0, row.center().y), Align2::RIGHT_CENTER, "Passed", regular(T_BODY), pal().ink2);
+                            widgets::focus_ring(ui, &resp, row.shrink2(vec2(-8.0, -2.0)), 10);
+                            widgets::a11y(&resp, Role::Button, &format!("{what} passed. {}", if open { "Hide them" } else { "Show them" }), None);
+                            if resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if resp.clicked() {
+                                toggle = true;
+                            }
+                        }
+                        Line::Passed(i) => {
+                            let tx = row.left() + 22.0;
+                            let text_w = row.width() - 26.0;
+                            widgets::status_mark(&p, pos2(row.left() + 4.0, row.top() + if i.title.is_empty() { 23.0 } else { 22.0 }), 8.0, widgets::Mark::Ok);
+                            if i.title.is_empty() {
+                                widgets::para_code(ui, pos2(tx, row.top() + 14.0), text_w, &i.detail, regular(T_BODY), pal().ink);
+                            } else {
+                                p.text(pos2(tx, row.top() + 22.0), Align2::LEFT_CENTER, &i.title, regular(T_BODY), pal().ink);
+                                widgets::para_code(ui, pos2(tx, row.top() + 32.0), text_w, &i.detail, regular(T_META), pal().ink3);
+                            }
+                            a11y_text(ui, Id::unique(("works", n)), row, Role::ListItem, &if i.title.is_empty() { i.detail.clone() } else { format!("{} passed. {}", i.title, i.detail) }, None);
+                        }
+                    }
+                }
+                page.finish(ui, c);
+            }
+            ui.allocate_space(vec2(rect.width(), page.height()));
         });
         if toggle {
             self.health_passed_open = !self.health_passed_open;

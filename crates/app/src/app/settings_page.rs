@@ -177,15 +177,18 @@ impl App {
     }
 
     pub(super) fn settings(&mut self, ui: &mut Ui, rect: Rect) {
-        let x0 = rect.left() + 4.0;
-        let full_w = rect.width() - 8.0;
+        // The pages' own head (title 22, its sentence), as Arrange's; the
+        // category pills under it stay while the cards scroll.
+        let x0 = rect.left() + page_ui::INSET;
+        let full_w = rect.width() - 2.0 * page_ui::INSET;
         let cat = self.settings_cat;
         // A shortcut being changed stops listening when its page goes.
         if cat != Cat::Shortcuts {
             ui.ctx().data_mut(|data| data.remove::<usize>(Id::unique("shortcut-recorder")));
         }
-        let pills_h = self.category_pills(ui, pos2(x0, rect.top() + 6.0), full_w);
-        let area = Rect::from_min_max(pos2(rect.left(), rect.top() + 6.0 + pills_h + 14.0), pos2(rect.right(), rect.bottom() - 8.0));
+        let pills_top = page_ui::head(ui, rect.min, rect.width(), "Settings", "Changes save right away.") + 4.0;
+        let pills_h = self.category_pills(ui, pos2(x0, pills_top), full_w);
+        let area = Rect::from_min_max(pos2(rect.left(), pills_top + pills_h + 14.0), pos2(rect.right(), rect.bottom() - 8.0));
         let col_w = (full_w - 14.0).clamp(240.0, PAGE_MAX);
         let inner_w = col_w - 36.0;
         // Every row's height, as it is now: a row that has nothing to show is 0.
