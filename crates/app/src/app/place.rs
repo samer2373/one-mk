@@ -465,10 +465,13 @@ impl App {
         };
         let mut card = page.wide(ui, "");
         let inner_w = page.w - 48.0;
-        let frame = self.plan.as_ref().map_or_else(|| PlanFrame::fit(bounds, inner_w, 150.0), |d| d.frame);
+        // Room around the screens to carry one into (a quarter of their
+        // height above and below, a little at the sides).
+        let room = one_mk_wallpaper::Rect { x: bounds.x - bounds.width * 0.06, y: bounds.y - bounds.height * 0.25, width: bounds.width * 1.12, height: bounds.height * 1.5 };
+        let frame = self.plan.as_ref().map_or_else(|| PlanFrame::fit(room, inner_w, 190.0), |d| d.frame);
         let size = frame.size();
-        let area = card.row(ui, size.y + 24.0 + 40.0);
-        let top_left = pos2(area.center().x - size.x / 2.0, area.top() + 24.0);
+        let area = card.row(ui, size.y + 12.0 + 40.0);
+        let top_left = pos2(area.center().x - size.x / 2.0, area.top() + 12.0);
         let mine = Desktop::new(status.screens.clone());
         let movable = |id: &str| -> Option<Desktop> {
             status.peers.iter().find(|p| p.id == id).filter(|p| !p.screens.is_empty() && !status.screens.is_empty()).map(|p| Desktop::new(p.screens.clone()))

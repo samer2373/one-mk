@@ -2424,6 +2424,7 @@ impl eframe::App for App {
             debug::point_at(_ctx, raw_input);
             debug::press_enter(_ctx, raw_input);
             debug::plan_drag(_ctx, raw_input);
+            debug::plan_keys(self, _ctx, raw_input);
         }
         // Nothing here is under a pointer that has gone elsewhere: no
         // tooltip or highlight is left standing over the window.
@@ -2793,7 +2794,8 @@ mod debug {
 
     /// `ONE_MK_APP_PLAN_DRAG=Name;dx,dy[;alt][;hold]` (with
     /// `ONE_MK_APP_TARGETS`, on Arrange): real pointer events pick up that
-    /// computer's block on the plan at 1.5 s, carry it dx, dy points over
+    /// computer's block on the plan (or the control of that name, such as
+    /// a computer on the desk) at 1.5 s, carry it dx, dy points over
     /// 0.8 s (Alt held with `alt`) and let go at 2.5 s (not with `hold`:
     /// a screenshot of the drag).
     pub fn plan_drag(ctx: &egui::Context, raw: &mut egui::RawInput) {
@@ -2811,7 +2813,7 @@ mod debug {
             return;
         }
         let key = Id::unique("plan-drag-from");
-        let Some(from) = ctx.data(|d| d.get_temp::<Pos2>(key)).or_else(|| widgets::targets::rect_of(&format!("plan {name}")).map(|r| r.center())) else { return };
+        let Some(from) = ctx.data(|d| d.get_temp::<Pos2>(key)).or_else(|| widgets::targets::rect_of(&format!("plan {name}")).or_else(|| widgets::targets::rect_of(name)).map(|r| r.center())) else { return };
         ctx.data_mut(|d| d.insert_temp(key, from));
         let modifiers = if alt { Modifiers::ALT } else { Modifiers::NONE };
         let step = Id::unique("plan-drag-step");
@@ -2832,6 +2834,52 @@ mod debug {
             raw.events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers });
             ctx.data_mut(|d| d.insert_temp(step, 2u8));
         }
+    }
+
+    /// `ONE_MK_APP_PLAN_KEYS=Name;Right,Down+,Enter` (on Arrange): at 1.5 s
+    /// the keyboard goes to that computer's first block on the plan, then a
+    /// key every 0.15 s (real key events; `+` holds Shift).
+    pub fn plan_keys(app: &App, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(spec) = var("ONE_MK_APP_PLAN_KEYS") else { return };
+        let Some((name, keys)) = spec.split_once(';') else { return };
+        let t = raw.time.unwrap_or(0.0);
+        if t < 4.0 {
+            ctx.request_repaint_after_secs(0.03);
+        }
+        let Some(peer) = app.running().and_then(|s| s.peers.iter().find(|p| p.name == name)).cloned() else { return };
+        if t < 1.5 {
+            return;
+        }
+        // The window has the keyboard (a bare Xvfb has no window manager to say so).
+        raw.focused = true;
+        let keys: Vec<&str> = keys.split(',').collect();
+        let id = Id::unique("plan-keys-done");
+        let (done, last) = ctx.data(|d| d.get_temp::<(usize, f64)>(id)).unwrap_or((0, 1.5));
+        if done == 0 {
+            ctx.data_mut(|d| d.insert_temp(Id::unique("keyboard-focus"), true));
+            ctx.memory_mut(|m| m.request_focus(Id::unique(("plan-screen", &peer.id, &format!("{} · 1", peer.name)))));
+            if t < 1.8 {
+                return;
+            }
+        }
+        if done >= keys.len() || t < last + 0.15 {
+            return;
+        }
+        let k = keys[done];
+        let shift = k.ends_with('+');
+        let key = match k.trim_end_matches('+') {
+            "Left" => Key::ArrowLeft,
+            "Right" => Key::ArrowRight,
+            "Up" => Key::ArrowUp,
+            "Down" => Key::ArrowDown,
+            "Esc" => Key::Escape,
+            _ => Key::Enter,
+        };
+        let modifiers = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+        raw.events.push(egui::Event::ModifiersChanged(modifiers));
+        raw.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+        raw.events.push(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+        ctx.data_mut(|d| d.insert_temp(id, (done + 1, t)));
     }
 
     /// `ONE_MK_APP_PLACE_XY=x,y` (on Arrange): at one second, Exact place
