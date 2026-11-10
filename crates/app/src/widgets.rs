@@ -202,8 +202,6 @@ pub enum Look {
     Primary,
     /// Everything else: a quiet `surface2` fill.
     Quiet,
-    /// A quiet button floating over the desk (the toolbar): the same look.
-    Glass,
     /// A link: no fill, the accent's text colour.
     #[cfg_attr(not(any(debug_assertions, feature = "design-evidence")), allow(dead_code))]
     Text,
@@ -234,7 +232,7 @@ pub fn button_radius(height: f32) -> u8 {
 pub fn button_font(look: Look) -> FontId {
     match look {
         Look::Primary | Look::Text | Look::Danger => semibold(T_BODY),
-        Look::Quiet | Look::Glass => medium(T_BODY),
+        Look::Quiet => medium(T_BODY),
     }
 }
 
@@ -248,12 +246,12 @@ pub fn paint_button(p: &Painter, rect: Rect, label: &str, look: Look, s: State) 
     let fg = match look {
         _ if !s.enabled => pal.ink3,
         Look::Primary => pal.on_accent,
-        Look::Quiet | Look::Glass => pal.ink,
+        Look::Quiet => pal.ink,
         Look::Text => pal.accent_text,
         Look::Danger => pal.danger,
     };
     match look {
-        Look::Primary | Look::Quiet | Look::Glass if !s.enabled => {
+        Look::Primary | Look::Quiet if !s.enabled => {
             p.rect_filled(rr, radius, pal.surface2);
         }
         // Flat, solid accent: no gradient, no rim, no glow; 6 % deeper under
@@ -262,7 +260,7 @@ pub fn paint_button(p: &Painter, rect: Rect, label: &str, look: Look, s: State) 
             p.rect_filled(rr, radius, mix(mix(pal.accent, pal.accent_hover, s.hover), pal.accent_press, s.press));
         }
         // Quiet: `surface2`, the `line2` overlay under the pointer.
-        Look::Quiet | Look::Glass => {
+        Look::Quiet => {
             p.rect_filled(rr, radius, pressed(mix(pal.surface2, pal.surface2_hover, s.hover), s.press));
         }
         // Links: no fill; a faint wash under the pointer.
@@ -930,10 +928,13 @@ pub fn group_shapes(rect: Rect, radius: u8) -> Vec<egui::Shape> {
     out
 }
 
-/// The right-hand panel (handoff 4.2, shared by Desk and Keys & mouse):
-/// `surface`, a 1-point `line`, corner 16, the theme's shadow.
+/// The right-hand panel's corner (handoff 4.2).
+const PANEL_R: u8 = 16;
+
+/// The right-hand panel (handoff 4.2), the one ground for the Desk's and
+/// Keys & mouse's: `surface`, a 1-point `line`, corner 16, the theme's shadow.
 pub fn panel(ui: &Ui, rect: Rect) {
-    for s in group_shapes(rect, 16) {
+    for s in group_shapes(rect, PANEL_R) {
         ui.painter().add(s);
     }
 }

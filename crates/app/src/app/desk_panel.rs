@@ -15,7 +15,6 @@ pub(super) const EDGE: f32 = 16.0;
 pub(super) const STACK_BELOW: f32 = 1000.0;
 /// The panel's height under the desk.
 pub(super) const STACKED_H: f32 = 260.0;
-const PANEL_R: u8 = 16;
 const PANEL_PAD: f32 = 20.0;
 const GAP: f32 = 18.0;
 const ROW: f32 = 46.0;
@@ -291,9 +290,7 @@ impl App {
                 }
             }
         }
-        for s in raised_shapes_of(rect) {
-            ui.painter().add(s);
-        }
+        widgets::panel(ui, rect);
         let inner = rect.shrink(PANEL_PAD);
         // A new computer described: its contents fade in, rising a little.
         let shown = format!("{:?}{:?}", self.status.as_ref().map(Option::is_some), self.selected_id());
@@ -722,11 +719,6 @@ impl App {
         }
         send.bottom()
     }
-}
-
-/// The panel's ground: `surface`, a 1-point `line`, corner 16, the theme's shadow.
-fn raised_shapes_of(rect: Rect) -> Vec<egui::Shape> {
-    widgets::raised_shapes(rect, f32::from(PANEL_R), true)
 }
 
 #[cfg(test)]

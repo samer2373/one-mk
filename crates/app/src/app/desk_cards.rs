@@ -92,9 +92,6 @@ impl App {
     /// Over the desk: the banner, the transfer that is running, and where
     /// files go while they are carried over the window.
     pub(super) fn desk_overlay(&mut self, ui: &mut Ui, desk: Rect, hovering_files: bool) {
-        if self.tab != Tab::Desk && self.tab != Tab::Arrange {
-            return;
-        }
         let p = ui.painter().clone();
         if hovering_files {
             let r = Rect::from_center_size(pos2(desk.center().x, desk.bottom() - 24.0), vec2(280.0, 40.0));
@@ -195,8 +192,8 @@ impl App {
     /// The band over the desk (banner, a small window's transfer),
     /// with its gaps: the desk is framed below it, never under it.
     pub(super) fn band_h(&self, ui: &Ui, desk_w: f32) -> f32 {
-        // Only the Desk and Arrange views draw the band.
-        if !matches!(self.tab, Tab::Desk | Tab::Arrange) {
+        // Only the Desk draws the band.
+        if self.tab != Tab::Desk {
             return 0.0;
         }
         let mut h = 0.0;
@@ -222,10 +219,7 @@ impl App {
             let side = self.side_shown(&p.id, p.side);
             items.push((p.id.clone(), p.name.clone(), if p.online { on_your(side).to_owned() } else { "offline".into() }, p.online));
         }
-        let hovering_files = ui.input(|i| !i.raw.hovered_files.is_empty());
         let dropped: Option<Vec<std::path::PathBuf>> = ui.input(|i| (!i.raw.dropped_files.is_empty()).then(|| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect()));
-        let drop_at = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
-        let mut drop_to: Option<(String, Vec<std::path::PathBuf>)> = None;
         const H: f32 = 44.0;
         let widths: Vec<f32> = items.iter().map(|(_, n, w, _)| (text_width(ui, n, semibold(T_BODY)).max(text_width(ui, w, regular(T_META))) + 50.0).clamp(120.0, 220.0)).collect();
         // Rows that wrap, centred in the room there is.
@@ -240,9 +234,8 @@ impl App {
             x += w + 8.0;
         }
         let total_h = rows.len() as f32 * (H + 8.0) - 8.0;
-        // On Clipboard & files the chips sit at the top, close to the page
-        // they serve; on the desk, centred where the monitors would be.
-        let mut y = if self.tab == Tab::Files { r.top() + 12.0 } else { r.center().y - total_h / 2.0 };
+        // Centred where the monitors would be.
+        let mut y = r.center().y - total_h / 2.0;
         for row in rows {
             let rw: f32 = row.iter().map(|k| widths[*k] + 8.0).sum::<f32>() - 8.0;
             let mut x = r.center().x - rw / 2.0;
@@ -265,15 +258,6 @@ impl App {
                 } else {
                     widgets::status_mark(p, mark, 7.0, widgets::Mark::Off);
                 }
-                // On Clipboard & files each chip is a drop target too.
-                let target = self.tab == Tab::Files && *online && id != "me";
-                let words: &str = if target && hovering_files { "Drop here" } else { words };
-                if target && hovering_files {
-                    p.rect_stroke(cr.expand(2.0), CornerRadius::same(R_INNER + 2), Stroke::new(1.5, pal().accent), StrokeKind::Outside);
-                }
-                if target && let Some(paths) = dropped.as_ref().filter(|_| drop_at.is_some_and(|q| cr.contains(q))) {
-                    drop_to = Some((id.clone(), paths.clone()));
-                }
                 let tw = cr.width() - 46.0;
                 p.text(pos2(cr.left() + 34.0, cr.top() + 15.0), Align2::LEFT_CENTER, fit(p, name, &semibold(T_BODY), tw), semibold(T_BODY), if *online { pal().ink } else { pal().ink2 });
                 p.text(pos2(cr.left() + 34.0, cr.top() + 31.0), Align2::LEFT_CENTER, fit(p, words, &regular(T_META), tw), regular(T_META), pal().ink3);
@@ -289,13 +273,10 @@ impl App {
             }
             y += H + 8.0;
         }
-        // Files let go: on a chip, to that computer; elsewhere, asked.
+        // Files let go over the chips: asked where they go.
         if let Some(paths) = dropped {
             let now = self.now;
-            match drop_to.and_then(|(id, p)| self.scene.devices.iter().position(|d| d.id == id).map(|i| (i, p))) {
-                Some((i, p)) => self.send_to(i, p),
-                None => self.drop_files(paths, None, now),
-            }
+            self.drop_files(paths, None, now);
         }
     }
 

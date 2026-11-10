@@ -57,34 +57,6 @@ impl App {
         self.rtt_frozen.unwrap_or(self.now)
     }
 
-    /// The panel under the desk: tall enough for the inspector with the
-    /// latency card, on the Desk tab once a computer is paired.
-    pub(super) fn panel_h(&self) -> f32 {
-        if self.tab == Tab::Files {
-            // The page scrolls, so the desk above keeps enough room for its
-            // monitors to stay readable drop targets in a small window.
-            // Narrow, the desk above is a row of named chips: the page takes the room.
-            if self.ctx.content_rect().width() < 1040.0 {
-                // Chips need a row (two at most): the page takes the rest.
-                let peers = self.running().map_or(0, |s| s.peers.len());
-                let chips = if peers > 3 { 2.0 * 52.0 } else { 52.0 };
-                return (self.ctx.content_rect().height() - shell::HEAD_H - chips - 3.0 * M).max(210.0);
-            }
-            return (self.ctx.content_rect().height() * 0.56).clamp(210.0, 460.0);
-        }
-        // A narrow window stacks Arrange's cards: give them half the height.
-        if self.tab == Tab::Arrange && self.ctx.content_rect().width() < 1040.0 {
-            return (self.ctx.content_rect().height() * 0.46).max(PANEL_H);
-        }
-        let with_card = self.tab == Tab::Desk && self.running().is_some_and(|s| !s.peers.is_empty());
-        let short = self.ctx.content_rect().height() < 640.0;
-        match (with_card, short) {
-            (true, false) => 228.0,
-            (true, true) => 220.0,
-            (false, _) => PANEL_H,
-        }
-    }
-
     /// A graph is on screen right now (so the daemon is worth asking).
     pub(super) fn graph_wanted(&self) -> bool {
         if self.rtt_frozen.is_some() {
