@@ -38,7 +38,7 @@ pub(super) fn panel_width(w: f32) -> f32 {
 
 /// How big the desk is drawn in a scene `w` × `h` (handoff 5.1).
 pub(super) fn desk_scale(w: f32, h: f32) -> f32 {
-    (w / DESK_ROOM.0).min(h / DESK_ROOM.1).min(1.45).max(0.5)
+    (w / DESK_ROOM.0).min(h / DESK_ROOM.1).clamp(0.5, 1.45)
 }
 
 /// Where the Desk's parts go in the window.
@@ -393,7 +393,7 @@ impl App {
             p.rect_filled(sw.shrink(3.0), CornerRadius::same(3), crate::style::SCREEN_PLATE);
         } else {
             let tex = crate::scene::wallpaper(ui.ctx(), device.map_or(ME_WALL, |d| d.wall));
-            p.add(egui::epaint::RectShape::filled(sw.shrink(3.0), CornerRadius::same(3), Color32::WHITE).with_texture(tex.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
+            p.add(egui::epaint::RectShape::filled(sw.shrink(3.0), CornerRadius::same(3), crate::style::UNTINTED).with_texture(tex.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
         }
         let x = sw.right() + 12.0;
         let room = c.right() - x;
