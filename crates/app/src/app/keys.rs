@@ -1083,8 +1083,21 @@ impl App {
     }
 
     /// The panel (handoff 4.2): `surface` at the right, or under the stage
-    /// (260 tall) in a compact window; what it holds scrolls.
+    /// (260 tall) in a compact window; what it holds scrolls. Beside the
+    /// stage it is as tall as what it holds (no void under "Test it"), as
+    /// the Desk's panel is, easing to a new height when that changes (a key
+    /// chosen, a rule added); a long one (the mouse's) fills the column and
+    /// scrolls.
     fn keys_panel(&mut self, ui: &mut Ui, r: Rect, compact: bool, now: f64) {
+        let key = if self.keys.view == View::Keyboard { "keyboard" } else { "mouse" };
+        let r = match self.keys.panel_heights.get(key).copied().filter(|_| !compact) {
+            Some(used) => {
+                let want = (used + 40.0).min(r.height());
+                let h = tween(ui.ctx(), Id::unique("keys-panel-h"), want, motion::space(0.18), motion::out_cubic);
+                Rect::from_min_size(r.min, vec2(r.width(), h.min(r.height())))
+            }
+            None => r,
+        };
         widgets::panel(ui, r);
         let inner = r.shrink(20.0);
         // A little room round the contents for focus rings, and on the
@@ -1095,7 +1108,6 @@ impl App {
         if motion::reduced() {
             child.style_mut().scroll_animation = egui::style::ScrollAnimation::none();
         }
-        let key = if self.keys.view == View::Keyboard { "keyboard" } else { "mouse" };
         let scroll = egui::ScrollArea::vertical().id_salt(("keys-panel", key)).auto_shrink([false, false]);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|value| value.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(offset));
@@ -1580,9 +1592,10 @@ impl App {
         if compact {
             y = self.quick_setups_panel(ui, pos2(at.x, y), w, &input);
         }
-        // "Test it" at the bottom when there is room, else after the rest.
+        // "Test it" right after the rest; in a compact window (a band
+        // under the stage) at its foot when there is room.
         let th = self.keys.panel_heights.get("test").copied().unwrap_or(64.0);
-        let ty = (y + PANEL_GAP).max(at.y + viewport - th);
+        let ty = if compact { (y + PANEL_GAP).max(at.y + viewport - th) } else { y + PANEL_GAP };
         // Pinned to the foot, "Test it" is the panel's footer: a hairline
         // across the panel sets it apart from the list above.
         if ty > y + PANEL_GAP + 24.0 {

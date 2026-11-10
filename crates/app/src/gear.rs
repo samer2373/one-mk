@@ -959,7 +959,53 @@ pub struct ModelPart {
 /// long triangle of the shell reaches under a button and covers part of it.
 const MAX_EDGE: f32 = 4.0;
 
+/// Faces meeting at less than this keep one smooth normal; sharper folds
+/// stay hard edges.
+const CREASE_DEG: f32 = 66.0;
+
 impl ModelPart {
+    /// The same triangles, shaded smooth: each corner's normal becomes the
+    /// area-weighted mean of the faces that share its point and lie within
+    /// [`CREASE_DEG`] of its own face, so a low-poly shell's facets blend
+    /// while its real folds (and the seams between parts, which are other
+    /// parts) stay crisp. The geometry is unchanged.
+    fn smoothed(mut self) -> ModelPart {
+        let key = |p: P3| ((p.x * 1000.0).round() as i64, (p.y * 1000.0).round() as i64, (p.z * 1000.0).round() as i64);
+        let tris = self.idx.as_chunks::<3>().0;
+        // Each face's normal (its area as its length), turned to agree with
+        // the normals the model came with.
+        let faces: Vec<P3> = tris.iter().map(|t| {
+            let [a, b, c] = t.map(|k| self.pos[k as usize]);
+            let f = (b - a).cross(c - a);
+            let given = t.iter().fold(p3(0.0, 0.0, 0.0), |acc, k| acc + self.nrm[*k as usize]);
+            if f.dot(given) < 0.0 { -f } else { f }
+        }).collect();
+        let mut at: std::collections::HashMap<(i64, i64, i64), Vec<usize>> = std::collections::HashMap::new();
+        for (f, t) in tris.iter().enumerate() {
+            for k in t {
+                let list = at.entry(key(self.pos[*k as usize])).or_default();
+                if !list.contains(&f) {
+                    list.push(f);
+                }
+            }
+        }
+        let cos = CREASE_DEG.to_radians().cos();
+        let mut nrm = self.nrm.clone();
+        for (f, t) in tris.iter().enumerate() {
+            let own = faces[f].norm();
+            for k in t {
+                let sum = at[&key(self.pos[*k as usize])].iter().map(|g| faces[*g]).filter(|n| n.norm().dot(own) >= cos).fold(p3(0.0, 0.0, 0.0), |acc, n| acc + n);
+                if sum.dot(sum) > 1e-12 {
+                    nrm[*k as usize] = sum.norm();
+                }
+            }
+        }
+        // (The packer writes one vertex per triangle corner, so no corner
+        // is asked for two normals.)
+        self.nrm = nrm;
+        self
+    }
+
     /// The same surface with every triangle cut (at the middle of its
     /// longest side, normals and colours blended) until its sides are short.
     fn refined(self, max: f32) -> ModelPart {
@@ -1033,7 +1079,7 @@ impl Model {
             if idx.iter().any(|i| *i as usize >= nv) {
                 return None;
             }
-            parts.push(ModelPart { name, gloss, spec, pos, nrm, col, idx }.refined(MAX_EDGE));
+            parts.push(ModelPart { name, gloss, spec, pos, nrm, col, idx }.smoothed().refined(MAX_EDGE));
         }
         Some(Model { parts })
     }
@@ -1149,7 +1195,9 @@ impl ModelView {
             // The model's own colours are one per part: each takes the
             // theme's material for what it is instead.
             let own = mouse_material(&part.name);
-            let f = Finish { albedo: own, gloss: part.gloss.max(2.0), spec: part.spec };
+            // A softer, broader highlight than the model's own: on the pale
+            // shell a tight one picks out every facet.
+            let f = Finish { albedo: own, gloss: (part.gloss * 0.55).max(2.0), spec: part.spec * 0.6 };
             let shown = if chosen == Some(part.name.as_str()) { lerp_col(own, pal().accent, 0.55) } else { own };
             // The buttons sit on the shell (named Material.…).
             t.bias = if part.name.starts_with("Material") { 0.0 } else { 0.6 };

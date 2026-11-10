@@ -1516,7 +1516,16 @@ impl Scene {
                         soft_rect(painter, cam, [fx, fz + 0.3, rx, rz], 0.0, lerp(2.2, 7.0, up), fade(pal().contact, a * (1.0 - up)));
                     }
                 } else {
-                    soft_rect(painter, cam, [fx, fz, rx * 0.8, rz * 0.8], 0.0, 9.0, fade(pal().occlusion, a * 0.7));
+                    // Standing above the desk (a computer that sits above
+                    // this one): its shadow lies on the floor below it, cast
+                    // a little forward and to the right (the key light is
+                    // high, behind and to the left), wider and softer the
+                    // higher it is, with a faint core, so the height reads.
+                    let h = d.at.y.max(1.0);
+                    let (cx, cz) = (fx + h * 0.06, fz + h * 0.14);
+                    let (spread, feather) = (1.0 + h / 70.0, 6.0 + h * 0.16);
+                    soft_rect(painter, cam, [cx, cz, rx * spread, rz * spread], 0.0, feather * 1.5, fade(pal().occlusion, a));
+                    soft_rect(painter, cam, [cx, cz, rx * 0.7, rz * 0.7], 0.0, feather, fade(pal().contact, a * 0.7 / (1.0 + h / 40.0)));
                 }
             };
             if wall {
