@@ -7,6 +7,8 @@ pub mod client;
 pub mod install;
 pub mod integrate;
 pub mod macos_windows;
+#[cfg(target_os = "macos")]
+pub mod notification;
 pub mod private;
 pub mod proc;
 pub mod settings_file;

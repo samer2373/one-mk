@@ -45,6 +45,12 @@ fn parse_args() -> Result<Option<PathBuf>, String> {
 }
 
 fn main() {
+    // macOS: `one-mk` starts the app like this to show a notification as oneMK, then it ends at once.
+    #[cfg(target_os = "macos")]
+    if let Some((title, body)) = one_mk_ctl::notification::post_args(&std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        let outcome = one_mk_ctl::notification::post(&title, &body);
+        std::process::exit(i32::from(!matches!(outcome, one_mk_ctl::notification::Outcome::Shown)));
+    }
     let mut args = Vec::new();
     let mut input = std::env::args_os().skip(1);
     while let Some(arg) = input.next() {
