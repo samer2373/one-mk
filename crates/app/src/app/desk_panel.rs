@@ -328,7 +328,9 @@ impl App {
             let name = "Timer: when typing on every computer stops by itself";
             let resp = tool(ui, r, "broadcast-options", Icon::Clock, label, false, !on, name).on_hover_text(name);
             widgets::debug_open_menu(ui, &resp, "timer");
-            egui::Popup::menu(&resp).width(280.0).align(egui::RectAlign::BOTTOM_START).show(|ui| {
+            // A field inside: a click in it must not close the menu (a menu's
+            // default), only a click outside it or Escape.
+            egui::Popup::menu(&resp).width(280.0).align(egui::RectAlign::BOTTOM_START).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
                 let (row, _) = ui.allocate_exact_size(vec2(280.0, 34.0), Sense::hover());
                 self.broadcast_timeout(ui, row.shrink2(vec2(4.0, 0.0)));
                 let (note, _) = ui.allocate_exact_size(vec2(280.0, 22.0), Sense::hover());
@@ -370,6 +372,10 @@ impl App {
         } else {
             rect
         };
+        // A window shrunk to almost nothing has no room for it.
+        if rect.width() <= 2.0 * PANEL_PAD + 1.0 || rect.height() <= 2.0 * PANEL_PAD + 1.0 {
+            return;
+        }
         widgets::panel(ui, rect);
         let inner = rect.shrink(PANEL_PAD);
         // A new computer described: its contents fade in, rising a little.
