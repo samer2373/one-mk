@@ -136,6 +136,9 @@ pub struct Status {
     pub discovery: Option<bool>,
     pub clipboard_history_revision: u64,
     pub clipboard_history_note: String,
+    /// This run shares no clipboard (`run --no-clipboard`), whatever the
+    /// clipboard settings say. Older daemons don't say: false.
+    pub clipboard_off: bool,
     /// What the input backend needs the user to know or do, one line each
     /// (e.g. approve the desktop's permission dialog); empty when it works.
     pub input: Vec<String>,
@@ -505,6 +508,7 @@ impl Status {
         if let Some(discovery) = self.discovery { out += &format!("discovery\t{discovery}\n"); }
         out += &format!("clipboard-history-revision\t{}\n", self.clipboard_history_revision);
         if !self.clipboard_history_note.is_empty() { out += &format!("clipboard-history-note\t{}\n", self.clipboard_history_note.replace(['\t', '\r', '\n'], " ")); }
+        if self.clipboard_off { out += "clipboard-sharing\toff\n"; }
         for line in &self.input {
             out += &format!("input\t{}\n", line.replace(['\t', '\n', '\r'], " "));
         }
@@ -598,6 +602,7 @@ impl Status {
                 ["discovery", "false"] => s.discovery = Some(false),
                 ["clipboard-history-revision", revision] => s.clipboard_history_revision = revision.parse().unwrap_or(0),
                 ["clipboard-history-note", note] => s.clipboard_history_note = note.to_string(),
+                ["clipboard-sharing", "off"] => s.clipboard_off = true,
                 ["hotkeys", state, detail] => (s.hotkeys, s.hotkeys_detail) = (state.into(), detail.into()),
                 ["profile", v] => s.layout.profile = Some(v.into()),
                 ["input", v] => s.input.push(v.into()),
@@ -1129,6 +1134,14 @@ mod invitation_tests {
         let status = Status { clipboard_history_enabled: true, clipboard_history_note: error.into(), ..Default::default() };
         assert!(status.render().contains(error));
         assert!(Status::decode(&status.encode()).unwrap().render().contains(error));
+    }
+
+    #[test]
+    fn a_run_without_clipboard_says_so_and_older_daemons_count_as_sharing() {
+        let off = Status { clipboard_off: true, ..Default::default() };
+        assert!(Status::decode(&off.encode()).unwrap().clipboard_off);
+        assert!(!Status::decode(&Status::default().encode()).unwrap().clipboard_off);
+        assert!(!Status::decode("ok\nname\tdesk\n").unwrap().clipboard_off, "older daemons say nothing");
     }
 
     #[test]
