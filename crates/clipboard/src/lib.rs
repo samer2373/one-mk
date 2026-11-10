@@ -31,6 +31,8 @@ mod history_save;
 #[cfg(target_os = "linux")]
 mod history_watch;
 mod sensitivity;
+#[cfg(target_os = "linux")]
+mod x11_read;
 
 /// Default for the largest clipboard content we send or accept, in bytes
 /// (all formats together).
@@ -426,7 +428,7 @@ fn x11_write_limit() -> Option<usize> {
     if let Some(known) = *KNOWN.lock().unwrap_or_else(|error| error.into_inner()) {
         return known;
     }
-    let found = if std::env::var_os("WAYLAND_DISPLAY").is_some() && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok() {
+    let found = if wayland_data_control() {
         Some(None)
     } else {
         use x11rb::connection::RequestConnection as _;
@@ -437,6 +439,41 @@ fn x11_write_limit() -> Option<usize> {
         *KNOWN.lock().unwrap_or_else(|error| error.into_inner()) = Some(found);
     }
     found.flatten()
+}
+
+/// Text and HTML from the X11 clipboard, or `None` where arboard doesn't
+/// use X11 (Wayland data-control; other platforms). Sets `broken` when the
+/// X server can't be reached (it restarted: open again next time, which
+/// also finds its new auth file).
+#[cfg(target_os = "linux")]
+fn x11_text_and_html(filter: &Filter, broken: &mut bool) -> Option<(Option<String>, Option<String>)> {
+    if wayland_data_control() {
+        return None;
+    }
+    let mut read = |wanted: bool, formats: &[&str]| {
+        if !wanted {
+            return None;
+        }
+        x11_read::read(formats, CEILING_BYTES).unwrap_or_else(|e| {
+            tracing::debug!("reading the X11 clipboard: {e:#}");
+            *broken |= x11rb::connect(None).is_err();
+            None
+        })
+    };
+    Some((read(filter.text, x11_read::TEXT), read(filter.html, x11_read::HTML)))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn x11_text_and_html(_: &Filter, _: &mut bool) -> Option<(Option<String>, Option<String>)> {
+    None
+}
+
+/// Whether arboard uses the Wayland data-control protocol rather than X11
+/// (the same test it makes; it doesn't change while we run).
+#[cfg(target_os = "linux")]
+fn wayland_data_control() -> bool {
+    static KNOWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *KNOWN.get_or_init(|| std::env::var_os("WAYLAND_DISPLAY").is_some() && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok())
 }
 
 /// Refuses text or HTML larger than an X11 clipboard can hand over (see
@@ -463,12 +500,19 @@ impl Backend {
             Backend::System(cb) => {
                 let handle = open(cb)?;
                 let mut broken = false;
-                // Asking for a format that isn't there is an error too ("incorrect
-                // type received"); only a dead handler thread means the display
-                // server went away under us.
-                let mut note = |e: &arboard::Error| broken |= handler_lost(e);
-                let text = if filter.text { handle.get_text().map_err(|e| note(&e)).ok() } else { None };
-                let html = if filter.html { handle.get().html().map_err(|e| note(&e)).ok() } else { None };
+                // On X11, text and HTML through our own reader: arboard's breaks
+                // off large (INCR) transfers (see `x11_read`).
+                let (text, html) = match x11_text_and_html(filter, &mut broken) {
+                    Some(both) => both,
+                    None => {
+                        // Asking for a format that isn't there is an error too ("incorrect
+                        // type received"); only a dead handler thread means the display
+                        // server went away under us.
+                        let mut note = |e: &arboard::Error| broken |= handler_lost(e);
+                        let text = if filter.text { handle.get_text().map_err(|e| note(&e)).ok() } else { None };
+                        (text, if filter.html { handle.get().html().map_err(|e| note(&e)).ok() } else { None })
+                    }
+                };
                 if broken {
                     // The display server went away under it: open again next time.
                     *cb = None;
