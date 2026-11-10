@@ -486,7 +486,7 @@ pub fn window_issue(text: &str) -> String {
         plain.replace_range(open..=close, "");
     }
     let kept: Vec<&str> = plain.split("; ").map(str::trim).filter(|part| !part.is_empty() && !terminal(part)).collect();
-    if kept.is_empty() || (kept.len() == 1 && kept[0].len() < 12) {
+    if kept.is_empty() || (kept.len() == 1 && kept[0].split_whitespace().count() < 2) {
         return if text.contains("settings.toml") { "Check the options in Settings, then try again.".into() } else { "Review the options in this window, or restart oneMK and try again.".into() };
     }
     if kept.len() == 1 && kept[0] == text {
