@@ -1,18 +1,29 @@
-//! Two full pages without the desk: Health (`one-mk doctor`, run on open
-//! and on Recheck, off the window's thread, plus what the daemon says
-//! right now) and Settings (edge rules, power and locking, gaming mode,
-//! keyboard shortcuts, Ctrl and Cmd, commands to run).
+
+//! Health, a full page without the desk: `one-mk doctor`, run on open and
+//! on Check again, off the window's thread, plus what the daemon says right
+//! now. A banner says in one line whether all is well; the cards under it
+//! hold what needs the person (Needs you, Pending), how each computer
+//! answers (Connections) and what passed. Settings is in `settings_page`.
 
 use super::*;
 use crate::view::{self, Check, Verdict};
 
 /// Doctor results older than this are run again when Health opens.
 const STALE: f64 = 30.0;
-/// A row of the Crossing edges card.
-/// Tall enough for a label with its caption under it.
-const EDGE_ROW: f32 = 50.0;
-const HELP_ROW: f32 = 50.0;
-const MODS: [(&str, &str); 4] = [("none", "None"), ("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
+
+/// The room a group's label takes above its card (see [`group_card`]).
+pub(super) const GROUP_LABEL: f32 = 28.0;
+
+/// A group of rows as Health and Settings draw it: its label (13, 600,
+/// `ink2`) above the card (radius 14, padding 0 18) that is `rows_h` tall,
+/// from `at` and `w` wide. Returns the room for the rows.
+pub(super) fn group_card(ui: &Ui, at: Pos2, w: f32, title: &str, rows_h: f32) -> Rect {
+    let card = Rect::from_min_size(at + vec2(0.0, GROUP_LABEL), vec2(w, rows_h));
+    widgets::group(ui, card, R_GROUP);
+    ui.painter().text(at + vec2(2.0, 12.0), Align2::LEFT_CENTER, title, semibold(T_BODY), pal().ink2);
+    a11y_text(ui, Id::unique(("group", title)), Rect::from_min_size(at, vec2(w, GROUP_LABEL)), Role::Heading, title, None);
+    Rect::from_min_size(card.min + vec2(18.0, 0.0), vec2(w - 36.0, rows_h))
+}
 
 /// A group of settings, as the system's own settings show them: its title
 /// above, quiet, and the rows on one quiet group below it.
@@ -39,35 +50,6 @@ enum Fix {
     Update,
     /// The steps for the desktop's own permission dialog (not macOS).
     DesktopGuide,
-}
-
-fn verdict_icon(p: &Painter, c: Pos2, v: Verdict) {
-    // One family: a 14-point round badge each, told apart by its mark (and
-    // by the word beside the title), never by colour alone.
-    let r = 7.0;
-    let colour = match v { Verdict::Pass => pal().ok, Verdict::Skip => pal().ink2, Verdict::Warn => pal().warn, Verdict::Fail => pal().danger };
-    match v {
-        Verdict::Pass => widgets::draw_check(p, c, 12.0, colour, 1.0),
-        Verdict::Skip => {
-            p.circle_stroke(c, r, Stroke::new(1.5, colour));
-            p.line_segment([c, c + vec2(0.0, -4.0)], Stroke::new(1.5, colour));
-            p.line_segment([c, c + vec2(3.0, 1.0)], Stroke::new(1.5, colour));
-        }
-        Verdict::Warn | Verdict::Fail => {
-            p.add(egui::Shape::closed_line(vec![c + vec2(0.0, -r), c + vec2(r, r), c + vec2(-r, r)], Stroke::new(1.5, colour)));
-            p.text(c + vec2(0.0, 2.0), Align2::CENTER_CENTER, "!", semibold(11.0), colour);
-        }
-    }
-}
-
-/// The word that goes with a badge.
-fn verdict_word(v: Verdict) -> &'static str {
-    match v {
-        Verdict::Pass => "passed",
-        Verdict::Skip => "waiting",
-        Verdict::Warn => "warning",
-        Verdict::Fail => "problem",
-    }
 }
 
 /// Whether a line the daemon says now is still pending, and if so whether
@@ -100,13 +82,6 @@ struct Item {
     k: usize,
 }
 
-fn text_height(ui: &Ui, text: &str, width: f32) -> f32 {
-    let f = regular(T_BODY);
-    let mut job = egui::text::LayoutJob::simple(text.to_owned(), f.clone(), pal().ink, width);
-    job.sections[0].format.line_height = Some((f.size * LEADING).round());
-    ui.painter().layout_job(job).size().y
-}
-
 fn current_check(mut check: Check, status: Option<&Status>) -> Option<Check> {
     if let Some(status) = status {
         if check.id == "pairing" && !status.peers.is_empty() {
@@ -122,14 +97,95 @@ fn current_check(mut check: Check, status: Option<&Status>) -> Option<Check> {
     Some(check)
 }
 
-/// A "Needs you" row's height: title, what is wrong, what to do.
-fn item_height(ui: &Ui, i: &Item, width: f32) -> f32 {
-    let title = if i.title.is_empty() { 0.0 } else { 24.0 };
+/// The mark a check's verdict gets: always a shape and a colour. ● passed,
+/// ◆ needs a look, ■ a problem, ○ waiting.
+fn verdict_mark(v: Verdict) -> widgets::Mark {
+    match v {
+        Verdict::Pass => widgets::Mark::Ok,
+        Verdict::Skip => widgets::Mark::Off,
+        Verdict::Warn => widgets::Mark::Warn,
+        Verdict::Fail => widgets::Mark::Error,
+    }
+}
+
+/// The width of a "Needs you" row's button: the window's own fix, or
+/// copying the command; 0 for none.
+fn fix_button_w(ui: &Ui, i: &Item) -> f32 {
+    match (&i.here, &i.fix) {
+        (Some((label, _)), _) => button_width(ui, label),
+        (None, Some(f)) if view::fix_command(f).1 => button_width(ui, "Copy command"),
+        _ => 0.0,
+    }
+}
+
+/// A "Needs you" or "Pending" row's height `w` wide (the text's room):
+/// what it is about, what is wrong (600), what to do.
+fn need_height(ui: &Ui, i: &Item, w: f32) -> f32 {
+    let title = if i.title.is_empty() { 0.0 } else { 18.0 };
     let fix = match (&i.here, &i.fix) {
-        (here, Some(f)) if shows_fix_text(here) => text_height(ui, f, width) + 6.0,
+        (here, Some(f)) if shows_fix_text(here) => 4.0 + widgets::para_code_h(ui, w, f, regular(T_BODY)),
         _ => 0.0,
     };
-    (12.0 + title + text_height(ui, &i.detail, width) + fix + 14.0).max(if i.here.is_some() || i.fix.is_some() { 56.0 } else { 44.0 })
+    let min = if i.here.is_some() || i.fix.is_some() { 56.0 } else { 48.0 };
+    (14.0 + title + widgets::para_code_h(ui, w, &i.detail, semibold(T_BODY)) + fix + 14.0).max(min)
+}
+
+/// A passed row's height `w` wide: its name, and what it found under it.
+fn passed_height(ui: &Ui, i: &Item, w: f32) -> f32 {
+    if i.title.is_empty() {
+        (14.0 + widgets::para_code_h(ui, w, &i.detail, regular(T_BODY)) + 14.0).max(48.0)
+    } else {
+        (12.0 + 20.0 + widgets::para_code_h(ui, w, &i.detail, regular(T_META)) + 12.0).max(52.0)
+    }
+}
+
+/// What a Health row is.
+enum Line<'a> {
+    Need(&'a Item),
+    Peer(usize),
+    /// "6 other checks · Passed": opens and closes the list of passed checks.
+    Toggle(usize),
+    Passed(&'a Item),
+}
+
+struct Card<'a> {
+    title: &'a str,
+    /// Quiet words at the right of the label.
+    extra: Option<String>,
+    lines: Vec<(Line<'a>, f32)>,
+}
+
+impl Card<'_> {
+    fn height(&self) -> f32 {
+        self.lines.iter().map(|(_, h)| h).sum()
+    }
+}
+
+/// How the banner at the top of Health looks.
+#[derive(Clone, Copy, PartialEq)]
+enum Tone {
+    /// Something needs a look: ◆ on the warning tint.
+    Warn,
+    /// A problem: ■ on the warning tint.
+    Danger,
+    /// All well: ● on a plain card.
+    Ok,
+    /// Checking, or not checked yet: ○ on a plain card.
+    Quiet,
+}
+
+impl App {
+    /// What Health says under its title: when the checks last ran.
+    pub(super) fn health_sub(&self) -> String {
+        match &self.doctor {
+            Some((Ok(_), at)) => {
+                let ago = (self.now - at).max(0.0);
+                let when = if ago < 60.0 { "just now".to_owned() } else if ago < 3600.0 { format!("{} min ago", (ago / 60.0) as u32) } else if ago < 86400.0 { format!("{} h ago", (ago / 3600.0) as u32) } else { format!("{} days ago", (ago / 86400.0) as u32) };
+                format!("Checked {when}")
+            }
+            _ => String::new(),
+        }
+    }
 }
 
 impl App {
@@ -196,6 +252,11 @@ impl App {
         }).collect())
     }
 
+    /// Health: a banner that says whether everything works, then cards:
+    /// what needs the person (each with the button that fixes it, when the
+    /// window can), what is pending, how each paired computer answers, and
+    /// what passed (a row that opens the list). A check about something
+    /// this computer doesn't use isn't shown.
     pub(super) fn health(&mut self, ui: &mut Ui, rect: Rect, now: f64) {
         let running = self.busy.contains(&Job::Doctor);
         let checks: Option<Vec<Check>> = match &self.doctor {
@@ -219,8 +280,7 @@ impl App {
         // check says: one row, not two.
         let has_hotkeys_check = checks.as_ref().is_some_and(|c| c.iter().any(|c| c.id == "hotkeys"));
         let hotkeys_line = self.running().and_then(|s| s.hotkeys_line());
-        for (c, l) in live.iter().filter(|(c, _)| *c != pal().danger) {
-            let _ = c;
+        for (_, l) in live.iter().filter(|(c, _)| *c != pal().danger) {
             if has_hotkeys_check && hotkeys_line.as_deref() == Some(l.as_str()) {
                 continue;
             }
@@ -232,13 +292,13 @@ impl App {
         if let Some(checks) = &checks {
             for (k, c) in checks.iter().enumerate() {
                 // Every row that isn't a pass carries an action: the
-                // window's own fix, a command to copy, or Recheck.
+                // window's own fix, a command to copy, or Check again.
                 let here = self.window_fix(c).or_else(|| match (&c.fix, c.verdict) {
                     (_, Verdict::Pass) => None,
                     (Some(f), _) if view::fix_command(f).1 => None,
                     _ if matches!(c.id.as_str(), "input" | "permissions" | "accessibility") => Some(("Open guide", if cfg!(target_os = "macos") { Fix::OpenPermissionGuide } else { Fix::DesktopGuide })),
                     // Nothing the window can do here: the fix is in words,
-                    // and Recheck (once, at the top) checks again.
+                    // and Check again (once, at the top) checks again.
                     _ => None,
                 });
                 let item = Item { title: c.title.clone(), detail: c.detail.clone(), fix: c.fix.clone(), verdict: c.verdict, here, k };
@@ -256,209 +316,255 @@ impl App {
             Verdict::Warn => 1,
             _ => 2,
         });
+        let (pending, problems): (Vec<&Item>, Vec<&Item>) = needs.iter().partition(|i| i.verdict == Verdict::Skip);
+        let peers: Vec<PeerStatus> = self.running().map(|s| s.peers.clone()).unwrap_or_default();
 
-        let w = (rect.width() - 48.0).min(960.0);
-        // Inset as Settings is: the column starts under the page title.
-        let x = rect.left() + 24.0;
+        // ---- the banner: the verdict, in a line, with Check again ----
+        let fails = needs.iter().filter(|i| i.verdict == Verdict::Fail).count();
+        let steps_only = !needs.is_empty() && needs.iter().all(|i| i.verdict == Verdict::Skip);
+        let didnt_run = match &self.doctor {
+            Some((Err(e), _)) => format!("The checks didn't run: {e}"),
+            _ => String::new(),
+        };
+        let (bold, rest, tone) = if running && checks.is_none() {
+            ("Checking this computer…".to_owned(), String::new(), Tone::Quiet)
+        } else if needs.is_empty() && checks.is_some() {
+            ("Checks pass".to_owned(), String::new(), Tone::Ok)
+        } else if needs.is_empty() {
+            ("Not checked yet".to_owned(), didnt_run.clone(), Tone::Quiet)
+        } else {
+            // The count names the groups below it: problems under Needs
+            // you, the rest under Pending.
+            let n_pending = pending.len();
+            let n = problems.len();
+            let asks = pending.iter().any(|i| matches!(i.here, Some((_, Fix::OpenPermissionGuide | Fix::DesktopGuide))));
+            let p_words = match (n_pending, asks) {
+                (1, true) => "1 awaiting permission".to_owned(),
+                (k, true) => format!("{k} awaiting you"),
+                (k, false) => format!("{k} pending"),
+            };
+            let bold = match (n, steps_only) {
+                (_, true) => format!("{p_words}."),
+                (n, _) if n_pending == 0 => format!("{n} {} you.", if n == 1 { "thing needs" } else { "things need" }),
+                (n, _) => format!("{n} {} you · {p_words}.", if n == 1 { "thing needs" } else { "things need" }),
+            };
+            let cause = problems.first().or(pending.first()).map_or(String::new(), |i| i.detail.clone());
+            let rest = if didnt_run.is_empty() { cause } else { format!("{cause} {didnt_run}") };
+            (bold, rest, if fails > 0 { Tone::Danger } else { Tone::Warn })
+        };
+
+        let full = (rect.width() - 8.0 - 14.0).clamp(300.0, 1440.0);
+        let x = rect.left() + 4.0;
+        let compact = full < 900.0;
+        let gap = 24.0;
+        let bw = button_width(ui, "Check again");
+        let text_w = full - 52.0 - bw - 20.0 - 20.0;
+        let galley = {
+            let wrap = egui::text::TextWrapping { max_width: text_w.max(80.0), max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
+            let mut job = egui::text::LayoutJob { wrap, ..Default::default() };
+            let fmt = |font: egui::FontId| egui::TextFormat { font_id: font, color: pal().ink, line_height: Some(21.0), ..Default::default() };
+            job.append(&bold, 0.0, fmt(semibold(T_BODY + 1.0)));
+            if !rest.is_empty() {
+                job.append(&format!(" {rest}"), 0.0, fmt(regular(T_BODY + 1.0)));
+            }
+            ui.painter().layout_job(job)
+        };
+        let banner_h = (galley.size().y + 32.0).max(68.0);
+
+        // ---- the cards: left (Needs you, Pending), right (Connections, Passed) ----
+        let mut left: Vec<Card> = vec![];
+        let mut right: Vec<Card> = vec![];
+        // A single column: as wide as the left one would be, no wider.
+        let (lw, rw) = if compact { (full, full) } else { let unit = (full - gap) / 2.2; (unit * 1.2, unit * 1.0) };
+        for (title, list) in [("Needs you", &problems), ("Pending", &pending)] {
+            if list.is_empty() {
+                continue;
+            }
+            let inner = lw - 36.0;
+            let lines = list.iter().map(|i| {
+                let bw = fix_button_w(ui, i);
+                let room = inner - 22.0 - if bw > 0.0 { bw + 16.0 } else { 0.0 };
+                (Line::Need(i), need_height(ui, i, room))
+            }).collect();
+            left.push(Card { title, extra: None, lines });
+        }
+        let mut lines: Vec<(Line, f32)> = (0..peers.len()).map(|k| (Line::Peer(k), links::ROW_H)).collect();
+        if !works.is_empty() {
+            lines.push((Line::Toggle(works.len()), ROW));
+            if self.health_passed_open {
+                let inner = rw - 36.0 - 26.0;
+                lines.extend(works.iter().map(|i| (Line::Passed(i), passed_height(ui, i, inner))));
+            }
+        }
+        if !lines.is_empty() {
+            let (title, extra) = if peers.is_empty() { ("Passed", None) } else { ("Connections", Some(format!("last {}", rtt::span_words()))) };
+            right.push(Card { title, extra, lines });
+        }
+        // Nothing to the left: the cards keep to one column, as wide as it.
+        let single = left.is_empty();
+        let columns: Vec<(f32, Vec<&Card>)> = if compact || single {
+            vec![(x, left.iter().chain(right.iter()).collect())]
+        } else {
+            vec![(x, left.iter().collect()), (x + lw + gap, right.iter().collect())]
+        };
+        let col_h = |cards: &Vec<&Card>| cards.iter().map(|c| GROUP_LABEL + c.height() + 18.0).sum::<f32>();
+        let cards_h = columns.iter().map(|(_, c)| col_h(c)).fold(0.0, f32::max);
+        let widths: Vec<f32> = if compact || single { vec![lw.min(full)] } else { vec![lw, rw] };
+        let total = banner_h + 20.0 + cards_h + 12.0;
+
         let area = Rect::from_min_max(pos2(rect.left(), rect.top() + 8.0), rect.max - vec2(0.0, 8.0));
         let mut child = ui.new_child(UiBuilder::new().max_rect(area));
         child.set_clip_rect(area);
         let mut fix_now = None;
         let mut copy = None;
         let mut recheck = false;
+        let mut toggle = false;
         let copied = self.copied;
+        let open = self.health_passed_open;
         egui::ScrollArea::vertical().id_salt("health-page").auto_shrink([false, false]).show(&mut child, |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            let top = ui.cursor().top();
-            let col = |ui: &mut Ui, h: f32| -> Rect {
-                let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
-                Rect::from_min_size(pos2(x, r.top()), vec2(w, h))
-            };
-            let _ = top;
-
-            // The verdict, in one line, with Recheck.
-            let fails = needs.iter().filter(|i| i.verdict == Verdict::Fail).count();
-            let steps_only = !needs.is_empty() && needs.iter().all(|i| i.verdict == Verdict::Skip);
-            let (headline, tone) = if running && checks.is_none() {
-                ("Checking this computer…".to_owned(), pal().ink2)
-            } else if needs.is_empty() && checks.is_some() {
-                ("Checks pass".to_owned(), pal().ok)
-            } else if needs.is_empty() {
-                ("Not checked yet".to_owned(), pal().ink2)
-            } else {
-                // The count names the groups below it: problems under Needs
-                // you, the rest under Pending.
-                let pending = needs.iter().filter(|i| i.verdict == Verdict::Skip).count();
-                let problems = needs.len() - pending;
-                let asks = needs.iter().any(|i| i.verdict == Verdict::Skip && matches!(i.here, Some((_, Fix::OpenPermissionGuide | Fix::DesktopGuide))));
-                let p_words = match (pending, asks) {
-                    (1, true) => "1 awaiting permission".to_owned(),
-                    (n, true) => format!("{n} awaiting you"),
-                    (n, false) => format!("{n} pending"),
-                };
-                let tone = if fails > 0 { pal().danger } else { pal().warn };
-                match (problems, steps_only) {
-                    (_, true) => (p_words, pal().ink),
-                    (n, _) if pending == 0 => (format!("{n} {} attention", if n == 1 { "needs" } else { "need" }), tone),
-                    (n, _) => (format!("{n} {} attention · {p_words}", if n == 1 { "needs" } else { "need" }), tone),
-                }
-            };
-            let sub = match &self.doctor {
-                Some((Err(e), _)) => format!("The checks didn't run: {e}"),
-                Some((Ok(_), at)) => {
-                    let ago = (now - at).max(0.0);
-                    let when = if ago < 60.0 { "just now".to_owned() } else if ago < 3600.0 { format!("{} min ago", (ago / 60.0) as u32) } else if ago < 86400.0 { format!("{} h ago", (ago / 3600.0) as u32) } else { format!("{} days ago", (ago / 86400.0) as u32) };
-                    let passed = works.iter().filter(|item| item.k != usize::MAX).count();
-                    format!("{passed} {} · checked {when}", if passed == 1 { "check passes" } else { "checks pass" })
-                }
-                None => String::new(),
-            };
-            let hero = col(ui, 92.0);
-            widgets::group(ui, hero, R_GROUP);
+            let (all, _) = ui.allocate_exact_size(vec2(area.width(), total), Sense::hover());
             let p = ui.painter().clone();
-            let medal = pos2(hero.left() + 46.0, hero.center().y);
-            p.circle_filled(medal, 22.0, tone.gamma_multiply(0.16));
-            p.circle_stroke(medal, 22.0, Stroke::new(1.0, tone.gamma_multiply(0.5)));
-            if running && checks.is_none() {
-                let turn = if motion::reduced() { 0.0 } else { (now * 5.0) as f32 };
-                widgets::draw_refresh(&p, Rect::from_center_size(medal, vec2(18.0, 18.0)), pal().ink2, turn);
-                ui.ctx().request_repaint_after_secs(1.0 / 30.0);
+
+            // The banner.
+            let b = Rect::from_min_size(pos2(x, all.top()), vec2(full, banner_h));
+            let warm = matches!(tone, Tone::Warn | Tone::Danger);
+            if warm {
+                p.rect_filled(b, CornerRadius::same(R_GROUP), pal().warn_soft);
             } else {
-                verdict_icon(&p, medal, if steps_only || checks.is_none() { Verdict::Skip } else if needs.is_empty() { Verdict::Pass } else if fails > 0 { Verdict::Fail } else { Verdict::Warn });
+                widgets::group(ui, b, R_GROUP);
             }
-            let bw = button_width(ui, "Recheck");
-            let tx = hero.left() + 84.0;
-            let tw = hero.width() - 84.0 - bw - 36.0;
-            p.text(pos2(tx, hero.center().y - (if sub.is_empty() { 0.0 } else { 11.0 })), Align2::LEFT_CENTER, fit(&p, &headline, &semibold(T_TITLE + 3.0), tw), semibold(T_TITLE + 3.0), pal().ink);
-            if !sub.is_empty() {
-                p.text(pos2(tx, hero.center().y + 13.0), Align2::LEFT_CENTER, fit(&p, &sub, &regular(T_BODY), tw), regular(T_BODY), pal().ink2);
+            let mark_at = pos2(b.left() + 24.0, b.center().y);
+            match tone {
+                Tone::Warn => widgets::status_mark(&p, mark_at, 10.0, widgets::Mark::Warn),
+                Tone::Danger => widgets::status_mark(&p, mark_at, 10.0, widgets::Mark::Error),
+                Tone::Ok => widgets::status_mark(&p, mark_at, 10.0, widgets::Mark::Ok),
+                Tone::Quiet if running && checks.is_none() => {
+                    let turn = if motion::reduced() { 0.0 } else { (now * 5.0) as f32 };
+                    widgets::draw_refresh(&p, Rect::from_center_size(mark_at, vec2(16.0, 16.0)), pal().ink2, turn);
+                    ui.ctx().request_repaint_after_secs(1.0 / 30.0);
+                }
+                Tone::Quiet => widgets::status_mark(&p, mark_at, 10.0, widgets::Mark::Off),
             }
-            let b = Rect::from_min_size(pos2(hero.right() - 18.0 - bw, hero.center().y - 16.0), vec2(bw, 32.0));
-            let label = if running { "Checking…" } else { "Recheck" };
-            if button(ui, b, Id::unique("recheck"), label, Look::Quiet, !running, Some("Run the checks again")).clicked() {
+            let gh = galley.size().y;
+            p.galley(pos2(b.left() + 52.0, b.center().y - gh / 2.0), galley.clone(), pal().ink);
+            let br = Rect::from_min_size(pos2(b.right() - 20.0 - bw, b.center().y - 16.0), vec2(bw, 32.0));
+            let label = if running { "Checking…" } else { "Check again" };
+            if button(ui, br, Id::unique("recheck"), label, Look::Quiet, !running, Some("Run the checks again")).clicked() {
                 recheck = true;
             }
-            a11y_text(ui, Id::unique("health-summary"), hero, Role::Status, &format!("{headline}. {sub}"), Some(Live::Polite));
-            ui.add_space(14.0);
+            a11y_text(ui, Id::unique("health-summary"), b, Role::Status, &format!("{bold} {rest}"), Some(Live::Polite));
 
-            // What needs the person (problems), then what is pending (a step
-            // to take, or something still on its way): two groups.
-            let (pending, problems): (Vec<&Item>, Vec<&Item>) = needs.iter().partition(|i| i.verdict == Verdict::Skip);
-            for (group_title, needs) in [("Needs you", problems), ("Pending", pending)] {
-            if !needs.is_empty() {
-                let inner = w - 36.0 - 26.0;
-                let bw = needs.iter().map(|i| match (&i.here, &i.fix) {
-                    (Some((label, _)), _) => button_width(ui, label),
-                    (None, Some(f)) if view::fix_command(f).1 => button_width(ui, "Copy command"),
-                    _ => 0.0,
-                }).fold(0.0, f32::max);
-                let text_w = inner - if bw > 0.0 { bw + 16.0 } else { 0.0 };
-                let heights: Vec<f32> = needs.iter().map(|i| item_height(ui, i, text_w)).collect();
-                let h = 52.0 + heights.iter().sum::<f32>() + 6.0;
-                let r = col(ui, h);
-                card(ui, r, group_title);
-                let mut y = r.top() + 48.0;
-                for (n, (i, ih)) in needs.iter().zip(&heights).enumerate() {
-                    let row = Rect::from_min_size(pos2(r.left() + 18.0, y), vec2(w - 36.0, *ih));
-                    let p = ui.painter().clone();
-                    verdict_icon(&p, pos2(row.left() + 8.0, row.top() + 22.0), i.verdict);
-                    let tx = row.left() + 26.0;
-                    let mut ty = row.top() + 12.0;
-                    if !i.title.is_empty() {
-                        let tw = text_width(ui, &i.title, semibold(T_BODY));
-                        p.text(pos2(tx, ty + 10.0), Align2::LEFT_CENTER, &i.title, semibold(T_BODY), pal().ink);
-                        p.text(pos2(tx + tw + 8.0, ty + 10.5), Align2::LEFT_CENTER, verdict_word(i.verdict), regular(T_META), pal().ink3);
-                        ty += 24.0;
+            // The cards.
+            let top = b.bottom() + 20.0;
+            for ((cx, cards), cw) in columns.iter().zip(&widths) {
+                let mut y = top;
+                for card in cards {
+                    let rows = group_card(ui, pos2(*cx, y), *cw, card.title, card.height());
+                    if let Some(extra) = &card.extra {
+                        p.text(pos2(cx + cw - 2.0, y + 12.0), Align2::RIGHT_CENTER, extra, regular(T_META), pal().ink3);
                     }
-                    // What is wrong in ink; what to do, quieter, under it.
-                    ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, regular(T_BODY), pal().ink);
-                    let fix_text = i.fix.clone().filter(|_| shows_fix_text(&i.here));
-                    if let Some(f) = &fix_text {
-                        widgets::para_code(ui, pos2(tx, ty + 6.0), text_w, f, regular(T_BODY), pal().ink2);
-                    }
-                    let br = Rect::from_min_size(pos2(row.right() - bw, row.top() + 6.0), vec2(bw, 32.0));
-                    if let Some((label, job)) = &i.here {
-                        let resp = button(ui, br, Id::unique(("fix-here", i.k)), label, Look::Quiet, !running, None);
-                        if matches!(job, Fix::DesktopGuide) {
-                            // The desktop's own dialog: the steps, beside the button.
-                            egui::Popup::menu(&resp).width(320.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
-                                ui.set_max_width(320.0);
-                                let steps = [
-                                    "1. Look for your desktop's sharing window (“Remote desktop” or “Input capture”). It can be behind other windows; check the taskbar.",
-                                    "2. Choose Allow (or Share). oneMK only asks for the mouse and keyboard.",
-                                    "3. Back here, choose Recheck. Dismissed it? Stop and start oneMK to be asked again.",
-                                ];
-                                for t in steps {
-                                    ui.add(egui::Label::new(egui::RichText::new(t).font(regular(T_BODY)).color(pal().ink_hover)).wrap());
-                                    ui.add_space(4.0);
-                                }
-                            });
-                        } else if resp.clicked() {
-                            fix_now = Some(*job);
+                    let mut ry = rows.top();
+                    for (n, (line, h)) in card.lines.iter().enumerate() {
+                        let row = Rect::from_min_size(pos2(rows.left(), ry), vec2(rows.width(), *h));
+                        if n > 0 {
+                            widgets::hairline(&p, row.x_range(), row.top());
                         }
-                    } else if let Some(f) = &i.fix {
-                        let (cmd, is_cmd) = view::fix_command(f);
-                        if is_cmd {
-                            let word = if copied.as_ref().is_some_and(|(k, t)| *k == i.k && now - t < 1.5) { "Copied" } else { "Copy command" };
-                            if button(ui, br, Id::unique(("copy-fix", i.k)), word, Look::Quiet, true, Some(&format!("Copy the fix for {}: {cmd}", i.title))).clicked() {
-                                copy = Some((i.k, cmd));
+                        match line {
+                            Line::Need(i) => {
+                                let bw = fix_button_w(ui, i);
+                                let text_w = row.width() - 22.0 - if bw > 0.0 { bw + 16.0 } else { 0.0 };
+                                widgets::status_mark(&p, pos2(row.left() + 5.0, row.top() + 23.0), 8.0, verdict_mark(i.verdict));
+                                let tx = row.left() + 22.0;
+                                let mut ty = row.top() + 14.0;
+                                if !i.title.is_empty() {
+                                    p.text(pos2(tx, ty + 8.0), Align2::LEFT_CENTER, &i.title, regular(T_META), pal().ink3);
+                                    ty += 18.0;
+                                }
+                                // What is wrong, in ink at 600; what to do, quieter, under it.
+                                ty += widgets::para_code(ui, pos2(tx, ty), text_w, &i.detail, semibold(T_BODY), pal().ink);
+                                if let Some(f) = i.fix.clone().filter(|_| shows_fix_text(&i.here)) {
+                                    widgets::para_code(ui, pos2(tx, ty + 4.0), text_w, &f, regular(T_BODY), pal().ink2);
+                                }
+                                let br = Rect::from_min_size(pos2(row.right() - bw, row.center().y - 15.0), vec2(bw, 30.0));
+                                if let Some((label, job)) = &i.here {
+                                    let resp = button(ui, br, Id::unique(("fix-here", i.k, n, card.title)), label, Look::Primary, !running, None);
+                                    if matches!(job, Fix::DesktopGuide) {
+                                        // The desktop's own dialog: the steps, beside the button.
+                                        egui::Popup::menu(&resp).width(320.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
+                                            ui.set_max_width(320.0);
+                                            let steps = [
+                                                "1. Look for your desktop's sharing window (“Remote desktop” or “Input capture”). It can be behind other windows; check the taskbar.",
+                                                "2. Choose Allow (or Share). oneMK only asks for the mouse and keyboard.",
+                                                "3. Back here, choose Check again. Dismissed it? Stop and start oneMK to be asked again.",
+                                            ];
+                                            for t in steps {
+                                                ui.add(egui::Label::new(egui::RichText::new(t).font(regular(T_BODY)).color(pal().ink_hover)).wrap());
+                                                ui.add_space(4.0);
+                                            }
+                                        });
+                                    } else if resp.clicked() {
+                                        fix_now = Some(*job);
+                                    }
+                                } else if let Some(f) = &i.fix {
+                                    let (cmd, is_cmd) = view::fix_command(f);
+                                    if is_cmd {
+                                        let word = if copied.as_ref().is_some_and(|(k, t)| *k == i.k && now - t < 1.5) { "Copied" } else { "Copy command" };
+                                        if button(ui, br, Id::unique(("copy-fix", i.k)), word, Look::Primary, true, Some(&format!("Copy the fix for {}: {cmd}", i.title))).clicked() {
+                                            copy = Some((i.k, cmd));
+                                        }
+                                    }
+                                }
+                                let state = if card.title == "Pending" { "is waiting" } else { "needs attention" };
+                                let fix = i.fix.as_deref().filter(|_| shows_fix_text(&i.here)).map_or(String::new(), |f| format!(" {}", f.replace('`', "")));
+                                let label = if i.title.is_empty() { format!("{}{fix}", i.detail) } else { format!("{} {state}. {}{fix}", i.title, i.detail) };
+                                a11y_text(ui, Id::unique(("need", card.title, n)), row, Role::ListItem, &label, None);
+                            }
+                            Line::Peer(k) => self.connection_row(ui, &peers[*k], row),
+                            Line::Toggle(count) => {
+                                let id = Id::unique("health-passed");
+                                let resp = ui.interact(widgets::hit_rect(row), id, widgets::sense(ui, Sense::click()));
+                                let hover = tween(ui.ctx(), id.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
+                                widgets::status_mark(&p, pos2(row.left() + 4.0, row.center().y), 8.0, widgets::Mark::Ok);
+                                let checks_word = if *count == 1 { "check" } else { "checks" };
+                                let what = if needs.is_empty() { format!("{count} {checks_word}") } else { format!("{count} other {checks_word}") };
+                                p.text(pos2(row.left() + 22.0, row.center().y), Align2::LEFT_CENTER, &what, regular(T_BODY), pal().ink);
+                                // "Passed" and a chevron: down to open, up when open.
+                                let c = pos2(row.right() - 6.0, row.center().y);
+                                let tint = mix(pal().ink2, pal().ink, hover);
+                                let dy = if open { 2.0 } else { -2.0 };
+                                p.add(egui::Shape::line(vec![c + vec2(-4.0, dy), c + vec2(0.0, -dy), c + vec2(4.0, dy)], Stroke::new(1.5, tint)));
+                                p.text(pos2(row.right() - 20.0, row.center().y), Align2::RIGHT_CENTER, "Passed", regular(T_BODY), pal().ink2);
+                                widgets::focus_ring(ui, &resp, row.shrink2(vec2(-8.0, -2.0)), 10);
+                                widgets::a11y(&resp, Role::Button, &format!("{what} passed. {}", if open { "Hide them" } else { "Show them" }), None);
+                                if resp.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+                                if resp.clicked() {
+                                    toggle = true;
+                                }
+                            }
+                            Line::Passed(i) => {
+                                let tx = row.left() + 22.0;
+                                let text_w = row.width() - 26.0;
+                                widgets::status_mark(&p, pos2(row.left() + 4.0, row.top() + if i.title.is_empty() { 23.0 } else { 22.0 }), 8.0, widgets::Mark::Ok);
+                                if i.title.is_empty() {
+                                    widgets::para_code(ui, pos2(tx, row.top() + 14.0), text_w, &i.detail, regular(T_BODY), pal().ink);
+                                } else {
+                                    p.text(pos2(tx, row.top() + 22.0), Align2::LEFT_CENTER, &i.title, regular(T_BODY), pal().ink);
+                                    widgets::para_code(ui, pos2(tx, row.top() + 32.0), text_w, &i.detail, regular(T_META), pal().ink3);
+                                }
+                                a11y_text(ui, Id::unique(("works", n)), row, Role::ListItem, &if i.title.is_empty() { i.detail.clone() } else { format!("{} passed. {}", i.title, i.detail) }, None);
                             }
                         }
+                        ry += h;
                     }
-                    let state = if group_title == "Pending" { "is waiting" } else { "needs attention" };
-                    let fix = i.fix.as_deref().filter(|_| shows_fix_text(&i.here)).map_or(String::new(), |f| format!(" {}", f.replace('`', "")));
-                    let label = if i.title.is_empty() { format!("{}{fix}", i.detail) } else { format!("{} {state}. {}{fix}", i.title, i.detail) };
-                    a11y_text(ui, Id::unique(("need", group_title, n)), row, Role::ListItem, &label, None);
-                    if n + 1 < needs.len() {
-                        ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, pal().line));
-                    }
-                    y += ih;
+                    y += GROUP_LABEL + card.height() + 18.0;
                 }
-                ui.add_space(14.0);
-            }
-            }
-
-            // How each paired computer answers.
-            let before = ui.cursor().top();
-            let links = self.latency_rows(ui, x, before, w);
-            if links > 0.0 {
-                ui.allocate_exact_size(vec2(ui.available_width(), links + 14.0), Sense::hover());
-            }
-
-            // What works: one quiet line each.
-            if !works.is_empty() {
-                let text_w = w - 36.0 - 26.0;
-                let line = |i: &Item| if i.title.is_empty() { i.detail.clone() } else { i.title.clone() };
-                // A line from the daemon (no title) is its detail alone,
-                // wrapped like the body; a check is its title and a smaller
-                // detail.
-                let heights: Vec<f32> = works.iter().map(|i| {
-                    if i.title.is_empty() {
-                        10.0 + text_height(ui, &i.detail, text_w).max(20.0) + 10.0
-                    } else {
-                        10.0 + 20.0 + text_height(ui, &i.detail, text_w) + 2.0 + 10.0
-                    }
-                }).collect();
-                let h = 52.0 + heights.iter().sum::<f32>() + 6.0;
-                let r = col(ui, h);
-                card(ui, r, "Passed");
-                let mut y = r.top() + 44.0;
-                for (n, (i, ih)) in works.iter().zip(&heights).enumerate() {
-                    let p = ui.painter().clone();
-                    let tx = r.left() + 18.0 + 26.0;
-                    verdict_icon(&p, pos2(r.left() + 26.0, y + 20.0), Verdict::Pass);
-                    if i.title.is_empty() {
-                        widgets::para_code(ui, pos2(tx, y + 10.0), text_w, &i.detail, regular(T_BODY), pal().ink);
-                    } else {
-                        p.text(pos2(tx, y + 20.0), Align2::LEFT_CENTER, line(i), regular(T_BODY), pal().ink);
-                        widgets::para_code(ui, pos2(tx, y + 32.0), text_w, &i.detail, regular(T_META), pal().ink3);
-                    }
-                    a11y_text(ui, Id::unique(("works", n)), Rect::from_min_size(pos2(r.left(), y), vec2(w, *ih)), Role::ListItem, &if i.title.is_empty() { i.detail.clone() } else { format!("{} passed. {}", line(i), i.detail) }, None);
-                    y += ih;
-                }
-                ui.add_space(8.0);
             }
         });
+        if toggle {
+            self.health_passed_open = !self.health_passed_open;
+        }
         if recheck {
             self.recheck();
         }
@@ -483,234 +589,10 @@ impl App {
             _ => {}
         }
     }
-
-    pub(super) fn settings(&mut self, ui: &mut Ui, rect: Rect) {
-        let area = Rect::from_min_max(rect.min + vec2(24.0, 16.0), rect.max - vec2(24.0, 12.0));
-        let two = area.width() >= 700.0;
-        let gap = 16.0;
-        let col_w = if two { (area.width() - gap) / 2.0 } else { area.width() };
-        // Each card as tall as what it holds: a title (48), rows, a margin (14).
-        let s = self.running();
-        let peers = s.map_or(0, |status| status.peers.len());
-        let heights = [
-            // The fifth row (Use shared rules) only for one edge's rules.
-            48.0 + 34.0 + 4.0 * EDGE_ROW + self.fullscreen_note_h(ui, col_w - 36.0) + if ui.ctx().data(|d| d.get_temp::<String>(Id::unique("edge-scope"))).unwrap_or_default().is_empty() { 0.0 } else { 36.0 } + 2.0,
-            48.0 + 3.0 * HELP_ROW - 6.0 + 14.0,
-            48.0 + HELP_ROW - 6.0 + 14.0,
-            48.0 + 62.0 + super::settings_controls::SHORTCUT_ROW * self.prefs.hotkeys.len() as f32 + 10.0 + if s.is_some_and(|status| status.hotkeys != "on" && crate::view::hotkeys_note(&status.hotkeys, &status.hotkeys_detail).is_some()) { 130.0 } else { 76.0 },
-            48.0 + 22.0 + (super::swap_row_h(col_w - 36.0) * peers as f32).max(40.0) + 14.0,
-            48.0 + 4.0 * super::settings_controls::HOOK_H + 60.0,
-            48.0 + 96.0 + 14.0,
-            48.0 + 260.0 + 14.0,
-            self.updates_card_h(ui, col_w),
-            48.0 + 2.0 * HELP_ROW - 6.0 + 14.0,
-        ];
-        // Two columns: crossing, power, games, pointer and layout, and
-        // updates on the left; keys and commands on the right. One column
-        // below 700 points.
-        let mut at = [(0usize, 0.0f32); 10];
-        let mut ys = [0.0f32; 2];
-        // Updates first: it is the one card people come to Settings for;
-        // then the rest of General (Appearance, and oneMK itself: Stop).
-        for k in [8, 9, 0, 1, 2, 3, 4, 5, 6, 7] {
-            let h = &heights[k];
-            let col = if two { usize::from((3..7).contains(&k)) } else { 0 };
-            at[k] = (col, ys[col]);
-            ys[col] += h + gap;
-        }
-        let total = ys[0].max(ys[1]) - gap;
-        let mut child = ui.new_child(UiBuilder::new().max_rect(area.expand2(vec2(6.0, 0.0))));
-        child.set_clip_rect(area.expand2(vec2(8.0, 4.0)));
-        let scroll = egui::ScrollArea::vertical().id_salt("settings").auto_shrink([false, false]);
-        #[cfg(any(debug_assertions, feature = "design-evidence"))]
-        let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|value| value.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(offset));
-        scroll.show(&mut child, |ui| {
-            let (all, _) = ui.allocate_exact_size(vec2(area.width(), total + 44.0), Sense::hover());
-            let r = |k: usize| Rect::from_min_size(pos2(all.left() + at[k].0 as f32 * (col_w + gap), all.top() + at[k].1), vec2(col_w, heights[k]));
-            // Updates first: first on the page, first in Tab order.
-            self.updates_card(ui, r(8));
-            let c = card(ui, r(9), "General");
-            self.appearance_row(ui, Rect::from_min_size(pos2(c.left(), c.top() - 6.0), vec2(c.width(), HELP_ROW)));
-            self.service_row(ui, Rect::from_min_size(pos2(c.left(), c.top() - 6.0 + HELP_ROW), vec2(c.width(), HELP_ROW)));
-            self.edges_card(ui, r(0));
-            self.power_card(ui, r(1));
-            let c = card(ui, r(2), "Games");
-            self.gaming_row(ui, Rect::from_min_size(pos2(c.left(), c.top() - 6.0), vec2(c.width(), HELP_ROW)));
-            self.keys_card(ui, r(3));
-            let c = card(ui, r(4), "Ctrl and Cmd");
-            ui.painter().text(pos2(c.left(), c.top() + 2.0), Align2::LEFT_CENTER, fit(ui.painter(), "Auto swaps them only between a Mac and a PC.", &regular(T_META), c.width()), regular(T_META), pal().ink2);
-            self.swaps(ui, Rect::from_min_max(pos2(c.left(), c.top() + 18.0), c.max));
-            self.hooks_card(ui, r(5));
-            self.typing_card(ui, r(6));
-            let c = card(ui, r(7), "Pointer and layout");
-            self.extra_controls(ui, c);
-            // Credits for what the window draws and isn't ours: last on the
-            // page, and last in Tab order.
-            let credit = "The 3D mouse is “Logitech G502 x lightspeed” by Okopchi, CC BY 4.0, changed for oneMK.";
-            let credit_at = pos2(all.left() + 4.0, all.bottom() - 16.0);
-            let shown = fit(ui.painter(), credit, &regular(T_META), all.width() - 8.0);
-            let link = ui.interact(widgets::hit_rect(Rect::from_min_size(credit_at - vec2(0.0, 9.0), vec2(text_width(ui, &shown, regular(T_META)), 18.0))), Id::unique("credit-mouse"), Sense::click());
-            let lr = link.rect;
-            ui.painter().text(credit_at, Align2::LEFT_CENTER, &shown, regular(T_META), if link.hovered() { pal().ink } else { pal().ink3 });
-            if link.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            widgets::focus_ring(ui, &link, lr, 6);
-            widgets::a11y(&link, Role::Link, "Credit: open the 3D mouse model's page", None);
-            if link.on_hover_text("Open the model's page").clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab("https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40"));
-            }
-        });
-    }
-
-    /// Whether oneMK runs here (as the status line says it) and the way to
-    /// stop it, or to start it again.
-    fn service_row(&mut self, ui: &mut Ui, row: Rect) {
-        ui.painter().hline(row.x_range(), row.top(), Stroke::new(1.0, pal().line));
-        let (tone, text) = self.status_line();
-        let running = self.running().is_some();
-        let busy = self.busy.contains(&Job::Stop) || self.busy.contains(&Job::Start);
-        let (label, name) = match (running, busy) {
-            (true, true) => ("Stopping…", "Stopping oneMK"),
-            (true, false) => ("Stop", "Stop oneMK: turn off sharing on this computer"),
-            (false, true) => ("Starting…", "Starting oneMK"),
-            (false, false) => ("Start oneMK", "Start oneMK"),
-        };
-        let bw = button_width(ui, label);
-        widgets::status_mark(ui.painter(), pos2(row.left() + 3.5, row.center().y), 7.0, widgets::Mark::of(tone));
-        let shown = fit(ui.painter(), &text, &regular(T_BODY), row.width() - bw - 30.0);
-        ui.painter().text(pos2(row.left() + 16.0, row.center().y), Align2::LEFT_CENTER, shown, regular(T_BODY), pal().ink);
-        a11y_text(ui, Id::unique("service-state"), Rect::from_min_max(row.min, pos2(row.right() - bw - 12.0, row.bottom())), Role::Label, &text, None);
-        let b = Rect::from_min_size(pos2(row.right() - bw, row.center().y - 16.0), vec2(bw, 32.0));
-        let can = self.status.is_some() && !busy && !self.sheet_open();
-        if button(ui, b, Id::unique("stop"), label, Look::Quiet, can, Some(name)).clicked() {
-            if running {
-                self.busy.push(Job::Stop);
-                self.link.stop();
-            } else {
-                self.busy.push(Job::Start);
-                self.link.start();
-            }
-        }
-    }
-
-    /// Room under "Stay in fullscreen windows" for what this desktop can't do.
-    fn fullscreen_note_h(&self, ui: &Ui, width: f32) -> f32 {
-        crate::desktop::Session::current().fullscreen_note().map_or(0.0, |note| ui.painter().layout(note.to_owned(), regular(T_META), pal().ink3, width.max(1.0)).size().y + 4.0)
-    }
-
-    fn edges_card(&mut self, ui: &mut Ui, r: Rect) {
-        let c = card(ui, r, "Crossing edges");
-        let mut p = self.prefs.clone();
-        let scope_id = Id::unique("edge-scope");
-        let mut side = ui.ctx().data(|data| data.get_temp::<String>(scope_id)).unwrap_or_default();
-        let track = Rect::from_min_size(c.min, vec2(c.width(), 28.0));
-        if let Some(chosen) = self.settings_segment(ui, track, "Crossing edge", &[("", "Shared"), ("left", "Left"), ("right", "Right"), ("top", "Top"), ("bottom", "Bottom")], &side) { side = chosen; }
-        ui.ctx().data_mut(|data| data.insert_temp(scope_id, side.clone()));
-        if let Some((_, rules)) = p.edge_sides.iter().find(|(name, _)| *name == side) {
-            p.edge_corner = rules.corner;
-            p.edge_dwell_ms = rules.dwell;
-            p.edge_modifier = rules.modifier.clone();
-            p.edge_fullscreen = rules.fullscreen;
-        }
-        let top = c.top() + 34.0;
-        let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + EDGE_ROW * k as f32), vec2(c.width(), EDGE_ROW));
-        // Numbers with a unit, typed; the fields line up whatever the unit.
-        let uw = text_width(ui, "px", regular(T_META)).max(text_width(ui, "ms", regular(T_META))) + 8.0;
-        for (k, (key, label, unit, cur, max, flag)) in [
-            ("corner", "Don't cross near corners", "px", p.edge_corner, 500u32, "--corner"),
-            ("dwell", "Wait at the edge", "ms", p.edge_dwell_ms, 5000, "--dwell"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let rr = row(k);
-            label_help(ui, rr, Id::unique(("edge-label", key)), label, &format!("edge-{key}"), true, 72.0 + uw + 12.0);
-            let fr = Rect::from_min_size(pos2(rr.right() - 72.0 - uw, rr.center().y - 13.0), vec2(72.0, 26.0));
-            ui.painter().text(pos2(rr.right(), rr.center().y), Align2::RIGHT_CENTER, unit, regular(T_META), pal().ink2);
-            let a11y = format!("{label}, in {}", if unit == "px" { "pixels (0: off)" } else { "milliseconds (0: off)" });
-            if let Some(text) = self.edit_field(ui, fr, &format!("edge-{key}"), &cur.to_string(), "0", &a11y, true, true) {
-                match text.parse::<u32>() {
-                    Ok(n) if n <= max => {
-                        let v = n.to_string();
-                        self.edge_setting(&side, flag, &v);
-                    }
-                    _ => self.toast_error(format!("{label}: type a whole number from 0 to {max}."), None, self.now),
-                }
-            }
-        }
-        let rr = row(2);
-        let word = "Hold a key to cross";
-        let lw = text_width(ui, word, regular(T_BODY)) + 16.0 + 26.0;
-        let seg_w = 200.0f32.min(rr.width() - lw);
-        label_help(ui, rr, Id::unique("edge-mod-label"), word, "edge-mod", true, seg_w + 12.0);
-        let track = Rect::from_min_size(pos2(rr.right() - seg_w, rr.center().y - 13.0), vec2(seg_w, 26.0));
-        let labels: Vec<&str> = MODS.iter().map(|(_, l)| *l).collect();
-        let pills = Pills {
-            id: Id::unique("edge-mod"),
-            track,
-            cells: Pills::even(track, 4, 2.0),
-            labels: &labels,
-            names: MODS.iter().map(|(_, l)| format!("Key to hold to cross: {l}")).collect(),
-            chosen: MODS.iter().position(|(v, _)| *v == p.edge_modifier),
-            enabled: vec![true; 4],
-            role: Role::RadioButton,
-            font: T_META,
-        };
-        if let Some(k) = pills.show(ui, self.arrowed) {
-            let v = MODS[k].0;
-            self.edge_setting(&side, "--modifier", v);
-        }
-        let r = switch_help(ui, row(3), Id::unique("edge-fullscreen"), "Stay in fullscreen windows", "edge-fullscreen", p.edge_fullscreen, true);
-        if r.clicked() {
-            let v = if p.edge_fullscreen { "off" } else { "on" };
-            self.edge_setting(&side, "--fullscreen-guard", v);
-        }
-        // Where this desktop can't see every fullscreen window, say so under the switch.
-        if let Some(note) = crate::desktop::Session::current().fullscreen_note() {
-            para(ui, pos2(c.left(), row(4).top() - 8.0), c.width(), note, regular(T_META), pal().ink3);
-        }
-        let reset = Rect::from_min_size(pos2(c.left(), row(4).top() + self.fullscreen_note_h(ui, c.width())), vec2(c.width(), 28.0));
-        if !side.is_empty() && button(ui, reset, Id::unique("edge-reset-side"), "Use shared rules", Look::Quiet, true, None).clicked() {
-            self.settings_command("the edge rules", vec!["edge".into(), "--side".into(), side.clone(), "--reset".into()]);
-        }
-    }
-
-    fn power_card(&mut self, ui: &mut Ui, r: Rect) {
-        let c = card(ui, r, "Power and locking");
-        let p = self.prefs.clone();
-        let row_h = HELP_ROW;
-        let top = c.top() - 6.0;
-        let row = |k: usize| Rect::from_min_size(pos2(c.left(), top + row_h * k as f32), vec2(c.width(), row_h));
-        let r0 = switch_help(ui, row(0), Id::unique("block-saver"), "Keep computers I control awake", "block-saver", p.block_screensaver, true);
-        if r0.clicked() {
-            let v = if p.block_screensaver { "off" } else { "on" };
-            self.set_pref("keeping computers awake", &["power", "--block-screensaver", v], |p| p.block_screensaver = !p.block_screensaver);
-        }
-        if switch_help(ui, row(1), Id::unique("sleep-sync"), "Sleep displays together", "sleep-sync", p.sleep_sync, true).clicked() {
-            let v = if p.sleep_sync { "off" } else { "on" };
-            self.set_pref("sleep sync", &["power", "--sleep-sync", v], |p| p.sleep_sync = !p.sleep_sync);
-        }
-        if switch_help(ui, row(2), Id::unique("lock-sync"), "Lock every screen with this one", "lock-sync", p.lock_sync, true).clicked() {
-            let v = if p.lock_sync { "off" } else { "on" };
-            self.set_pref("lock sync", &["lock-sync", v], |p| p.lock_sync = !p.lock_sync);
-        }
-    }
-
-    fn keys_card(&mut self, ui: &mut Ui, r: Rect) {
-        let c = card(ui, r, "Keyboard shortcuts");
-        let row = Rect::from_min_size(c.min, vec2(c.width(), HELP_ROW));
-        if switch_help(ui, row, Id::unique("hotkeys"), "Use keyboard shortcuts", "hotkeys", self.prefs.hotkeys_on, true).clicked() {
-            self.set_pref("keyboard shortcuts", &["hotkeys", if self.prefs.hotkeys_on { "--off" } else { "--on" }], |prefs| prefs.hotkeys_on = !prefs.hotkeys_on);
-        }
-        self.shortcut_controls(ui, Rect::from_min_max(c.min + vec2(0.0, 62.0), c.max));
-    }
-
-    fn hooks_card(&mut self, ui: &mut Ui, r: Rect) {
-        let c = card(ui, r, "Run commands");
-        self.hook_controls(ui, c);
-    }
 }
+
+/// A row of Health or Settings (the handoff's 52).
+const ROW: f32 = 52.0;
 
 #[cfg(test)]
 mod health_tests {

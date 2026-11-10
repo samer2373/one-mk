@@ -569,8 +569,8 @@ fn legacy_check(mut check: Check) -> Option<Check> {
                 _ => "Sharing cannot use its network connection.".into(),
             };
             check.fix = Some(match who {
-                Some(w) => format!("Quit {w}, then choose Recheck. Or use another port on both computers."),
-                None => "Quit the program using it, then choose Recheck. Or use another port on both computers.".into(),
+                Some(w) => format!("Quit {w}, then choose Check again. Or use another port on both computers."),
+                None => "Quit the program using it, then choose Check again. Or use another port on both computers.".into(),
             });
             return Some(check);
         }
@@ -592,8 +592,8 @@ fn legacy_check(mut check: Check) -> Option<Check> {
                 _ => "The firewall may be blocking sharing connections.".into(),
             };
             check.fix = Some(match port {
-                Some(p) => format!("Allow incoming UDP on port {p} for oneMK in the firewall's settings, then choose Recheck."),
-                None => "Allow incoming connections for oneMK in the firewall's settings, then choose Recheck.".into(),
+                Some(p) => format!("Allow incoming UDP on port {p} for oneMK in the firewall's settings, then choose Check again."),
+                None => "Allow incoming connections for oneMK in the firewall's settings, then choose Check again.".into(),
             });
             return Some(check);
         }

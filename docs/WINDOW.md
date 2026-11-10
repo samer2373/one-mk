@@ -80,21 +80,27 @@ scrolling (direction, speed, steps, natural scrolling, Shift to scroll sideways)
 
 ## Health
 
-The results of `one-mk doctor` (run when the page opens and on **Recheck**), each with its fix
-and a button to copy the command (or, for starting and pairing, the window's own button), plus
-what oneMK says right now (for example a permission still to approve) and the live connection
-to each computer. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+A banner at the top says in one line whether all is well ("Checks pass", or "2 things need you" with
+the first cause) and has **Check again**. Under it: **Needs you** (what is wrong, what to do, and a
+button to fix it, copy the command, or the window's own button for starting and pairing), **Pending**
+(a permission to approve, something still starting), **Connections** (how each computer answers now, and
+the last two minutes) and a row "N other checks · Passed" that opens the checks that passed. The results
+come from `one-mk doctor` (run when the page opens and on Check again). See
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 ![Health: doctor results with their fixes](screens/health.png)
 
 ## Settings
 
-Updates (daily check on or off, release notes), edge rules (corners, waiting at the edge, a key
-to hold, fullscreen guard), pointer wrap and layout learning, keeping controlled computers
-awake, sleep and lock sync, gaming mode, keyboard shortcuts on or off, typing mode, drawing a
-pointer on a computer with no mouse, start at login, and Ctrl/Cmd swapping per computer.
-Commands to run on events (hooks) are edited in `settings.toml`; see
-[AUTOMATION.md](AUTOMATION.md).
+A row of eight pills under the title picks what the page shows, one at a time: **General** (appearance,
+start at login, stop or start oneMK, updates), **Crossing edges** (which edges cross, corners, waiting at
+the edge, a key to hold, fullscreen guard, learning positions), **Power & locking** (keeping controlled
+computers awake, sleep and lock sync), **Games** (gaming mode), **Shortcuts** (keyboard shortcuts on or
+off, and each shortcut), **Run commands** (on pointer arrives or leaves, a computer connects or
+disconnects), **Typing** (typing mode, Ctrl/Cmd swapping per computer, when typing on every computer stops
+by itself) and **Pointer** (pointer wrap, drawing a pointer on a computer with no mouse). Every row has a
+caption; the "i" beside it explains it. Search (the palette) opens the right pill and lights the row.
+See [AUTOMATION.md](AUTOMATION.md) for commands to run.
 
 ![Settings](screens/settings.png)
 
