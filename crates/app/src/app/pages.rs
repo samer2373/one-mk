@@ -348,7 +348,7 @@ impl App {
             page.split(1.2);
             let (x, full) = (page.x, page.w);
             let bw = button_width(ui, "Check again");
-            let text_w = full - 52.0 - bw - 20.0 - 20.0;
+            let text_w = full - BANNER_TEXT_X - bw - 20.0 - 20.0;
             let galley = {
                 let wrap = egui::text::TextWrapping { max_width: text_w.max(80.0), max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
                 let mut job = egui::text::LayoutJob { wrap, ..Default::default() };
@@ -366,15 +366,18 @@ impl App {
             let b = Rect::from_min_size(pos2(x, page.below() + 4.0), vec2(full, banner_h));
             let warm = matches!(tone, Tone::Warn | Tone::Danger);
             if warm {
-                p.rect_filled(b, CornerRadius::same(R_GROUP), pal().warn_soft);
+                p.rect(b, CornerRadius::same(R_GROUP), pal().warn_soft, Stroke::new(1.0, pal().warn.gamma_multiply(0.22)), StrokeKind::Inside);
             } else {
                 widgets::group(ui, b, R_GROUP);
             }
-            let mark_at = pos2(b.left() + 24.0, b.center().y);
+            // The verdict as a shape on a tile of its own colour.
+            let mark_at = pos2(b.left() + 34.0, b.center().y);
+            let tile_tone = match tone { Tone::Warn => pal().warn, Tone::Danger => pal().danger, Tone::Ok => pal().ok, Tone::Quiet => pal().ink3 };
+            p.rect_filled(Rect::from_center_size(mark_at, vec2(32.0, 32.0)), CornerRadius::same(9), tile_tone.gamma_multiply(0.15));
             match tone {
-                Tone::Warn => widgets::status_mark(&p, mark_at, 10.0, widgets::Mark::Warn),
-                Tone::Danger => widgets::status_mark(&p, mark_at, 10.0, widgets::Mark::Error),
-                Tone::Ok => widgets::status_mark(&p, mark_at, 10.0, widgets::Mark::Ok),
+                Tone::Warn => widgets::status_mark(&p, mark_at, 11.0, widgets::Mark::Warn),
+                Tone::Danger => widgets::status_mark(&p, mark_at, 11.0, widgets::Mark::Error),
+                Tone::Ok => widgets::status_mark(&p, mark_at, 11.0, widgets::Mark::Ok),
                 Tone::Quiet if running && checks.is_none() => {
                     let turn = if motion::reduced() { 0.0 } else { (now * 5.0) as f32 };
                     widgets::draw_refresh(&p, Rect::from_center_size(mark_at, vec2(16.0, 16.0)), pal().ink2, turn);
@@ -383,7 +386,7 @@ impl App {
                 Tone::Quiet => widgets::status_mark(&p, mark_at, 10.0, widgets::Mark::Off),
             }
             let gh = galley.size().y;
-            p.galley(pos2(b.left() + 52.0, b.center().y - gh / 2.0), galley.clone(), pal().ink);
+            p.galley(pos2(b.left() + BANNER_TEXT_X, b.center().y - gh / 2.0), galley.clone(), pal().ink);
             let br = Rect::from_min_size(pos2(b.right() - 20.0 - bw, b.center().y - 16.0), vec2(bw, 32.0));
             let label = if running { "Checking…" } else { "Check again" };
             if button(ui, br, Id::unique("recheck"), label, Look::Quiet, !running, Some("Run the checks again")).clicked() {
@@ -437,7 +440,7 @@ impl App {
                             let tx = row.left() + 22.0;
                             let mut ty = row.top() + 14.0;
                             if !i.title.is_empty() {
-                                p.text(pos2(tx, ty + 8.0), Align2::LEFT_CENTER, &i.title, regular(T_META), pal().ink3);
+                                p.text(pos2(tx, ty + 8.0), Align2::LEFT_CENTER, &i.title, medium(T_META), pal().ink2);
                                 ty += 18.0;
                             }
                             // What is wrong, in ink at 600; what to do, quieter, under it.
@@ -549,6 +552,9 @@ impl App {
         }
     }
 }
+
+/// Where the banner's words start (after its verdict tile).
+const BANNER_TEXT_X: f32 = 64.0;
 
 /// A row of Health or Settings (the handoff's 52).
 const ROW: f32 = 52.0;

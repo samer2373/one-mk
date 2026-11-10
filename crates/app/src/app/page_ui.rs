@@ -34,23 +34,39 @@ fn compact(ui: &Ui) -> bool {
     ui.ctx().content_rect().width() < shell::COMPACT_BELOW
 }
 
-/// A page's head (handoff 5.2): the title (22, 600) and its sentence (13,
-/// `ink2`) from `origin`, inset as the cards are. Returns where what comes
+/// The widest a page of cards gets: a wider window centres it (calm
+/// margins, rows a hand's reach long) rather than stretching every row.
+pub(super) const MAX_W: f32 = 1160.0;
+/// The page title's size: a clear step above the group labels and rows.
+/// (At least the type scale's page title, should that grow.)
+pub(super) const TITLE: f32 = T_PAGE.max(26.0);
+/// The page's sentence under its title.
+pub(super) const SUBTITLE: f32 = 14.0;
+
+/// Where a page's content sits across `width` from `origin_x`: its left
+/// edge and width, inset on both sides and centred once it reaches `max_w`.
+pub(super) fn frame_x(origin_x: f32, width: f32, max_w: f32) -> (f32, f32) {
+    let room = (width - 2.0 * INSET).max(200.0);
+    let w = room.min(max_w);
+    ((origin_x + INSET + (room - w) / 2.0).round(), w)
+}
+
+/// A page's head (handoff 5.2): the title (26, 600) and its sentence (14,
+/// `ink2`) from `origin`, where the cards start. Returns where what comes
 /// under it starts.
 pub(super) fn head(ui: &Ui, origin: Pos2, width: f32, title: &str, sub: &str) -> f32 {
-    let x = origin.x + INSET;
-    let w = (width - 2.0 * INSET).max(200.0);
-    // The type scale's headline (28/600, set a little tight), then its
-    // sentence a step larger than the body and quieter (14, `ink2`).
+    let (x, w) = frame_x(origin.x, width, MAX_W);
     let p = ui.painter();
-    widgets::title_text(p, pos2(x, origin.y + 38.0), Align2::LEFT_CENTER, title, T_PAGE, w);
-    let sub_y = origin.y + 60.0;
-    let sub_h = if sub.is_empty() { 0.0 } else { para(ui, pos2(x, sub_y), w, sub, regular(T_LEAD), pal().ink2).max(20.0) };
-    a11y_text(ui, Id::unique(("page-title", title)), Rect::from_min_size(pos2(x, origin.y + 20.0), vec2(w, 36.0)), Role::Heading, title, None);
+    // A short window gives the head less room (the handoff's 22 title).
+    let tight = ui.ctx().content_rect().height() < 700.0;
+    widgets::title_text(p, pos2(x, origin.y + if tight { 32.0 } else { 40.0 }), Align2::LEFT_CENTER, title, if tight { T_SECTION } else { TITLE }, w);
+    let sub_top = origin.y + if tight { 49.0 } else { 60.0 };
+    let sub_h = if sub.is_empty() { 0.0 } else { para(ui, pos2(x, sub_top), w.min(760.0), sub, regular(SUBTITLE), pal().ink2).max(20.0) };
+    a11y_text(ui, Id::unique(("page-title", title)), Rect::from_min_size(pos2(x, origin.y + 22.0), vec2(w, 36.0)), Role::Heading, title, None);
     if !sub.is_empty() {
-        a11y_text(ui, Id::unique(("page-sub", title)), Rect::from_min_size(pos2(x, sub_y), vec2(w, sub_h)), Role::Label, sub, None);
+        a11y_text(ui, Id::unique(("page-sub", title)), Rect::from_min_size(pos2(x, sub_top), vec2(w, sub_h)), Role::Label, sub, None);
     }
-    sub_y + sub_h + 20.0
+    sub_top + sub_h + if tight { 16.0 } else { 22.0 }
 }
 
 /// A page being laid out.
@@ -70,8 +86,7 @@ impl Page {
     /// Starts a page at `origin` (the top left of the scrolling content),
     /// `width` wide, and draws its title and sentence.
     pub fn begin(ui: &Ui, origin: Pos2, width: f32, title: &str, sub: &str) -> Page {
-        let x = origin.x + INSET;
-        let w = (width - 2.0 * INSET).max(200.0);
+        let (x, w) = frame_x(origin.x, width, MAX_W);
         let two = !compact(ui);
         let top = head(ui, origin, width, title, sub);
         let col_w = if two { (w - GAP) / 2.0 } else { w };
@@ -199,6 +214,23 @@ impl Card {
         r
     }
 
+}
+
+/// How tall a card's row is when it stands in for a list that is empty.
+pub(super) const EMPTY_ROW: f32 = 64.0;
+
+/// A row that stands in for an empty list: a quiet round tile with a
+/// dashed screen in it, and the sentence that says what fills the list.
+pub(super) fn empty_row(ui: &Ui, row: Rect, text: &str) {
+    let p = ui.painter();
+    let c = pos2(row.left() + 16.0, row.center().y);
+    p.circle_filled(c, 16.0, pal().surface2);
+    let glyph = Rect::from_center_size(c, vec2(14.0, 10.0));
+    let corners = vec![glyph.left_top(), glyph.right_top(), glyph.right_bottom(), glyph.left_bottom(), glyph.left_top()];
+    p.extend(Shape::dashed_line(&corners, Stroke::new(1.25, pal().ink3), 2.0, 1.5));
+    p.line_segment([pos2(c.x - 3.0, glyph.bottom() + 2.5), pos2(c.x + 3.0, glyph.bottom() + 2.5)], Stroke::new(1.25, pal().ink3));
+    let x = row.left() + 44.0;
+    p.text(pos2(x, row.center().y), Align2::LEFT_CENTER, fit(p, text, &regular(T_BODY), row.right() - x), regular(T_BODY), pal().ink2);
 }
 
 /// A page's scrolling area (`ONE_MK_APP_SCROLL=points` scrolls it in a
@@ -386,11 +418,11 @@ mod tests {
     #[test]
     fn two_columns_split_the_page_and_one_column_stacks() {
         crate::style::set_palette(crate::style::Palette::light(), None);
-        let (page, rects) = lay(1440.0 - 32.0, 1440.0);
+        let (page, rects) = lay(1200.0 - 32.0, 1200.0);
         assert!(page.two);
         // Cards: 32 from each window edge, a 20 gap between columns.
         assert_eq!(rects[2].left(), 32.0);
-        assert_eq!(rects[4].right(), 1408.0);
+        assert_eq!(rects[4].right(), 1168.0);
         assert!((rects[4].left() - rects[2].right() - GAP).abs() < 0.01);
         // Two rows of 52 and no padding above or below them.
         assert_eq!(rects[2].height(), 2.0 * ROW);
@@ -401,6 +433,16 @@ mod tests {
         assert!(!page.two);
         assert_eq!(rects[2].width(), 820.0 - 64.0);
         assert!(rects[4].top() > rects[2].bottom(), "stacked");
+    }
+
+    #[test]
+    fn a_wide_window_centres_the_page_at_its_widest() {
+        crate::style::set_palette(crate::style::Palette::light(), None);
+        let (page, rects) = lay(1920.0 - 32.0, 1920.0);
+        assert_eq!(page.w, MAX_W);
+        let (left, right) = (rects[2].left(), 1920.0 - rects[4].right());
+        assert!((left - right).abs() <= 1.0, "centred: {left} and {right}");
+        assert_eq!(frame_x(16.0, 900.0, MAX_W), (32.0, 868.0), "narrower than the widest: inset only");
     }
 
     #[test]

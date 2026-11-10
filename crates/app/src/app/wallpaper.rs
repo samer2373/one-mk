@@ -64,11 +64,14 @@ impl App {
             // The preview: every screen, as it stands, each showing its part
             // of the one picture; what plays and how to change it under it.
             // As tall as the screens need at this width, within reason.
-            let need = canvas.bounds().map_or(180.0, |b| ((page.w - 48.0) as f64 * b.height / b.width) as f32);
+            let need = canvas.bounds().map_or(180.0, |b| ((page.w - 2.0 * (page_ui::CARD_PAD + WELL_PAD.x)) as f64 * b.height / b.width) as f32);
             let screens_h = stage_screens_h(need, area.height(), wallpaper.gnome.is_some());
             let mut card = page.wide(ui, "");
-            let stage = card.more(screens_h + 26.0 + 24.0);
-            let screens = Rect::from_min_max(pos2(card.x + 24.0, stage.top() + 26.0), pos2(card.x + card.w - 24.0, stage.bottom() - 24.0));
+            // The screens stand in a recessed well, inset as the rows are.
+            let stage = card.more(page_ui::CARD_PAD + screens_h + 2.0 * WELL_PAD.y + 4.0);
+            let well = Rect::from_min_max(pos2(card.x + page_ui::CARD_PAD, stage.top() + page_ui::CARD_PAD), pos2(card.x + card.w - page_ui::CARD_PAD, stage.bottom() - 4.0));
+            preview::stage(ui.painter(), well, 12, 16.0);
+            let screens = well.shrink2(WELL_PAD);
             draw_canvas(ui, screens, &canvas, plan.map(|plan| &plan.media), fit_now, self.wallpaper_ui.poster.as_ref(), &computers);
             a11y_text(ui, Id::unique("wallpaper-stage"), stage, Role::Image, &match plan { Some(plan) => plan.playing_summary(&wallpaper.computers), None => "No wallpaper playing".into() }, None);
             let foot = card.row(ui, 70.0);
@@ -108,7 +111,13 @@ impl App {
                 p.text(pos2(foot.left() + nw + 12.0, foot.center().y), Align2::LEFT_CENTER, detail, mono(T_META), pal().ink2);
             } else {
                 let hint = if status.is_none() { "Start oneMK to choose a wallpaper" } else if !wallpaper.available { "Wallpaper isn't available on this computer" } else { "Choose a video or picture" };
-                p.text(pos2(foot.left(), foot.center().y), Align2::LEFT_CENTER, fit(p, hint, &regular(T_BODY), room), regular(T_BODY), pal().ink2);
+                // Can't be chosen here: said with the "off" mark, not only in words.
+                let blocked = status.is_none() || !wallpaper.available;
+                let x = foot.left() + if blocked { 18.0 } else { 0.0 };
+                if blocked {
+                    widgets::status_mark(p, pos2(foot.left() + 5.0, foot.center().y), 8.0, widgets::Mark::Off);
+                }
+                p.text(pos2(x, foot.center().y), Align2::LEFT_CENTER, fit(p, hint, &regular(T_BODY), room - (x - foot.left())), regular(T_BODY), if blocked { pal().ink2 } else { pal().ink });
             }
             let preview = page.finish(ui, card);
             if hovering && enabled {
@@ -160,8 +169,8 @@ impl App {
 
             let mut card = page.card(ui, 1, "Play on");
             if computers.is_empty() {
-                let row = card.row(ui, ROW);
-                ui.painter().text(row.left_center(), Align2::LEFT_CENTER, "Your computers appear here", regular(T_BODY), pal().ink2);
+                let row = card.row(ui, page_ui::EMPTY_ROW);
+                page_ui::empty_row(ui, row, "Your computers appear here");
             }
             for (id, name, online) in &computers {
                 let on = plan.is_none_or(|plan| plan.computers.contains(id));
@@ -294,17 +303,30 @@ fn clock(ms: u64) -> String {
     if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
 }
 
-/// A screen's bezel, on every side.
-const BEZEL_W: f32 = 4.0;
+/// Between the well's rim and the screens in it.
+const WELL_PAD: egui::Vec2 = egui::Vec2 { x: 24.0, y: 22.0 };
 
 /// The screens, where they stand, each showing its part of the picture,
 /// named by computer under the first of each.
 fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit: Fit, poster: Option<&egui::TextureHandle>, computers: &[(String, String, bool)]) {
     let Some(bounds) = canvas.bounds() else {
-        ui.painter().text(area.center(), Align2::CENTER_CENTER, "Your screens appear here", regular(T_BODY), pal().ink2);
+        // No screens known yet: a ghost of one, dashed, over the sentence.
+        let p = ui.painter();
+        let ghost = Rect::from_center_size(area.center() - vec2(0.0, 16.0), vec2(150.0, 86.0));
+        let r = 8.0;
+        let mut path = vec![];
+        for (c, from) in [(ghost.left_top() + vec2(r, r), 180.0_f32), (ghost.right_top() + vec2(-r, r), 270.0), (ghost.right_bottom() + vec2(-r, -r), 0.0), (ghost.left_bottom() + vec2(r, -r), 90.0)] {
+            for k in 0..=4 {
+                let a = (from + 22.5 * k as f32).to_radians();
+                path.push(c + vec2(a.cos(), a.sin()) * r);
+            }
+        }
+        path.push(path[0]);
+        p.extend(egui::Shape::dashed_line(&path, Stroke::new(1.5, pal().line2), 6.0, 4.0));
+        p.text(pos2(area.center().x, ghost.bottom() + 22.0), Align2::CENTER_CENTER, "Your screens appear here", regular(T_BODY), pal().ink2);
         return;
     };
-    let gap = 10.0;
+    let gap = 8.0;
     let scale = (area.width() as f64 / bounds.width).min(area.height() as f64 / bounds.height);
     let top = area.center() - vec2((bounds.width * scale) as f32, (bounds.height * scale) as f32) / 2.0;
     let map = |rect: one_mk_wallpaper::Rect| Rect::from_min_size(top + vec2(((rect.x - bounds.x) * scale) as f32, ((rect.y - bounds.y) * scale) as f32), vec2((rect.width * scale) as f32, (rect.height * scale) as f32));
@@ -313,16 +335,15 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
     let p = ui.painter();
     let mut named = std::collections::BTreeSet::new();
     for monitor in &canvas.monitors {
-        // A bezel's worth apart, so they read as separate screens.
+        // Apart by a hair, so they read as separate screens.
         let screen = map(monitor.rect).shrink(gap / 2.0);
-        if screen.width() < 4.0 || screen.height() < 4.0 {
+        if screen.width() < 8.0 || screen.height() < 8.0 {
             continue;
         }
-        // A 4 point bezel, near black in both themes, round the picture.
-        let radius = CornerRadius::same(8);
-        let glass = screen.shrink(BEZEL_W);
-        p.rect_filled(screen, radius, BEZEL);
-        p.rect_filled(glass, CornerRadius::same(5), if pal().theme == crate::style::Theme::Light { SCREEN_BLANK } else { SCREEN_PLATE });
+        // A graphite bezel round the glass, the same in both themes.
+        let (glass, r) = preview::monitor(p, screen, 0.0);
+        let radius = CornerRadius::same(r);
+        let mut pictured = false;
         if let (Some(texture), Some(image_rect)) = (poster, image_rect) {
             // Each screen shows the part of the picture that falls on it.
             let picture = image_rect;
@@ -332,18 +353,26 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
                     pos2((inside.left() - picture.left()) / picture.width(), (inside.top() - picture.top()) / picture.height()),
                     pos2((inside.right() - picture.left()) / picture.width(), (inside.bottom() - picture.top()) / picture.height()),
                 );
-                p.add(egui::Shape::Rect(egui::epaint::RectShape::filled(inside, CornerRadius::same(5), UNTINTED).with_texture(texture.id(), uv)));
+                if inside != glass {
+                    // Fit leaves bands the picture doesn't cover: blank glass there.
+                    preview::blank_glass(p, glass, r);
+                }
+                p.add(egui::Shape::Rect(egui::epaint::RectShape::filled(inside, radius, UNTINTED).with_texture(texture.id(), uv)));
+                pictured = true;
             }
         }
-        if !monitor.online {
-            p.rect_filled(glass, CornerRadius::same(5), black(150));
+        if !pictured {
+            preview::blank_glass(p, glass, r);
         }
-        if named.insert(monitor.computer.clone()) {
+        if !monitor.online {
+            p.rect_filled(glass, radius, black(140));
+        }
+        preview::glass_finish(p, glass, r);
+        if named.insert(monitor.computer.clone()) && glass.width() > 40.0 && glass.height() > 24.0 {
             let name = computers.iter().find(|c| c.0 == monitor.computer).map_or(monitor.name.as_str(), |c| c.1.as_str());
-            let name = fit_text(ui, name, glass.width() - 14.0);
-            let at = glass.left_bottom() + vec2(8.0, -7.0);
-            p.text(at + vec2(0.0, 1.0), Align2::LEFT_BOTTOM, &name, regular(T_META), black(160));
-            p.text(at, Align2::LEFT_BOTTOM, name, regular(T_META), if monitor.online { white(255) } else { SCREEN_INK2 });
+            let name = if monitor.online { name.to_owned() } else { format!("{name} · Offline") };
+            let name = crate::style::fit(p, &name, &medium(T_META), glass.width() - 28.0);
+            preview::name_tag(p, glass.left_bottom() + vec2(7.0, -7.0), &name, pictured || !monitor.online);
         }
     }
 }

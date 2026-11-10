@@ -76,8 +76,8 @@ impl App {
             } else { "Choose a recipient to pick files, or drop files on its row." };
             let mut card = page.card(ui, 0, "Send files");
             if recipients.is_empty() {
-                let row = card.row(ui, ROW);
-                ui.painter().text(row.left_center(), Align2::LEFT_CENTER, fit(ui.painter(), "Pair a computer to send files to it.", &regular(T_BODY), row.width()), regular(T_BODY), pal().ink2);
+                let row = card.row(ui, page_ui::EMPTY_ROW);
+                page_ui::empty_row(ui, row, "Pair a computer to send files to it.");
             }
             for peer in &recipients {
                 let row = card.row(ui, ROW);

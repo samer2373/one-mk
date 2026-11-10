@@ -10,6 +10,7 @@ mod links;
 mod page_ui;
 mod pages;
 mod place;
+mod preview;
 mod shell;
 mod desk_cards;
 mod desk_panel;
