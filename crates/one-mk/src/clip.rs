@@ -88,6 +88,17 @@ pub fn mb(bytes: usize) -> String {
     }
 }
 
+/// A peer controlling us.
+struct Session {
+    /// Resolved with the peer's address when it leaves.
+    leave: oneshot::Sender<SocketAddr>,
+    id: u64,
+    /// Our clipboard's digest when it took control (`None` until read;
+    /// `Some(None)`: it was empty). A change since then is a copy made
+    /// here during the visit.
+    baseline: Option<Option<Digest>>,
+}
+
 #[derive(Default)]
 struct State {
     /// Content each peer is known to have.
@@ -98,7 +109,9 @@ struct State {
     /// Peers we are receiving a clipboard from.
     receiving: HashSet<Fingerprint>,
     /// Peers controlling us: resolved with their address when they leave.
-    sessions: HashMap<Fingerprint, oneshot::Sender<SocketAddr>>,
+    sessions: HashMap<Fingerprint, Session>,
+    /// Numbers sessions, so a late baseline can't land on a newer session.
+    next_session: u64,
     /// Our bulk connection to each peer.
     bulk: HashMap<Fingerprint, quinn::Connection>,
 }
@@ -156,10 +169,19 @@ impl ClipSync {
     /// we can tell on `left` whether the user copied something here.
     pub fn entered(self: &Arc<Self>, fp: Fingerprint, name: &str) {
         let (tx, rx) = oneshot::channel();
-        self.state().sessions.insert(fp, tx); // replaces (and ends) any earlier session
+        let id = {
+            let mut s = self.state();
+            s.next_session += 1;
+            let id = s.next_session;
+            s.sessions.insert(fp, Session { leave: tx, id, baseline: None }); // replaces (and ends) any earlier session
+            id
+        };
         let (this, name) = (self.clone(), name.to_owned());
         tokio::spawn(async move {
             let baseline = this.cb.digest().await.ok().flatten();
+            if let Some(session) = this.state().sessions.get_mut(&fp).filter(|s| s.id == id) {
+                session.baseline = Some(baseline);
+            }
             if let Ok(addr) = rx.await {
                 this.spawn_push(fp, name, addr, baseline);
             }
@@ -168,8 +190,8 @@ impl ClipSync {
 
     /// `fp` (reachable at `addr`) stopped controlling us.
     pub fn left(&self, fp: Fingerprint, addr: SocketAddr) {
-        if let Some(tx) = self.state().sessions.remove(&fp) {
-            let _ = tx.send(addr);
+        if let Some(session) = self.state().sessions.remove(&fp) {
+            let _ = session.leave.send(addr);
         }
     }
 
@@ -349,12 +371,13 @@ impl ClipSync {
                     anyhow::anyhow!("it did not answer: it may be running an older one-mk, or not sharing its clipboard ({error:#})")
                 }
             })?;
-            self.read_snapshot(fp, &self.peer_name(fp), &header, &mut recv).await
+            self.read_snapshot(fp, &self.peer_name(fp), &header, &mut recv, false).await
         })
         .await
         .unwrap_or_else(|_| Err(anyhow::anyhow!("timed out")))?;
         match got {
             Received::Stored { bytes, what } => Ok(Moved { bytes, what, ack: Some(ClipAck::Stored) }),
+            Received::KeptNewer => bail!("a newer copy was made here meanwhile; it was kept"),
             Received::Nothing => bail!("its clipboard is empty, or it does not share it (`one-mk clipboard` there)"),
             Received::FormatsOff => bail!("what it has is switched off here (see `one-mk clipboard`)"),
             Received::TooLarge(size) => bail!(
@@ -406,8 +429,11 @@ impl ClipSync {
             self.answer_pull(name, send).await?;
             return Ok(None);
         }
-        let (ack, stored) = match self.read_snapshot(fp, name, &header, recv).await? {
+        let (ack, stored) = match self.read_snapshot(fp, name, &header, recv, true).await? {
             Received::Stored { bytes, .. } => (Some(ClipAck::Stored), Some(bytes)),
+            // Superseded rather than refused: sending it again would not
+            // help, and ours goes to it when it leaves.
+            Received::KeptNewer => (Some(ClipAck::Stored), None),
             Received::FormatsOff => (Some(ClipAck::FormatsOff), None),
             Received::TooLarge(_) => (Some(ClipAck::TooLarge), None),
             Received::Nothing => (None, None),
@@ -447,7 +473,12 @@ impl ClipSync {
 
     /// Reads the payloads `header` announces and puts what the settings
     /// allow on the clipboard, remembering that `fp` has it.
-    async fn read_snapshot(&self, fp: Fingerprint, name: &str, header: &ClipHeader, recv: &mut quinn::RecvStream) -> anyhow::Result<Received> {
+    ///
+    /// `pushed`: `fp` sent it unasked. If `fp` controls us and something was
+    /// copied here since it took control, that copy is newer than what it
+    /// pushes (copied before it crossed, and maybe still arriving: a large
+    /// one takes seconds), so ours is kept and goes to `fp` when it leaves.
+    async fn read_snapshot(&self, fp: Fingerprint, name: &str, header: &ClipHeader, recv: &mut quinn::RecvStream, pushed: bool) -> anyhow::Result<Received> {
         let filter = self.cb.filter();
         let wanted = |f: ClipFormat| match f {
             ClipFormat::Text => filter.text,
@@ -488,11 +519,26 @@ impl ClipSync {
         if data.has_no_content() {
             return Ok(Received::Nothing);
         }
+        if pushed && self.copied_during_visit(fp).await {
+            tracing::debug!(peer = %name, "something was copied here since it took control; kept that newer copy");
+            return Ok(Received::KeptNewer);
+        }
         let (bytes, what) = (data.len(), describe(&data));
         // Sensitive content the sender chose to send: on the clipboard, but never in the history.
         let digest = if header.concealed { self.cb.write_concealed(data).await? } else { self.cb.write_from(data, name.into(), true).await? };
-        self.state().known.insert(fp, digest);
+        let mut s = self.state();
+        s.known.insert(fp, digest);
+        // What it sent is no copy made here.
+        if let Some(session) = s.sessions.get_mut(&fp).filter(|session| session.baseline.is_some()) {
+            session.baseline = Some(Some(digest));
+        }
         Ok(Received::Stored { bytes, what })
+    }
+
+    /// Whether `fp` controls us and our clipboard changed since it took control.
+    async fn copied_during_visit(&self, fp: Fingerprint) -> bool {
+        let Some(baseline) = self.state().sessions.get(&fp).and_then(|session| session.baseline) else { return false };
+        self.cb.digest().await.is_ok_and(|now| now != baseline)
     }
 
     fn peer_name(&self, fp: Fingerprint) -> String {
@@ -506,6 +552,8 @@ impl ClipSync {
 /// What came of a snapshot read off a stream.
 enum Received {
     Stored { bytes: usize, what: String },
+    /// Not applied: something newer was copied here (see `read_snapshot`).
+    KeptNewer,
     /// An empty snapshot.
     Nothing,
     /// Every format in it is switched off.
@@ -570,6 +618,37 @@ mod tests {
         b.settings(ClipSettings::default());
         a.clip.push_once(b.fp(), "b", b.addr(), None).await;
         eventually("retry accepted", || b.mem.text().as_deref() == Some("unchanged clipboard")).await;
+    }
+
+    /// A copies, crosses to B, and the user copies on B at once: A's push,
+    /// still arriving, must not replace that newer copy, which goes back to
+    /// A when it leaves (found by the multi-device rig: both ended up with
+    /// the older copy).
+    #[tokio::test]
+    async fn a_push_never_replaces_a_newer_copy_made_during_the_visit() {
+        let (a, b) = (Pc::new(), Pc::new());
+        a.serve();
+        b.serve();
+        text(&b.mem, "on b before the visit");
+        b.clip.entered(a.fp(), "a");
+        eventually("baseline read", || b.clip.state().sessions.get(&a.fp()).is_some_and(|s| s.baseline.is_some())).await;
+        text(&b.mem, "newer, copied on b during the visit");
+        text(&a.mem, "older, copied on a before crossing");
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert_eq!(b.mem.text().as_deref(), Some("newer, copied on b during the visit"));
+        b.clip.left(a.fp(), a.addr());
+        eventually("newer copy back on a", || a.mem.text().as_deref() == Some("newer, copied on b during the visit")).await;
+
+        // Without a copy during the visit the push lands as before.
+        text(&a.mem, "copied on a, then crossing");
+        b.clip.entered(a.fp(), "a");
+        eventually("baseline read", || b.clip.state().sessions.get(&a.fp()).is_some_and(|s| s.baseline.is_some())).await;
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert_eq!(b.mem.text().as_deref(), Some("copied on a, then crossing"));
+        let writes = a.mem.writes();
+        b.clip.left(a.fp(), a.addr());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(a.mem.writes(), writes, "nothing new to send back");
     }
 
     #[tokio::test]
