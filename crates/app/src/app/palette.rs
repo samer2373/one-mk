@@ -102,6 +102,14 @@ fn score(text: &str, query: &str) -> u32 {
     }
 }
 
+/// Where an entry goes in the list for `query`: a title typed out in full
+/// is what was meant ("Health" opens Health, not "Check health again"),
+/// then actions before computers, pages and settings, then how well it matches.
+fn rank(group: &str, title: &str, query: &str) -> (bool, usize, u32) {
+    let order = ["Actions", "Computers", "Go to", "Settings"].iter().position(|x| *x == group).unwrap_or(9);
+    (!title.trim().eq_ignore_ascii_case(query.trim()), order, score(title, query))
+}
+
 impl App {
     fn palette_entries(&self) -> Vec<Entry> {
         let mut out = vec![];
@@ -235,8 +243,7 @@ impl App {
             Some((e, m))
         }).collect();
         if !q.is_empty() {
-            let order = |g: &str| ["Actions", "Computers", "Go to", "Settings"].iter().position(|x| *x == g).unwrap_or(9);
-            found.sort_by_key(|(e, _)| (order(e.group), score(&e.title, &q)));
+            found.sort_by_key(|(e, _)| rank(e.group, &e.title, &q));
         }
         if self.palette.sel_for != q {
             self.palette.sel = 0;
@@ -446,6 +453,17 @@ fn palette_layout(screen: Rect, rows: &[(Option<&'static str>, usize)]) -> Palet
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_named_in_full_comes_first() {
+        let mut found = [("Actions", "Check health again"), ("Go to", "Health"), ("Actions", "Choose a wallpaper"), ("Go to", "Wallpaper"), ("Settings", "Wallpaper · Pause on battery")];
+        found.sort_by_key(|(g, t)| rank(g, t, "health"));
+        assert_eq!(found[0].1, "Health");
+        found.sort_by_key(|(g, t)| rank(g, t, "Wallpaper "));
+        assert_eq!(found[0].1, "Wallpaper");
+        found.sort_by_key(|(g, t)| rank(g, t, "wall"));
+        assert_eq!(found[0].1, "Choose a wallpaper", "a part of a word still puts actions first");
+    }
 
     #[test]
     fn rows_head_each_group_once_and_keep_every_entry() {
