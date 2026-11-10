@@ -63,8 +63,10 @@ pub async fn status(dir: &Path) -> Result<()> {
     #[cfg(any(windows, target_os = "macos"))]
     println!("Updates: executable replacement is untested on this operating system.");
     let reply = control::request(dir, Request::Status).await?;
+    let mut clipboard_off = false;
     match reply.as_deref().and_then(Status::decode) {
         Some(s) => {
+            clipboard_off = s.clipboard_off;
             print!("{}", s.render());
             if let Ok(Some((count, bytes, age, _))) = partials_of(dir, false).await
                 && let Some(text) = partials_text(count, bytes, age)
@@ -94,7 +96,11 @@ pub async fn status(dir: &Path) -> Result<()> {
     if settings.hooks.blocked.is_some() {
         println!("{}", settings.hooks.describe());
     }
-    println!("Clipboard: {}.", settings.clipboard.summary());
+    if clipboard_off {
+        println!("Clipboard: not shared while this one-mk runs (it was started with --no-clipboard); the settings, used otherwise: {}.", settings.clipboard.summary());
+    } else {
+        println!("Clipboard: {}.", settings.clipboard.summary());
+    }
     if settings.wallpaper.enabled || !settings.wallpaper.grants.is_empty() {
         println!("{}", crate::wallpaper::summary(&settings.wallpaper));
     }

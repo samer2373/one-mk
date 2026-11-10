@@ -2935,6 +2935,7 @@ impl App {
             clipboard_history: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history_status().len.load(std::sync::atomic::Ordering::Relaxed)),
             clipboard_history_enabled: self.services.clip.as_ref().is_some_and(|clip| !clip.clipboard().history_status().disabled.load(std::sync::atomic::Ordering::Relaxed)),
             clipboard_fetch_shortcut: self.shortcuts.fetch_enabled(),
+            clipboard_off: self.services.clip.is_none(),
             broadcast_stop_hint: if self.broadcast_hotkey().is_empty() { "Press Ctrl+Alt+Shift+Esc to stop broadcasting.".into() } else { format!("Press {} or Ctrl+Alt+Shift+Esc to stop broadcasting.", self.broadcast_hotkey()) },
             clipboard_history_revision: self.services.clip.as_ref().map_or(0, |clip| clip.clipboard().history_status().revision.load(std::sync::atomic::Ordering::Relaxed)),
             clipboard_history_note: self.services.clip.as_ref().map_or_else(|| "Clipboard sharing and history are off (--no-clipboard).".into(), |clip| {
