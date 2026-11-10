@@ -426,7 +426,9 @@ impl App {
     fn plan_status(&self, status: &Status) -> Status {
         let mut shown = status.clone();
         shown.offsets.clear();
-        let mine = Desktop::new(status.screens.clone());
+        // Before this computer's screens are known (no desktop session yet)
+        // there is nothing to measure a placement against.
+        let mine = (!status.screens.is_empty()).then(|| Desktop::new(status.screens.clone()));
         for peer in &mut shown.peers {
             let (mut side, mut offset) = self.place_shown(&peer.id, (peer.side, status.offset_of(&peer.id)));
             if let Some(d) = self.plan.as_ref().filter(|d| d.id == peer.id) {
@@ -435,10 +437,10 @@ impl App {
                     scene::Landing::Along(s) => (s, None),
                 };
             } else if let Some(Ok(o)) = self.place_draft(&peer.id)
-                && !status.screens.is_empty()
+                && let Some(mine) = &mine
                 && !peer.screens.is_empty()
             {
-                (side, offset) = (side_for(&mine, &Desktop::new(peer.screens.clone()), o), Some(o));
+                (side, offset) = (side_for(mine, &Desktop::new(peer.screens.clone()), o), Some(o));
             }
             peer.side = side;
             if let Some(o) = offset {
@@ -464,7 +466,7 @@ impl App {
     /// desk, or anywhere with Place freely (or Alt held), apart.
     fn plan_card(&mut self, ui: &mut Ui, page: &mut Page, status: &Status, selected: Option<&str>) {
         let before = one_mk_ctl::wallpaper::canvas(&self.plan_status(status));
-        let Some(bounds) = before.bounds().filter(|_| before.monitors.len() > 1) else {
+        let Some(bounds) = before.bounds().filter(|_| before.monitors.len() > 1 && !status.screens.is_empty()) else {
             self.plan = None;
             return;
         };
