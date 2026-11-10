@@ -2314,12 +2314,14 @@ fn pairing_code(ui: &Ui, block: Rect, code: &str) {
 
 /// The room a toast sits at the bottom of: the desk's side of the window
 /// (`desk`: its scene, and whether its panel is stacked under it), the
-/// whole content otherwise. A small window's desk is too short to give up
-/// any of it: the toast goes to the window's foot, over the panel's end.
+/// whole content otherwise. Under a small window's desk the panel holds
+/// what the toast is about (its buttons, its name): the toast stands just
+/// over the panel's top edge, on the foot of the desk.
 fn toast_room(content: Rect, desk: Option<(Rect, bool)>) -> Rect {
     match desk {
         Some((scene, false)) => scene.shrink2(vec2(desk_panel::EDGE, 0.0)),
-        _ => content,
+        Some((scene, true)) => Rect::from_min_max(scene.min, pos2(scene.max.x, scene.max.y + 12.0)).shrink2(vec2(desk_panel::EDGE, 0.0)),
+        None => content,
     }
 }
 
@@ -2415,12 +2417,14 @@ impl eframe::App for App {
         let mut frame = scene;
         let mut compact = false;
         let mut tools = None;
+        let mut ask_row = None;
         if self.tab == Tab::Desk {
             // The banner on top, the toolbar under it, the hint along the
             // foot; the computers fit the handoff's box in what is left.
             let band = tween(ui.ctx(), Id::unique("desk-band"), self.band_h(ui, scene.width() - 2.0 * desk_panel::EDGE), motion::space(0.22), motion::out_cubic);
-            let (free, row) = self.desk_room(scene, band);
+            let (free, row, ask) = self.desk_room(scene, band, full.width() < desk_panel::STACK_BELOW);
             tools = row;
+            ask_row = ask;
             frame = free;
             self.desk_stage = Some(desk_panel::desk_stage(scene, free));
             // Too little room for monitors anyone could read: named chips.
@@ -2436,11 +2440,11 @@ impl eframe::App for App {
             self.top_bar(&mut top, f.bar, now);
             if let Some(row) = tools {
                 let narrow = full.width() < desk_panel::STACK_BELOW;
-                let end = self.desk_toolbar(&mut top, row, narrow);
-                // A narrow window: layout learning's question in the
-                // toolbar's row, so the computers keep their room.
-                if narrow {
-                    self.suggestion_row(&mut top, Rect::from_min_max(pos2(end + 8.0, row.top()), row.max));
+                self.desk_toolbar(&mut top, row, narrow);
+                // A narrow window: layout learning's question in a row of
+                // its own over the desk, beside the toolbar's column.
+                if let Some(ask) = ask_row {
+                    self.suggestion_row(&mut top, ask);
                 }
             }
         }
@@ -3281,9 +3285,10 @@ mod tests {
             assert!(b <= buttons_top || b - 52.0 >= sheet.bottom(), "{h}: {b}");
             assert!(b - 52.0 >= window.top() && b <= window.bottom(), "{h}: {b} on screen");
         }
-        // The Desk in a small window: the window's foot, not the short scene.
+        // The Desk in a small window: just over the panel (4 under the
+        // scene), clear of it by 8.
         let scene = Rect::from_min_max(pos2(0.0, 60.0), pos2(820.0, 260.0));
-        assert_eq!(toast_room(window, Some((scene, true))), window);
+        assert_eq!(toast_bottom(toast_room(window, Some((scene, true))), 52.0, window, None), scene.bottom() - 4.0);
         assert_eq!(toast_room(window, Some((scene, false))).bottom(), scene.bottom());
     }
 

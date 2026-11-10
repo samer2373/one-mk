@@ -1245,7 +1245,10 @@ impl Scene {
         let mut cam = Camera::new(yaw, self.pitch, dist, target, rect, raise);
         {
             let sheet_top = self.sheet_top.filter(|_| raise > 0.0).unwrap_or(rect.bottom());
-            let (lo, hi) = (rect.top() + self.top_clear + 8.0, sheet_top - 30.0);
+            // 30 points of floor kept under the desk; a short desk (a small
+            // window, the panel under it) keeps less, so it is not shrunk.
+            let floor = (rect.height() * 0.12).clamp(16.0, 30.0);
+            let (lo, hi) = (rect.top() + self.top_clear + 8.0, sheet_top - floor);
             // Every corner of every part (screens, stands, bases, the pairing
             // slot) as seen: the desk is fitted to all of them, 12 points
             // clear of the sides and of what floats above and below.
@@ -1262,7 +1265,11 @@ impl Scene {
             let (left, right) = (rect.left() + MARGIN, rect.right() - MARGIN);
             if bounds.is_positive() && hi > lo {
                 let visible = self.devices.iter().filter(|device| !device.leaving).count();
-                let max_scale = if visible >= 5 { 1.25 } else { 1.0 };
+                // A short, wide desk (a small window, the panel under it):
+                // the camera's own framing is bound by the height, so the
+                // computers may grow to fill the width they have.
+                let short = if rect.height() < 240.0 && rect.width() > rect.height() * 2.5 { 1.6 } else { 1.0 };
+                let max_scale = if visible >= 5 { 1.25 } else { 1.0 } * short;
                 let s = ((hi - lo) / bounds.height()).min((right - left) / bounds.width()).min(max_scale);
                 let (c, mid) = (cam.centre.y, bounds.center().y);
                 // After scaling about the centre, the middle sits at c + s*(mid - c).

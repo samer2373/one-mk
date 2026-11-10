@@ -20,6 +20,9 @@ const GAP: f32 = 18.0;
 const ROW: f32 = 46.0;
 /// The toolbar's buttons.
 pub(super) const TOOL_H: f32 = 32.0;
+/// The toolbar as a column (a narrow window): as wide as its widest button,
+/// Choose computer's icon and arrow.
+const TOOL_COLUMN: f32 = 50.0;
 /// The line along the desk's bottom.
 pub(super) const HINT: &str = "Click a computer · drag it to where it sits · drop files on it to send";
 /// Room the hint line keeps free at the desk's bottom (the camera keeps
@@ -163,11 +166,25 @@ pub(super) struct DeskUi {
 
 impl App {
     /// The free room for the computers in `scene`, under the band (`band`
-    /// tall) and the toolbar, above the hint line; and the toolbar's row.
-    pub(super) fn desk_room(&self, scene: Rect, band: f32) -> (Rect, Option<Rect>) {
+    /// tall) and the toolbar, above the hint line; the toolbar's place; and
+    /// in a narrow window the row for layout learning's question. A narrow
+    /// window's desk is short (the panel is under it): the toolbar stands as
+    /// a column at its left, so the computers keep its height.
+    pub(super) fn desk_room(&self, scene: Rect, band: f32, narrow: bool) -> (Rect, Option<Rect>, Option<Rect>) {
         let mut free = scene.shrink2(vec2(EDGE, 0.0));
         free.min.y += EDGE + band;
+        let mut ask = None;
         let tools = self.desk_views_shown().then(|| {
+            if narrow {
+                let col = Rect::from_min_size(free.min, vec2(TOOL_COLUMN, free.height()));
+                free = free.shrink2(vec2(TOOL_COLUMN + 8.0, 0.0));
+                if self.suggestion_waiting() {
+                    let row = Rect::from_min_size(free.min, vec2(free.width(), TOOL_H));
+                    free.min.y = row.bottom() + 8.0;
+                    ask = Some(row);
+                }
+                return col;
+            }
             let row = Rect::from_min_size(free.min, vec2(free.width(), TOOL_H));
             free.min.y = row.bottom() + 8.0;
             row
@@ -177,7 +194,7 @@ impl App {
         } else {
             free.max.y -= EDGE;
         }
-        (free, tools)
+        (free, tools, ask)
     }
 
     /// The hint along the desk's bottom (while computers are paired, and
@@ -193,8 +210,9 @@ impl App {
 
     /// The toolbar at the desk's top left (handoff 5.1): Choose computer
     /// (5 computers or more), Type on every computer, Timer and Lock every
-    /// screen; icons only in a narrow window or when the labels don't fit.
-    /// Returns where its last button ends.
+    /// screen; icons only in a narrow window or when the labels don't fit,
+    /// and down a column in a narrow window. Returns where its last button
+    /// ends.
     pub(super) fn desk_toolbar(&mut self, ui: &mut Ui, row: Rect, narrow_window: bool) -> f32 {
         let Some(status) = self.running().cloned() else { return row.left() };
         let online = status.peers.iter().any(|p| p.online);
@@ -207,10 +225,14 @@ impl App {
             .map(|w| w + 8.0)
             .sum();
         let icons_only = narrow_window || full > row.width();
-        let mut x = row.left();
+        let (mut x, mut y) = (row.left(), row.top());
         let mut place = |w: f32| {
-            let r = Rect::from_min_size(pos2(x, row.top()), vec2(w, TOOL_H));
-            x += w + 8.0;
+            let r = Rect::from_min_size(pos2(x, y), vec2(w, TOOL_H));
+            if narrow_window {
+                y += TOOL_H + 8.0;
+            } else {
+                x += w + 8.0;
+            }
             r
         };
         let tool = |ui: &mut Ui, r: Rect, id: &str, icon: Icon, label: &str, lit: bool, enabled: bool, name: &str| {

@@ -298,6 +298,11 @@ impl App {
 
     /// The question in one line, `r` (the toolbar row's free part): the
     /// banner's look, its words, Yes and No; why it asks, on hover.
+    /// Layout learning asks a question not answered yet.
+    pub(super) fn suggestion_waiting(&self) -> bool {
+        self.running().and_then(|s| s.suggestion.as_ref()).is_some_and(|g| self.answered.as_ref() != Some(&(g.id.clone(), g.side)))
+    }
+
     pub(super) fn suggestion_row(&mut self, ui: &mut Ui, r: Rect) {
         let Some(g) = self.running().and_then(|s| s.suggestion.clone()) else {
             self.answered = None;

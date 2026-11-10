@@ -57,6 +57,17 @@ impl Cat {
         }
     }
 
+    /// The pill's word: the label, or a shorter one where the full row
+    /// would not fit (the accessible name stays the label).
+    fn name(self, short: bool) -> &'static str {
+        match self {
+            Cat::Edges if short => "Edges",
+            Cat::Power if short => "Power",
+            Cat::Commands if short => "Commands",
+            _ => self.label(),
+        }
+    }
+
     pub(super) fn slug(self) -> &'static str {
         match self {
             Cat::General => "general",
@@ -270,13 +281,18 @@ impl App {
     fn category_pills(&mut self, ui: &mut Ui, at: Pos2, w: f32) -> f32 {
         let (mut x, mut y) = (at.x, at.y);
         let mut chosen = None;
-        // 14 either side of the word and 8 between; a little less when that
-        // is the difference between one row and two (a narrow window).
-        let words: f32 = Cat::ALL.iter().map(|c| text_width(ui, c.label(), semibold(T_BODY))).sum();
+        // 14 either side of the word and 8 between; less, then the short
+        // names, when that is the difference between one row and two (a
+        // narrow window). Two rows only when even those don't fit.
         let n = Cat::ALL.len() as f32;
-        let (pad, gap) = if words + n * 28.0 + (n - 1.0) * PILL_GAP <= w { (28.0, PILL_GAP) } else { (24.0, 6.0) };
+        let words = |short: bool| -> f32 { Cat::ALL.iter().map(|c| text_width(ui, c.name(short), semibold(T_BODY))).sum() };
+        let fits = |short: bool, pad: f32, gap: f32| words(short) + n * pad + (n - 1.0) * gap <= w;
+        let (pad, gap, short) = [(28.0, PILL_GAP, false), (24.0, 6.0, false), (20.0, 4.0, false), (24.0, 6.0, true)]
+            .into_iter()
+            .find(|&(pad, gap, short)| fits(short, pad, gap))
+            .unwrap_or((24.0, 6.0, true));
         for cat in Cat::ALL {
-            let width = text_width(ui, cat.label(), semibold(T_BODY)) + pad;
+            let width = text_width(ui, cat.name(short), semibold(T_BODY)) + pad;
             if x > at.x && x + width > at.x + w {
                 x = at.x;
                 y += PILL_H + PILL_GAP;
@@ -294,7 +310,7 @@ impl App {
             let p = ui.painter();
             p.rect_filled(r, CornerRadius::same((PILL_H / 2.0) as u8), fill);
             let font = if on { semibold(T_BODY) } else { medium(T_BODY) };
-            p.text(r.center(), Align2::CENTER_CENTER, cat.label(), font, mix(mix(pal().ink2, pal().ink_hover, hover), pal().bg, lit));
+            p.text(r.center(), Align2::CENTER_CENTER, cat.name(short), font, mix(mix(pal().ink2, pal().ink_hover, hover), pal().bg, lit));
             widgets::focus_ring(ui, &resp, r, (PILL_H / 2.0) as u8);
             if resp.hovered() && !on {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
