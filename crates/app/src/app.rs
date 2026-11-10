@@ -275,6 +275,12 @@ pub struct App {
     notice: desk_cards::NoticeHold,
     /// Whether the window had the focus last frame (see `pointer_away`).
     was_focused: bool,
+    /// While another computer is controlled: whether the pointer was seen
+    /// here all the same (oneMK couldn't hold it, or it came back unannounced).
+    pointer_here: bool,
+    /// When control of another computer began (input time), so a move
+    /// queued just before the pointer left isn't taken for it being here.
+    controlling_since: Option<f64>,
     pending_swap: HashMap<String, String>,
     /// A computer that should hop (not slide) to its new place.
     hop: Option<String>,
@@ -503,6 +509,8 @@ impl App {
             plan_free: false,
             notice: desk_cards::NoticeHold::default(),
             was_focused: true,
+            pointer_here: false,
+            controlling_since: None,
             pending_swap: HashMap::new(),
             hop: None,
             just_paired: None,
@@ -1127,10 +1135,12 @@ impl App {
 
 /// Whether the pointer has left the window without the window being told:
 /// it is on another computer (`controlling`: oneMK holds it there, and the
-/// window hears no leave), or the window just lost the focus to something
-/// in front of it. Moving over the window again brings hover back.
-fn pointer_away(controlling: bool, was_focused: bool, focused: bool) -> bool {
-    controlling || (was_focused && !focused)
+/// window hears no leave) unless it has been seen moving or clicking here
+/// since (`here`: then it is here, and its clicks must count), or the window
+/// just lost the focus to something in front of it. Moving over the window
+/// again brings hover back.
+fn pointer_away(controlling: bool, here: bool, was_focused: bool, focused: bool) -> bool {
+    (controlling && !here) || (was_focused && !focused)
 }
 
 /// A raw image embedded in the app (the format scripts/make-icons.py
@@ -2589,7 +2599,15 @@ impl eframe::App for App {
         // Nothing here is under a pointer that has gone elsewhere: no
         // tooltip or highlight is left standing over the window.
         let controlling = self.running().is_some_and(|s| s.controlling.is_some());
-        if pointer_away(controlling, self.was_focused, raw_input.focused) {
+        let t = raw_input.time.unwrap_or(0.0);
+        let since = *self.controlling_since.get_or_insert(t);
+        if !controlling {
+            self.controlling_since = None;
+        }
+        let seen = raw_input.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. }));
+        // Seen here a moment after control began: here until control ends.
+        self.pointer_here = controlling && (self.pointer_here || (seen && t - since > 0.3));
+        if pointer_away(controlling, self.pointer_here, self.was_focused, raw_input.focused) {
             raw_input.events.push(egui::Event::PointerGone);
         }
         self.was_focused = raw_input.focused;
@@ -3181,13 +3199,16 @@ mod tests {
     #[test]
     fn hover_ends_when_the_pointer_goes_elsewhere_unannounced() {
         // On another computer: every frame, whatever the focus.
-        assert!(pointer_away(true, true, true));
-        assert!(pointer_away(true, false, false));
+        assert!(pointer_away(true, false, true, true));
+        assert!(pointer_away(true, false, false, false));
+        // ...unless it is seen here after all (oneMK couldn't hold it):
+        // then hover and clicks work (Switch back here must be clickable).
+        assert!(!pointer_away(true, true, true, true));
         // Focus lost: once, at that moment; moving back over it hovers again.
-        assert!(pointer_away(false, true, false));
-        assert!(!pointer_away(false, false, false));
-        assert!(!pointer_away(false, true, true));
-        assert!(!pointer_away(false, false, true));
+        assert!(pointer_away(false, false, true, false));
+        assert!(!pointer_away(false, false, false, false));
+        assert!(!pointer_away(false, false, true, true));
+        assert!(!pointer_away(false, false, false, true));
         // egui drops a tooltip once the pointer is gone.
         let tip_shown = |events: Vec<egui::Event>| {
             let ctx = egui::Context::default();
