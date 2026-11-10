@@ -625,7 +625,7 @@ impl App {
             if first && rect.width() > 30.0 && rect.height() > 18.0 {
                 let shown = fit(&p, &name, &name_font, room);
                 let y = if two_lines { rect.center().y - 7.0 } else { rect.center().y };
-                p.text(pos2(rect.center().x, y), Align2::CENTER_CENTER, shown, name_font, ink);
+                p.text(pos2(rect.center().x, y), Align2::CENTER_CENTER, shown, name_font.clone(), ink);
                 if let Some(under) = under.as_ref().filter(|_| two_lines) {
                     p.text(pos2(rect.center().x, y + 15.0), Align2::CENTER_CENTER, under, mono(T_CHIP), if chosen { pal().accent_text } else { pal().ink3 });
                 }
@@ -633,6 +633,9 @@ impl App {
                 p.text(rect.center(), Align2::CENTER_CENTER, under, mono(T_CHIP), pal().ink3);
             }
             widgets::focus_ring(ui, response, rect, TILE_R);
+            if first && fit(&p, &name, &name_font, room) != name && response.hovered() && carried.is_none() {
+                response.clone().on_hover_text(&name);
+            }
             let can_move = !is_me && movable(&monitor.computer).is_some();
             let words = if can_move {
                 format!("{name}: drag it to place it, or use the arrow keys (Shift moves 10 pixels), Enter to place it, Esc to cancel")
@@ -723,8 +726,8 @@ impl App {
         let row = card.row(ui, ROW.max(27.0 + cap_h + 11.0));
         self.sits_row(ui, row, status.name.clone(), "me".to_owned(), "This computer", None, Some(&me_text), selected == Some("me"), None);
         if status.peers.is_empty() {
-            let row = card.row(ui, ROW);
-            ui.painter().text(row.left_center(), Align2::LEFT_CENTER, fit(ui.painter(), "Pair a computer to place it around this one.", &regular(T_BODY), row.width()), regular(T_BODY), pal().ink2);
+            let row = card.row(ui, page_ui::EMPTY_ROW);
+            page_ui::empty_row(ui, row, "Pair a computer to place it around this one.");
             return;
         }
         for peer in &status.peers {

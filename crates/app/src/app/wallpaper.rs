@@ -169,8 +169,8 @@ impl App {
 
             let mut card = page.card(ui, 1, "Play on");
             if computers.is_empty() {
-                let row = card.row(ui, ROW);
-                ui.painter().text(row.left_center(), Align2::LEFT_CENTER, "Your computers appear here", regular(T_BODY), pal().ink2);
+                let row = card.row(ui, page_ui::EMPTY_ROW);
+                page_ui::empty_row(ui, row, "Your computers appear here");
             }
             for (id, name, online) in &computers {
                 let on = plan.is_none_or(|plan| plan.computers.contains(id));
@@ -310,7 +310,20 @@ const WELL_PAD: egui::Vec2 = egui::Vec2 { x: 24.0, y: 22.0 };
 /// named by computer under the first of each.
 fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit: Fit, poster: Option<&egui::TextureHandle>, computers: &[(String, String, bool)]) {
     let Some(bounds) = canvas.bounds() else {
-        ui.painter().text(area.center(), Align2::CENTER_CENTER, "Your screens appear here", regular(T_BODY), pal().ink2);
+        // No screens known yet: a ghost of one, dashed, over the sentence.
+        let p = ui.painter();
+        let ghost = Rect::from_center_size(area.center() - vec2(0.0, 16.0), vec2(150.0, 86.0));
+        let r = 8.0;
+        let mut path = vec![];
+        for (c, from) in [(ghost.left_top() + vec2(r, r), 180.0_f32), (ghost.right_top() + vec2(-r, r), 270.0), (ghost.right_bottom() + vec2(-r, -r), 0.0), (ghost.left_bottom() + vec2(r, -r), 90.0)] {
+            for k in 0..=4 {
+                let a = (from + 22.5 * k as f32).to_radians();
+                path.push(c + vec2(a.cos(), a.sin()) * r);
+            }
+        }
+        path.push(path[0]);
+        p.extend(egui::Shape::dashed_line(&path, Stroke::new(1.5, pal().line2), 6.0, 4.0));
+        p.text(pos2(area.center().x, ghost.bottom() + 22.0), Align2::CENTER_CENTER, "Your screens appear here", regular(T_BODY), pal().ink2);
         return;
     };
     let gap = 8.0;

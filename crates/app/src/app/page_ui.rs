@@ -57,15 +57,17 @@ pub(super) fn frame_x(origin_x: f32, width: f32, max_w: f32) -> (f32, f32) {
 pub(super) fn head(ui: &Ui, origin: Pos2, width: f32, title: &str, sub: &str) -> f32 {
     let (x, w) = frame_x(origin.x, width, MAX_W);
     let p = ui.painter();
-    let title_font = semibold(TITLE);
-    p.text(pos2(x, origin.y + 40.0), Align2::LEFT_CENTER, fit(p, title, &title_font, w), title_font, pal().ink);
-    let sub_top = origin.y + 60.0;
+    // A short window gives the head less room (the handoff's 22 title).
+    let tight = ui.ctx().content_rect().height() < 700.0;
+    let title_font = semibold(if tight { T_PAGE } else { TITLE });
+    p.text(pos2(x, origin.y + if tight { 32.0 } else { 40.0 }), Align2::LEFT_CENTER, fit(p, title, &title_font, w), title_font, pal().ink);
+    let sub_top = origin.y + if tight { 49.0 } else { 60.0 };
     let sub_h = if sub.is_empty() { 0.0 } else { para(ui, pos2(x, sub_top), w.min(760.0), sub, regular(SUBTITLE), pal().ink2).max(20.0) };
     a11y_text(ui, Id::unique(("page-title", title)), Rect::from_min_size(pos2(x, origin.y + 22.0), vec2(w, 36.0)), Role::Heading, title, None);
     if !sub.is_empty() {
         a11y_text(ui, Id::unique(("page-sub", title)), Rect::from_min_size(pos2(x, sub_top), vec2(w, sub_h)), Role::Label, sub, None);
     }
-    sub_top + sub_h + 22.0
+    sub_top + sub_h + if tight { 16.0 } else { 22.0 }
 }
 
 /// A page being laid out.
@@ -213,6 +215,23 @@ impl Card {
         r
     }
 
+}
+
+/// How tall a card's row is when it stands in for a list that is empty.
+pub(super) const EMPTY_ROW: f32 = 64.0;
+
+/// A row that stands in for an empty list: a quiet round tile with a
+/// dashed screen in it, and the sentence that says what fills the list.
+pub(super) fn empty_row(ui: &Ui, row: Rect, text: &str) {
+    let p = ui.painter();
+    let c = pos2(row.left() + 16.0, row.center().y);
+    p.circle_filled(c, 16.0, pal().surface2);
+    let glyph = Rect::from_center_size(c, vec2(14.0, 10.0));
+    let corners = vec![glyph.left_top(), glyph.right_top(), glyph.right_bottom(), glyph.left_bottom(), glyph.left_top()];
+    p.extend(Shape::dashed_line(&corners, Stroke::new(1.25, pal().ink3), 2.0, 1.5));
+    p.line_segment([pos2(c.x - 3.0, glyph.bottom() + 2.5), pos2(c.x + 3.0, glyph.bottom() + 2.5)], Stroke::new(1.25, pal().ink3));
+    let x = row.left() + 44.0;
+    p.text(pos2(x, row.center().y), Align2::LEFT_CENTER, fit(p, text, &regular(T_BODY), row.right() - x), regular(T_BODY), pal().ink2);
 }
 
 /// A page's scrolling area (`ONE_MK_APP_SCROLL=points` scrolls it in a
