@@ -226,7 +226,8 @@ impl App {
 /// width, within reason; in a short window with the GNOME setup block under
 /// it, no taller than lets the setup show without scrolling far.
 fn stage_screens_h(need: f32, page_h: f32, gnome: bool) -> f32 {
-    let wanted = need.clamp(150.0, 330.0);
+    // Up to about half the page: the screens are what the page is about.
+    let wanted = need.clamp(150.0, (page_h * 0.46).clamp(260.0, 440.0));
     if !gnome {
         return wanted;
     }
@@ -333,8 +334,15 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
     let fallback = poster.map(|texture| Media { width: texture.size()[0] as u32, height: texture.size()[1] as u32, duration_ms: 1, frame_rate: 0 }).unwrap_or_default();
     let image_rect = canvas.image_rect(media.unwrap_or(&fallback), fit).map(map);
     let p = ui.painter();
-    let mut named = std::collections::BTreeSet::new();
-    for monitor in &canvas.monitors {
+    // Each computer is named on its largest screen.
+    let mut label_on: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (k, m) in canvas.monitors.iter().enumerate() {
+        let area_of = |m: &one_mk_wallpaper::Monitor| m.rect.width * m.rect.height;
+        if label_on.get(m.computer.as_str()).is_none_or(|j| area_of(&canvas.monitors[*j]) < area_of(m)) {
+            label_on.insert(m.computer.as_str(), k);
+        }
+    }
+    for (k, monitor) in canvas.monitors.iter().enumerate() {
         // Apart by a hair, so they read as separate screens.
         let screen = map(monitor.rect).shrink(gap / 2.0);
         if screen.width() < 8.0 || screen.height() < 8.0 {
@@ -368,11 +376,19 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
             p.rect_filled(glass, radius, black(140));
         }
         preview::glass_finish(p, glass, r);
-        if named.insert(monitor.computer.clone()) && glass.width() > 40.0 && glass.height() > 24.0 {
-            let name = computers.iter().find(|c| c.0 == monitor.computer).map_or(monitor.name.as_str(), |c| c.1.as_str());
-            let name = if monitor.online { name.to_owned() } else { format!("{name} · Offline") };
-            let name = crate::style::fit(p, &name, &medium(T_META), glass.width() - 28.0);
-            preview::name_tag(p, glass.left_bottom() + vec2(7.0, -7.0), &name, pictured || !monitor.online);
+        if label_on.get(monitor.computer.as_str()) == Some(&k) && glass.width() > 40.0 && glass.height() > 24.0 {
+            let full = computers.iter().find(|c| c.0 == monitor.computer).map_or(monitor.name.as_str(), |c| c.1.as_str());
+            let full = if monitor.online { full.to_owned() } else { format!("{full} · Offline") };
+            // Whole words only: the name, its first word or its initials,
+            // and the whole of it on hover.
+            let room = glass.width() - 28.0;
+            let (name, short) = place::short_name(&full, |t| text_width(ui, t, medium(T_META)) <= room);
+            if !name.is_empty() {
+                let tag = preview::name_tag(p, glass.left_bottom() + vec2(7.0, -7.0), &name, pictured || !monitor.online);
+                if short {
+                    ui.interact(tag, Id::unique(("wallpaper-name", &monitor.computer)), Sense::hover()).on_hover_text(&full);
+                }
+            }
         }
     }
 }

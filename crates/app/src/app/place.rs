@@ -14,6 +14,7 @@ use one_mk_wallpaper::Canvas;
 const SUGGEST_YES: &str = "Yes, place it";
 const SUGGEST_NO: &str = "No";
 const SUGGEST_WHY: &str = "You pushed the pointer against that edge twice.";
+const EXACT_PLACE: &str = "Exact place";
 const SUB: &str = "Exact screen edges, to pixel. Most people only need to drag computers on the desk.";
 
 /// "main screen", "second screen"…: how this computer's screens are named in
@@ -140,6 +141,8 @@ const PLACE_BOUNDS: &str = "X and Y must be within -16777216 and 16777216 pixels
 /// How near an edge of ours a block let go on the plan snaps to it, in
 /// points of the plan.
 const PLAN_REACH: f64 = 10.0;
+/// Room round the screens on the plan, in points.
+const PLAN_PAD: f32 = 30.0;
 /// A plan tile's corner.
 const TILE_R: u8 = 6;
 /// A field's height (the handoff's 38).
@@ -215,11 +218,6 @@ pub(super) struct PlanFrame {
 }
 
 impl PlanFrame {
-    /// The frame for `bounds`, as large as `inner_w` and `max_h` allow.
-    pub fn fit(bounds: one_mk_wallpaper::Rect, inner_w: f32, max_h: f64) -> PlanFrame {
-        let scale = (f64::from(inner_w) / bounds.width).min(max_h / bounds.height);
-        PlanFrame { x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height, scale }
-    }
     /// How big the plan is on screen.
     pub fn size(&self) -> egui::Vec2 {
         vec2((self.w * self.scale) as f32, (self.h * self.scale) as f32)
@@ -232,6 +230,64 @@ impl PlanFrame {
     pub fn px(&self, top_left: Pos2, p: Pos2) -> (f64, f64) {
         (self.x + f64::from(p.x - top_left.x) / self.scale, self.y + f64::from(p.y - top_left.y) / self.scale)
     }
+}
+
+/// The plan filling its well: the frame for screens spanning `bounds` (our
+/// pixels) in a well `w` wide, and how tall the well is. The screens get
+/// as large as `w` and `max_h` allow with `pad` points round them (room to
+/// carry one into); the well is no shorter than `min_h`, and the screens sit
+/// in its middle. The frame's size is the well's.
+pub(super) fn plan_fill(bounds: one_mk_wallpaper::Rect, w: f32, min_h: f32, max_h: f32, pad: f32) -> (PlanFrame, f32) {
+    let (bw, bh) = (bounds.width.max(1.0), bounds.height.max(1.0));
+    let scale = (f64::from((w - 2.0 * pad).max(1.0)) / bw).min(f64::from((max_h - 2.0 * pad).max(1.0)) / bh);
+    let h = ((bh * scale) as f32 + 2.0 * pad).clamp(min_h, max_h.max(min_h));
+    let (cx, cy) = (bounds.x + bw / 2.0, bounds.y + bh / 2.0);
+    let (fw, fh) = (f64::from(w) / scale, f64::from(h) / scale);
+    (PlanFrame { x: cx - fw / 2.0, y: cy - fh / 2.0, w: fw, h: fh, scale }, h)
+}
+
+/// A computer's name laid out for a tile: whole words on one line, or two,
+/// each as `fits` allows; never cut inside a word. When even two lines
+/// can't hold it, a compact label: its first word, or its initials (then
+/// `true`: the full name goes in a tooltip). Empty when nothing fits.
+pub(super) fn tile_name(name: &str, fits: impl Fn(&str) -> bool) -> (Vec<String>, bool) {
+    let name = name.trim();
+    if fits(name) {
+        return (vec![name.to_owned()], false);
+    }
+    let words: Vec<&str> = name.split_whitespace().collect();
+    for cut in (1..words.len()).rev() {
+        let (a, b) = (words[..cut].join(" "), words[cut..].join(" "));
+        if fits(&a) {
+            if fits(&b) {
+                return (vec![a, b], false);
+            }
+            break;
+        }
+    }
+    if let Some(first) = words.first().filter(|w| fits(w)) {
+        return (vec![(*first).to_owned()], true);
+    }
+    let initials: String = words.iter().filter_map(|w| w.chars().next()).take(3).flat_map(char::to_uppercase).collect();
+    if !initials.is_empty() && fits(&initials) {
+        return (vec![initials], true);
+    }
+    (vec![], true)
+}
+
+/// A computer's name on one line for a small label: whole, or its first
+/// word, or its initials, as `fits` allows (`true`: shortened).
+pub(super) fn short_name(name: &str, fits: impl Fn(&str) -> bool) -> (String, bool) {
+    let name = name.trim();
+    if fits(name) {
+        return (name.to_owned(), false);
+    }
+    let words: Vec<&str> = name.split_whitespace().collect();
+    if let Some(first) = words.first().filter(|w| fits(w)) {
+        return ((*first).to_owned(), true);
+    }
+    let initials: String = words.iter().filter_map(|w| w.chars().next()).take(3).flat_map(char::to_uppercase).collect();
+    (if fits(&initials) { initials } else { String::new() }, true)
 }
 
 /// Where a carried computer's (0,0) is with the pointer at `pointer`
@@ -392,7 +448,10 @@ impl App {
             self.sits_rows(ui, &mut card, &status, &canvas, selected.as_deref());
             page.finish(ui, card);
             if let Some(peer) = edit.as_ref().and_then(|id| status.peers.iter().find(|p| &p.id == id)) {
-                let mut card = page.card(ui, 0, &peer.name);
+                // Two columns: the chosen computer beside the list (its side),
+                // its exact place under the list, so the columns balance; one
+                // column: one card under the list.
+                let mut card = page.card(ui, 1, &peer.name);
                 // Connected or not, as a word beside the name (a shape too).
                 let (word, mark) = if peer.online { ("Connected", Mark::Ok) } else { ("Offline", Mark::Off) };
                 let at = card.label_right();
@@ -400,8 +459,16 @@ impl App {
                 let galley = p.layout_no_wrap(word.to_owned(), regular(T_META), pal().ink2);
                 p.galley(pos2(at.x - galley.size().x, at.y - galley.size().y / 2.0), galley.clone(), pal().ink2);
                 widgets::status_mark(p, pos2(at.x - galley.size().x - 10.0, at.y), 7.0, mark);
-                self.place_rows(ui, &mut card, &status, peer);
-                page.finish(ui, card);
+                self.side_rows(ui, &mut card, &status, peer);
+                if page.two {
+                    page.finish(ui, card);
+                    let mut card = page.card(ui, 0, EXACT_PLACE);
+                    self.exact_rows(ui, &mut card, &status, peer, false);
+                    page.finish(ui, card);
+                } else {
+                    self.exact_rows(ui, &mut card, &status, peer, true);
+                    page.finish(ui, card);
+                }
             }
 
             // Saved layouts, and layout learning.
@@ -473,19 +540,20 @@ impl App {
             return;
         };
         let mut card = page.wide(ui, "");
-        // The screens stand in a recessed well as wide as the card's rows,
-        // as tall as a third of the window allows (within reason).
-        let inner_w = page.w - 2.0 * page_ui::CARD_PAD - 32.0;
-        let tall = f64::from((ui.ctx().content_rect().height() * 0.34).clamp(180.0, 320.0));
-        // Room around the screens to carry one into (a fifth of their
-        // height above and below, a little at the sides).
-        let room = one_mk_wallpaper::Rect { x: bounds.x - bounds.width * 0.06, y: bounds.y - bounds.height * 0.2, width: bounds.width * 1.12, height: bounds.height * 1.4 };
-        let frame = self.plan.as_ref().map_or_else(|| PlanFrame::fit(room, inner_w, tall), |d| d.frame);
-        let size = frame.size();
-        let area = card.row(ui, 18.0 + size.y + 16.0 + 40.0);
-        let well = Rect::from_min_max(pos2(area.left(), area.top() + 18.0), pos2(area.right(), area.top() + 18.0 + size.y + 16.0));
+        // The screens fill a recessed well as wide as the card's rows and
+        // up to half the window tall, with room round them to carry one
+        // into. While one is carried the plan keeps its scale.
+        let well_w = page.w - 2.0 * page_ui::CARD_PAD;
+        let view_h = ui.ctx().content_rect().height();
+        let (max_h, min_h) = ((view_h * 0.5).clamp(230.0, 420.0), (view_h * 0.3).clamp(170.0, 260.0));
+        let (frame, well_h) = match self.plan.as_ref() {
+            Some(d) => (d.frame, d.frame.size().y),
+            None => plan_fill(bounds, well_w, min_h, max_h, PLAN_PAD),
+        };
+        let area = card.row(ui, 18.0 + well_h + 40.0);
+        let well = Rect::from_min_size(pos2(area.left(), area.top() + 18.0), vec2(well_w, well_h));
         preview::stage(ui.painter(), well, 12, 16.0);
-        let top_left = pos2((well.center().x - size.x / 2.0).round(), well.top() + 8.0);
+        let top_left = well.min;
         let mine = Desktop::new(status.screens.clone());
         let movable = |id: &str| -> Option<Desktop> {
             status.peers.iter().find(|p| p.id == id).filter(|p| !p.screens.is_empty() && !status.screens.is_empty()).map(|p| Desktop::new(p.screens.clone()))
@@ -595,7 +663,14 @@ impl App {
             glide.insert(monitor.computer.clone(), vec2((f64::from(gx - o.0 as f32) * frame.scale) as f32, (f64::from(gy - o.1 as f32) * frame.scale) as f32));
         }
         let p = ui.painter_at(area.expand(6.0));
-        let mut named = std::collections::BTreeSet::new();
+        // Each computer is named on its largest screen.
+        let mut label_on: HashMap<String, usize> = HashMap::new();
+        for (k, m) in canvas.monitors.iter().enumerate() {
+            let area_of = |m: &one_mk_wallpaper::Monitor| m.rect.width * m.rect.height;
+            if label_on.get(&m.computer).is_none_or(|j| area_of(&canvas.monitors[*j]) < area_of(m)) {
+                label_on.insert(m.computer.clone(), k);
+            }
+        }
         // The carried computer's screens are painted last, over the others.
         let mut order: Vec<usize> = (0..canvas.monitors.len()).collect();
         order.sort_by_key(|k| carried.as_deref() == Some(canvas.monitors[*k].computer.as_str()));
@@ -610,30 +685,57 @@ impl App {
             let lift = tween(ui.ctx(), response.id.with("lift"), f32::from(lifted && self.plan.as_ref().is_some_and(|d| d.grab.is_some())), motion::fade(0.14), motion::out_cubic);
             preview::tile(&p, rect, TILE_R, preview::TileState { chosen, hover, lift, online: monitor.online });
             let name = if is_me { status.name.clone() } else { status.peers.iter().find(|peer| peer.id == monitor.computer).map_or_else(|| monitor.name.clone(), |peer| peer.name.clone()) };
-            // The computer's name on its first screen; under it (room
-            // allowing) the screen's size, or that it is offline.
-            let first = named.insert(monitor.computer.clone());
+            // The computer's name on its largest screen, in whole words on
+            // up to two lines; under it (room allowing) the screen's size,
+            // or that it is offline. The others say their size.
+            let first = label_on.get(&monitor.computer) == Some(&k);
             let size_words = monitor.local.map(|l| format!("{} × {}", l.width.round(), l.height.round()));
             let under = if !monitor.online { Some("Offline".to_owned()) } else { size_words };
-            let room = rect.width() - 12.0;
-            // A size is said whole or not at all; a name too long for the
-            // tile steps down a size before it is cut short.
+            let room = rect.width() - 10.0;
             let under = under.filter(|u| text_width(ui, u, mono(T_CHIP)) <= room);
-            let two_lines = rect.height() >= 40.0 && under.is_some();
-            let name_font = if text_width(ui, &name, medium(T_META)) <= room { medium(T_META) } else { medium(T_CHIP) };
             let ink = if chosen { pal().accent_text } else if monitor.online { pal().ink } else { pal().ink2 };
-            if first && rect.width() > 30.0 && rect.height() > 18.0 {
-                let shown = fit(&p, &name, &name_font, room);
-                let y = if two_lines { rect.center().y - 7.0 } else { rect.center().y };
-                p.text(pos2(rect.center().x, y), Align2::CENTER_CENTER, shown, name_font.clone(), ink);
-                if let Some(under) = under.as_ref().filter(|_| two_lines) {
-                    p.text(pos2(rect.center().x, y + 15.0), Align2::CENTER_CENTER, under, mono(T_CHIP), if chosen { pal().accent_text } else { pal().ink3 });
+            let quiet = if chosen { pal().accent_text } else { pal().ink3 };
+            let mut tip = false;
+            if first {
+                // The largest face that holds the name, then the lines that fit the tile's height.
+                let fit_in = |font: &egui::FontId, lines_room: f32| {
+                    let (lines, compact) = tile_name(&name, |t| text_width(ui, t, font.clone()) <= room);
+                    let line_h = font.size + 3.0;
+                    (lines.len() as f32 * line_h <= lines_room).then_some((lines, compact, line_h))
+                };
+                let inner_h = rect.height() - 8.0;
+                let with_under = under.is_some() && inner_h >= 15.0 + 14.0;
+                let faces = if rect.height() >= 90.0 && rect.width() >= 140.0 { vec![medium(T_BODY), medium(T_META), medium(T_CHIP)] } else { vec![medium(T_META), medium(T_CHIP)] };
+                let laid = faces.into_iter().find_map(|font| {
+                    let lines_room = inner_h - if with_under { 14.0 } else { 0.0 };
+                    fit_in(&font, lines_room).filter(|(l, c, _)| !l.is_empty() && !*c).map(|(l, c, h)| (font, l, c, h))
+                });
+                let laid = laid.or_else(|| {
+                    let font = medium(T_CHIP);
+                    let (lines, _) = tile_name(&name, |t| text_width(ui, t, font.clone()) <= room);
+                    let lines: Vec<String> = lines.into_iter().take(1).collect();
+                    (!lines.is_empty() && inner_h >= 12.0).then_some((font, lines, true, T_CHIP + 3.0))
+                });
+                if let Some((font, lines, compact, line_h)) = laid {
+                    tip = compact || lines.join(" ") != name;
+                    let show_under = under.is_some() && inner_h >= lines.len() as f32 * line_h + 14.0;
+                    let block_h = lines.len() as f32 * line_h + if show_under { 14.0 } else { 0.0 };
+                    let mut y = rect.center().y - block_h / 2.0 + line_h / 2.0;
+                    for line in &lines {
+                        p.text(pos2(rect.center().x, y), Align2::CENTER_CENTER, line, font.clone(), ink);
+                        y += line_h;
+                    }
+                    if let Some(under) = under.as_ref().filter(|_| show_under) {
+                        p.text(pos2(rect.center().x, y - line_h / 2.0 + 8.0), Align2::CENTER_CENTER, under, mono(T_CHIP), quiet);
+                    }
+                } else {
+                    tip = true;
                 }
             } else if let Some(under) = under.as_ref().filter(|_| rect.height() > 18.0) {
                 p.text(rect.center(), Align2::CENTER_CENTER, under, mono(T_CHIP), pal().ink3);
             }
             widgets::focus_ring(ui, response, rect, TILE_R);
-            if first && fit(&p, &name, &name_font, room) != name && response.hovered() && carried.is_none() {
+            if (tip || !first) && response.hovered() && carried.is_none() {
                 response.clone().on_hover_text(&name);
             }
             let can_move = !is_me && movable(&monitor.computer).is_some();
@@ -794,7 +896,7 @@ impl App {
 
     /// The chosen computer: its side as four choices, what that means, and
     /// its exact place with the ways back to anywhere along the side.
-    fn place_rows(&mut self, ui: &mut Ui, card: &mut page_ui::Card, status: &Status, peer: &PeerStatus) {
+    fn side_rows(&mut self, ui: &mut Ui, card: &mut page_ui::Card, status: &Status, peer: &PeerStatus) {
         let (side, offset) = self.place_shown(&peer.id, (peer.side, status.offset_of(&peer.id)));
         let row = card.row(ui, ROW);
         page_ui::paint_words(ui, row, &Words::new("Sits"), 280.0);
@@ -825,7 +927,15 @@ impl App {
         let row = card.row(ui, h + 24.0);
         para(ui, row.min + vec2(0.0, 12.0), inner, &sentence, regular(T_BODY), pal().ink2);
         a11y_text(ui, Id::unique(("arrange-sentence", &peer.id)), row, Role::Label, &sentence, Some(Live::Polite));
+    }
 
+    /// The chosen computer's exact place, X and Y to type and the ways back
+    /// to anywhere along the side; `named`: the row says "Exact place"
+    /// itself (the card's label says it otherwise).
+    fn exact_rows(&mut self, ui: &mut Ui, card: &mut page_ui::Card, status: &Status, peer: &PeerStatus, named: bool) {
+        let (side, offset) = self.place_shown(&peer.id, (peer.side, status.offset_of(&peer.id)));
+        let apart = self.apart.contains(&peer.id);
+        let inner = card.w - 2.0 * page_ui::CARD_PAD;
         // Exact place: where its top left corner sits in our pixels, as X
         // and Y to type (checked as `one-mk layout --offset` checks them;
         // the plan shows it there while it is typed).
@@ -839,10 +949,14 @@ impl App {
         let error = self.place_draft(&peer.id).and_then(Result::err);
         let buttons = offset.is_some();
         let fields_h = 12.0 + FIELD_H + if error.is_some() { 6.0 + 16.0 } else { 0.0 };
-        let row = card.row(ui, 14.0 + 18.0 + 4.0 + h + fields_h + if buttons { 12.0 + 30.0 } else { 0.0 } + 14.0);
-        ui.painter().text(row.left_top() + vec2(0.0, 23.0), Align2::LEFT_CENTER, "Exact place", regular(T_BODY), pal().ink);
-        let ch = para(ui, row.min + vec2(0.0, 36.0), inner, &text, regular(T_META), pal().ink2);
-        a11y_text(ui, Id::unique(("exact-place", &peer.id)), Rect::from_min_size(row.min + vec2(0.0, 14.0), vec2(inner, 22.0 + ch)), Role::Label, &text, Some(Live::Polite));
+        let head = if named { 14.0 + 18.0 + 4.0 } else { 16.0 };
+        let row = card.row(ui, head + h + fields_h + if buttons { 12.0 + 30.0 } else { 0.0 } + 14.0);
+        if named {
+            ui.painter().text(row.left_top() + vec2(0.0, 23.0), Align2::LEFT_CENTER, EXACT_PLACE, regular(T_BODY), pal().ink);
+        }
+        let text_top = if named { 36.0 } else { head };
+        let ch = para(ui, row.min + vec2(0.0, text_top), inner, &text, regular(T_META), pal().ink2);
+        a11y_text(ui, Id::unique(("exact-place", &peer.id)), Rect::from_min_size(row.min + vec2(0.0, text_top - 22.0), vec2(inner, 22.0 + ch)), Role::Label, &text, Some(Live::Polite));
 
         // X [   ]  Y [   ]  Place
         let can = !status.screens.is_empty() && !peer.screens.is_empty();
@@ -850,7 +964,7 @@ impl App {
         let hint = shown_offset(&one_mk_ctl::wallpaper::canvas(status), &peer.id).map_or(("X".to_owned(), "Y".to_owned()), |(x, y)| (x.to_string(), y.to_string()));
         let mut xs = self.drafts.get(&kx).cloned().unwrap_or_else(|| cx.clone());
         let mut ys = self.drafts.get(&ky).cloned().unwrap_or_else(|| cy.clone());
-        let fy = row.top() + 36.0 + ch + 12.0;
+        let fy = row.top() + text_top + ch + 12.0;
         let field_w = ((inner - 2.0 * 18.0 - 12.0 - 14.0 - button_width(ui, "Place")) / 2.0).clamp(80.0, 132.0);
         let p = ui.painter().clone();
         p.text(pos2(row.left(), fy + FIELD_H / 2.0), Align2::LEFT_CENTER, "X", mono(T_META), pal().ink2);
@@ -1183,9 +1297,9 @@ mod tests {
     #[test]
     fn the_plan_maps_points_to_pixels_and_a_carried_block_follows_the_pointer() {
         let bounds = one_mk_wallpaper::Rect { x: -1470.0, y: 0.0, width: 5950.0, height: 1440.0 };
-        let frame = PlanFrame::fit(bounds, 1000.0, 300.0);
+        let (frame, _) = plan_fill(bounds, 1000.0, 100.0, 400.0, 0.0);
         assert!((frame.scale - 1000.0 / 5950.0).abs() < 1e-9, "as wide as the room allows");
-        assert!(PlanFrame::fit(bounds, 1000.0, 150.0).size().y <= 150.0 + 1e-3, "no taller than allowed");
+        assert!(plan_fill(bounds, 1000.0, 100.0, 150.0, 0.0).0.size().y <= 150.0 + 1e-3, "no taller than allowed");
         let top_left = pos2(100.0, 50.0);
         let p = frame.screen(top_left, 0.0, 120.0);
         let back = frame.px(top_left, p);
@@ -1197,6 +1311,58 @@ mod tests {
         let grab = (px.0 - f64::from(at.0), px.1 - f64::from(at.1));
         let now = carried_to(frame.px(top_left, start + vec2(-17.0, 10.0)), grab);
         assert_eq!(now, ((-1470.0 - 17.0 / frame.scale).round() as i32, (120.0 + 10.0 / frame.scale).round() as i32));
+    }
+
+    #[test]
+    fn the_plan_fills_its_well_by_width_or_height_with_room_round_it() {
+        // Wide and low (side by side): the width decides; the well is as
+        // tall as the screens and their room, never below its least.
+        let wide = one_mk_wallpaper::Rect { x: -1470.0, y: 0.0, width: 5950.0, height: 1440.0 };
+        let (frame, h) = plan_fill(wide, 1000.0, 170.0, 480.0, 30.0);
+        assert!((frame.scale - 940.0 / 5950.0).abs() < 1e-9);
+        assert!((h - (1440.0 * frame.scale as f32 + 60.0)).abs() < 0.01 || h == 170.0);
+        // Tall (a computer below): the height decides, up to its most.
+        let tall = one_mk_wallpaper::Rect { x: -1470.0, y: -300.0, width: 5950.0, height: 3480.0 };
+        let (frame, h) = plan_fill(tall, 1000.0, 170.0, 300.0, 30.0);
+        assert_eq!(h, 300.0);
+        assert!((frame.scale - 240.0 / 3480.0).abs() < 1e-9);
+        // The frame is the well: its middle is the screens' middle.
+        assert!((frame.size().x - 1000.0).abs() < 0.01 && (frame.size().y - 300.0).abs() < 0.01);
+        let mid = frame.screen(Pos2::ZERO, tall.x + tall.width / 2.0, tall.y + tall.height / 2.0);
+        assert!((mid - pos2(500.0, 150.0)).length() < 0.01);
+        // Every screen is inside the well, `pad` clear of its edges.
+        let corner = frame.screen(Pos2::ZERO, tall.x, tall.y);
+        assert!(corner.y >= 30.0 - 0.01 && corner.x >= 30.0 - 0.01);
+    }
+
+    #[test]
+    fn a_tile_names_its_computer_in_whole_words() {
+        // Seven points a character, as a stand-in for the font.
+        let fits = |room: usize| move |t: &str| t.chars().count() * 7 <= room;
+        assert_eq!(tile_name("Studio PC", fits(100)), (vec!["Studio PC".to_owned()], false));
+        assert_eq!(tile_name("MacBook Air", fits(60)), (vec!["MacBook".to_owned(), "Air".to_owned()], false));
+        let long = "Samer's extremely long workstation name that goes on and on and on";
+        // Two lines can't hold it: the first word, and a tooltip.
+        assert_eq!(tile_name(long, fits(160)), (vec!["Samer's".to_owned()], true));
+        // Not even a word: the initials.
+        assert_eq!(tile_name("Gaming Rig Two", fits(30)), (vec!["GRT".to_owned()], true));
+        assert_eq!(tile_name("工作站", fits(14)).0, vec!["工".to_owned()]);
+        // Never a word cut short.
+        for room in [20, 40, 60, 90, 140] {
+            let (lines, _) = tile_name(long, fits(room));
+            for line in lines {
+                assert!(line.split(' ').all(|w| long.split(' ').any(|x| x == w)) || line.chars().all(char::is_uppercase), "{line}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_label_keeps_whole_words_on_one_line() {
+        let fits = |room: usize| move |t: &str| t.chars().count() * 7 <= room;
+        assert_eq!(short_name("Studio PC", fits(100)), ("Studio PC".to_owned(), false));
+        assert_eq!(short_name("MacBook Air", fits(60)), ("MacBook".to_owned(), true));
+        assert_eq!(short_name("Gaming Rig Two", fits(30)), ("GRT".to_owned(), true));
+        assert_eq!(short_name("Samer's extremely long workstation", fits(100)), ("Samer's".to_owned(), true));
     }
 
     #[test]

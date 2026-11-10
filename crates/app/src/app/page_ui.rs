@@ -160,6 +160,33 @@ impl Page {
         h
     }
 
+    /// The column whose cards end higher (0 with one column): where a card
+    /// that may go either side keeps the two even.
+    pub fn shorter(&self) -> usize {
+        usize::from(self.two && self.y[1] < self.y[0])
+    }
+
+    /// How far down the page its cards reach.
+    pub fn bottom(&self) -> f32 {
+        self.below() - GAP
+    }
+
+    /// A quiet line at the foot of the page: under a hairline, in `ink3`,
+    /// at the bottom of a window taller than the page (`view_bottom`), or
+    /// under the cards when the page scrolls. `code` spans in backticks are
+    /// in JetBrains Mono.
+    pub fn footer(&mut self, ui: &Ui, view_bottom: f32, text: &str) {
+        let h = widgets::para_code_h(ui, self.w, text, regular(T_META));
+        // Pinned to the foot, the page is exactly as tall as the window (no scroll).
+        let top = (self.bottom() + FOOTER_GAP).max(view_bottom - FOOTER_FROM_BOTTOM - h - 12.0 - 1.0).round();
+        widgets::hairline(ui.painter(), egui::Rangef::new(self.x, self.x + self.w), top.round() - 0.5);
+        widgets::para_code(ui, pos2(self.x, top + 12.0), self.w, text, regular(T_META), pal().ink3);
+        a11y_text(ui, Id::unique(("page-footer", text)), Rect::from_min_size(pos2(self.x, top), vec2(self.w, h + 12.0)), Role::Label, &text.replace('`', ""), None);
+        // So that `height` ends `FOOTER_FROM_BOTTOM` under the words.
+        let end = top + 12.0 + h + FOOTER_FROM_BOTTOM - 28.0 + GAP;
+        self.y = [end, end];
+    }
+
     /// The scrolling content's height, from where the page began.
     pub fn height(&self) -> f32 {
         self.below() - GAP + 28.0 - self.origin_y
@@ -215,6 +242,11 @@ impl Card {
     }
 
 }
+
+/// A page's footer: at least this far under the cards, and this far above
+/// the window's foot when it sits there.
+const FOOTER_GAP: f32 = 28.0;
+const FOOTER_FROM_BOTTOM: f32 = 28.0;
 
 /// How tall a card's row is when it stands in for a list that is empty.
 pub(super) const EMPTY_ROW: f32 = 64.0;
@@ -429,10 +461,12 @@ mod tests {
         assert_eq!(rects[4].height(), ROW);
         // Both columns start together, under the same sentence.
         assert_eq!(rects[2].top(), rects[4].top());
+        assert_eq!(page.shorter(), 1, "the right column, one row long, ends higher");
         let (page, rects) = lay(820.0 - 32.0, 820.0);
         assert!(!page.two);
         assert_eq!(rects[2].width(), 820.0 - 64.0);
         assert!(rects[4].top() > rects[2].bottom(), "stacked");
+        assert_eq!(page.shorter(), 0, "one column");
     }
 
     #[test]
@@ -443,6 +477,31 @@ mod tests {
         let (left, right) = (rects[2].left(), 1920.0 - rects[4].right());
         assert!((left - right).abs() <= 1.0, "centred: {left} and {right}");
         assert_eq!(frame_x(16.0, 900.0, MAX_W), (32.0, 868.0), "narrower than the widest: inset only");
+    }
+
+    #[test]
+    fn a_footer_sits_at_the_window_foot_or_under_the_cards() {
+        crate::style::set_palette(crate::style::Palette::light(), None);
+        let ctx = egui::Context::default();
+        crate::style::install(&ctx);
+        let mut out = vec![];
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0))), ..Default::default() }, |ui| {
+            for view_bottom in [800.0, 200.0] {
+                let mut page = Page::begin(ui, pos2(16.0, 60.0), 1168.0, "Title", "A sentence.");
+                let mut card = page.card(ui, 0, "Left");
+                card.row(ui, ROW);
+                let bottom = page.finish(ui, card).bottom();
+                page.footer(ui, view_bottom, "Checked just now");
+                out.push((bottom, 60.0 + page.height(), page.shorter()));
+            }
+        });
+        output.textures_delta.clear();
+        // A tall window: the page ends at its foot, no further (no scroll).
+        assert!(out[0].1 <= 800.0 && out[0].1 > 790.0, "{:?}", out[0]);
+        // A short one: under the cards, and the page grows to hold it.
+        assert!(out[1].1 > out[1].0 + FOOTER_GAP, "{:?}", out[1]);
+        // After a footer both columns end together.
+        assert_eq!(out[0].2, 0);
     }
 
     #[test]

@@ -113,16 +113,33 @@ impl App {
             para(ui, row.min + vec2(0.0, 12.0), inner, hint, regular(T_META), pal().ink2);
             page.finish(ui, card);
 
-            // The files' own settings, under the sending.
-            let mut card = page.card(ui, 0, "Files");
-            self.files_rows(ui, &mut card);
-            page.finish(ui, card);
+            // The files' own settings: under the sending in one column;
+            // with two, in whichever column keeps them even.
+            if !page.two {
+                let mut card = page.card(ui, 0, "Files");
+                self.files_rows(ui, &mut card);
+                page.finish(ui, card);
+            }
 
             // The clipboard: what it shares, and who may take it.
             let mut card = page.card(ui, 1, "Clipboard");
             self.clipboard_rows(ui, &mut card);
             page.finish(ui, card);
-            self.history_card(ui, &mut page, 1);
+            if page.two {
+                // The taller of the two (Files) goes where there is more room, History to the other.
+                let col = page.shorter();
+                let mut card = page.card(ui, col, "Files");
+                self.files_rows(ui, &mut card);
+                page.finish(ui, card);
+                let col = page.shorter();
+                self.history_card(ui, &mut page, col);
+            } else {
+                self.history_card(ui, &mut page, 0);
+            }
+            // Where received files go, at the foot of the page.
+            if let Some(dir) = received_dir() {
+                page.footer(ui, origin.y + rect.height(), &format!("Received files go to `{dir}`"));
+            }
             ui.allocate_space(vec2(rect.width(), page.height()));
         });
         let _ = out;
@@ -359,6 +376,21 @@ impl App {
     pub(super) fn set_appearance(&mut self, appearance: crate::style::Appearance) {
         self.set_pref("appearance", &["appearance", appearance.key()], |p| p.appearance = appearance);
     }
+}
+
+/// The folder received files go to (what Received files → Open opens), as
+/// a person reads it: `~` for the home folder. Worked out once.
+fn received_dir() -> Option<&'static str> {
+    static DIR: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let dirs = directories::UserDirs::new()?;
+        let dir = dirs.download_dir()?.join("one-mk");
+        Some(match dir.strip_prefix(dirs.home_dir()) {
+            Ok(rest) if !cfg!(windows) => format!("~/{}", rest.display()),
+            _ => dir.display().to_string(),
+        })
+    })
+    .as_deref()
 }
 
 #[cfg(test)]
