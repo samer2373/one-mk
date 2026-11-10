@@ -77,6 +77,13 @@ fn describe(data: &ClipData) -> String {
     }
 }
 
+/// `size` and the `limit` it is over, as [`mb`] says them, in bytes when
+/// they would read the same ("25.0 MB, limit 25.0 MB").
+pub fn over(size: usize, limit: usize) -> (String, String) {
+    let (a, b) = (mb(size), mb(limit));
+    if a == b { (format!("{size} bytes"), format!("{limit} bytes")) } else { (a, b) }
+}
+
 /// "12 B", "3 KB", "1.9 MB": binary units, like the size limit.
 pub fn mb(bytes: usize) -> String {
     if bytes >= 1 << 20 {
@@ -253,8 +260,9 @@ impl ClipSync {
                 }
             }
             Ok(Read::TooLarge { digest, size }) => {
-                tracing::warn!(peer = %name, "clipboard is too large to share ({}, limit {}); skipped \
-                    (raise the limit with `one-mk clipboard --max-mb`)", mb(size), mb(self.cb.filter().max_bytes()));
+                let (size, limit) = over(size, self.cb.filter().max_bytes());
+                tracing::warn!(peer = %name, "clipboard is too large to share ({size}, limit {limit}); skipped \
+                    (raise the limit with `one-mk clipboard --max-mb`)");
                 self.state().known.insert(fp, digest);
             }
             Ok(Read::Concealed(digest) | Read::Sensitive { digest, .. }) => {
@@ -312,11 +320,10 @@ impl ClipSync {
         let (digest, data, concealed) = match self.cb.read_explicit(Vec::new()).await.context("reading the clipboard")? {
             Read::Changed { digest, data } => (digest, data, false),
             Read::Sensitive { digest, data } => (digest, data, true),
-            Read::TooLarge { size, .. } => bail!(
-                "your clipboard is {}, over the limit of {}; raise it with `one-mk clipboard --max-mb N`",
-                mb(size),
-                mb(self.cb.filter().max_bytes())
-            ),
+            Read::TooLarge { size, .. } => {
+                let (size, limit) = over(size, self.cb.filter().max_bytes());
+                bail!("your clipboard is {size}, over the limit of {limit}; raise it with `one-mk clipboard --max-mb N`")
+            }
             Read::Empty | Read::Unchanged(_) | Read::Concealed(_) => bail!(
                 "your clipboard is empty, or holds only formats that are switched off (see `one-mk clipboard`)"
             ),
@@ -380,11 +387,14 @@ impl ClipSync {
             Received::KeptNewer => bail!("a newer copy was made here meanwhile; it was kept"),
             Received::Nothing => bail!("its clipboard is empty, or it does not share it (`one-mk clipboard` there)"),
             Received::FormatsOff => bail!("what it has is switched off here (see `one-mk clipboard`)"),
-            Received::TooLarge(size) => bail!(
-                "its clipboard is {}, over the limit of {} here; raise it with `one-mk clipboard --max-mb N`",
-                mb(size),
-                mb(self.cb.filter().max_bytes())
-            ),
+            Received::TooLarge { size, limit, display: false } => {
+                let (size, limit) = over(size, limit);
+                bail!("its clipboard is {size}, over the limit of {limit} here; raise it with `one-mk clipboard --max-mb N`")
+            }
+            Received::TooLarge { size, limit, display: true } => {
+                let (size, limit) = over(size, limit);
+                bail!("its clipboard is {size}, more than this computer's clipboard can hold ({limit} at most on X11)")
+            }
         }
     }
 
@@ -435,7 +445,7 @@ impl ClipSync {
             // help, and ours goes to it when it leaves.
             Received::KeptNewer => (Some(ClipAck::Stored), None),
             Received::FormatsOff => (Some(ClipAck::FormatsOff), None),
-            Received::TooLarge(_) => (Some(ClipAck::TooLarge), None),
+            Received::TooLarge { .. } => (Some(ClipAck::TooLarge), None),
             Received::Nothing => (None, None),
         };
         // Tell the sender what became of it; it may have stopped listening, which is fine.
@@ -496,9 +506,21 @@ impl ClipSync {
         }
         let max = filter.max_bytes();
         if allowed > max as u64 {
-            tracing::warn!("peer sent a {} clipboard (limit {}); ignored", mb(allowed as usize), mb(max));
+            let (size, limit) = over(allowed as usize, max);
+            tracing::warn!("peer sent a {size} clipboard (limit {limit}); ignored");
             let _ = recv.stop(0u32.into());
-            return Ok(Received::TooLarge(allowed as usize));
+            return Ok(Received::TooLarge { size: allowed as usize, limit: max, display: false });
+        }
+        // More than this computer's clipboard can hand over to a program
+        // that pastes (X11): refused, not set unpasteable.
+        if let Some(limit) = self.cb.write_limit()
+            && let Some(&(_, largest)) = header.items.iter().filter(|(f, _)| wanted(*f)).max_by_key(|(_, n)| *n)
+            && largest as usize > limit
+        {
+            let (size, limit_text) = over(largest as usize, limit);
+            tracing::warn!("peer sent a {size} clipboard, more than this computer's X11 clipboard can hand over ({limit_text} at most); ignored");
+            let _ = recv.stop(0u32.into());
+            return Ok(Received::TooLarge { size: largest as usize, limit, display: true });
         }
         let last = header.items.iter().rposition(|(f, _)| wanted(*f)).expect("allowed > 0");
         let mut data = ClipData::default();
@@ -558,7 +580,9 @@ enum Received {
     Nothing,
     /// Every format in it is switched off.
     FormatsOff,
-    TooLarge(usize),
+    /// Over `limit`: the size limit, or (`display`) what the platform's
+    /// clipboard can hold ([`Clipboard::write_limit`]).
+    TooLarge { size: usize, limit: usize, display: bool },
 }
 
 /// A snapshot as one header and the payloads, then the end of the stream.
@@ -649,6 +673,41 @@ mod tests {
         b.clip.left(a.fp(), a.addr());
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(a.mem.writes(), writes, "nothing new to send back");
+    }
+
+    /// A receiver whose clipboard can hold less than the size limit (X11:
+    /// one request, 16 MB) refuses a larger copy and says so, rather than
+    /// setting a clipboard that every paste then fails on.
+    #[tokio::test]
+    async fn a_copy_too_large_for_the_receivers_clipboard_is_refused_not_set() {
+        let a = Pc::new();
+        let (cb, mem) = Clipboard::memory();
+        let cb = cb.with_write_limit(1000);
+        let node = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let b = Pc { clip: ClipSync::new(cb, node.clone()), node, mem };
+        b.serve();
+        text(&b.mem, "kept");
+        text(&a.mem, &"x".repeat(1001));
+        let moved = a.clip.send_now(b.fp(), b.addr(), false).await.unwrap();
+        assert_eq!(moved.ack, Some(ClipAck::TooLarge));
+        assert_eq!(b.mem.text().as_deref(), Some("kept"));
+        assert_eq!(b.mem.writes(), 0);
+        text(&a.mem, &"x".repeat(1000));
+        assert_eq!(a.clip.send_now(b.fp(), b.addr(), false).await.unwrap().ack, Some(ClipAck::Stored));
+        assert_eq!(b.mem.text().map(|t| t.len()), Some(1000));
+        // Fetched the other way, it says why.
+        let (c, d) = (Pc::new(), b);
+        c.serve();
+        c.settings(ClipSettings { allow_pull: true, ..Default::default() });
+        text(&c.mem, &"y".repeat(2000));
+        let error = d.clip.pull(c.fp(), c.addr()).await.unwrap_err();
+        assert!(format!("{error:#}").contains("2 KB, more than this computer's clipboard can hold (1000 B at most on X11)"), "{error:#}");
+    }
+
+    #[test]
+    fn sizes_over_a_limit_never_read_the_same() {
+        assert_eq!(over(26_214_401, 25 << 20), ("26214401 bytes".into(), "26214400 bytes".into()));
+        assert_eq!(over(30 << 20, 25 << 20), ("30.0 MB".into(), "25.0 MB".into()));
     }
 
     #[tokio::test]

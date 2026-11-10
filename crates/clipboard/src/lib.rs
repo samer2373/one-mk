@@ -145,6 +145,11 @@ pub struct Clipboard {
     history_apps: Arc<Mutex<Vec<String>>>,
     #[cfg(target_os = "linux")]
     _watch: Option<Arc<std::os::unix::net::UnixStream>>,
+    /// The system clipboard (not [`Clipboard::memory`]).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    system: bool,
+    /// Stands in for the platform's [`write_limit`](Self::write_limit) in tests.
+    test_limit: Option<usize>,
 }
 
 enum Cmd {
@@ -175,6 +180,7 @@ impl Clipboard {
     }
 
     fn spawn(backend: Backend) -> Self {
+        let backend_kind = match backend { Backend::System(_) => Kind::System, Backend::Memory(_) => Kind::Memory };
         let (tx, rx) = mpsc::channel();
         let filter = Arc::new(Mutex::new(Filter::default()));
         let shared = filter.clone();
@@ -193,7 +199,37 @@ impl Clipboard {
         Self { tx, filter, history, history_status, history_apps,
             #[cfg(target_os = "linux")]
             _watch: None,
+            system: matches!(backend_kind, Kind::System),
+            test_limit: None,
         }
+    }
+
+    /// The most one format (text, HTML or an image) put on this clipboard
+    /// may hold, where the platform sets a limit; `None` if it sets none.
+    ///
+    /// An X11 clipboard is the one: arboard hands the content over in a
+    /// single request (it has no INCR transfers), so anything larger than
+    /// the X server's largest request (16 MB with BIG-REQUESTS) is set but
+    /// can't be pasted: every paste fails ("Maximum request length
+    /// exceeded") and the pasting program waits for an answer that never
+    /// comes. Wayland data-control, Windows and macOS have no such limit.
+    pub fn write_limit(&self) -> Option<usize> {
+        if self.test_limit.is_some() {
+            return self.test_limit;
+        }
+        #[cfg(target_os = "linux")]
+        if self.system {
+            return x11_write_limit();
+        }
+        None
+    }
+
+    /// A clipboard that says it holds at most `bytes` per format (as an X11
+    /// one does), for tests.
+    #[doc(hidden)]
+    pub fn with_write_limit(mut self, bytes: usize) -> Self {
+        self.test_limit = Some(bytes);
+        self
     }
 
     /// Changes what is shared, from the next read on.
@@ -371,6 +407,53 @@ enum Backend {
     Memory(MemoryClipboard),
 }
 
+enum Kind {
+    System,
+    Memory,
+}
+
+/// Room for the request header around the data of an X11 `ChangeProperty`
+/// (24 bytes, 4 more with BIG-REQUESTS).
+#[cfg(target_os = "linux")]
+const X11_REQUEST_HEADER: usize = 64;
+
+/// What [`Clipboard::write_limit`] is for the system clipboard on Linux:
+/// the X server's largest request when arboard uses X11 (no Wayland
+/// data-control: the same test arboard makes). Asked once it is known.
+#[cfg(target_os = "linux")]
+fn x11_write_limit() -> Option<usize> {
+    static KNOWN: Mutex<Option<Option<usize>>> = Mutex::new(None);
+    if let Some(known) = *KNOWN.lock().unwrap_or_else(|error| error.into_inner()) {
+        return known;
+    }
+    let found = if std::env::var_os("WAYLAND_DISPLAY").is_some() && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok() {
+        Some(None)
+    } else {
+        use x11rb::connection::RequestConnection as _;
+        // No display yet: not known, asked again next time.
+        x11rb::connect(None).ok().map(|(connection, _)| Some(connection.maximum_request_bytes().saturating_sub(X11_REQUEST_HEADER)))
+    };
+    if let Some(found) = found {
+        *KNOWN.lock().unwrap_or_else(|error| error.into_inner()) = Some(found);
+    }
+    found.flatten()
+}
+
+/// Refuses text or HTML larger than an X11 clipboard can hand over (see
+/// [`Clipboard::write_limit`]), instead of setting a clipboard nothing can
+/// paste. Images are encoded by arboard, so their size is not known here.
+#[cfg(target_os = "linux")]
+fn check_x11_size(raw: &Raw) -> Result<()> {
+    let largest = raw.text.as_ref().map_or(0, String::len).max(raw.html.as_ref().map_or(0, String::len));
+    match x11_write_limit() {
+        Some(limit) if largest > limit => bail!(
+            "{} MB of text is more than this computer's X11 clipboard can hand over ({} MB at most)",
+            largest >> 20, limit >> 20
+        ),
+        _ => Ok(()),
+    }
+}
+
 impl Backend {
     /// Reads what `filter` lets through; a format that is switched off is
     /// not even fetched.
@@ -422,6 +505,8 @@ impl Backend {
                 Ok(())
             }
             Backend::System(cb) => {
+                #[cfg(target_os = "linux")]
+                check_x11_size(&raw)?;
                 let first = write_system(open(cb)?, &raw);
                 let Err(first) = first else { return Ok(()) };
                 // A handle kept across a restart of the display server (GNOME
@@ -805,6 +890,24 @@ mod tests {
         let history = clipboard.history().lock().unwrap();
         assert_eq!(history.len(), 2, "own XFixes selection events must not re-record restores");
         assert_eq!(history.get(1).unwrap().origin, "peer");
+    }
+
+    /// An X11 clipboard holds what arboard can hand over in one request:
+    /// more is refused with a reason, not set unpasteable.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires an explicitly private X11 display"]
+    async fn real_x11_refuses_text_it_could_not_hand_over() {
+        assert_eq!(std::env::var("ONE_MK_PRIVATE_X11").as_deref(), Ok("1"));
+        assert!(std::env::var_os("WAYLAND_DISPLAY").is_none());
+        let clipboard = Clipboard::system();
+        let limit = clipboard.write_limit().expect("an X11 clipboard has a limit");
+        assert!(limit > 1 << 20 && limit < 64 << 20, "{limit}");
+        let error = clipboard.write(ClipData { text: Some("x".repeat(limit + 1)), ..Default::default() }).await.unwrap_err();
+        assert!(format!("{error:#}").contains("more than this computer's X11 clipboard can hand over"), "{error:#}");
+        clipboard.write(ClipData { text: Some("x".repeat(limit)), ..Default::default() }).await.unwrap();
+        let (memory, _) = Clipboard::memory();
+        assert_eq!(memory.write_limit(), None);
     }
 
     /// A secret another computer sent on purpose (marked) lands on the
