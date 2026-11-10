@@ -20,6 +20,42 @@ fn transfer_height(transfer: &one_mk_ctl::status::TransferStatus) -> f32 {
 pub(super) struct FilesUi {
     picker: Option<(String, Receiver<Option<Vec<PathBuf>>>)>,
     all_transfers: bool,
+    /// Show desk: the 3D desk in the Send files card, to drop files on.
+    spatial: bool,
+}
+
+const SHOW_DESK: &str = "Show desk";
+const HIDE_DESK: &str = "Hide desk";
+
+/// Where files let go on Clipboard & files go.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum FilesDrop {
+    /// On a recipient's row: to that computer.
+    Row(String),
+    /// On the desk, where the pointer is: to the computer there (the desk
+    /// says which, or asks).
+    Desk(Pos2),
+    /// Anywhere else, or where the pointer can't be trusted: ask which
+    /// computer, unless only one could take them.
+    Ask,
+}
+
+/// Which: a recipient's row first; then the desk, when it is shown, the
+/// pointer is over it and its position is fresh (some systems don't move
+/// the pointer during a drag from another app).
+pub(super) fn files_drop(row: Option<String>, pointer: Option<Pos2>, desk: Option<Rect>, fresh: bool) -> FilesDrop {
+    if let Some(id) = row {
+        return FilesDrop::Row(id);
+    }
+    match (pointer, desk) {
+        (Some(p), Some(d)) if fresh && d.contains(p) => FilesDrop::Desk(p),
+        _ => FilesDrop::Ask,
+    }
+}
+
+/// How tall the desk in the Send files card is in a window `view_h` tall.
+pub(super) fn files_desk_h(view_h: f32) -> f32 {
+    (view_h * 0.3).clamp(180.0, 300.0).round()
 }
 
 impl App {
@@ -42,6 +78,15 @@ impl App {
         let pointer = ui.input(|input| input.pointer.hover_pos());
         let hovering = ui.input(|input| !input.raw.hovered_files.is_empty());
         let mut drop_id = None;
+        // Where the desk was drawn (when shown), and whether the pointer's
+        // place over it is fresh (as the desk worked it out last frame).
+        let mut desk_at = None;
+        let fresh = self.drop_pos_fresh || ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO);
+        #[cfg(any(debug_assertions, feature = "design-evidence"))]
+        if std::env::var_os("ONE_MK_APP_FILES_DESK").is_some() && ui.ctx().data(|d| d.get_temp::<bool>(Id::unique("files-desk-hook")).is_none()) {
+            ui.ctx().data_mut(|d| d.insert_temp(Id::unique("files-desk-hook"), true));
+            self.files_ui.spatial = true;
+        }
         let out = page_ui::scroll("files-page").show_viewport(ui, |ui, _| {
             let origin = ui.cursor().min;
             let mut page = Page::begin(ui, origin, rect.width(), "Clipboard & files", "What you copy and send follows you between computers. Drop files on a computer on the desk to send them.");
@@ -73,8 +118,17 @@ impl App {
             let hint = if !transfers.is_empty() && recipients.iter().all(|peer| !peer.online) { "Transfer details and reconnect steps are above." } else if !recipients.is_empty() && recipients.iter().all(|peer| !peer.online) {
                 reconnect = format!("Open oneMK on {} to reconnect, then choose files or drop them here.", recipients[0].name);
                 reconnect.as_str()
-            } else { "Choose a recipient to pick files, or drop files on its row." };
+            } else if self.files_ui.spatial { "Drop files on a computer, or choose a recipient above." } else { "Choose a recipient to pick files, or drop files on its row." };
             let mut card = page.card(ui, 0, "Send files");
+            // Show desk: the 3D desk under the recipients, to drop files on.
+            let label = if self.files_ui.spatial { HIDE_DESK } else { SHOW_DESK };
+            let width = button_width(ui, SHOW_DESK).max(button_width(ui, HIDE_DESK));
+            let at = card.label_right();
+            let toggle = Rect::from_min_size(pos2(at.x - width, at.y - 14.0), vec2(width, 28.0));
+            let words = if self.files_ui.spatial { "Hide the desk" } else { "Show the desk, to drop files on a computer" };
+            if button(ui, toggle, Id::unique("files-spatial"), label, Look::Quiet, true, Some(words)).clicked() {
+                self.files_ui.spatial = !self.files_ui.spatial;
+            }
             if recipients.is_empty() {
                 let row = card.row(ui, page_ui::EMPTY_ROW);
                 page_ui::empty_row(ui, row, "Pair a computer to send files to it.");
@@ -107,9 +161,18 @@ impl App {
                     }
                 }
             }
+            if self.files_ui.spatial {
+                // The desk stands in a recessed well of the window's own
+                // ground, as on the Desk, so its lighting reads the same.
+                let row = card.row(ui, 14.0 + files_desk_h(ui.ctx().content_rect().height()) + 2.0);
+                let well = Rect::from_min_max(pos2(row.left(), row.top() + 14.0), pos2(row.right(), row.bottom() - 2.0));
+                ui.painter().rect(well, CornerRadius::same(12), pal().bg, Stroke::new(1.0, pal().line), StrokeKind::Inside);
+                self.desk(ui, well.shrink(4.0), well.shrink(1.0), self.now);
+                desk_at = Some(well);
+            }
             let inner = card.w - 2.0 * page_ui::CARD_PAD;
             let hint_h = page_ui::text_h(ui, hint, inner, regular(T_META));
-            let row = card.row(ui, hint_h + 24.0);
+            let row = if self.files_ui.spatial { card.more(hint_h + 24.0) } else { card.row(ui, hint_h + 24.0) };
             para(ui, row.min + vec2(0.0, 12.0), inner, hint, regular(T_META), pal().ink2);
             page.finish(ui, card);
 
@@ -142,12 +205,16 @@ impl App {
             }
             ui.allocate_space(vec2(rect.width(), page.height()));
         });
-        let _ = out;
+        // Only where the page shows the desk counts (not under the bar).
+        let desk_at = desk_at.map(|d: Rect| d.intersect(out.inner_rect));
         if !dropped.is_empty() {
-            if let Some(index) = drop_id.and_then(|id| self.online_targets().into_iter().find(|index| self.scene.devices[*index].id == id)) {
-                self.send_to(index, dropped);
-            } else {
-                self.drop_files(dropped, None, self.now);
+            match files_drop(drop_id, pointer, desk_at, fresh) {
+                FilesDrop::Row(id) => match self.online_targets().into_iter().find(|index| self.scene.devices[*index].id == id) {
+                    Some(index) => self.send_to(index, dropped),
+                    None => self.drop_files(dropped, None, self.now),
+                },
+                FilesDrop::Desk(p) => self.drop_files(dropped, Some(p), self.now),
+                FilesDrop::Ask => self.drop_files(dropped, None, self.now),
             }
         }
     }
@@ -413,5 +480,28 @@ mod tests {
         let transfer = one_mk_ctl::status::TransferStatus { id: 8, sending: true, peer: "Studio PC".into(), files: 1, done: 500_000, total: 9_000_000, rate: 0 };
         assert_eq!(transfer_height(&transfer), 82.0);
         assert_eq!(transfer_height(&one_mk_ctl::status::TransferStatus { rate: 100, ..transfer }), 64.0);
+    }
+
+    #[test]
+    fn files_go_to_the_row_then_the_desk_then_ask() {
+        let desk = Rect::from_min_size(pos2(100.0, 300.0), vec2(500.0, 220.0));
+        let over = pos2(300.0, 400.0);
+        // A recipient's row wins, wherever the desk is.
+        assert_eq!(files_drop(Some("3333-4444".into()), Some(over), Some(desk), true), FilesDrop::Row("3333-4444".into()));
+        // Over the desk, with a pointer that moved during the drag: there.
+        assert_eq!(files_drop(None, Some(over), Some(desk), true), FilesDrop::Desk(over));
+        // A pointer that didn't move during the drag means nothing: ask.
+        assert_eq!(files_drop(None, Some(over), Some(desk), false), FilesDrop::Ask);
+        // Off the desk, or the desk hidden, or no pointer: ask.
+        assert_eq!(files_drop(None, Some(pos2(50.0, 50.0)), Some(desk), true), FilesDrop::Ask);
+        assert_eq!(files_drop(None, Some(over), None, true), FilesDrop::Ask);
+        assert_eq!(files_drop(None, None, Some(desk), true), FilesDrop::Ask);
+    }
+
+    #[test]
+    fn the_desk_on_the_files_page_is_as_tall_as_the_window_allows() {
+        assert_eq!(files_desk_h(540.0), 180.0, "a small window keeps a usable desk");
+        assert_eq!(files_desk_h(780.0), 234.0);
+        assert_eq!(files_desk_h(1200.0), 300.0, "and never more than this");
     }
 }
