@@ -132,7 +132,8 @@ palette! {
     seg_on,
     /// A switch's track when off, and its knob.
     switch_off, switch_knob,
-    /// The soft ellipse under the 3D objects.
+    /// The handoff's soft ellipse under the 3D objects (the scenes now draw
+    /// their ground from `stage_pool`, `occlusion` and `contact`).
     floor,
     /// A faint grid (plans).
     grid,
@@ -140,6 +141,25 @@ palette! {
     focus,
     /// What shadows are made of (opaque; [`Palette::shadow`] sets how much).
     shadow_ink,
+
+    // ---- the 3D scenes (keyboard, mouse, desk): materials and ground ----
+    /// The 3D keyboard: its case, the plate between the keys, keycaps and
+    /// modifier keycaps (albedos; the light shades them).
+    key_case, key_plate, key_cap, key_cap_mod,
+    /// Legends printed on the keycaps, on the modifiers, and a changed key's.
+    key_legend, key_legend_mod, key_legend_changed,
+    /// A keycap under the pointer: an overlay on its top.
+    key_hover,
+    /// The 3D mouse: its shell, the two main buttons, the wheel, and the
+    /// side buttons and grip.
+    mouse_shell, mouse_button, mouse_wheel, mouse_trim,
+    /// The desk's computers: a monitor's stand, its back and sides, its
+    /// screen when off, a laptop's body and its keyboard well.
+    stand, monitor_body, screen_off, laptop_body, laptop_well,
+    /// The ground the 3D objects stand on: a soft pool of light under them,
+    /// the broad soft shadow round each, and the tight dark line where it
+    /// touches the ground.
+    stage_pool, occlusion, contact,
 
     // ---- worked out from the tokens ----
     /// The flat keycap symbol in the top bar (handoff section 2): the key,
@@ -196,6 +216,12 @@ palette! {
     /// The cards' and panels' own shadow (light: the handoff's two-layer
     /// shadow; dark: none).
     card_shadow,
+
+    // ---- the 3D scenes' light ----
+    /// The light everywhere (no direction), the key light from above and
+    /// behind, the soft fill from the front right, and the cool rim where a
+    /// surface turns away from the eye.
+    gear_ambient, gear_key, gear_fill, gear_rim,
 }
 
 /// `a` toward `b` by `t`, premultiplied, as the controls blend.
@@ -279,6 +305,32 @@ impl Palette {
             press_amount: 0.10,
             shadow_k: 0.35,
             card_shadow: 1.0,
+
+            // ---- the 3D scenes: pale ceramic and aluminium on the paper ----
+            key_case: rgb(0xD6D7D9),
+            key_plate: rgb(0xCDCED0),
+            key_cap: rgb(0xEEEDEA),
+            key_cap_mod: rgb(0xD3D6DC),
+            key_legend: rgb(0x2B2D33),
+            key_legend_mod: rgb(0x3A3E47),
+            key_legend_changed: rgb(0x2443C9),
+            key_hover: rgba(0x16171A, 0.10),
+            mouse_shell: rgb(0xE2E1DD),
+            mouse_button: rgb(0xEFEEEB),
+            mouse_wheel: rgb(0x34363D),
+            mouse_trim: rgb(0x9A9DA4),
+            stand: rgb(0xC9CCD1),
+            monitor_body: rgb(0xB9BDC4),
+            screen_off: rgb(0x0B0D10),
+            laptop_body: rgb(0xCDD0D5),
+            laptop_well: rgb(0x2A2C31),
+            stage_pool: rgba(0xFFFFFF, 0.36),
+            occlusion: rgba(0x16171A, 0.045),
+            contact: rgba(0x16171A, 0.22),
+            gear_ambient: 0.32,
+            gear_key: 0.46,
+            gear_fill: 0.40,
+            gear_rim: 0.6,
         }
     }
 
@@ -339,6 +391,32 @@ impl Palette {
             press_amount: 0.3,
             shadow_k: 1.0,
             card_shadow: 0.0,
+
+            // ---- the 3D scenes: graphite and obsidian on the night ground ----
+            key_case: rgb(0x2A2C31),
+            key_plate: rgb(0x141518),
+            key_cap: rgb(0x34373E),
+            key_cap_mod: rgb(0x282B31),
+            key_legend: rgb(0xE8EAEE),
+            key_legend_mod: rgb(0xC9CED8),
+            key_legend_changed: rgb(0xC4CFFF),
+            key_hover: rgba(0xFFFFFF, 0.08),
+            mouse_shell: rgb(0x34373E),
+            mouse_button: rgb(0x3B3E46),
+            mouse_wheel: rgb(0x1A1B1F),
+            mouse_trim: rgb(0x23252A),
+            stand: rgb(0x5A5E66),
+            monitor_body: rgb(0x2B2E34),
+            screen_off: rgb(0x08090B),
+            laptop_body: rgb(0x6E727A),
+            laptop_well: rgb(0x121316),
+            stage_pool: rgba(0xFFFFFF, 0.045),
+            occlusion: rgba(0x000000, 0.30),
+            contact: rgba(0x000000, 0.70),
+            gear_ambient: 0.12,
+            gear_key: 1.05,
+            gear_fill: 0.42,
+            gear_rim: 1.0,
         }
     }
 
@@ -505,24 +583,6 @@ pub const POINTER_EDGE: Color32 = rgb(0x111111);
 pub const POINTER: Color32 = Color32::WHITE;
 /// A monitor's bezel in the wallpaper preview: near-black in both themes.
 pub const BEZEL: Color32 = rgb(0x0C0D0F);
-/// The 3D devices' materials (hex, as the meshes take them).
-pub const STAND: u32 = 0x8E949D;
-pub const MONITOR_BODY: u32 = 0x2B2F36;
-pub const SCREEN_OFF: u32 = 0x0B0D10;
-pub const LAPTOP_BODY: u32 = 0xAEB3BB;
-/// A laptop's keyboard well and its touchpad's sheen.
-pub const LAPTOP_WELL: Color32 = rgb(0x14161A);
-/// The 3D keyboard: case, its top plate, keycaps, modifier keycaps.
-pub const KEY_CASE: Color32 = rgb(0x3A3E45);
-pub const KEY_PLATE: Color32 = rgb(0x1C1E22);
-pub const KEY_CAP: Color32 = rgb(0x34373D);
-pub const KEY_CAP_MOD: Color32 = rgb(0x55524D);
-/// Legends printed on the (dark) keycaps, and a changed key's new legend.
-pub const KEY_LEGEND: Color32 = rgb(0xC6CBD3);
-pub const KEY_LEGEND_MOD: Color32 = rgb(0xD9D3C8);
-pub const KEY_LEGEND_CHANGED: Color32 = rgb(0x8EA4FF);
-/// The mouse model's shell (shaded by the light).
-pub const MOUSE_SHELL: Color32 = Color32::GRAY;
 /// Each computer's wallpaper on the desk: a light colour and a deep one,
 /// as desktop pictures are (dusk violet, lagoon, ember, ocean); deep
 /// enough that white names on them stay readable. Low chroma, about equal
@@ -983,7 +1043,7 @@ mod tests {
     #[test]
     fn both_palettes_are_complete() {
         let (l, d) = (Palette::light(), Palette::dark());
-        let translucent = ["line", "line2", "floor", "grid", "hover", "well", "field_edge_lit", "glass_top", "glass", "room_tint", "glass_edge", "ring", "card_edge", "edge_hi"];
+        let translucent = ["line", "line2", "floor", "grid", "hover", "well", "field_edge_lit", "glass_top", "glass", "room_tint", "glass_edge", "ring", "card_edge", "edge_hi", "key_hover", "stage_pool", "occlusion", "contact"];
         for p in [l, d] {
             for (name, c) in p.colours() {
                 assert_ne!(c, Color32::PLACEHOLDER, "{name}");

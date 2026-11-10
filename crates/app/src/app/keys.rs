@@ -672,20 +672,21 @@ fn draw_cross(p: &Painter, rect: Rect, col: Color32) {
     p.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], st);
 }
 
-/// The floor under the 3D objects (handoff 3): a soft radial ellipse of
-/// the theme's `floor`, 820 × 120 at scale 1, 130 below the stage's middle.
+/// The ground under the 3D objects: a soft pool of light (the theme's
+/// `stage_pool`) round where they stand, wider than they are, fading into
+/// the page's own ground with no edge; the objects bring their own shadows.
 fn floor(p: &Painter, stage: Rect, scale: f32) {
-    let c = pos2(stage.center().x, stage.center().y + 130.0 * scale);
-    let (rx, ry) = (410.0 * scale, 60.0 * scale);
+    let c = pos2(stage.center().x, stage.center().y + 60.0 * scale);
+    let (rx, ry) = (560.0 * scale, 170.0 * scale);
     let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(c, pal().floor);
-    // As the handoff's gradient: from `floor` at the middle to clear at 70 %.
-    let rings = [(0.35, 0.55), (0.7, 0.0)];
+    mesh.colored_vertex(c, pal().stage_pool);
+    // Eased over three rings, from the pool's colour to clear.
+    let rings = [(0.3, 0.85), (0.62, 0.38), (1.0, 0.0)];
     const N: u32 = 48;
     for (k, (at, alpha)) in rings.iter().enumerate() {
         for i in 0..N {
             let a = i as f32 / N as f32 * std::f32::consts::TAU;
-            mesh.colored_vertex(c + vec2(a.cos() * rx * at, a.sin() * ry * at), pal().floor.gamma_multiply(*alpha));
+            mesh.colored_vertex(c + vec2(a.cos() * rx * at, a.sin() * ry * at), pal().stage_pool.gamma_multiply(*alpha));
         }
         let base = 1 + k as u32 * N;
         for i in 0..N {

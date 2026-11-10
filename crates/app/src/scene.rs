@@ -179,9 +179,9 @@ struct Box3 {
     a: (f32, f32),
     b: (f32, f32),
     c: (f32, f32),
-    col: u32,
+    col: Color32,
     /// The front face is a screen, in this colour when off.
-    screen: Option<u32>,
+    screen: Option<Color32>,
 }
 
 /// A screen's surface: `at(0, 0)` is its top left, `at(1, 1)` its bottom right.
@@ -604,10 +604,10 @@ impl Device {
                     if !held {
                         // A stand and base in proportion, as for a monitor alone.
                         let (mx, m) = ((a.0 + a.1) / 2.0, (a.1 - a.0).max(b.1 - b.0) / 58.0);
-                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 12.0)), a: (-11.0 * m, 11.0 * m), b: (0.0, BASE_H), c: (-8.0 * m, 8.0 * m), col: style::STAND, screen: None });
-                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 15.6)), a: (-3.0 * m, 3.0 * m), b: (0.0, cy + (b.0 + b.1) / 2.0), c: (-1.1, 1.1), col: style::STAND, screen: None });
+                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 12.0)), a: (-11.0 * m, 11.0 * m), b: (0.0, BASE_H), c: (-8.0 * m, 8.0 * m), col: pal().stand, screen: None });
+                        boxes.push(Box3 { fr: Frame3::axes(v(x + mx, y, z - 15.6)), a: (-3.0 * m, 3.0 * m), b: (0.0, cy + (b.0 + b.1) / 2.0), c: (-1.1, 1.1), col: pal().stand, screen: None });
                     }
-                    boxes.push(Box3 { fr: scr, a, b, c: (-2.2, 0.0), col: style::MONITOR_BODY, screen: Some(style::SCREEN_OFF) });
+                    boxes.push(Box3 { fr: scr, a, b, c: (-2.2, 0.0), col: pal().monitor_body, screen: Some(pal().screen_off) });
                 }
                 Geo { boxes, screen, deck: None, foot: [x, z - 12.0, hw, 8.0 * s] }
             }
@@ -617,9 +617,9 @@ impl Device {
                 let scr = Frame3::axes(v(x, y + cy, z - 14.0));
                 Geo {
                     boxes: vec![
-                        Box3 { fr: Frame3::axes(v(x, y, z - 12.0)), a: (-11.0 * s, 11.0 * s), b: (0.0, 0.8), c: (-8.0 * s, 8.0 * s), col: style::STAND, screen: None },
-                        Box3 { fr: Frame3::axes(v(x, y, z - 15.6)), a: (-3.0 * s, 3.0 * s), b: (0.0, cy), c: (-1.1, 1.1), col: style::STAND, screen: None },
-                        Box3 { fr: scr, a: (-hw, hw), b: (-hh, hh), c: (-2.2, 0.0), col: style::MONITOR_BODY, screen: Some(style::SCREEN_OFF) },
+                        Box3 { fr: Frame3::axes(v(x, y, z - 12.0)), a: (-11.0 * s, 11.0 * s), b: (0.0, 0.8), c: (-8.0 * s, 8.0 * s), col: pal().stand, screen: None },
+                        Box3 { fr: Frame3::axes(v(x, y, z - 15.6)), a: (-3.0 * s, 3.0 * s), b: (0.0, cy), c: (-1.1, 1.1), col: pal().stand, screen: None },
+                        Box3 { fr: scr, a: (-hw, hw), b: (-hh, hh), c: (-2.2, 0.0), col: pal().monitor_body, screen: Some(pal().screen_off) },
                     ],
                     screen: Plane { fr: scr, u: (-hw + 0.9, hw - 0.9), w: (hh - 0.9, -hh + 0.9) },
                     deck: None,
@@ -631,8 +631,8 @@ impl Device {
                 let lid = Frame3 { o: v(x, y + 1.4 * s, z - 6.5 * s), ex: v(1.0, 0.0, 0.0), ey: v(0.0, ca, -sa), ez: v(0.0, sa, ca) };
                 Geo {
                     boxes: vec![
-                        Box3 { fr: Frame3::axes(v(x, y, z + 4.0 * s)), a: (-15.5 * s, 15.5 * s), b: (0.0, 1.4 * s), c: (-10.5 * s, 10.5 * s), col: style::LAPTOP_BODY, screen: None },
-                        Box3 { fr: lid, a: (-15.5 * s, 15.5 * s), b: (0.0, 20.4 * s), c: (-0.6, 0.0), col: style::LAPTOP_BODY, screen: Some(style::SCREEN_OFF) },
+                        Box3 { fr: Frame3::axes(v(x, y, z + 4.0 * s)), a: (-15.5 * s, 15.5 * s), b: (0.0, 1.4 * s), c: (-10.5 * s, 10.5 * s), col: pal().laptop_body, screen: None },
+                        Box3 { fr: lid, a: (-15.5 * s, 15.5 * s), b: (0.0, 20.4 * s), c: (-0.6, 0.0), col: pal().laptop_body, screen: Some(pal().screen_off) },
                     ],
                     screen: Plane { fr: lid, u: (-14.4 * s, 14.4 * s), w: (19.5 * s, 1.3 * s) },
                     deck: Some(Frame3::axes(v(x, y + 1.41 * s, z + 4.0 * s))),
@@ -723,14 +723,17 @@ fn faces_of(cam: &Camera, b: &Box3, owner: usize, first_box: bool, panel: usize,
         if area < 1.0 {
             continue;
         }
-        // Computers that are off sit a little darker on the desk.
-        let lit = (0.32 + 0.78 * dot(n, LIGHT).max(0.0)) * if d.online { 1.0 } else { 0.75 };
+        // Computers that are off sit a little darker on the desk. The light
+        // everywhere follows the theme (the pale light-theme aluminium takes
+        // more of it, so it reads silver, not grey); the dark theme's is 0.32.
+        let ambient = 0.32 + (pal().gear_ambient - 0.12) * 0.9;
+        let lit = (ambient + (1.1 - ambient) * dot(n, LIGHT).max(0.0)) * if d.online { 1.0 } else { 0.75 };
         let col = if front { b.screen.unwrap_or(b.col) } else { b.col };
         let top = ln.y > 0.5;
         out.push(Face {
             pts,
             depth: proj.iter().map(|p| p.1).sum::<f32>() / 4.0,
-            fill: rgba(hex(col), lit, 1.0),
+            fill: rgba([col.r(), col.g(), col.b()], lit, 1.0),
             owner,
             screen: (front && b.screen.is_some()).then_some(panel),
             deck: d.kind == Kind::Laptop && first_box && top,
@@ -1353,7 +1356,7 @@ impl Scene {
             {
                 let s = d.scale * d.k;
                 let well = [k.at(-13.0 * s, 0.0, -9.5 * s), k.at(13.0 * s, 0.0, -9.5 * s), k.at(13.0 * s, 0.0, 1.0 * s), k.at(-13.0 * s, 0.0, 1.0 * s)];
-                quad(painter, well.map(|p| cam.pt(p)), fade(style::LAPTOP_WELL, 0.85 * d.a));
+                quad(painter, well.map(|p| cam.pt(p)), fade(pal().laptop_well, 0.85 * d.a));
                 let pad = [k.at(-5.5 * s, 0.0, 3.0 * s), k.at(5.5 * s, 0.0, 3.0 * s), k.at(5.5 * s, 0.0, 9.0 * s), k.at(-5.5 * s, 0.0, 9.0 * s)];
                 quad(painter, pad.map(|p| cam.pt(p)), style::white((0.12 * d.a * 255.0) as u8));
             }
@@ -1446,9 +1449,9 @@ impl Scene {
     fn room(&self, painter: &Painter, cam: &Camera, geo: &[Geo], rect: Rect) {
         // The room behind is the window's own ground (chrome::paint_room),
         // the theme's `bg`: no stage of its own. Under the computers lies a
-        // soft ellipse of the theme's floor, with no edges, nothing to
-        // suggest a box they sit in; the screens' colour stays on the
-        // screens, with only a small neutral pool of light under each one.
+        // soft pool of light (the theme's `stage_pool`), with no edges,
+        // nothing to suggest a box they sit in; the screens' colour stays on
+        // the screens, with only a small neutral pool of light under each.
         let _ = rect;
         // As wide as the computers stand, a little over; centred under them.
         let shown = || self.devices.iter().zip(geo).filter(|(d, _)| d.visible() > 0.01).map(|(_, g)| g.foot);
@@ -1461,7 +1464,7 @@ impl Scene {
             let k = (1.0 - d).clamp(0.0, 1.0);
             k * k * (3.0 - 2.0 * k)
         };
-        let floor = pal().floor;
+        let floor = pal().stage_pool;
         let shade = |k: f32| floor.gamma_multiply(k.clamp(0.0, 1.0));
         const NX: usize = 24;
         const NZ: usize = 12;
@@ -1493,20 +1496,27 @@ impl Scene {
             let [fx, fz, rx, _] = g.foot;
             if d.online {
                 // The screen's light where it falls, close by and nearly
-                // neutral (a tenth of its colour), not a tinted haze.
+                // neutral (a quarter of its colour), not a tinted haze; on
+                // the light floor it is lighter than the floor, never grey.
                 let c = hex(d.wall[0]);
                 let pw = if wall { rx.max(36.0) } else { 36.0 };
-                let grey = |k: u8| ((u16::from(k) + 3 * 150) / 4) as u8;
+                let base: u16 = if pal().theme == style::Theme::Light { 255 } else { 150 };
+                let grey = |k: u8| ((u16::from(k) + 3 * base) / 4) as u8;
                 let glow = [grey(c[0]), grey(c[1]), grey(c[2])];
                 pool(painter, cam, v(fx, 0.0, fz + 10.0), pw, 18.0, rgba(glow, 1.0, 0.07 * a));
             }
             let up = (d.at.y - d.target.y.max(0.0)).clamp(0.0, 6.0) / 6.0;
+            // Each foot: a broad soft shadow round it, and a tight dark one
+            // right under its edge where it meets the desk (gone as it lifts).
             let shadow = |[fx, fz, rx, rz]: [f32; 4]| {
                 if d.target.y < 1.0 {
-                    let (k, feather) = (lerp(1.0, 0.85, up), lerp(5.0, 9.0, up));
-                    soft_rect(painter, cam, [fx, fz, rx * k, rz * k], 0.0, feather, pal().shadow((lerp(140.0, 70.0, up) * a) as u8));
+                    let (k, feather) = (lerp(1.0, 0.85, up), lerp(7.5, 14.0, up));
+                    soft_rect(painter, cam, [fx, fz + 1.5, rx * k + 1.5, rz * k + 1.5], 0.0, feather, fade(pal().occlusion, a * lerp(1.0, 0.7, up)));
+                    if up < 0.99 {
+                        soft_rect(painter, cam, [fx, fz + 0.3, rx, rz], 0.0, lerp(2.2, 7.0, up), fade(pal().contact, a * (1.0 - up)));
+                    }
                 } else {
-                    soft_rect(painter, cam, [fx, fz, rx * 0.8, rz * 0.8], 0.0, 9.0, pal().shadow((60.0 * a) as u8));
+                    soft_rect(painter, cam, [fx, fz, rx * 0.8, rz * 0.8], 0.0, 9.0, fade(pal().occlusion, a * 0.7));
                 }
             };
             if wall {
