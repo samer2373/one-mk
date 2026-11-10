@@ -274,7 +274,15 @@ MEAN_TOLERANCE = 3.0
 LAST = {}  # how far apart the last pictures compared were, for the report of a failed check
 
 
+def premultiplied(im):
+    """What the picture looks like on any background: each colour scaled by its opacity. The colour
+    stored under a fully transparent pixel is invisible, and another Pillow may store another one."""
+    r, g, b, a = im.convert("RGBA").split()
+    return Image.merge("RGBA", (ImageChops.multiply(r, a), ImageChops.multiply(g, a), ImageChops.multiply(b, a), a))
+
+
 def close(ia, ib):
+    ia, ib = premultiplied(ia), premultiplied(ib)
     worst = max(hi for lo, hi in ImageChops.difference(ia, ib).getextrema())
     LAST.update(worst=worst, coarse=None, mean=None)
     if worst <= TOLERANCE:
