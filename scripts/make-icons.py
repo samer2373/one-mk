@@ -260,9 +260,34 @@ def overview(out):
 
 # ------------------------------------------------------------------- check ----
 # --check compares pictures by their pixels, not their bytes: another Pillow or zlib version may
-# compress the same picture differently or round an edge pixel by one level. A real change to an
-# SVG or to the geometry moves many pixels by far more than TOLERANCE.
+# compress the same picture differently, round an edge pixel by a level, or soften a shadow a
+# little differently (CI's Ubuntu has an older Pillow than a developer's machine). So two pictures
+# are the same when no pixel differs by more than TOLERANCE, or when they agree once averaged down
+# to a coarse grid and their average difference is tiny. A real change (another colour, a moved
+# or reshaped part) moves whole areas, which the coarse grid sees; a different resampler does not.
 TOLERANCE = 3
+COARSE = 16
+COARSE_TOLERANCE = 10
+MEAN_TOLERANCE = 3.0
+
+
+LAST = {}  # how far apart the last pictures compared were, for the report of a failed check
+
+
+def close(ia, ib):
+    worst = max(hi for lo, hi in ImageChops.difference(ia, ib).getextrema())
+    LAST.update(worst=worst, coarse=None, mean=None)
+    if worst <= TOLERANCE:
+        return True
+    grid = (min(COARSE, ia.width), min(COARSE, ia.height))
+    ca, cb = ia.resize(grid, Image.BOX), ib.resize(grid, Image.BOX)
+    LAST["coarse"] = max(hi for lo, hi in ImageChops.difference(ca, cb).getextrema())
+    if LAST["coarse"] > COARSE_TOLERANCE:
+        return False
+    # Averaged over every pixel and channel, how far apart they are.
+    histogram = ImageChops.difference(ia, ib).convert("L").histogram()
+    LAST["mean"] = sum(level * count for level, count in enumerate(histogram)) / max(1, ia.width * ia.height)
+    return LAST["mean"] <= MEAN_TOLERANCE
 
 
 def frames(path, data):
@@ -302,7 +327,7 @@ def same(path, full, data):
     for (na, ia), (nb, ib) in zip(a, b):
         if na != nb or ia is None or ia.size != ib.size:
             return False
-        if max(hi for lo, hi in ImageChops.difference(ia, ib).getextrema()) > TOLERANCE:
+        if not close(ia, ib):
             return False
     return True
 
@@ -322,9 +347,13 @@ def main():
     args = ap.parse_args()
     out = build()
     if args.check:
-        bad = [path for path, data in sorted(out.files.items()) if not same(path, os.path.join(ROOT, path), data)]
-        for p in bad:
-            print("stale or missing:", p)
+        bad = []
+        for path, data in sorted(out.files.items()):
+            LAST.clear()
+            if not same(path, os.path.join(ROOT, path), data):
+                bad.append(path)
+                how = "missing" if not os.path.isfile(os.path.join(ROOT, path)) else "differs (worst pixel %s, coarse %s, mean %s)" % (LAST.get("worst"), LAST.get("coarse"), None if LAST.get("mean") is None else round(LAST["mean"], 2))
+                print("stale or missing:", path, "-", how)
         print("%s" % ("all %d icon files match" % len(out.files) if not bad else "%d icon file(s) out of date: run python3 scripts/make-icons.py" % len(bad)))
         sys.exit(1 if bad else 0)
     for path, data in sorted(out.files.items()):
