@@ -120,6 +120,8 @@ pub static HELP: &[(&str, Help)] = &[
     ("pointer-overlay", Help { caption: "A pointer for computers with no mouse", detail: "A computer with no mouse attached can show no pointer at all while you control it. Auto: oneMK draws a small arrow only when the system shows none. Always: whenever this computer is controlled. Never: not at all.", scene: None }),
     ("broadcast-idle", Help { caption: "Typing on every computer stops itself", detail: "Typing on every computer at once stops after this many minutes without input. 0 means it never stops by itself.", scene: None }),
     ("wallpaper-fit", Help { caption: "How the picture meets the screens", detail: "Fill: the picture covers the screens and crops what doesn't fit. Fit: all of it shows, with bars where the shapes differ. Stretch: it is pulled to the exact shape of the screens, which can distort it.", scene: None }),
+    ("appearance", Help { caption: "System follows this computer's setting", detail: "Light, Dark, or whichever this computer uses. The window changes at once.", scene: None }),
+    ("typing", Help { caption: "Which keys the other computer types", detail: "Keys: each key you press is the same key on the other computer, whatever its layout. Letters and Auto are experimental: the other computer types the letters printed on your keys, even with a different layout.", scene: None }),
     ("hotkeys", Help { caption: "Shortcuts that jump to another computer", detail: "Press a shortcut to send the keyboard and mouse straight to a computer, without moving the pointer to an edge. Off: only the edges switch.", scene: Keys }),
 ];
 

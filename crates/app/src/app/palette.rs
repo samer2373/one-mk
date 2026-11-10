@@ -36,6 +36,8 @@ enum Act {
     WallPause(bool),
     WallOff,
     Appearance(crate::style::Appearance),
+    /// A setting on the Settings page: its category and row.
+    Setting(settings_page::Cat, &'static str),
 }
 
 struct Entry {
@@ -50,23 +52,6 @@ const SETTINGS: &[(&str, Tab)] = &[
     ("Wallpaper · Fill, fit or stretch", Tab::Wallpaper),
     ("Wallpaper · Pause on battery", Tab::Wallpaper),
     ("Wallpaper · Play on a computer", Tab::Wallpaper),
-    ("Crossing edges · Don't cross near corners", Tab::Settings),
-    ("Crossing edges · Wait at the edge", Tab::Settings),
-    ("Crossing edges · Hold a key to cross", Tab::Settings),
-    ("Crossing edges · Stay in fullscreen windows", Tab::Settings),
-    ("Power · Keep computers I control awake", Tab::Settings),
-    ("Power · Sleep displays together", Tab::Settings),
-    ("Power · Lock every screen with this one", Tab::Settings),
-    ("Games · Gaming mode", Tab::Settings),
-    ("Keyboard shortcuts", Tab::Settings),
-    ("Ctrl and Cmd · Swap them between a Mac and a PC", Tab::Settings),
-    ("Run commands when the pointer arrives or leaves", Tab::Settings),
-    ("Typing on the other computer · Letters across layouts", Tab::Settings),
-    ("Pointer wrap", Tab::Settings),
-    ("Learn computer positions", Tab::Settings),
-    ("Draw a pointer on computers with no mouse", Tab::Settings),
-    ("Updates · Look for updates", Tab::Settings),
-    ("Updates · Install them without asking", Tab::Settings),
     ("Clipboard · Text, rich text and images", Tab::Files),
     ("Clipboard · Others can get this clipboard", Tab::Files),
     ("Clipboard · Skip sensitive copies", Tab::Files),
@@ -168,6 +153,10 @@ impl App {
             let hint = if a == self.prefs.appearance { "Now" } else { "" };
             out.push(Entry { group: "Settings", title: format!("Appearance: {}", a.label()), hint: hint.into(), act: Act::Appearance(a) });
         }
+        // Settings' own rows: each opens its category and lights its row.
+        for (title, cat, key) in settings_page::JUMPS {
+            out.push(Entry { group: "Settings", title: (*title).into(), hint: format!("Settings · {}", cat.label()), act: Act::Setting(*cat, key) });
+        }
         for (title, t) in SETTINGS {
             let page = TABS.iter().find(|x| x.0 == *t).map_or("", |x| x.1);
             out.push(Entry { group: "Settings", title: (*title).into(), hint: page.into(), act: Act::Tab(*t) });
@@ -219,6 +208,7 @@ impl App {
             Act::WallPause(paused) => self.wallpaper_command(one_mk_wallpaper::Command::Pause { paused }),
             Act::WallOff => self.wallpaper_command(one_mk_wallpaper::Command::Off),
             Act::Appearance(a) => self.set_appearance(a),
+            Act::Setting(cat, key) => self.jump_to_setting(cat, key),
         }
     }
 
@@ -358,7 +348,7 @@ impl App {
                     let icon = match e.act {
                         Act::Tab(Tab::Files) => Icon::Clipboard,
                         Act::Tab(Tab::Keys) => Icon::Keys,
-                        Act::Tab(Tab::Settings) | Act::Appearance(_) => Icon::Settings,
+                        Act::Tab(Tab::Settings) | Act::Appearance(_) | Act::Setting(..) => Icon::Settings,
                         Act::Tab(Tab::Health) | Act::Recheck => Icon::Health,
                         Act::Tab(Tab::Arrange) => Icon::Arrange,
                         Act::Tab(Tab::Wallpaper) | Act::WallChoose | Act::WallPause(_) | Act::WallOff => Icon::Wallpaper,
@@ -431,6 +421,23 @@ mod tests {
         assert!(matches("Lock every screen", "lock wall").is_none());
         // Case doesn't matter.
         assert!(matches("Keyboard shortcuts", "KEYB").is_some());
+    }
+
+    #[test]
+    fn settings_titles_come_from_settings_so_each_lands_on_its_row() {
+        // Settings' own rows are listed by `settings_page::JUMPS` (each opens
+        // its category and lights its row); this list holds other pages'.
+        assert!(SETTINGS.iter().all(|(_, tab)| *tab != Tab::Settings));
+        // A typed query finds a setting by any word of its title, as the
+        // palette does, and the row it stands for is in the category it says.
+        for (query, cat, key) in [("wait at", settings_page::Cat::Edges, "edge-dwell"), ("pointer wrap", settings_page::Cat::Pointer, "pointer-wrap"),
+            ("look for updates", settings_page::Cat::General, "update-check"), ("stop when idle", settings_page::Cat::Typing, "broadcast-idle"),
+            ("ctrl and cmd", settings_page::Cat::Typing, "swaps"), ("run commands", settings_page::Cat::Commands, "hook-0"),
+            ("gaming", settings_page::Cat::Games, "gaming"), ("keyboard shortcuts", settings_page::Cat::Shortcuts, "hotkeys"),
+            ("lock every screen with", settings_page::Cat::Power, "lock-sync")] {
+            let found: Vec<_> = settings_page::JUMPS.iter().filter(|(title, _, _)| matches(title, query).is_some()).collect();
+            assert!(found.iter().any(|(_, c, k)| *c == cat && *k == key), "{query}: {found:?}");
+        }
     }
 
     #[test]
