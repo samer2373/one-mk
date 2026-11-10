@@ -1,0 +1,14 @@
+{
+  "name": "oneMK",
+  "short_name": "oneMK",
+  "description": "One mouse and keyboard for all your computers.",
+  "start_url": "./",
+  "display": "browser",
+  "background_color": "#F4F3F0",
+  "theme_color": "#2F54EB",
+  "icons": [
+    { "src": "assets/brand/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "assets/brand/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
