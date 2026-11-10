@@ -574,6 +574,11 @@ impl App {
                 pick = Some(monitor.computer.clone());
             }
             if can_move {
+                // Chosen with the mouse, it takes the keyboard too: the
+                // hint's "arrow keys move the chosen one" holds either way.
+                if resp.clicked() || resp.drag_stopped() {
+                    resp.request_focus();
+                }
                 if resp.drag_started() {
                     start = resp.interact_pointer_pos().map(|p| (monitor.computer.clone(), p));
                 }
