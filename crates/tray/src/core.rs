@@ -93,6 +93,7 @@ impl Ctx {
             Action::WallpaperPause(paused) => self.ask(one_mk_ctl::wallpaper::request(&one_mk_ctl::wallpaper::Command::Pause { paused: *paused })),
             Action::ToggleAutostart => self.toggle_autostart(),
             Action::Forget { peer } => self.forget(peer),
+            Action::OpenMaker => one_mk_ctl::brand::open_site().map_err(Into::into),
             Action::Quit => self.quit(),
         };
         if let Err(e) = result {

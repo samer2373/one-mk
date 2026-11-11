@@ -33,6 +33,11 @@ Unbounded font (embedded in one-mk-app)
   buttons and recoloured. Logitech and G502 are trademarks of their owner;
   oneMK is not affiliated with or endorsed by Logitech.
 
+Bigfoot Technology logo (embedded in one-mk-app, Settings > General > About)
+  The mark of Bigfoot Technology (https://bigfootjo.com/), who make oneMK.
+  It belongs to Bigfoot Technology and is not covered by oneMK's licence;
+  see docs/brand/bigfoot/README.md.
+
 ==============================================================================
 RUST CRATES (565)
 ==============================================================================

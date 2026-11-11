@@ -14,7 +14,8 @@
 #   - the macOS installer window's artwork and settings (scripts/dmg/check.sh;
 #     needs Python 3 with Pillow);
 #   - every icon (app icon sets, tray icons, the window icon) is what
-#     scripts/make-icons.py builds from the brand SVGs now (needs Pillow).
+#     scripts/make-icons.py builds from the brand SVGs now, and the maker's mark
+#     what scripts/make-bigfoot.py builds (needs Pillow).
 #   - the licence files every package carries (scripts/copy-notices.sh) and
 #     THIRD-PARTY-NOTICES is current (scripts/third-party-notices.py --check);
 # Optional tools (dpkg-deb, desktop-file-validate, appstreamcli, ruby, Pillow) are
@@ -188,6 +189,9 @@ else skip "macOS installer window checks: Python 3 with Pillow not installed"; f
 if python3 -c 'import PIL' 2>/dev/null; then
     if python3 -I "$ROOT/scripts/make-icons.py" --check >"$scratch/icons.txt" 2>&1; then ok "icons match the brand SVGs ($(tail -n1 "$scratch/icons.txt"))"
     else cat "$scratch/icons.txt"; bad "icons are out of date: run python3 scripts/make-icons.py"; fi
+    # The maker's mark (docs/brand/bigfoot) the window's About card embeds.
+    if python3 -I "$ROOT/scripts/make-bigfoot.py" --check >"$scratch/bigfoot.txt" 2>&1; then ok "Bigfoot mark matches its SVG"
+    else cat "$scratch/bigfoot.txt"; bad "Bigfoot pictures are out of date: run python3 scripts/make-bigfoot.py"; fi
 else skip "icon check: Python 3 with Pillow not installed"; fi
 
 # Every package carries the same licence files; the crate list must match Cargo.lock.

@@ -3,6 +3,7 @@
 //! Everything shown comes from the running daemon; everything changed goes
 //! through it.
 
+mod about;
 mod cells;
 mod clipboard_history;
 mod keys;
