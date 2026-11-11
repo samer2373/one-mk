@@ -110,6 +110,10 @@ off, and each shortcut), **Run commands** (on pointer arrives or leaves, a compu
 disconnects), **Typing** (typing mode, Ctrl/Cmd swapping per computer, when typing on every computer stops
 by itself) and **Pointer** (pointer wrap, drawing a pointer on a computer with no mouse). Every row has a
 caption; the "i" beside it explains it. Search (the palette) opens the right pill and lights the row.
+At the foot of General, **About** shows oneMK's version and licence, who makes it (Bigfoot Technology:
+its tile, name, line and "Visit bigfootjo.com" are one link to <https://bigfootjo.com/>) and the credits
+for the 3D mouse and the fonts; "About oneMK" in the palette opens it, and the foot of every other pill
+links to it.
 See [AUTOMATION.md](AUTOMATION.md) for commands to run.
 
 ![Settings](screens/settings.png)
@@ -132,6 +136,7 @@ on macOS). oneMK works the same without it. Start it by running `one-mk-tray` (o
   "Broadcasting to N computers" while it is on;
 - **Keep the pointer here**, **Lock every screen**, **Take back control**, **Start oneMK**
   (when it is not running), **Pair a computer…** (when none is paired) and **Start at login**;
+- **Made by Bigfoot Technology**, which opens <https://bigfootjo.com/> in the browser;
 - **Quit tray**, which closes only the tray.
 
 The icon is the oneMK keycap with the pointer on its top, in white ink for a dark bar and black

@@ -102,6 +102,7 @@ pub(super) fn groups(cat: Cat) -> &'static [Group] {
         Cat::General => &[
             Group { title: "General", rows: &["appearance", "autostart", "service"] },
             Group { title: "Updates", rows: &["update-check", "update-auto", "update-now", "update-more"] },
+            Group { title: "About", rows: &["about"] },
         ],
         Cat::Edges => &[Group { title: "Crossing edges", rows: &["edge-scope", "edge-corner", "edge-dwell", "edge-mod", "edge-fullscreen", "edge-reset", "edge-learn"] }],
         Cat::Power => &[Group { title: "Power and locking", rows: &["block-saver", "sleep-sync", "lock-sync"] }],
@@ -119,6 +120,7 @@ pub(super) fn groups(cat: Cat) -> &'static [Group] {
 
 /// What the palette finds in Settings: its title there, and where it is.
 pub(super) const JUMPS: &[(&str, Cat, &str)] = &[
+    ("About oneMK", Cat::General, "about"),
     ("Updates · Look for updates", Cat::General, "update-check"),
     ("Updates · Install them without asking", Cat::General, "update-auto"),
     ("Crossing edges · Which edges cross", Cat::Edges, "edge-scope"),
@@ -205,7 +207,7 @@ impl App {
         // Every row's height, as it is now: a row that has nothing to show is 0.
         let heights: Vec<Vec<f32>> = groups(cat).iter().map(|g| g.rows.iter().map(|k| self.setting_h(ui, k, inner_w)).collect()).collect();
         let rows_h = |hs: &Vec<f32>| hs.iter().sum::<f32>();
-        let credit_h = 56.0;
+        let credit_h = if cat == Cat::General { 16.0 } else { 56.0 };
         // A short category still ends at the window's foot: the credit sits
         // there, under a hairline, as the other pages' footers do.
         let total = (groups(cat).iter().zip(&heights).map(|(_, hs)| GROUP_LABEL + rows_h(hs) + GROUP_GAP).sum::<f32>() + credit_h).max(area.height() - 1.0);
@@ -215,6 +217,7 @@ impl App {
         let scroll = egui::ScrollArea::vertical().id_salt(("settings", cat.slug())).auto_shrink([false, false]);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         let scroll = std::env::var("ONE_MK_APP_SCROLL").ok().and_then(|value| value.parse::<f32>().ok()).map_or(scroll.clone(), |offset| scroll.vertical_scroll_offset(offset));
+        let mut jump_about = false;
         scroll.show(&mut child, |ui| {
             let (all, _) = ui.allocate_exact_size(vec2(area.width(), total), Sense::hover());
             let mut y = all.top();
@@ -240,24 +243,27 @@ impl App {
             if cat == Cat::Shortcuts {
                 self.shortcut_record(ui);
             }
-            // Credits for what the window draws and isn't ours: last on the
-            // page, and last in Tab order.
-            let credit = "The 3D mouse is “Logitech G502 x lightspeed” by Okopchi, CC BY 4.0, changed for oneMK.";
-            let credit_at = pos2(x0, all.bottom() - 22.0);
-            widgets::hairline(ui.painter(), egui::Rangef::new(x0, x0 + col_w), (credit_at.y - 22.0).round() - 0.5);
-            let shown = fit(ui.painter(), credit, &regular(T_META), col_w - 4.0);
-            let link = ui.interact(widgets::hit_rect(Rect::from_min_size(credit_at - vec2(0.0, 9.0), vec2(text_width(ui, &shown, regular(T_META)), 18.0))), Id::unique("credit-mouse"), Sense::click());
-            let lr = link.rect;
-            ui.painter().text(credit_at, Align2::LEFT_CENTER, &shown, regular(T_META), if link.hovered() { pal().ink } else { pal().ink3 });
-            if link.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            widgets::focus_ring(ui, &link, lr, 6);
-            widgets::a11y(&link, Role::Link, "Credit: open the 3D mouse model's page", None);
-            if link.on_hover_text("Open the model's page").clicked() {
-                ui.ctx().open_url(egui::OpenUrl::new_tab("https://sketchfab.com/3d-models/logitech-g502-x-lightspeed-cda7107cc1444b4788d747f0361f7d40"));
+            // The foot of every other category: a quiet link to About (the
+            // credits for what the window draws and isn't ours are there).
+            if cat != Cat::General {
+                let words = format!("oneMK {} · About", env!("CARGO_PKG_VERSION"));
+                let at = pos2(x0, all.bottom() - 22.0);
+                widgets::hairline(ui.painter(), egui::Rangef::new(x0, x0 + col_w), (at.y - 22.0).round() - 0.5);
+                let link = ui.interact(widgets::hit_rect(Rect::from_min_size(at - vec2(0.0, 9.0), vec2(text_width(ui, &words, regular(T_META)), 18.0))), Id::unique("settings-about-link"), widgets::sense(ui, Sense::click()));
+                ui.painter().text(at, Align2::LEFT_CENTER, &words, regular(T_META), if link.hovered() { pal().ink } else { pal().ink3 });
+                if link.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                widgets::focus_ring(ui, &link, link.rect, 6);
+                widgets::a11y(&link, Role::Link, "About oneMK: its version, who makes it and the credits", None);
+                if link.clicked() {
+                    jump_about = true;
+                }
             }
         });
+        if jump_about {
+            self.jump_to_setting(Cat::General, "about");
+        }
     }
 
     /// The row the palette found: scrolled into view once, and lit on the
@@ -356,6 +362,7 @@ impl App {
         match key {
             "update-auto" | "update-now" if !self.update_known() => 0.0,
             "update-more" => self.update_more_h(ui, w),
+            "about" => self.about_h(ui, w),
             "edge-fullscreen" => ROW + self.fullscreen_note_h(ui, w),
             "edge-reset" => if self.edge_side(ui).is_empty() { 0.0 } else { 48.0 },
             "hotkeys-note" => {
@@ -402,6 +409,7 @@ impl App {
                 }
             }
             "service" => self.service_row(ui, r),
+            "about" => self.about_row(ui, r),
             "update-check" | "update-auto" | "update-now" | "update-more" => self.update_row(ui, key, r),
             "edge-scope" => {
                 let mut side = self.edge_side(ui);

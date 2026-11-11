@@ -3,6 +3,7 @@
 //! window. Wi-Fi observations use their own event-driven worker, not the
 //! daemon's runtime.
 
+pub mod brand;
 pub mod client;
 pub mod install;
 pub mod integrate;
