@@ -121,7 +121,11 @@ fails when the release has drifted apart:
   well formed and agree with each other and with the code they name.
 
 `python3 scripts/test-release-consistency.py` checks that each of those checks
-fails on the mistake it is for. `scripts/test-install.sh` runs `install.sh`
+fails on the mistake it is for, and `python3 scripts/test-update-manifest.py`
+builds the signed update list from the file names the release makes and checks
+that every choice the updater makes (portable binary, AppImage, .deb, Mac app)
+is exactly one file, that the list is reproducible, that bad input is refused
+and that a damaged signature never verifies. `scripts/test-install.sh` runs `install.sh`
 against fake releases (bad checksums and signatures, hostile and broken
 archives, offline, plain http, an unsupported system, repeat and read-only
 installs). The GNOME extensions are tested against stand-ins for the Shell:

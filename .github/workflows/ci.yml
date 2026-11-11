@@ -87,6 +87,7 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           python3 scripts/check-release-consistency.py
           python3 scripts/test-release-consistency.py
+          python3 scripts/test-update-manifest.py
 
   # The Linux packages and the package-manager files, built from a debug
   # build and checked without installing anything (scripts/check-packaging.sh).
