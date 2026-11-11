@@ -236,7 +236,7 @@ impl Desktop {
                     desktop.chains.push(Chain { swap: chain, latency });
                 }
                 desktop.destinations.push(RECT { left: 0, top: 0, right: width as i32, bottom: height as i32 });
-                let slice = config.plan.canvas.slice(monitor, &config.plan.media, config.plan.fit).context("Empty canvas")?;
+                let slice = config.plan.slice(monitor).context("Empty canvas")?;
                 let left = slice.x.max(0.0);
                 let top = slice.y.max(0.0);
                 let right = (slice.x + slice.width).min(1.0);

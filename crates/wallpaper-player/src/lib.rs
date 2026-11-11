@@ -12,6 +12,17 @@ pub const MAX_MEDIA_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 #[serde(rename_all = "lowercase")]
 pub enum Fit { #[default] Fill, Fit, Stretch }
 
+/// How one picture or video is spread over the screens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Spread {
+    /// One picture across all screens of all computers, as if they were one.
+    #[default]
+    Span,
+    /// The whole picture on every screen, each screen alone.
+    Each,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Rect { pub x: f64, pub y: f64, pub width: f64, pub height: f64 }
 
@@ -53,23 +64,30 @@ impl Canvas {
             && !monitor.computer.is_empty() && monitor.computer.len() <= 128 && monitor.name.len() <= 256)
     }
     pub fn image_rect(&self, media: &Media, fit: Fit) -> Option<Rect> {
-        let canvas = self.bounds()?;
+        Some(Self::image_in(self.bounds()?, media, fit))
+    }
+    /// Where the picture lands when `canvas` is the area it covers.
+    pub fn image_in(canvas: Rect, media: &Media, fit: Fit) -> Rect {
         let source_width = f64::from(media.width.max(1));
         let source_height = f64::from(media.height.max(1));
-        if fit == Fit::Stretch { return Some(canvas); }
+        if fit == Fit::Stretch { return canvas; }
         let horizontal = canvas.width / source_width;
         let vertical = canvas.height / source_height;
         let scale = if fit == Fit::Fill { horizontal.max(vertical) } else { horizontal.min(vertical) };
         let width = source_width * scale;
         let height = source_height * scale;
-        Some(Rect { x: canvas.x + (canvas.width - width) / 2.0,
-            y: canvas.y + (canvas.height - height) / 2.0, width, height })
+        Rect { x: canvas.x + (canvas.width - width) / 2.0,
+            y: canvas.y + (canvas.height - height) / 2.0, width, height }
     }
     pub fn slice(&self, monitor: &Monitor, media: &Media, fit: Fit) -> Option<Rect> {
-        let image = self.image_rect(media, fit)?;
-        Some(Rect { x: (monitor.rect.x - image.x) / image.width,
+        Some(Self::slice_of(monitor, self.image_rect(media, fit)?))
+    }
+    /// The part of `image` (in canvas coordinates) that `monitor` shows, as
+    /// fractions of the image.
+    pub fn slice_of(monitor: &Monitor, image: Rect) -> Rect {
+        Rect { x: (monitor.rect.x - image.x) / image.width,
             y: (monitor.rect.y - image.y) / image.height,
-            width: monitor.rect.width / image.width, height: monitor.rect.height / image.height })
+            width: monitor.rect.width / image.width, height: monitor.rect.height / image.height }
     }
     pub fn update(&mut self, monitors: Vec<Monitor>) {
         for saved in &mut self.monitors { saved.online = false; }
@@ -132,9 +150,39 @@ pub struct Plan {
     pub picture: bool,
     #[serde(default)]
     pub asset_hash: Option<String>,
+    /// One picture across all screens (the default), or the whole picture on
+    /// every screen.
+    #[serde(default)]
+    pub spread: Spread,
 }
 
 impl Plan {
+    /// Where the whole picture lands, in canvas coordinates, for `monitor`:
+    /// the same place for every screen when spanning, the screen's own area
+    /// when each shows it whole.
+    pub fn image_rect_for(&self, monitor: &Monitor) -> Option<Rect> {
+        match self.spread {
+            Spread::Span => self.canvas.image_rect(&self.media, self.fit),
+            Spread::Each => Some(Canvas::image_in(monitor.rect, &self.media, self.fit)),
+        }
+    }
+
+    /// The part of the picture `monitor` shows, as fractions of it.
+    pub fn slice(&self, monitor: &Monitor) -> Option<Rect> {
+        Some(Canvas::slice_of(monitor, self.image_rect_for(monitor)?))
+    }
+
+    /// The biggest picture, in pixels, one screen of `computer` needs.
+    pub fn largest_image(&self, computer: &str) -> Option<(f64, f64)> {
+        let mine = || self.canvas.monitors.iter().filter(|monitor| monitor.computer == computer);
+        let scale = mine().map(|monitor| monitor.scale).fold(1.0, f64::max);
+        match self.spread {
+            Spread::Span => self.canvas.image_rect(&self.media, self.fit).map(|image| (image.width * scale, image.height * scale)),
+            Spread::Each => mine().filter_map(|monitor| self.image_rect_for(monitor).map(|image| (image.width * monitor.scale, image.height * monitor.scale)))
+                .reduce(|a, b| (a.0.max(b.0), a.1.max(b.1))),
+        }
+    }
+
     pub fn playing_message(&self) -> String { self.playing_summary(&std::collections::BTreeMap::new()) }
 
     /// What is playing, leaving out computers that said they can't play it
@@ -245,6 +293,7 @@ pub enum Command {
     Off,
     Pause { paused: bool },
     Fit { fit: Fit },
+    Spread { spread: Spread },
     Battery { enabled: bool },
     Computer { id: String, enabled: bool },
 }
@@ -415,6 +464,60 @@ pub fn file_identity(file: &std::fs::File) -> anyhow::Result<Vec<u64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn screen(computer: &str, x: f64, width: f64, height: f64) -> Monitor {
+        Monitor { computer: computer.into(), name: "screen".into(), rect: Rect { x, y: 0.0, width, height }, local: None, scale: 1.0, online: true }
+    }
+    fn plan_of(spread: Spread, fit: Fit, monitors: Vec<Monitor>) -> Plan {
+        Plan { hash: "a".repeat(64), title: "t".into(), media: Media { width: 1920, height: 1080, duration_ms: 1000, frame_rate: 30 },
+            canvas: Canvas { monitors }, start_ms: 1, fit, computers: vec!["a".into()], pause_on_battery: false, paused: false, picture: true, asset_hash: None, spread }
+    }
+    #[test]
+    fn spanning_cuts_one_picture_across_the_screens_and_each_shows_all_of_it() {
+        let two = vec![screen("a", 0.0, 1920.0, 1080.0), screen("a", 1920.0, 1920.0, 1080.0)];
+        let span = plan_of(Spread::Span, Fit::Fill, two.clone());
+        let halves: Vec<Rect> = two.iter().map(|m| span.slice(m).unwrap()).collect();
+        assert_eq!((halves[0].x, halves[0].width), (0.0, 0.5));
+        assert_eq!((halves[1].x, halves[1].width), (0.5, 0.5));
+        let each = plan_of(Spread::Each, Fit::Fill, two.clone());
+        for m in &two {
+            let whole = each.slice(m).unwrap();
+            assert!((whole.x, whole.y, whole.width, whole.height) == (0.0, 0.0, 1.0, 1.0), "{whole:?}");
+        }
+    }
+    #[test]
+    fn each_screen_is_fitted_on_its_own_shape() {
+        // A 16:9 picture on a tall screen and a wide one.
+        let tall = screen("a", 0.0, 1000.0, 2000.0);
+        let wide = screen("a", 5000.0, 3840.0, 1080.0);
+        let fill = plan_of(Spread::Each, Fit::Fill, vec![tall.clone(), wide.clone()]);
+        let on_tall = fill.slice(&tall).unwrap();
+        assert!(on_tall.width < 1.0 && (on_tall.height - 1.0).abs() < 1e-9, "fill crops the sides of a tall screen: {on_tall:?}");
+        let fit = plan_of(Spread::Each, Fit::Fit, vec![tall.clone(), wide.clone()]);
+        let in_tall = fit.slice(&tall).unwrap();
+        assert!(in_tall.height > 1.0 && (in_tall.width - 1.0).abs() < 1e-9, "fit leaves bars above and below: {in_tall:?}");
+        let on_wide = fit.slice(&wide).unwrap();
+        assert!(on_wide.width > 1.0 && (on_wide.height - 1.0).abs() < 1e-9, "{on_wide:?}");
+        let stretch = plan_of(Spread::Each, Fit::Stretch, vec![tall.clone(), wide.clone()]);
+        assert_eq!(stretch.slice(&tall).unwrap(), Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
+    }
+    #[test]
+    fn a_plan_from_before_spread_existed_spans_and_the_command_round_trips() {
+        let json = serde_json::to_string(&plan_of(Spread::Span, Fit::Fill, vec![screen("a", 0.0, 10.0, 10.0)])).unwrap();
+        let old = json.replace(",\"spread\":\"span\"", "");
+        assert!(!old.contains("spread"));
+        assert_eq!(serde_json::from_str::<Plan>(&old).unwrap().spread, Spread::Span);
+        let command = Command::Spread { spread: Spread::Each };
+        assert_eq!(serde_json::to_string(&command).unwrap(), r#"{"action":"spread","spread":"each"}"#);
+        assert_eq!(serde_json::from_str::<Command>(&serde_json::to_string(&command).unwrap()).unwrap(), command);
+    }
+    #[test]
+    fn the_biggest_picture_a_computer_decodes_follows_its_largest_screen_when_each_shows_it() {
+        let screens = vec![screen("a", 0.0, 1920.0, 1080.0), screen("a", 1920.0, 3840.0, 2160.0), screen("b", 5760.0, 100.0, 100.0)];
+        let span = plan_of(Spread::Span, Fit::Fill, screens.clone());
+        let each = plan_of(Spread::Each, Fit::Fill, screens);
+        assert_eq!(each.largest_image("a"), Some((3840.0, 2160.0)));
+        assert!(span.largest_image("a").unwrap().0 > 5760.0 - 1.0);
+    }
     #[test]
     fn extension_actions_are_local_commands_and_old_status_still_decodes() {
         for operation in [ExtensionAction::Install, ExtensionAction::Enable] {
@@ -460,7 +563,7 @@ mod tests {
         assert_eq!(canvas.bounds(), bounds);
         assert!(!canvas.monitors[1].online);
         let plan = Plan { hash: "a".repeat(64), title: "Video".into(), media, canvas, start_ms: 1, fit: Fit::Fill,
-            computers: vec!["mac".into(), "pc".into()], pause_on_battery: true, paused: false, picture: false, asset_hash: None };
+            computers: vec!["mac".into(), "pc".into()], pause_on_battery: true, paused: false, picture: false, asset_hash: None, spread: Default::default() };
         assert_eq!(plan.playing_message(), "Playing on 1 monitor on 1 computer");
         // A computer that said it can't play it isn't counted as playing.
         let mut plan = plan;

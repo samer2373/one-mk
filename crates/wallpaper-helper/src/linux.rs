@@ -394,14 +394,13 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     let desktop = Desktop::new(&config)?;
     ensure!(!desktop.windows.is_empty(), "No monitors selected on this computer");
     let gst = Gst::load()?;
-    let image = config.plan.canvas.image_rect(&config.plan.media, config.plan.fit).context("Empty canvas")?;
-    let scale = config.plan.canvas.monitors.iter().filter(|monitor| monitor.computer == config.computer).map(|monitor| monitor.scale).fold(1.0, f64::max);
-    let width = (image.width * scale).min(f64::from(config.plan.media.width)).round().max(1.0);
-    let height = (image.height * scale).min(f64::from(config.plan.media.height)).round().max(1.0);
+    let (wanted_width, wanted_height) = config.plan.largest_image(&config.computer).context("Empty canvas")?;
+    let width = wanted_width.min(f64::from(config.plan.media.width)).round().max(1.0);
+    let height = wanted_height.min(f64::from(config.plan.media.height)).round().max(1.0);
     let mut pipeline_text = format!("uridecodebin uri={} caps=video/x-raw name=source source. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 ! videoscale ! video/x-raw,width={},height={},pixel-aspect-ratio=1/1 ! videoconvert ! tee name=picture ", quoted(&uri(&config.path)?), width as u32, height as u32);
     let mut visible = Vec::new();
     for (index, monitor) in config.plan.canvas.monitors.iter().filter(|monitor| monitor.computer == config.computer).enumerate() {
-        let slice = config.plan.canvas.slice(monitor, &config.plan.media, config.plan.fit).context("Empty canvas")?;
+        let slice = config.plan.slice(monitor).context("Empty canvas")?;
         if slice.x >= 1.0 || slice.y >= 1.0 || slice.x + slice.width <= 0.0 || slice.y + slice.height <= 0.0 { continue; }
         visible.push(index);
         let left = (slice.x * width).round() as i32;

@@ -7,9 +7,12 @@ that continues from screen to screen in the positions you gave them in
 ## Using it
 
 Open the oneMK window, go to **Wallpaper**, and choose **Choose…** (or drop a
-file on the page). Pick how it fills the screens (Fill, Fit or Stretch) and
-which computers show it (**Play on**). **Pause** holds a video on its current
+file on the page). Pick how it fills the screens (Fill, Fit or Stretch),
+whether it is one picture **Across** all the screens (the default) or the
+whole picture **Each** screen shows by itself, the same on every screen of
+every computer, and which computers show it (**Play on**). **Pause** holds a video on its current
 frame; **Turn off** stops it everywhere and puts your own wallpaper back.
+Pictures up to 128 megapixels open; oneMK keeps them at 8192 pixels on the longest side.
 
 From a terminal:
 

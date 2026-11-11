@@ -239,7 +239,7 @@ impl Drop for Prepared {
 }
 
 fn picture_asset(dir: &Path, plan: &Plan, computer: &str) -> Result<String> {
-    let key = ring::digest::digest(&SHA256, &serde_json::to_vec(&(2, &plan.hash, &plan.canvas, plan.fit, computer))?);
+    let key = ring::digest::digest(&SHA256, &serde_json::to_vec(&(3, &plan.hash, &plan.canvas, plan.fit, plan.spread, computer))?);
     let key: String = key.as_ref().iter().map(|byte| format!("{byte:02x}")).collect();
     let index = cache(dir).join(format!("{}-{key}.slice", plan.hash));
     if let Ok(hash) = std::fs::read_to_string(&index) && let Ok(path) = cache_path(&cache(dir), &hash) && digest(&path).ok().as_ref() == Some(&hash) { return Ok(hash); }
@@ -794,12 +794,13 @@ impl Runtime {
                 }
             };
             let computers = std::iter::once(status.id.clone()).chain(status.peers.iter().map(|peer| peer.id.clone())).collect();
-            plan = Some(Plan { hash, title, media, canvas, start_ms: now_ms() + 2000, fit: Default::default(), computers, pause_on_battery: true, paused: false, picture, asset_hash: None });
+            plan = Some(Plan { hash, title, media, canvas, start_ms: now_ms() + 2000, fit: Default::default(), computers, pause_on_battery: true, paused: false, picture, asset_hash: None, spread: Default::default() });
         } else {
             let plan = plan.as_mut().context("Choose a video first")?;
             match command {
                 Command::Pause { paused } => plan.paused = paused,
                 Command::Fit { fit } => plan.fit = fit,
+                Command::Spread { spread } => plan.spread = spread,
                 Command::Battery { enabled } => plan.pause_on_battery = enabled,
                 Command::Computer { id, enabled } => {
                     ensure!(id == status.id || status.peers.iter().any(|peer| peer.id == id), "Computer is no longer paired");
@@ -1186,7 +1187,7 @@ mod tests {
         Plan { hash: "a".repeat(64), title: "test".into(), media: Media { width: 640, height: 360, duration_ms: 10000, frame_rate: 30 },
             canvas: one_mk_wallpaper::Canvas { monitors: ["host", "remote"].into_iter().enumerate().map(|(index, computer)| one_mk_wallpaper::Monitor {
                 computer: computer.into(), name: computer.into(), rect: one_mk_wallpaper::Rect { x: index as f64 * 640.0, y: 0.0, width: 640.0, height: 360.0 }, local: None, scale: 1.0, online: true }).collect() },
-            start_ms: now_ms(), fit: Default::default(), computers: vec!["host".into(), "remote".into()], pause_on_battery: true, paused: false, picture: false, asset_hash: None }
+            start_ms: now_ms(), fit: Default::default(), computers: vec!["host".into(), "remote".into()], pause_on_battery: true, paused: false, picture: false, asset_hash: None, spread: Default::default() }
     }
 
     #[cfg(unix)]
