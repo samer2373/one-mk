@@ -92,6 +92,6 @@ jobs:
       - run: cargo build --locked -j 4 -p one-mk -p one-mk-tray -p one-mk-app -p one-mk-wallpaper-helper -p one-mk-wall --features one-mk-wall/gnome-bridge
       - name: Install artwork-check dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-pil
+          # PyPI first: apt's hosts sometimes do not resolve on the runners.
+          sudo python3 -m pip install --disable-pip-version-check --retries 5 pillow || sh scripts/apt-install.sh python3-pil
       - run: BIN_DIR=target/debug sh scripts/check-packaging.sh

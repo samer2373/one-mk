@@ -477,9 +477,40 @@ impl App {
             self.start_pairing(now);
         }
         y = self.footer_rule(ui, c, b.bottom() + GAP);
+        y = self.alone_row(ui, c, y, _status);
         y = self.autostart_row(ui, c, y, true);
         y = self.received_row(ui, c, y, false);
         y - c.top()
+    }
+
+    /// Pairing is optional: what already works on this computer alone, as
+    /// two quiet buttons under a line saying so. Returns the next y.
+    fn alone_row(&mut self, ui: &mut Ui, c: Rect, y: f32, status: &Status) -> f32 {
+        let head = "Or use oneMK on this computer alone";
+        let hh = para(ui, pos2(c.left(), y), c.width(), head, semibold(T_BODY), pal().ink);
+        let mut choices: Vec<(&str, Tab)> = Vec::new();
+        if status.wallpaper.as_ref().is_some_and(|w| w.available) { choices.push(("Wallpaper", Tab::Wallpaper)); }
+        // Changing keys here needs macOS or Windows; Linux can't yet.
+        if cfg!(any(windows, target_os = "macos")) { choices.push(("Change keys", Tab::Keys)); }
+        choices.push(("Clipboard history", Tab::Files));
+        // Each button is as wide as its words and they wrap to a new row, so
+        // no label is cut whatever the font or the card's width.
+        let gap = 8.0;
+        let mut x = 0.0;
+        let mut row_top = y + hh + 8.0;
+        for (label, tab) in &choices {
+            let w = (widgets::button_width(ui, label) + 8.0).min(c.width());
+            if x > 0.0 && x + w > c.width() {
+                x = 0.0;
+                row_top += 34.0 + gap;
+            }
+            let b = Rect::from_min_size(pos2(c.left() + x, row_top), vec2(w, 34.0));
+            if button(ui, b, Id::unique(("alone", *label)), label, Look::Quiet, !self.sheet_open(), Some(&format!("{label}, on this computer"))).clicked() {
+                self.set_tab(*tab);
+            }
+            x += w + gap;
+        }
+        row_top + 34.0 + GAP
     }
 
     /// The header: the screen as a small swatch, the name, and a line with
