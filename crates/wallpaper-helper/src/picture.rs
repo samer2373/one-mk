@@ -279,11 +279,45 @@ pub fn player_source(config: &one_mk_wallpaper::PlayerConfig) -> Result<RgbaImag
     source(&mut input, &config.plan)
 }
 
+/// The part of `image` one screen shows, shrunk to the screen's own pixels
+/// with a filter that averages them, when it is shown smaller than it is
+/// (an 8K picture on a 4K or 1080p screen). Sampling single points of such a
+/// picture looks jagged and shimmers; this keeps its detail clean. Returns
+/// the shrunk part and where the screen's slice falls in it, as fractions.
+fn shrunk_for(image: &RgbaImage, slice: one_mk_wallpaper::Rect, width: u32, height: u32) -> Option<(RgbaImage, one_mk_wallpaper::Rect)> {
+    let (source_width, source_height) = (f64::from(image.width()), f64::from(image.height()));
+    let across = slice.width * source_width / f64::from(width);
+    let down = slice.height * source_height / f64::from(height);
+    if across < 1.5 && down < 1.5 { return None; }
+    // The part of the picture the slice reaches, a pixel wider each side.
+    let left = (slice.x * source_width).floor().max(0.0) as u32;
+    let top = (slice.y * source_height).floor().max(0.0) as u32;
+    let right = (((slice.x + slice.width) * source_width).ceil().min(source_width)) as u32;
+    let bottom = (((slice.y + slice.height) * source_height).ceil().min(source_height)) as u32;
+    if right <= left || bottom <= top { return None; }
+    let (part_width, part_height) = (right - left, bottom - top);
+    let factor_x = across.max(1.0);
+    let factor_y = down.max(1.0);
+    let new_width = ((f64::from(part_width) / factor_x).round() as u32).max(1);
+    let new_height = ((f64::from(part_height) / factor_y).round() as u32).max(1);
+    let part = image::imageops::crop_imm(image, left, top, part_width, part_height).to_image();
+    let shrunk = image::imageops::resize(&part, new_width, new_height, image::imageops::FilterType::Lanczos3);
+    let at = one_mk_wallpaper::Rect {
+        x: (slice.x * source_width - f64::from(left)) / f64::from(part_width),
+        y: (slice.y * source_height - f64::from(top)) / f64::from(part_height),
+        width: slice.width * source_width / f64::from(part_width),
+        height: slice.height * source_height / f64::from(part_height),
+    };
+    Some((shrunk, at))
+}
+
 pub fn render(image: &RgbaImage, plan: &Plan, monitor: &Monitor) -> Result<RgbaImage> {
     let slice = plan.slice(monitor).context("Empty picture layout")?;
     let width = (monitor.rect.width * monitor.scale).round() as u32;
     let height = (monitor.rect.height * monitor.scale).round() as u32;
     pixel_limits(width, height).context("This screen is too large for a picture wallpaper")?;
+    let shrunk = shrunk_for(image, slice, width, height);
+    let (image, slice) = shrunk.as_ref().map_or((image, slice), |(part, at)| (part, *at));
     let mut pixels = RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 255]));
     for (horizontal, vertical, pixel) in pixels.enumerate_pixels_mut() {
         let source_x = slice.x + (f64::from(horizontal) + 0.5) / f64::from(width) * slice.width;
@@ -578,8 +612,8 @@ mod tests {
         for (fit, left, right) in [(Fit::Fill, [0, 60, 0, 255], [120, 60, 0, 255]),
             (Fit::Fit, [0, 0, 0, 255], [135, 15, 0, 255]), (Fit::Stretch, [0, 15, 0, 255], [120, 15, 0, 255])] {
             plan.fit = fit;
-            assert_eq!(render(&pixels, &plan, &plan.canvas.monitors[0]).unwrap().get_pixel(0, 0).0, left);
-            assert_eq!(render(&pixels, &plan, &plan.canvas.monitors[1]).unwrap().get_pixel(0, 0).0, right);
+            assert_near(render(&pixels, &plan, &plan.canvas.monitors[0]).unwrap().get_pixel(0, 0).0, left);
+            assert_near(render(&pixels, &plan, &plan.canvas.monitors[1]).unwrap().get_pixel(0, 0).0, right);
         }
         plan.fit = Fit::Stretch;
         plan.canvas.monitors[1].computer = "peer".into();
@@ -613,6 +647,39 @@ mod tests {
         assert!(error.to_string().contains("cannot be opened"), "{error}");
     }
 
+    /// A picture shown smaller than it is is filtered, which can move a value
+    /// a little (a sharp edge overshoots): where a pixel lands is what these check.
+    fn assert_near(actual: [u8; 4], expected: [u8; 4]) {
+        assert!(actual.iter().zip(expected).all(|(a, e)| a.abs_diff(e) <= 8), "{actual:?} is not near {expected:?}");
+    }
+
+    #[test]
+    fn a_picture_shown_smaller_than_it_is_is_averaged_not_sampled_at_points() {
+        use one_mk_wallpaper::{Fit, Rect};
+        // One-pixel black and white columns, shown 8 times smaller: an average
+        // is grey everywhere; sampling single points would give black or white.
+        let stripes = RgbaImage::from_fn(4000, 200, |column, _| { let v = if column % 2 == 0 { 0 } else { 255 }; image::Rgba([v, v, v, 255]) });
+        let mut plan = plan();
+        plan.fit = Fit::Stretch;
+        plan.media.width = 4000;
+        plan.media.height = 200;
+        plan.canvas.monitors.truncate(1);
+        plan.canvas.monitors[0].rect = Rect { x: 0.0, y: 0.0, width: 500.0, height: 25.0 };
+        plan.canvas.monitors[0].scale = 1.0;
+        let shown = render(&stripes, &plan, &plan.canvas.monitors[0]).unwrap();
+        assert_eq!(shown.dimensions(), (500, 25));
+        for column in 10..490 {
+            let value = shown.get_pixel(column, 12).0[0];
+            assert!((100..=155).contains(&value), "column {column} is {value}, not a grey average");
+        }
+        // A slice that reaches past the picture still has black bars, and its edge stays put.
+        plan.fit = Fit::Fit;
+        plan.canvas.monitors[0].rect = Rect { x: 0.0, y: 0.0, width: 500.0, height: 250.0 };
+        let fitted = render(&stripes, &plan, &plan.canvas.monitors[0]).unwrap();
+        assert_eq!(fitted.get_pixel(250, 0).0, [0, 0, 0, 255], "a bar above the picture");
+        assert!((100..=155).contains(&fitted.get_pixel(250, 125).0[0]));
+    }
+
     #[test]
     fn each_screen_shows_the_whole_picture_by_itself() {
         use one_mk_wallpaper::{Fit, Spread};
@@ -624,15 +691,15 @@ mod tests {
         for monitor in &plan.canvas.monitors {
             let shown = render(&pixels, &plan, monitor).unwrap();
             let (width, _) = shown.dimensions();
-            assert_eq!(shown.get_pixel(0, 0).0, [250, 0, 0, 255], "every screen starts on the picture's left edge");
-            assert_eq!(shown.get_pixel(width - 1, 0).0, [0, 0, 250, 255], "and ends on its right edge");
+            assert_near(shown.get_pixel(0, 0).0, [250, 0, 0, 255]);
+            assert_near(shown.get_pixel(width - 1, 0).0, [0, 0, 250, 255]);
         }
         plan.spread = Spread::Span;
         let first = render(&pixels, &plan, &plan.canvas.monitors[0]).unwrap();
         let last = &plan.canvas.monitors[plan.canvas.monitors.len() - 1];
         let second = render(&pixels, &plan, last).unwrap();
-        assert_eq!(first.get_pixel(first.width() - 1, 0).0, [250, 0, 0, 255], "spanning cuts the picture between the screens");
-        assert_eq!(second.get_pixel(second.width() - 1, 0).0, [0, 0, 250, 255]);
+        assert_near(first.get_pixel(first.width() - 1, 0).0, [250, 0, 0, 255]);
+        assert_near(second.get_pixel(second.width() - 1, 0).0, [0, 0, 250, 255]);
     }
 
     #[test]
