@@ -9,7 +9,7 @@
 // - the download chooser: 18 platforms as pure unit tests of js/detect.js, and
 //   7 of them in the browser with faked user agent, client hints, touch and GPU.
 import { launch, serve } from "./cdp.mjs";
-import { mkdirSync, mkdtempSync, symlinkSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, rmSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -68,6 +68,16 @@ const CASES = [
     if (r.panel !== panel || r.file !== file || r.label !== label || r.href !== href || r.sure !== sure) bad.push(`${name}: got ${JSON.stringify({ panel: r.panel, file: r.file, label: r.label, sure: r.sure })}`);
   }
   ok(`download detection, ${CASES.length} platforms (unit)`, bad.length === 0, bad.join(" | "));
+}
+
+// 0b. The 3D keyboard: every row is as wide as the case, so no key hangs off it.
+{
+  const src = readFileSync(join(site, "js/desk.js"), "utf8");
+  const rows = new Function("return " + src.match(/var ROWS = (\[[\s\S]*?\n  \]);/)[1])();
+  const widths = rows.map((r) => r.reduce((n, k) => n + k[2], 0));
+  ok("keyboard rows fit the 15-unit case", widths.every((w) => w <= 15) && widths[5] === 15, widths.join(", "));
+  const at = (id) => { for (const r of rows) { let x = 0; for (const k of r) { if (k[0] === id) return x; x += k[2]; } } };
+  ok("keyboard arrows are an inverted T", at("up") === at("down") && at("left") + 1 === at("down") && at("down") + 1 === at("right"));
 }
 
 const srv = await serve(site);

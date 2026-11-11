@@ -114,14 +114,16 @@
   }
 
   // ------------------------------------------------------------- keyboard --
-  // A 75% ANSI board: rows of [id, legend, width in units, kind].
+  // A compact board: rows of [id, legend, width in units, kind]. Every row is
+  // exactly 15 units (the case is 15 wide; tools/checks.mjs checks it), and the
+  // arrows are an inverted T with the up key over the down key.
   var ROWS = [
     [["esc", "Esc", 1, "acc"], ["f1", "F1", 1, "fn"], ["f2", "F2", 1, "fn"], ["f3", "F3", 1, "fn"], ["f4", "F4", 1, "fn"], ["f5", "F5", 1, "fn"], ["f6", "F6", 1, "fn"], ["f7", "F7", 1, "fn"], ["f8", "F8", 1, "fn"], ["f9", "F9", 1, "fn"], ["f10", "F10", 1, "fn"], ["f11", "F11", 1, "fn"], ["f12", "F12", 1, "fn"], ["prt", "PrSc", 1, "mod"], ["del", "Del", 1, "mod"]],
     [["`", "`", 1], ["1", "1", 1], ["2", "2", 1], ["3", "3", 1], ["4", "4", 1], ["5", "5", 1], ["6", "6", 1], ["7", "7", 1], ["8", "8", 1], ["9", "9", 1], ["0", "0", 1], ["-", "-", 1], ["=", "=", 1], ["bksp", "Backspace", 2, "mod"]],
     [["tab", "Tab", 1.5, "mod"], ["q", "Q", 1], ["w", "W", 1], ["e", "E", 1], ["r", "R", 1], ["t", "T", 1], ["y", "Y", 1], ["u", "U", 1], ["i", "I", 1], ["o", "O", 1], ["p", "P", 1], ["[", "[", 1], ["]", "]", 1], ["\\", "\\", 1.5, "mod"]],
     [["caps", "Caps", 1.75, "mod"], ["a", "A", 1], ["s", "S", 1], ["d", "D", 1], ["f", "F", 1], ["g", "G", 1], ["h", "H", 1], ["j", "J", 1], ["k", "K", 1], ["l", "L", 1], [";", ";", 1], ["'", "'", 1], ["enter", "Enter", 2.25, "mod"]],
-    [["shiftL", "Shift", 2.25, "mod"], ["z", "Z", 1], ["x", "X", 1], ["c", "C", 1], ["v", "V", 1], ["b", "B", 1], ["n", "N", 1], ["m", "M", 1], [",", ",", 1], [".", ".", 1], ["/", "/", 1], ["shiftR", "Shift", 1.75, "mod"], ["up", "↑", 1, "mod"]],
-    [["ctrlL", "Ctrl", 1.25, "mod"], ["super", "Super", 1.25, "mod"], ["altL", "Alt", 1.25, "mod"], ["space", "", 6.25], ["altR", "Alt", 1, "mod"], ["fn", "Fn", 1, "mod"], ["ctrlR", "Ctrl", 1, "mod"], ["left", "←", 1, "mod"], ["down", "↓", 1, "mod"], ["right", "→", 1, "mod"]]
+    [["shiftL", "Shift", 1.75, "mod"], ["z", "Z", 1], ["x", "X", 1], ["c", "C", 1], ["v", "V", 1], ["b", "B", 1], ["n", "N", 1], ["m", "M", 1], [",", ",", 1], [".", ".", 1], ["/", "/", 1], ["shiftR", "Shift", 1.25, "mod"], ["up", "↑", 1, "mod"]],
+    [["ctrlL", "Ctrl", 1.25, "mod"], ["super", "Super", 1.25, "mod"], ["altL", "Alt", 1.25, "mod"], ["space", "", 6.25], ["altR", "Alt", 1, "mod"], ["fn", "Fn", 1, "mod"], ["left", "←", 1, "mod"], ["down", "↓", 1, "mod"], ["right", "→", 1, "mod"]]
   ];
   var SHIFTED = { ":": ";", "?": "/", "!": "1", "@": "2", "_": "-", "\"": "'" };
   var REMAPS = {
