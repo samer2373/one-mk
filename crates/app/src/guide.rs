@@ -686,6 +686,9 @@ const MARGIN: f32 = 30.0;
 const RADIUS: u8 = R_GROUP;
 const HEADER_H: f32 = 16.0;
 const FOOTER_H: f32 = 30.0;
+/// Seconds on one step before the card says what to try when the switch is
+/// already on but oneMK still isn't allowed.
+const STUCK_AFTER: f64 = 25.0;
 
 fn body_galley(ctx: &egui::Context, text: &str, width: f32, col: Color32) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple(text.into(), regular(T_BODY), col, width);
@@ -882,9 +885,14 @@ fn draw_card(
             p.circle_filled(c, 3.5, wink(pal().ink2));
             let text = if v.covered || v.settings.is_none() {
                 "Waiting for System Settings…"
+            } else if now - v.phase_at > STUCK_AFTER {
+                // macOS can show a switch as on for an entry made by an
+                // older version of the app, and still refuse it.
+                "Already on? Remove it (−), reopen oneMK"
             } else {
                 "Watching for the switch…"
             };
+            let text = crate::style::fit(&p, text, &regular(T_META), inner.width() - 16.0);
             p.text(pos2(inner.left() + 16.0, fy), Align2::LEFT_CENTER, text, regular(T_META), wink(pal().ink2));
         }
         Footer::Note(text) => {
