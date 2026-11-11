@@ -123,6 +123,9 @@ class Manifest(unittest.TestCase):
             self.assertEqual((asset["size"], asset["sha256"]), (len(content), hashlib.sha256(content).hexdigest()))
         self.assertEqual([a["name"] for a in data["assets"]], sorted(a["name"] for a in data["assets"]), "assets sorted by name")
         self.assertLess(len(first), 256 * 1024)
+        # install.sh finds an archive's signed checksum by this exact run of keys (name, os, sha256 side by side).
+        for asset in data["assets"]:
+            self.assertIn(f'"name":"{asset["name"]}","os":"{asset["os"]}","sha256":"{asset["sha256"]}"'.encode(), first)
 
     def test_a_staged_manifest_or_checksum_file_is_never_listed_in_itself(self):
         self.stage_release()

@@ -43,7 +43,7 @@ fn run(seed: u64) {
     for step in 0..200 {
         let what;
         match random.below(14) {
-            0 | 1 | 2 => {
+            0..=2 => {
                 what = "a fresh plan";
                 let next = plan(model.sequence + 1 + random.below(3), model.serial, random.below(4) == 0);
                 let result = gate.accept(&owner(), next.clone());

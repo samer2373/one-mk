@@ -316,9 +316,8 @@ fn png_structure_attacks_are_refused() {
     assert!(inspect(&still(2, 2, &[png_chunk(b"tEXt", b"Comment\0hello")])).is_ok());
     assert!(inspect(&still(2, 2, &[png_chunk(b"tEXt", &vec![b'a'; MAX_METADATA + 1])])).unwrap_err().contains("metadata"));
     // Two headers, a header that is not first, image data before the header, a chunk longer than the file.
-    let mut twice = still(2, 2, &[ihdr(2, 2)]);
+    let twice = still(2, 2, &[ihdr(2, 2)]);
     assert!(inspect(&twice).is_err());
-    twice.truncate(0);
     let mut late = b"\x89PNG\r\n\x1a\n".to_vec();
     late.extend(png_chunk(b"tEXt", b"a\0b"));
     late.extend(ihdr(2, 2));

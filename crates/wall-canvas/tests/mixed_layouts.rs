@@ -7,6 +7,7 @@ const SCALES: [(Scale, u32); 4] = [(Scale::One, 4), (Scale::FiveFourths, 5), (Sc
 const ROTATIONS: [Rotation; 4] = [Rotation::Zero, Rotation::Clockwise90, Rotation::Half, Rotation::Clockwise270];
 const FITS: [Fit; 4] = [Fit::Cover, Fit::Contain, Fit::Stretch, Fit::Tile];
 
+#[allow(clippy::too_many_arguments)]
 /// A screen of `width` x `height` logical units, its pixels as the scale and rotation make them.
 fn screen(device: &str, name: &str, x: i64, y: i64, width: u32, height: u32, scale: (Scale, u32), rotation: Rotation) -> Output {
     let (buffer_width, buffer_height) = (width * scale.1 / 4, height * scale.1 / 4);
