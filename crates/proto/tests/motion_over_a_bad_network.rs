@@ -3,7 +3,7 @@
 //! absolute and relative (gaming) modes, across visits (epochs), mode switches and the
 //! wrap-around of the 32-bit sequence number and of the relative running sum.
 
-use one_mk_proto::{Datagram, Desktop, MotionReceiver, Pos, Received, RelReceived, Rect, RemoteCursor, Side, Step};
+use one_mk_proto::{Datagram, Desktop, MotionReceiver, Pos, Received, Rect, RelReceived, RemoteCursor, Side, Step};
 
 struct Rng(u64);
 impl Rng {
@@ -71,7 +71,9 @@ fn random_delta(rng: &mut Rng) -> (f64, f64) {
 
 #[test]
 fn absolute_motion_ends_exactly_where_the_sender_is_however_the_network_behaves() {
-    for (seed, loss, duplicate, window) in [(1, 0, 0, 1), (2, 30, 20, 8), (3, 70, 50, 3), (4, 10, 90, 20), (5, 95, 0, 1)] {
+    for (seed, loss, duplicate, window) in
+        [(1, 0, 0, 1), (2, 30, 20, 8), (3, 70, 50, 3), (4, 10, 90, 20), (5, 95, 0, 1)]
+    {
         let mut rng = Rng(0xA11CE ^ seed);
         let mut sender = RemoteCursor::enter(desktop(), Side::Left, 0.5, 3);
         let mut receiver = MotionReceiver::default();
@@ -110,10 +112,10 @@ fn absolute_motion_ends_exactly_where_the_sender_is_however_the_network_behaves(
         }
         // Whatever is still in flight arrives; then the sender's idle keepalive lands.
         for d in net.drain(&mut rng) {
-            if let Datagram::Motion { epoch, seq, pos } = d {
-                if let Received::Move(p) = receiver.accept(epoch, seq, pos) {
-                    at = p;
-                }
+            if let Datagram::Motion { epoch, seq, pos } = d
+                && let Received::Move(p) = receiver.accept(epoch, seq, pos)
+            {
+                at = p;
             }
         }
         let Datagram::Motion { epoch, seq, pos } = sender.current() else { panic!("absolute") };
@@ -187,7 +189,9 @@ fn a_late_click_is_placed_where_it_happened_and_the_pointer_goes_back() {
 
 #[test]
 fn relative_motion_never_drifts_over_a_bad_network_and_across_the_wrap_of_the_sum() {
-    for (seed, loss, duplicate, window, fling) in [(1u64, 0, 0, 1, false), (2, 40, 30, 6, false), (3, 80, 10, 2, false), (4, 25, 25, 5, true)] {
+    for (seed, loss, duplicate, window, fling) in
+        [(1u64, 0, 0, 1, false), (2, 40, 30, 6, false), (3, 80, 10, 2, false), (4, 25, 25, 5, true)]
+    {
         let mut rng = Rng(0xBEE5 ^ seed);
         let mut sender = RemoteCursor::enter(desktop(), Side::Left, 0.5, 9);
         sender.set_relative(true);
@@ -207,18 +211,18 @@ fn relative_motion_never_drifts_over_a_bad_network_and_across_the_wrap_of_the_su
                 net.send(&mut rng, sender.current());
             }
             for _ in 0..rng.below(3) {
-                if let Some(Datagram::MotionBy { epoch, seq, sum_x, sum_y }) = net.deliver(&mut rng) {
-                    if let RelReceived::MoveBy { dx, dy } = receiver.accept_relative(epoch, seq, (sum_x, sum_y)) {
-                        moved = (moved.0 + i64::from(dx), moved.1 + i64::from(dy));
-                    }
+                if let Some(Datagram::MotionBy { epoch, seq, sum_x, sum_y }) = net.deliver(&mut rng)
+                    && let RelReceived::MoveBy { dx, dy } = receiver.accept_relative(epoch, seq, (sum_x, sum_y))
+                {
+                    moved = (moved.0 + i64::from(dx), moved.1 + i64::from(dy));
                 }
             }
         }
         for d in net.drain(&mut rng) {
-            if let Datagram::MotionBy { epoch, seq, sum_x, sum_y } = d {
-                if let RelReceived::MoveBy { dx, dy } = receiver.accept_relative(epoch, seq, (sum_x, sum_y)) {
-                    moved = (moved.0 + i64::from(dx), moved.1 + i64::from(dy));
-                }
+            if let Datagram::MotionBy { epoch, seq, sum_x, sum_y } = d
+                && let RelReceived::MoveBy { dx, dy } = receiver.accept_relative(epoch, seq, (sum_x, sum_y))
+            {
+                moved = (moved.0 + i64::from(dx), moved.1 + i64::from(dy));
             }
         }
         let Datagram::MotionBy { epoch, seq, sum_x, sum_y } = sender.current() else { panic!("relative") };
@@ -228,7 +232,10 @@ fn relative_motion_never_drifts_over_a_bad_network_and_across_the_wrap_of_the_su
         // Everything the sender moved by arrived, to within the half pixel of rounding: no loss,
         // repeat or reordering leaves a residue.
         let target = (sent.0.round() as i64, sent.1.round() as i64);
-        assert!((moved.0 - target.0).abs() <= 1 && (moved.1 - target.1).abs() <= 1, "loss {loss}% dup {duplicate}%: moved {moved:?} but the sender moved {sent:?}");
+        assert!(
+            (moved.0 - target.0).abs() <= 1 && (moved.1 - target.1).abs() <= 1,
+            "loss {loss}% dup {duplicate}%: moved {moved:?} but the sender moved {sent:?}"
+        );
     }
 }
 

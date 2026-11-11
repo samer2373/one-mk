@@ -10,8 +10,41 @@ use one_mk_proto::Mods;
 const SHIFT: u32 = 42;
 const ALTGR: u32 = 100;
 const LAYOUTS: &[&str] = &[
-    "us", "us(dvorak)", "us(colemak)", "us(intl)", "gb", "de", "de(nodeadkeys)", "fr", "es", "it", "pt", "br", "se", "no", "fi", "dk", "ch(fr)", "ch(de)",
-    "be", "cz", "pl", "hu", "tr", "ru", "gr", "il", "jp", "latam", "ca(fr)", "ua", "ro", "sk", "hr", "is", "ie",
+    "us",
+    "us(dvorak)",
+    "us(colemak)",
+    "us(intl)",
+    "gb",
+    "de",
+    "de(nodeadkeys)",
+    "fr",
+    "es",
+    "it",
+    "pt",
+    "br",
+    "se",
+    "no",
+    "fi",
+    "dk",
+    "ch(fr)",
+    "ch(de)",
+    "be",
+    "cz",
+    "pl",
+    "hu",
+    "tr",
+    "ru",
+    "gr",
+    "il",
+    "jp",
+    "latam",
+    "ca(fr)",
+    "ua",
+    "ro",
+    "sk",
+    "hr",
+    "is",
+    "ie",
 ];
 
 fn keymap(symbols: &str) -> String {
@@ -52,7 +85,9 @@ fn every_character_a_layout_types_can_be_typed_again_from_its_own_table() {
                 let mut chars = text.chars();
                 let (Some(character), None) = (chars.next(), chars.next()) else { continue };
                 pairs += 1;
-                let chord = resolver.reverse(character, 0).unwrap_or_else(|| panic!("{symbols}: {character:?} (key {code}, {keys:?}) cannot be asked for again"));
+                let chord = resolver.reverse(character, 0).unwrap_or_else(|| {
+                    panic!("{symbols}: {character:?} (key {code}, {keys:?}) cannot be asked for again")
+                });
                 let again = with(&resolver, &chord.modifiers, 0, 0);
                 assert_eq!(
                     resolver.resolve(chord.code, again).as_deref(),
@@ -75,7 +110,9 @@ fn every_character_a_layout_types_can_be_typed_again_from_its_own_table() {
 #[test]
 fn shift_altgr_and_caps_lock_choose_the_right_symbol() {
     let Some(us) = resolver("us") else { return };
-    let typed = |resolver: &LayoutResolver, code: u32, keys: &[u32], caps: bool| resolver.resolve(code, with(resolver, keys, if caps { 2 } else { 0 }, 0));
+    let typed = |resolver: &LayoutResolver, code: u32, keys: &[u32], caps: bool| {
+        resolver.resolve(code, with(resolver, keys, if caps { 2 } else { 0 }, 0))
+    };
     // Letters: Caps Lock capitalises, and Shift undoes it.
     assert_eq!(typed(&us, 30, &[], false).as_deref(), Some("a"));
     assert_eq!(typed(&us, 30, &[SHIFT], false).as_deref(), Some("A"));
@@ -88,11 +125,17 @@ fn shift_altgr_and_caps_lock_choose_the_right_symbol() {
     // US has no AltGr characters: it types the plain one, not nothing.
     assert_eq!(typed(&us, 30, &[ALTGR], false).as_deref(), Some("a"));
     if let Some(de) = resolver("de") {
-        for (code, plain, shift, altgr, shift_altgr) in [(16u32, "q", "Q", "@", "Ω"), (18, "e", "E", "€", "€"), (12, "ß", "?", "\\", "¿")] {
+        for (code, plain, shift, altgr, shift_altgr) in
+            [(16u32, "q", "Q", "@", "Ω"), (18, "e", "E", "€", "€"), (12, "ß", "?", "\\", "¿")]
+        {
             assert_eq!(typed(&de, code, &[], false).as_deref(), Some(plain), "de key {code}");
             assert_eq!(typed(&de, code, &[SHIFT], false).as_deref(), Some(shift), "de key {code} shifted");
             assert_eq!(typed(&de, code, &[ALTGR], false).as_deref(), Some(altgr), "de key {code} with AltGr");
-            assert_eq!(typed(&de, code, &[SHIFT, ALTGR], false).as_deref(), Some(shift_altgr), "de key {code} with Shift+AltGr");
+            assert_eq!(
+                typed(&de, code, &[SHIFT, ALTGR], false).as_deref(),
+                Some(shift_altgr),
+                "de key {code} with Shift+AltGr"
+            );
         }
         // AltGr+E is the euro sign whatever Caps Lock says; Caps capitalises ä, ö, ü like any letter.
         assert_eq!(typed(&de, 18, &[ALTGR], true).as_deref(), Some("€"));
@@ -111,7 +154,12 @@ fn shift_altgr_and_caps_lock_choose_the_right_symbol() {
 #[test]
 fn a_second_layout_is_a_second_group_and_text_is_looked_up_in_the_one_in_use() {
     let Some(both) = resolver("us+ru:2") else { return };
-    assert_eq!(both.layout_name(0).as_deref().map(|n| n.to_lowercase().contains("english") || n.to_lowercase().contains("us")), Some(true), "{:?}", both.layout_name(0));
+    assert_eq!(
+        both.layout_name(0).as_deref().map(|n| n.to_lowercase().contains("english") || n.to_lowercase().contains("us")),
+        Some(true),
+        "{:?}",
+        both.layout_name(0)
+    );
     assert!(both.layout_name(1).is_some_and(|n| n.to_lowercase().contains("russian")), "{:?}", both.layout_name(1));
     assert!(both.layout_name(7).is_none(), "no such group");
     let at = |group: u32| both.resolve(30, with(&both, &[], 0, group));
@@ -134,7 +182,9 @@ fn hostile_requests_to_a_layout_return_nothing_and_never_panic() {
     }
     // Characters that can never be typed as text: controls, format characters, private use,
     // unassigned, separators other than the plain space, and ones no layout has.
-    for character in ['\0', '\n', '\t', '\u{7f}', '\u{200d}', '\u{202e}', '\u{e000}', '\u{a0}', '\u{2028}', '\u{10ffff}', '\u{378}'] {
+    for character in
+        ['\0', '\n', '\t', '\u{7f}', '\u{200d}', '\u{202e}', '\u{e000}', '\u{a0}', '\u{2028}', '\u{10ffff}', '\u{378}']
+    {
         assert_eq!(de.reverse(character, 0), None, "{character:?}");
     }
     assert!(de.reverse(' ', 0).is_some(), "a space is the space bar");

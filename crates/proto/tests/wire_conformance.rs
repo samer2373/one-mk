@@ -6,8 +6,8 @@
 use one_mk_proto::typing::LayoutDescriptor;
 use one_mk_proto::wallpaper::{self, Kind};
 use one_mk_proto::{
-    Batch, ClipFormat, ClipHeader, Control, Datagram, DecodeError, FileMsg, MAX_SCREENS, PROTOCOL_VERSION, Pos, Rect, Side,
-    StreamKind, caps, os,
+    Batch, ClipFormat, ClipHeader, Control, Datagram, DecodeError, FileMsg, MAX_SCREENS, PROTOCOL_VERSION, Pos, Rect,
+    Side, StreamKind, caps, os,
 };
 
 /// xorshift64*: deterministic, no dependencies.
@@ -34,7 +34,16 @@ impl Rng {
         Pos::new(self.range(-4_000_000, 4_000_000) as f64 / 256.0, self.range(-4_000_000, 4_000_000) as f64 / 256.0)
     }
     fn rects(&mut self) -> Vec<Rect> {
-        (0..self.below(5)).map(|_| Rect::new(self.range(-20000, 20000) as i32, self.range(-20000, 20000) as i32, self.range(1, 16000) as i32, self.range(1, 16000) as i32)).collect()
+        (0..self.below(5))
+            .map(|_| {
+                Rect::new(
+                    self.range(-20000, 20000) as i32,
+                    self.range(-20000, 20000) as i32,
+                    self.range(1, 16000) as i32,
+                    self.range(1, 16000) as i32,
+                )
+            })
+            .collect()
     }
     fn string(&mut self, max_chars: u64) -> String {
         const ALPHABET: [char; 12] = ['a', 'Z', '7', ' ', '-', 'é', 'ß', '界', '😀', 'ñ', '_', '.'];
@@ -113,7 +122,12 @@ fn catalogue() -> Vec<Control> {
         Control::CharacterKey { code: 30, down: true, character: 'ß' },
         Control::CharacterKey { code: 767, down: false, character: '界' },
         Control::KeyboardLayout(Box::new(layout("de", "nodeadkeys"))),
-        Control::KeyboardLayout(Box::new(LayoutDescriptor { name: "x".repeat(128), variant: String::new(), rules: String::new(), model: String::new() })),
+        Control::KeyboardLayout(Box::new(LayoutDescriptor {
+            name: "x".repeat(128),
+            variant: String::new(),
+            rules: String::new(),
+            model: String::new(),
+        })),
         Control::LiveWallpaper(String::new()),
         Control::LiveWallpaper("{\"action\":\"on\"}".into()),
         Control::LiveWallpaper("z".repeat(12000)),
@@ -121,11 +135,18 @@ fn catalogue() -> Vec<Control> {
         Control::WatchFocus { epoch: 7, on: true, app: true, fullscreen: false },
     ];
     for side in Side::ALL {
-        all.push(Control::Layout { side_of_you: side, version: u64::MAX, offset: Some((1 << 24, -(1 << 24))), clear_offset: false });
+        all.push(Control::Layout {
+            side_of_you: side,
+            version: u64::MAX,
+            offset: Some((1 << 24, -(1 << 24))),
+            clear_offset: false,
+        });
         all.push(Control::Layout { side_of_you: side, version: 0, offset: None, clear_offset: true });
         all.push(Control::Layout { side_of_you: side, version: 5, offset: None, clear_offset: false });
     }
-    for kind in [Kind::Version, Kind::Renderer, Kind::Canvas, Kind::ConsentRequest, Kind::ConsentGrant, Kind::ConsentRevoke] {
+    for kind in
+        [Kind::Version, Kind::Renderer, Kind::Canvas, Kind::ConsentRequest, Kind::ConsentGrant, Kind::ConsentRevoke]
+    {
         all.push(Control::Wallpaper(wallpaper_message(kind)));
     }
     all
@@ -134,7 +155,13 @@ fn catalogue() -> Vec<Control> {
 /// A random, canonical (so exactly round-trippable) message.
 fn random_control(rng: &mut Rng) -> Control {
     match rng.below(31) {
-        0 => Control::Hello { version: PROTOCOL_VERSION, name: rng.string(60), screens: rng.rects(), nonce: rng.next(), os: rng.below(4) as u8 },
+        0 => Control::Hello {
+            version: PROTOCOL_VERSION,
+            name: rng.string(60),
+            screens: rng.rects(),
+            nonce: rng.next(),
+            os: rng.below(4) as u8,
+        },
         1 => Control::Screens(rng.rects()),
         2 => Control::Enter { epoch: rng.next() as u16, pos: rng.pos() },
         3 => Control::Leave,
@@ -148,7 +175,8 @@ fn random_control(rng: &mut Rng) -> Control {
         11 => Control::Revoked { epoch: rng.next() as u16 },
         12 => Control::IdleRevoked { epoch: rng.next() as u16 },
         13 => {
-            let offset = rng.flag().then(|| (rng.range(-(1 << 24), 1 << 24) as i32, rng.range(-(1 << 24), 1 << 24) as i32));
+            let offset =
+                rng.flag().then(|| (rng.range(-(1 << 24), 1 << 24) as i32, rng.range(-(1 << 24), 1 << 24) as i32));
             let clear_offset = offset.is_none() && rng.flag();
             Control::Layout { side_of_you: Side::ALL[rng.below(4) as usize], version: rng.next(), offset, clear_offset }
         }
@@ -165,7 +193,10 @@ fn random_control(rng: &mut Rng) -> Control {
             down: rng.flag(),
             character: ['a', 'é', '界', '😀', '~', ' '][rng.below(6) as usize],
         },
-        23 => Control::KeyboardLayout(Box::new(layout(&format!("l{}", rng.below(99)), &rng.string(10).replace('\u{1f600}', "x")))),
+        23 => Control::KeyboardLayout(Box::new(layout(
+            &format!("l{}", rng.below(99)),
+            &rng.string(10).replace('\u{1f600}', "x"),
+        ))),
         24 => Control::LiveWallpaper(rng.string(200)),
         25 => Control::Wallpaper(wallpaper_message(Kind::Version)),
         26 => Control::Wallpaper(wallpaper_message(Kind::Canvas)),
@@ -197,12 +228,13 @@ fn every_truncation_is_rejected_or_the_older_shorter_form() {
                 Err(_) => {}
                 Ok(shorter) => {
                     let tag = encoded[0];
-                    assert!(
-                        matches!(tag, 13 | 16 | 17 | 18),
-                        "{message:?} cut to {cut} bytes decoded as {shorter:?}"
-                    );
+                    assert!(matches!(tag, 13 | 16 | 17 | 18), "{message:?} cut to {cut} bytes decoded as {shorter:?}");
                     // Never a message of another kind.
-                    assert_eq!(std::mem::discriminant(&shorter), std::mem::discriminant(&message), "{message:?} at {cut}");
+                    assert_eq!(
+                        std::mem::discriminant(&shorter),
+                        std::mem::discriminant(&message),
+                        "{message:?} at {cut}"
+                    );
                 }
             }
         }
@@ -284,7 +316,13 @@ fn decode_encode_is_stable_for_arbitrary_bytes() {
 #[test]
 fn only_a_hello_carries_a_version_and_only_ours_is_accepted() {
     let hello = |version: u16| {
-        let mut b = body(&Control::Hello { version: PROTOCOL_VERSION, name: "peer".into(), screens: vec![Rect::new(0, 0, 10, 10)], nonce: 9, os: os::LINUX });
+        let mut b = body(&Control::Hello {
+            version: PROTOCOL_VERSION,
+            name: "peer".into(),
+            screens: vec![Rect::new(0, 0, 10, 10)],
+            nonce: 9,
+            os: os::LINUX,
+        });
         b[1..3].copy_from_slice(&version.to_le_bytes());
         b
     };
@@ -321,12 +359,24 @@ fn hello_names_and_screens_are_cut_not_corrupted() {
     assert_eq!(name.len(), 254);
     assert!(name.chars().all(|c| c == 'é'));
     // Four-byte characters: 255 / 4 = 63 whole ones.
-    let b = body(&Control::Hello { version: PROTOCOL_VERSION, name: "😀".repeat(100), screens: vec![], nonce: 1, os: os::MACOS });
+    let b = body(&Control::Hello {
+        version: PROTOCOL_VERSION,
+        name: "😀".repeat(100),
+        screens: vec![],
+        nonce: 1,
+        os: os::MACOS,
+    });
     let Ok(Control::Hello { name, .. }) = Control::decode(&b) else { panic!() };
     assert_eq!(name.chars().count(), 63);
     // More monitors than the limit are cut to the limit, and the rest of the hello still reads.
     let many: Vec<Rect> = (0..200).map(|i| Rect::new(i * 10, 0, 10, 10)).collect();
-    let b = body(&Control::Hello { version: PROTOCOL_VERSION, name: "n".into(), screens: many.clone(), nonce: 77, os: os::LINUX });
+    let b = body(&Control::Hello {
+        version: PROTOCOL_VERSION,
+        name: "n".into(),
+        screens: many.clone(),
+        nonce: 77,
+        os: os::LINUX,
+    });
     let Ok(Control::Hello { screens, nonce, os: o, .. }) = Control::decode(&b) else { panic!() };
     assert_eq!((screens.len(), nonce, o), (MAX_SCREENS, 77, os::LINUX));
     assert_eq!(screens[..], many[..MAX_SCREENS]);
@@ -364,7 +414,11 @@ fn typing_messages_refuse_what_a_hostile_peer_could_send() {
     assert!(invalid(&text("\n".as_bytes())), "a newline goes through Enter, not as text");
     assert!(invalid(&text(&[b'a'; 9])), "over the limit");
     assert_eq!(Control::decode(&text(&[0xFF])), Err(DecodeError::BadString));
-    assert_eq!(Control::decode(&text(" ".as_bytes())), Ok(Control::Text { text: " ".into() }), "a space is a character");
+    assert_eq!(
+        Control::decode(&text(" ".as_bytes())),
+        Ok(Control::Text { text: " ".into() }),
+        "a space is a character"
+    );
     // An invalid text is sent as an empty one, which the receiver rejects: callers (the typing
     // `Sender`) validate first, so nothing invalid is ever built.
     let b = body(&Control::Text { text: "two".into() });
@@ -480,7 +534,12 @@ fn datagrams_round_trip_and_reject_cuts_and_unknown_tags() {
     for _ in 0..5000 {
         let datagram = match rng.below(4) {
             0 => Datagram::Motion { epoch: rng.next() as u16, seq: rng.next() as u32, pos: rng.pos() },
-            1 => Datagram::MotionBy { epoch: rng.next() as u16, seq: rng.next() as u32, sum_x: rng.next() as i32, sum_y: rng.next() as i32 },
+            1 => Datagram::MotionBy {
+                epoch: rng.next() as u16,
+                seq: rng.next() as u32,
+                sum_x: rng.next() as i32,
+                sum_y: rng.next() as i32,
+            },
             2 => Datagram::Probe { id: rng.next() as u32, sent_ns: rng.next() },
             _ => Datagram::ProbeEcho { id: rng.next() as u32, sent_ns: rng.next() },
         };
@@ -512,7 +571,8 @@ fn stream_kinds_cover_every_byte_exactly_once() {
 #[test]
 fn clipboard_headers_obey_their_limits() {
     // More than 16 items are cut to 16 when sending.
-    let items: Vec<_> = (0..40).map(|i| (if i % 2 == 0 { ClipFormat::Text } else { ClipFormat::Png }, i as u32)).collect();
+    let items: Vec<_> =
+        (0..40).map(|i| (if i % 2 == 0 { ClipFormat::Text } else { ClipFormat::Png }, i as u32)).collect();
     let header = ClipHeader { items: items.clone(), pull: false, concealed: false };
     let mut frame = Vec::new();
     header.encode_frame(&mut frame);
@@ -528,7 +588,9 @@ fn clipboard_headers_obey_their_limits() {
     }
     assert_eq!(ClipHeader::decode(&raw).unwrap().items.len(), 255);
     // A pull and a private probe carry no items and are distinct.
-    for (header, pull, concealed) in [(ClipHeader::pull_request(), true, false), (ClipHeader::private_probe(), false, true)] {
+    for (header, pull, concealed) in
+        [(ClipHeader::pull_request(), true, false), (ClipHeader::private_probe(), false, true)]
+    {
         let mut f = Vec::new();
         header.encode_frame(&mut f);
         let back = ClipHeader::decode(&f[2..]).unwrap();
@@ -536,7 +598,8 @@ fn clipboard_headers_obey_their_limits() {
     }
     // Every prefix of an item list is truncation, except exactly at an item boundary after n items.
     let mut frame = Vec::new();
-    ClipHeader { items: vec![(ClipFormat::Text, 5), (ClipFormat::Png, 9)], pull: true, concealed: true }.encode_frame(&mut frame);
+    ClipHeader { items: vec![(ClipFormat::Text, 5), (ClipFormat::Png, 9)], pull: true, concealed: true }
+        .encode_frame(&mut frame);
     for cut in 0..frame.len() - 3 {
         assert!(ClipHeader::decode(&frame[2..2 + cut]).is_err(), "cut {cut}");
     }
@@ -588,7 +651,11 @@ fn random_file_and_clipboard_headers_round_trip() {
                 path: rng.string(100),
                 size: rng.next(),
                 mtime: rng.next(),
-                batch: if rng.flag() { Batch::default() } else { Batch { id: rng.next() | 1, files: rng.next() as u32, bytes: rng.next() } },
+                batch: if rng.flag() {
+                    Batch::default()
+                } else {
+                    Batch { id: rng.next() | 1, files: rng.next() as u32, bytes: rng.next() }
+                },
             },
             1 => FileMsg::Accept { offset: rng.next() },
             2 => FileMsg::Reject { reason: rng.string(100) },
@@ -600,7 +667,11 @@ fn random_file_and_clipboard_headers_round_trip() {
         message.encode_frame(&mut frame);
         assert_eq!(FileMsg::decode(&frame[2..]), Ok(message));
         let header = ClipHeader {
-            items: (0..rng.below(17)).map(|_| ([ClipFormat::Text, ClipFormat::Html, ClipFormat::Png][rng.below(3) as usize], rng.next() as u32)).collect(),
+            items: (0..rng.below(17))
+                .map(|_| {
+                    ([ClipFormat::Text, ClipFormat::Html, ClipFormat::Png][rng.below(3) as usize], rng.next() as u32)
+                })
+                .collect(),
             pull: rng.flag(),
             concealed: rng.flag(),
         };
@@ -614,11 +685,34 @@ fn random_file_and_clipboard_headers_round_trip() {
 fn capability_bits_are_stable_and_local_ones_are_a_subset() {
     // The numeric values are the wire contract with already released builds.
     assert_eq!(
-        [caps::RELATIVE, caps::LOCK, caps::FOCUS, caps::POWER, caps::FOCUS_BEAT, caps::FOCUS_APP, caps::TEXT, caps::IDLE_REVOKE, caps::WALLPAPER, caps::CLIPBOARD_FETCH, caps::TEXT_SOURCE, caps::TEXT_HOLD, caps::LIVE_WALLPAPER],
+        [
+            caps::RELATIVE,
+            caps::LOCK,
+            caps::FOCUS,
+            caps::POWER,
+            caps::FOCUS_BEAT,
+            caps::FOCUS_APP,
+            caps::TEXT,
+            caps::IDLE_REVOKE,
+            caps::WALLPAPER,
+            caps::CLIPBOARD_FETCH,
+            caps::TEXT_SOURCE,
+            caps::TEXT_HOLD,
+            caps::LIVE_WALLPAPER
+        ],
         [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
     );
     // An unknown bit from a newer peer survives decoding untouched.
     let b = body(&Control::Caps(caps::LOCAL | 1 << 31));
     assert_eq!(Control::decode(&b), Ok(Control::Caps(caps::LOCAL | 1 << 31)));
-    assert_eq!(os::local(), if cfg!(target_os = "linux") { os::LINUX } else if cfg!(windows) { os::WINDOWS } else { os::MACOS });
+    assert_eq!(
+        os::local(),
+        if cfg!(target_os = "linux") {
+            os::LINUX
+        } else if cfg!(windows) {
+            os::WINDOWS
+        } else {
+            os::MACOS
+        }
+    );
 }

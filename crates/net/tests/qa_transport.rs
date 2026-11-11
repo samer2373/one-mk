@@ -3,8 +3,11 @@
 //! dead-peer detection, brief outages, shutdown notices and the failure
 //! paths of the pairing exchange. Nothing here leaves 127.0.0.1.
 
-use one_mk_net::{ControlWriter, Identity, Node, Pairing, Peer, open_stream, read_clip_header, read_file_msg, read_frame, read_stream_kind, write_file_msg};
 use one_mk_net::quinn::{RecvStream, SendStream};
+use one_mk_net::{
+    ControlWriter, Identity, Node, Pairing, Peer, open_stream, read_clip_header, read_file_msg, read_frame,
+    read_stream_kind, write_file_msg,
+};
 use one_mk_proto::{Batch, ClipFormat, ClipHeader, Control, FileMsg, StreamKind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,7 +50,10 @@ async fn control_frames_larger_than_the_limit_are_refused_before_they_are_read()
     // reader must not wait for (or allocate) it.
     send.write_all(&((Control::MAX_LEN + 1) as u16).to_le_bytes()).await.unwrap();
     let mut buf = Vec::new();
-    let err = tokio::time::timeout(Duration::from_secs(2), read_frame(&mut recv, &mut buf)).await.expect("must not wait for the body").unwrap_err();
+    let err = tokio::time::timeout(Duration::from_secs(2), read_frame(&mut recv, &mut buf))
+        .await
+        .expect("must not wait for the body")
+        .unwrap_err();
     assert!(err.to_string().contains("too large"), "{err}");
     assert!(buf.capacity() < Control::MAX_LEN, "nothing was allocated for it");
 }
@@ -99,7 +105,14 @@ async fn frames_decode_stream_ends_and_cuts_are_told_apart() {
 async fn an_unknown_stream_kind_is_refused_and_every_known_one_is_read() {
     let (a, b) = (node(), node());
     let (pa, pb) = connected(&a, &b).await;
-    for kind in [StreamKind::Control, StreamKind::Pairing, StreamKind::Clipboard, StreamKind::File, StreamKind::Probe, StreamKind::WallpaperVideo] {
+    for kind in [
+        StreamKind::Control,
+        StreamKind::Pairing,
+        StreamKind::Clipboard,
+        StreamKind::File,
+        StreamKind::Probe,
+        StreamKind::WallpaperVideo,
+    ] {
         let (send, _) = open_stream(&pa.conn, kind).await.unwrap();
         let (got, _, mut recv) = pb.accept_stream().await.unwrap();
         assert_eq!(got, kind);
@@ -108,7 +121,7 @@ async fn an_unknown_stream_kind_is_refused_and_every_known_one_is_read() {
     for bad in [0u8, 7, 99, 255] {
         let (mut send, _recv) = pa.conn.open_bi().await.unwrap();
         send.write_all(&[bad]).await.unwrap();
-        let err = pb.accept_stream().await.err().expect("an unknown kind is an error");
+        let err = pb.accept_stream().await.expect_err("an unknown kind is an error");
         assert!(err.to_string().contains("unknown stream kind"), "{err}");
     }
     // A stream that never says what it carries does not decide anything until it does.
@@ -132,7 +145,12 @@ async fn file_messages_and_clipboard_headers_cross_the_wire_and_obey_their_limit
     let (pa, pb) = connected(&a, &b).await;
     let (mut send, mut recv) = stream_pair(&pa, &pb, StreamKind::File).await;
     let messages = [
-        FileMsg::Offer { path: "dir/é.txt".into(), size: 1 << 33, mtime: 5, batch: Batch { id: 9, files: 2, bytes: 3 } },
+        FileMsg::Offer {
+            path: "dir/é.txt".into(),
+            size: 1 << 33,
+            mtime: 5,
+            batch: Batch { id: 9, files: 2, bytes: 3 },
+        },
         FileMsg::Accept { offset: 17 },
         FileMsg::End { hash: [3; 32] },
         FileMsg::Saved { name: "dir/é (1).txt".into() },
@@ -154,7 +172,8 @@ async fn file_messages_and_clipboard_headers_cross_the_wire_and_obey_their_limit
 
     // Clipboard headers: good, over 1 KiB, and a stream that ends before one.
     let (mut send, mut recv) = stream_pair(&pa, &pb, StreamKind::Clipboard).await;
-    let header = ClipHeader { items: vec![(ClipFormat::Text, 10), (ClipFormat::Png, 9_000_000)], pull: false, concealed: true };
+    let header =
+        ClipHeader { items: vec![(ClipFormat::Text, 10), (ClipFormat::Png, 9_000_000)], pull: false, concealed: true };
     let mut bytes = Vec::new();
     header.encode_frame(&mut bytes);
     send.write_all(&bytes).await.unwrap();
@@ -271,7 +290,9 @@ async fn a_closed_node_ends_accept_and_tells_its_peers_at_once() {
     let (pa, pb) = connected(&a, &b).await;
     let started = Instant::now();
     a.shutdown(Duration::from_secs(1)).await;
-    let reason = tokio::time::timeout(Duration::from_secs(2), pb.conn.closed()).await.expect("the peer is told, not left to time out");
+    let reason = tokio::time::timeout(Duration::from_secs(2), pb.conn.closed())
+        .await
+        .expect("the peer is told, not left to time out");
     assert!(started.elapsed() < Duration::from_secs(1), "{reason}");
     assert!(matches!(reason, one_mk_net::quinn::ConnectionError::ApplicationClosed(_)), "{reason:?}");
     let _ = pa;
@@ -328,7 +349,8 @@ async fn a_one_second_outage_is_survived_and_a_long_one_closes_the_connection_in
     wire.up.store(true, Ordering::SeqCst);
     let (mut send, _) = open_stream(&pa.conn, StreamKind::Control).await.unwrap();
     send.write_all(&frame(&[4])).await.unwrap();
-    let (kind, _, mut recv) = tokio::time::timeout(Duration::from_secs(3), pb.accept_stream()).await.expect("still connected").unwrap();
+    let (kind, _, mut recv) =
+        tokio::time::timeout(Duration::from_secs(3), pb.accept_stream()).await.expect("still connected").unwrap();
     assert_eq!(kind, StreamKind::Control);
     let mut buf = Vec::new();
     assert_eq!(read_frame(&mut recv, &mut buf).await.unwrap(), Some(Control::Leave));
@@ -338,7 +360,10 @@ async fn a_one_second_outage_is_survived_and_a_long_one_closes_the_connection_in
     // so held keys are let go and the pointer comes home.
     wire.up.store(false, Ordering::SeqCst);
     let started = Instant::now();
-    let (ra, rb) = tokio::join!(tokio::time::timeout(Duration::from_secs(8), pa.conn.closed()), tokio::time::timeout(Duration::from_secs(8), pb.conn.closed()));
+    let (ra, rb) = tokio::join!(
+        tokio::time::timeout(Duration::from_secs(8), pa.conn.closed()),
+        tokio::time::timeout(Duration::from_secs(8), pb.conn.closed())
+    );
     let (ra, rb) = (ra.expect("the dialler notices"), rb.expect("the acceptor notices"));
     assert!(matches!(ra, one_mk_net::quinn::ConnectionError::TimedOut), "{ra:?}");
     assert!(matches!(rb, one_mk_net::quinn::ConnectionError::TimedOut), "{rb:?}");
@@ -416,13 +441,30 @@ async fn clients_without_a_certificate_or_with_another_protocol_name_are_refused
     #[derive(Debug)]
     struct AcceptAll(Arc<rustls::crypto::CryptoProvider>);
     impl ServerCertVerifier for AcceptAll {
-        fn verify_server_cert(&self, _: &CertificateDer<'_>, _: &[CertificateDer<'_>], _: &ServerName<'_>, _: &[u8], _: UnixTime) -> Result<ServerCertVerified, rustls::Error> {
+        fn verify_server_cert(
+            &self,
+            _: &CertificateDer<'_>,
+            _: &[CertificateDer<'_>],
+            _: &ServerName<'_>,
+            _: &[u8],
+            _: UnixTime,
+        ) -> Result<ServerCertVerified, rustls::Error> {
             Ok(ServerCertVerified::assertion())
         }
-        fn verify_tls12_signature(&self, _: &[u8], _: &CertificateDer<'_>, _: &rustls::DigitallySignedStruct) -> Result<HandshakeSignatureValid, rustls::Error> {
+        fn verify_tls12_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &rustls::DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
             Ok(HandshakeSignatureValid::assertion())
         }
-        fn verify_tls13_signature(&self, message: &[u8], cert: &CertificateDer<'_>, dss: &rustls::DigitallySignedStruct) -> Result<HandshakeSignatureValid, rustls::Error> {
+        fn verify_tls13_signature(
+            &self,
+            message: &[u8],
+            cert: &CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
             rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0.signature_verification_algorithms)
         }
         fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
@@ -441,7 +483,9 @@ async fn clients_without_a_certificate_or_with_another_protocol_name_are_refused
             None => builder.with_no_client_auth(),
         };
         config.alpn_protocols = vec![alpn.to_vec()];
-        one_mk_net::quinn::ClientConfig::new(Arc::new(one_mk_net::quinn::crypto::rustls::QuicClientConfig::try_from(config).unwrap()))
+        one_mk_net::quinn::ClientConfig::new(Arc::new(
+            one_mk_net::quinn::crypto::rustls::QuicClientConfig::try_from(config).unwrap(),
+        ))
     };
 
     let server = node();
@@ -509,9 +553,12 @@ async fn a_peer_that_announces_an_oversized_name_is_refused() {
     let (a, b) = (node(), node());
     let (pa, pb) = connected(&a, &b).await;
     let me = a.identity().fingerprint;
-    let (start, _) = tokio::join!(Pairing::start(&pa, me, "me"), hostile_responder(&pb, Some(60_000), async |_send, _recv| {
-        tokio::time::sleep(Duration::from_millis(300)).await;
-    }));
+    let (start, _) = tokio::join!(
+        Pairing::start(&pa, me, "me"),
+        hostile_responder(&pb, Some(60_000), async |_send, _recv| {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        })
+    );
     let err = start.err().expect("an oversized name must fail the pairing");
     assert!(format!("{err:#}").contains("too long"), "{err:#}");
 }
@@ -537,13 +584,16 @@ async fn a_wrong_pairing_answer_is_never_taken_as_a_yes() {
             let pairing = Pairing::start(&pa, me, "me").await.unwrap();
             pairing.confirm_port(answer, Some(24900)).await
         };
-        let (result, ()) = tokio::join!(initiator, hostile_responder(&pb, None, async |mut send, recv| {
-            send.write_all(trailer).await.unwrap();
-            send.finish().unwrap();
-            // Keep both streams open while the initiator answers.
-            tokio::time::sleep(Duration::from_millis(600)).await;
-            drop(recv);
-        }));
+        let (result, ()) = tokio::join!(
+            initiator,
+            hostile_responder(&pb, None, async |mut send, recv| {
+                send.write_all(trailer).await.unwrap();
+                send.finish().unwrap();
+                // Keep both streams open while the initiator answers.
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                drop(recv);
+            })
+        );
         match outcome {
             Some(expected) => assert_eq!(result.unwrap(), expected, "{trailer:?} / {answer}"),
             None => {
@@ -588,7 +638,10 @@ async fn pairing_codes_differ_between_sessions_and_always_have_six_digits() {
     let mut seen = std::collections::HashSet::new();
     for _ in 0..12 {
         let (pa, pb) = connected(&a, &b).await;
-        let (sa, sb) = tokio::join!(Pairing::start(&pa, a.identity().fingerprint, "a"), Pairing::start(&pb, b.identity().fingerprint, "b"));
+        let (sa, sb) = tokio::join!(
+            Pairing::start(&pa, a.identity().fingerprint, "a"),
+            Pairing::start(&pb, b.identity().fingerprint, "b")
+        );
         let (sa, sb) = (sa.unwrap(), sb.unwrap());
         assert_eq!(sa.sas, sb.sas);
         let shown = sa.sas.to_string();

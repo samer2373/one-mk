@@ -147,17 +147,29 @@ async fn an_identity_can_be_used_to_run_a_node_and_the_name_is_never_empty() {
 #[test]
 fn a_damaged_devices_file_is_an_error_and_is_left_alone() {
     let dir = tempfile::tempdir().unwrap();
-    for text in ["device = 5", "[[device]\nname = \"x\"", "\u{0}\u{0}", "[[device]]\nname = 3\nfingerprint = \"x\"", "[[device]]\nfingerprint = \"x\""] {
+    for text in [
+        "device = 5",
+        "[[device]\nname = \"x\"",
+        "\u{0}\u{0}",
+        "[[device]]\nname = 3\nfingerprint = \"x\"",
+        "[[device]]\nfingerprint = \"x\"",
+    ] {
         write(dir.path(), text);
         let err = TrustStore::load(dir.path()).err().unwrap_or_else(|| panic!("{text:?} loaded"));
         assert!(format!("{err:#}").contains("devices.toml"), "{err:#}");
         // A change through `update` fails too, and does not replace the file with an empty one.
-        assert!(TrustStore::update(dir.path(), |s| {
-            s.upsert(device("new", 1));
-            Ok(())
-        })
-        .is_err());
-        assert_eq!(std::fs::read_to_string(dir.path().join("devices.toml")).unwrap(), text, "the damaged file is not overwritten");
+        assert!(
+            TrustStore::update(dir.path(), |s| {
+                s.upsert(device("new", 1));
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("devices.toml")).unwrap(),
+            text,
+            "the damaged file is not overwritten"
+        );
     }
 }
 
@@ -182,7 +194,11 @@ fn a_failing_change_writes_nothing_and_a_missing_file_is_an_empty_store() {
     TrustStore::update(dir.path(), |_| Ok(())).unwrap();
     assert_eq!(std::fs::metadata(dir.path().join("devices.toml")).unwrap().modified().unwrap(), stamp);
     // No temporary file is left behind by any of it.
-    let leftovers: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".tmp")).collect();
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
 
@@ -235,7 +251,11 @@ fn lookup_by_name_or_id_never_picks_between_two_matches() {
     assert!(store.find_fingerprint("12").is_none());
     assert!(store.find_fingerprint("12zz").is_none());
     assert!(store.find_fingerprint("abab").is_none(), "two fingerprints start with abab");
-    assert_eq!(store.find_fingerprint("abab-cdcd").unwrap().fingerprint, b.fingerprint, "a longer prefix tells them apart");
+    assert_eq!(
+        store.find_fingerprint("abab-cdcd").unwrap().fingerprint,
+        b.fingerprint,
+        "a longer prefix tells them apart"
+    );
     assert_eq!(store.find_fingerprint("ABABABAB").unwrap().fingerprint, a.fingerprint);
     // A blank alias does not hide the real name.
     assert_eq!(store.get(&fp(0xAB)).unwrap().label(), "Desk");
@@ -272,7 +292,10 @@ fn upsert_keeps_what_the_user_chose_and_refreshes_what_the_device_says() {
     assert_eq!(store.devices().len(), 1);
     let d = &store.devices()[0];
     assert_eq!((d.name.as_str(), d.os, d.addrs.as_slice()), ("New name", 3, &["10.0.0.9:24900".to_owned()][..]));
-    assert_eq!((d.side.as_str(), d.offset, d.layout_version, d.swap_ctrl_cmd, d.placed_by), ("left", Some((1, 2)), 99, Swap::Off, PlacedBy::User));
+    assert_eq!(
+        (d.side.as_str(), d.offset, d.layout_version, d.swap_ctrl_cmd, d.placed_by),
+        ("left", Some((1, 2)), 99, Swap::Off, PlacedBy::User)
+    );
     assert_eq!(d.label(), "Mine");
     assert_eq!(store.display(d), "Mine");
 }
@@ -291,7 +314,11 @@ fn names_shown_to_people_are_clean_and_commands_quote_what_needs_it() {
     assert!(!shown.chars().any(char::is_control) && !shown.contains('\u{202e}'), "{shown:?}");
     assert_eq!(store.arg(store.get(&fp(2)).unwrap()), "Plain-Name_1.local");
     assert_eq!(store.arg(store.get(&fp(3)).unwrap()), "\"Two Words\"");
-    assert_eq!(store.arg(store.get(&fp(4)).unwrap()), fp(4).short(), "a name that is not safe to type is given as its id");
+    assert_eq!(
+        store.arg(store.get(&fp(4)).unwrap()),
+        fp(4).short(),
+        "a name that is not safe to type is given as its id"
+    );
     let twin = store.get(&fp(5)).unwrap();
     assert!(store.label_is_shared(twin));
     assert_eq!(store.display(twin), format!("Twin ({})", twin.short_id()));

@@ -24,11 +24,77 @@ impl Rng {
 }
 
 const TOKENS: &[&str] = &[
-    "ctrl", "shift", "alt", "meta", "lctrl", "rmeta", "esc", "capslock", "a", "kp5", "f13", "+", "++", " ", "  ", "\t", "\n", "\u{0}",
-    "code:", "code:58", "code:0x3a", "code:99999", "evdev:", "evdev:KEY_A", "0x", "-1", "layer:", "layer:nav", "run:", "switch", "switch next",
-    "none", "back", "forward", "scroll", "scroll down 3", "up", "down", "lock-pointer", "on", "toggle", "!", "*", "**", "/", "\\", "%", "%2F",
-    "%25", "%zz", ":", "046d:c52b", "usb", "Bluetooth", "é", "ß", "界", "😀", "\u{202e}", "\u{200b}", "\u{feff}", "\u{301}", "\u{0}", "9999999999999",
-    "button4", "volume up", "ÿ", "İ", "ǅ", "ﬃ", "ẞ",
+    "ctrl",
+    "shift",
+    "alt",
+    "meta",
+    "lctrl",
+    "rmeta",
+    "esc",
+    "capslock",
+    "a",
+    "kp5",
+    "f13",
+    "+",
+    "++",
+    " ",
+    "  ",
+    "\t",
+    "\n",
+    "\u{0}",
+    "code:",
+    "code:58",
+    "code:0x3a",
+    "code:99999",
+    "evdev:",
+    "evdev:KEY_A",
+    "0x",
+    "-1",
+    "layer:",
+    "layer:nav",
+    "run:",
+    "switch",
+    "switch next",
+    "none",
+    "back",
+    "forward",
+    "scroll",
+    "scroll down 3",
+    "up",
+    "down",
+    "lock-pointer",
+    "on",
+    "toggle",
+    "!",
+    "*",
+    "**",
+    "/",
+    "\\",
+    "%",
+    "%2F",
+    "%25",
+    "%zz",
+    ":",
+    "046d:c52b",
+    "usb",
+    "Bluetooth",
+    "é",
+    "ß",
+    "界",
+    "😀",
+    "\u{202e}",
+    "\u{200b}",
+    "\u{feff}",
+    "\u{301}",
+    "\u{0}",
+    "9999999999999",
+    "button4",
+    "volume up",
+    "ÿ",
+    "İ",
+    "ǅ",
+    "ﬃ",
+    "ẞ",
 ];
 
 fn junk(rng: &mut Rng) -> String {
@@ -89,7 +155,10 @@ fn no_parser_panics_on_junk_and_what_parses_prints_and_parses_again() {
         assert!(!cleaned.is_empty() && cleaned.chars().count() <= 64);
         assert_eq!(sanitize_name(&cleaned), cleaned, "cleaning twice changes nothing: {s:?}");
     }
-    assert!(chords > 30 && triggers > 30 && outputs > 30 && patterns > 30, "{chords} {triggers} {outputs} {patterns} {devices}");
+    assert!(
+        chords > 30 && triggers > 30 && outputs > 30 && patterns > 30,
+        "{chords} {triggers} {outputs} {patterns} {devices}"
+    );
 }
 
 #[test]
@@ -100,7 +169,13 @@ fn device_names_with_every_awkward_character_round_trip() {
         let word = |rng: &mut Rng| (0..rng.below(6)).map(|_| pieces[rng.below(pieces.len())]).collect::<String>();
         let (serial, name) = (word(&mut rng), word(&mut rng));
         let bus = Bus::ALL[rng.below(Bus::ALL.len())];
-        let device = Device::new(bus, rng.next() as u16, rng.next() as u16, if rng.below(3) == 0 { None } else { Some(&serial) }, &name);
+        let device = Device::new(
+            bus,
+            rng.next() as u16,
+            rng.next() as u16,
+            if rng.below(3) == 0 { None } else { Some(&serial) },
+            &name,
+        );
         if device.serial.is_none() && device.name.is_empty() {
             // Nothing to tell it from the same model: refused, with a reason.
             assert!(device.to_string().parse::<Device>().is_err());

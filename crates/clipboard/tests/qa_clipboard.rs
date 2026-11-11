@@ -3,7 +3,9 @@
 //! exact boundaries, change detection (the loop guard), and sensitive content.
 
 use one_mk_clipboard::history::{self, History};
-use one_mk_clipboard::{CEILING_BYTES, ClipData, Clipboard, DEFAULT_MAX_BYTES, Filter, Image, Raw, Read, decode_png, encode_png};
+use one_mk_clipboard::{
+    CEILING_BYTES, ClipData, Clipboard, DEFAULT_MAX_BYTES, Filter, Image, Raw, Read, decode_png, encode_png,
+};
 use std::sync::Arc;
 
 struct Rng(u64);
@@ -21,7 +23,14 @@ fn rgba(width: usize, height: usize, seed: u64) -> Image {
     Image { width, height, rgba: (0..width * height * 4).map(|_| rng.next() as u8).collect() }
 }
 
-fn encode(color: png::ColorType, depth: png::BitDepth, width: u32, height: u32, data: &[u8], tweak: impl FnOnce(&mut png::Encoder<'_, &mut Vec<u8>>)) -> Vec<u8> {
+fn encode(
+    color: png::ColorType,
+    depth: png::BitDepth,
+    width: u32,
+    height: u32,
+    data: &[u8],
+    tweak: impl FnOnce(&mut png::Encoder<'_, &mut Vec<u8>>),
+) -> Vec<u8> {
     let mut out = Vec::new();
     let mut encoder = png::Encoder::new(&mut out, width, height);
     encoder.set_color(color);
@@ -88,7 +97,9 @@ fn images_survive_encode_and_decode_at_awkward_sizes() {
 #[test]
 fn every_png_colour_type_and_depth_becomes_rgba() {
     use png::{BitDepth::*, ColorType::*};
-    let case = |color, depth, w: u32, h: u32, data: &[u8], tweak: fn(&mut png::Encoder<'_, &mut Vec<u8>>)| decode_png(&encode(color, depth, w, h, data, tweak)).unwrap();
+    let case = |color, depth, w: u32, h: u32, data: &[u8], tweak: fn(&mut png::Encoder<'_, &mut Vec<u8>>)| {
+        decode_png(&encode(color, depth, w, h, data, tweak)).unwrap()
+    };
     // Rgb: opaque.
     let image = case(Rgb, Eight, 2, 1, &[1, 2, 3, 4, 5, 6], |_| {});
     assert_eq!((image.width, image.height, image.rgba), (2, 1, vec![1, 2, 3, 255, 4, 5, 6, 255]));
@@ -142,7 +153,13 @@ fn damaged_and_hostile_pictures_are_errors_within_bounds() {
     }
     // A header that claims a picture beyond the limit is refused up front: nothing that large
     // is allocated for a few dozen bytes of data.
-    for (w, h, color, depth) in [(20_000, 20_000, 6, 8), (65_535, 65_535, 6, 16), (1 << 20, 1 << 20, 0, 1), (16_385, 4_096, 6, 8), (u32::MAX >> 1, 2, 6, 8)] {
+    for (w, h, color, depth) in [
+        (20_000, 20_000, 6, 8),
+        (65_535, 65_535, 6, 16),
+        (1 << 20, 1 << 20, 0, 1),
+        (16_385, 4_096, 6, 8),
+        (u32::MAX >> 1, 2, 6, 8),
+    ] {
         let started = std::time::Instant::now();
         let bomb = claimed_size(w, h, color, depth);
         assert!(bomb.len() < 200);
@@ -161,9 +178,22 @@ async fn the_size_limit_is_exact_for_text_html_and_both_together() {
     let (clipboard, memory) = Clipboard::memory();
     clipboard.set_filter(Filter { max_bytes: 100, ..Filter::default() });
     let read = |memory: &one_mk_clipboard::MemoryClipboard, text: usize, html: usize| {
-        memory.set(Raw { text: (text > 0).then(|| "t".repeat(text)), html: (html > 0).then(|| "h".repeat(html)), ..Raw::default() });
+        memory.set(Raw {
+            text: (text > 0).then(|| "t".repeat(text)),
+            html: (html > 0).then(|| "h".repeat(html)),
+            ..Raw::default()
+        });
     };
-    for (text, html, fits) in [(100, 0, true), (101, 0, false), (0, 100, true), (0, 101, false), (60, 40, true), (60, 41, false), (1, 99, true), (50, 51, false)] {
+    for (text, html, fits) in [
+        (100, 0, true),
+        (101, 0, false),
+        (0, 100, true),
+        (0, 101, false),
+        (60, 40, true),
+        (60, 41, false),
+        (1, 99, true),
+        (50, 51, false),
+    ] {
         read(&memory, text, html);
         match clipboard.read(vec![]).await.unwrap() {
             Read::Changed { data, .. } => assert!(fits && data.len() == text + html, "{text}+{html}"),
@@ -180,7 +210,7 @@ async fn the_size_limit_is_exact_for_text_html_and_both_together() {
     // The bound the settings cannot exceed.
     assert_eq!(Filter { max_bytes: usize::MAX, ..Filter::default() }.max_bytes(), CEILING_BYTES);
     assert_eq!(Filter::default().max_bytes(), DEFAULT_MAX_BYTES);
-    assert!(DEFAULT_MAX_BYTES < CEILING_BYTES);
+    const { assert!(DEFAULT_MAX_BYTES < CEILING_BYTES) };
 }
 
 #[tokio::test]
@@ -202,7 +232,10 @@ async fn too_large_stays_too_large_until_the_content_or_the_limit_changes() {
 async fn a_huge_image_alone_is_too_large_and_a_picture_over_the_limit_after_encoding_too() {
     let (clipboard, memory) = Clipboard::memory();
     // Over the decoded-size bound: refused before it is even encoded.
-    memory.set(Raw { image: Some(Image { width: 16_384, height: 4_097, rgba: vec![0; 16_384 * 4_097 * 4] }), ..Raw::default() });
+    memory.set(Raw {
+        image: Some(Image { width: 16_384, height: 4_097, rgba: vec![0; 16_384 * 4_097 * 4] }),
+        ..Raw::default()
+    });
     assert!(matches!(clipboard.read(vec![]).await.unwrap(), Read::TooLarge { size, .. } if size > 256 << 20));
     // A noisy picture does not compress: its PNG is what the limit counts.
     let image = rgba(200, 200, 3);
@@ -241,7 +274,10 @@ async fn digests_tell_formats_apart_and_are_stable() {
     // Two images of different shape but the same bytes differ.
     let wide = Image { width: 4, height: 1, rgba: vec![7; 16] };
     let tall = Image { width: 1, height: 4, rgba: vec![7; 16] };
-    assert_ne!(digest_of(Raw { image: Some(wide), ..Raw::default() }).await, digest_of(Raw { image: Some(tall), ..Raw::default() }).await);
+    assert_ne!(
+        digest_of(Raw { image: Some(wide), ..Raw::default() }).await,
+        digest_of(Raw { image: Some(tall), ..Raw::default() }).await
+    );
     memory.set(Raw::default());
     assert_eq!(clipboard.digest().await.unwrap(), None, "an empty clipboard has no digest");
 }
@@ -262,7 +298,10 @@ async fn a_write_is_recognised_when_read_back_for_every_format_mix() {
     ];
     for data in cases {
         let written = clipboard.write(data.clone()).await.unwrap();
-        assert!(matches!(clipboard.read(vec![written]).await.unwrap(), Read::Unchanged(d) if d == written), "{data:?} came back as a change");
+        assert!(
+            matches!(clipboard.read(vec![written]).await.unwrap(), Read::Unchanged(d) if d == written),
+            "{data:?} came back as a change"
+        );
         assert_eq!(clipboard.digest().await.unwrap(), Some(written));
         // What a person copies next is a change.
         memory.set_text("something else");
@@ -275,7 +314,12 @@ async fn an_invalid_picture_from_a_peer_is_refused_and_leaves_the_clipboard_alon
     let (clipboard, memory) = Clipboard::memory();
     memory.set_text("mine");
     let writes = memory.writes();
-    for bad in [vec![], b"not a png".to_vec(), claimed_size(30_000, 30_000, 6, 8), encode_png(&rgba(4, 4, 1)).unwrap()[..40].to_vec()] {
+    for bad in [
+        vec![],
+        b"not a png".to_vec(),
+        claimed_size(30_000, 30_000, 6, 8),
+        encode_png(&rgba(4, 4, 1)).unwrap()[..40].to_vec(),
+    ] {
         assert!(clipboard.write(ClipData { png: Some(bad), ..ClipData::default() }).await.is_err());
     }
     assert_eq!(memory.text().as_deref(), Some("mine"));
@@ -316,13 +360,20 @@ async fn sensitive_content_follows_the_rules_in_every_combination() {
 async fn an_empty_piece_of_text_is_content_to_the_clipboard_but_not_to_the_sender() {
     let (clipboard, memory) = Clipboard::memory();
     memory.set(Raw { text: Some(String::new()), ..Raw::default() });
-    let Read::Changed { data, .. } = clipboard.read(vec![]).await.unwrap() else { panic!("an empty string is a format that is present") };
+    let Read::Changed { data, .. } = clipboard.read(vec![]).await.unwrap() else {
+        panic!("an empty string is a format that is present")
+    };
     assert!(!data.is_empty() && data.has_no_content(), "callers must check has_no_content before sending");
-    assert!(ClipData::default().has_no_content() && ClipData { png: Some(vec![]), ..ClipData::default() }.has_no_content());
+    assert!(
+        ClipData::default().has_no_content() && ClipData { png: Some(vec![]), ..ClipData::default() }.has_no_content()
+    );
     assert!(!ClipData { html: Some("x".into()), ..ClipData::default() }.has_no_content());
     assert_eq!(ClipData { text: Some("ab".into()), html: Some("c".into()), png: Some(vec![0; 4]) }.len(), 7);
     // And empty content is not what the history keeps.
-    assert!(clipboard.history().lock().unwrap().is_empty(), "a blank entry is not worth keeping (this used to be recorded)");
+    assert!(
+        clipboard.history().lock().unwrap().is_empty(),
+        "a blank entry is not worth keeping (this used to be recorded)"
+    );
 }
 
 // ------------------------------------------------------------------ history
@@ -333,14 +384,26 @@ fn history_previews_and_kinds_describe_what_is_held_without_trusting_it() {
     let picture = encode_png(&rgba(30, 20, 2)).unwrap();
     history.record(Arc::new(ClipData { png: Some(picture), ..ClipData::default() }), false, "desk");
     history.record(Arc::new(ClipData { png: Some(vec![1, 2, 3]), ..ClipData::default() }), false, "desk");
-    history.record(Arc::new(ClipData { html: Some("<p>h\u{202e}tml</p>".into()), text: None, png: None }), false, "bad\u{1b}[2Kname");
+    history.record(
+        Arc::new(ClipData { html: Some("<p>h\u{202e}tml</p>".into()), text: None, png: None }),
+        false,
+        "bad\u{1b}[2Kname",
+    );
     let list = history.list();
     assert_eq!((list[0].kind(), list[0].preview().as_str()), ("html", "<p>html</p>"));
     assert_eq!(list[0].origin, "bad[2Kname", "an origin from the network cannot carry escapes");
-    assert_eq!((list[1].kind(), list[1].preview().as_str()), ("image", "image"), "an undecodable picture is just an image");
+    assert_eq!(
+        (list[1].kind(), list[1].preview().as_str()),
+        ("image", "image"),
+        "an undecodable picture is just an image"
+    );
     assert_eq!((list[2].kind(), list[2].preview().as_str()), ("image", "image 30x20"));
     // With both formats, the plain text is what is shown.
-    history.record(Arc::new(ClipData { html: Some("<b>x</b>".into()), text: Some("plain".into()), png: None }), false, "x");
+    history.record(
+        Arc::new(ClipData { html: Some("<b>x</b>".into()), text: Some("plain".into()), png: None }),
+        false,
+        "x",
+    );
     assert_eq!((history.list()[0].kind(), history.list()[0].preview().as_str()), ("html", "plain"));
     assert_eq!(history::digest(&list[0].data), list[0].digest);
 }
@@ -357,7 +420,10 @@ fn history_bounds_hold_for_hostile_settings() {
     assert_eq!(history.list()[0].preview(), "entry 1199");
     // Shrinking the settings trims what is held at once, oldest first.
     history.configure(3, usize::MAX, usize::MAX, None);
-    assert_eq!(history.list().iter().map(|e| e.preview()).collect::<Vec<_>>(), ["entry 1199", "entry 1198", "entry 1197"]);
+    assert_eq!(
+        history.list().iter().map(|e| e.preview()).collect::<Vec<_>>(),
+        ["entry 1199", "entry 1198", "entry 1197"]
+    );
     // A byte budget smaller than one item keeps nothing and refuses to keep the next.
     history.configure(10, 4, 100, None);
     assert!(history.is_empty());

@@ -7,7 +7,9 @@
 //! this), so these run on any machine; what they cannot show is how the real
 //! OS APIs behave.
 
-use crate::common_logic::{Backoff, Controlled, KeyRepeat, LOCAL_INPUT_EVERY_MS, LocalInputGate, coalesce, is_repeatable};
+use crate::common_logic::{
+    Backoff, Controlled, KeyRepeat, LOCAL_INPUT_EVERY_MS, LocalInputGate, coalesce, is_repeatable,
+};
 use crate::win_logic::{self, SenderKeys, Space, WinKey};
 use crate::{Inject, linux_logic, macos_logic};
 use one_mk_proto::{Edge, Pos, Rect, Side, keynames, mediakeys, swap_ctrl_meta};
@@ -58,12 +60,14 @@ fn mac_deliverable(code: u32) -> bool {
 fn a_windows_keyboard_reaches_linux_and_macos_except_for_keys_they_lack() {
     let codes = windows_capturable();
     assert!(codes.len() > 120, "{} keys", codes.len());
-    let to_x: Vec<_> = codes.iter().filter(|&&c| linux_logic::evdev_to_xkeycode(c).is_none()).map(|&c| name(c)).collect();
+    let to_x: Vec<_> =
+        codes.iter().filter(|&&c| linux_logic::evdev_to_xkeycode(c).is_none()).map(|&c| name(c)).collect();
     assert!(to_x.is_empty(), "undeliverable to X: {to_x:?}");
     // Num Lock (it would toggle the Mac's keypad into arrows), JIS kana keys, power keys,
     // browser and launcher keys, and F21-F24 have no Mac key.
     let documented: BTreeSet<u32> =
-        [69, 90, 91, 116, 128, 140, 142, 143, 155, 156, 157, 158, 159, 166, 172, 173, 191, 192, 193, 194, 217, 226].into();
+        [69, 90, 91, 116, 128, 140, 142, 143, 155, 156, 157, 158, 159, 166, 172, 173, 191, 192, 193, 194, 217, 226]
+            .into();
     let to_mac: BTreeSet<u32> = codes.iter().copied().filter(|&c| !mac_deliverable(c)).collect();
     let unexpected: Vec<_> = to_mac.difference(&documented).map(|&c| name(c)).collect();
     assert!(unexpected.is_empty(), "newly undeliverable to a Mac: {unexpected:?}");
@@ -102,8 +106,15 @@ fn linux_keys_are_delivered_as_themselves_or_not_at_all() {
         assert_eq!(linux_logic::evdev_to_xkeycode(evdev), Some(keycode as u8));
         // Print Screen's second code (210) and the JIS half/full-width key (85) are sent as their
         // Windows twin and come back as that twin: a one-way alias, not a mix-up.
-        if let (Some(WinKey::Scan { scan, extended }), false) = (win_logic::evdev_to_win(evdev), [210, 85].contains(&evdev)) {
-            assert_eq!(win_logic::scan_to_evdev(scan, extended), Some(evdev), "{} through a Windows scan code", name(evdev));
+        if let (Some(WinKey::Scan { scan, extended }), false) =
+            (win_logic::evdev_to_win(evdev), [210, 85].contains(&evdev))
+        {
+            assert_eq!(
+                win_logic::scan_to_evdev(scan, extended),
+                Some(evdev),
+                "{} through a Windows scan code",
+                name(evdev)
+            );
         }
         if let Some(mac) = macos_logic::evdev_to_mac(evdev) {
             // The aliases (Print Screen to F13, Menu to the context-menu key) come back as the
@@ -127,9 +138,47 @@ fn every_key_a_person_can_name_in_a_rule_is_deliverable_or_known_not_to_be() {
     let no_win: BTreeSet<u32> = named.iter().copied().filter(|&c| win_logic::evdev_to_win(c).is_none()).collect();
     let expected_no_win: BTreeSet<u32> =
         [95, 101, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 161, 224, 225, 228, 229, 230, 248].into();
-    assert!(no_win.is_subset(&expected_no_win), "newly missing on Windows: {:?}", no_win.difference(&expected_no_win).map(|&c| name(c)).collect::<Vec<_>>());
+    assert!(
+        no_win.is_subset(&expected_no_win),
+        "newly missing on Windows: {:?}",
+        no_win.difference(&expected_no_win).map(|&c| name(c)).collect::<Vec<_>>()
+    );
     // The keys every keyboard has are never missing anywhere.
-    for key in ["a", "z", "0", "9", "enter", "esc", "space", "tab", "backspace", "capslock", "lctrl", "rctrl", "lshift", "rshift", "lalt", "ralt", "lmeta", "rmeta", "left", "right", "up", "down", "home", "end", "pageup", "pagedown", "delete", "insert", "f1", "f12", "kp0", "kp9", "kpenter"] {
+    for key in [
+        "a",
+        "z",
+        "0",
+        "9",
+        "enter",
+        "esc",
+        "space",
+        "tab",
+        "backspace",
+        "capslock",
+        "lctrl",
+        "rctrl",
+        "lshift",
+        "rshift",
+        "lalt",
+        "ralt",
+        "lmeta",
+        "rmeta",
+        "left",
+        "right",
+        "up",
+        "down",
+        "home",
+        "end",
+        "pageup",
+        "pagedown",
+        "delete",
+        "insert",
+        "f1",
+        "f12",
+        "kp0",
+        "kp9",
+        "kpenter",
+    ] {
         let code = keynames::parse_key(key).unwrap();
         assert!(win_logic::evdev_to_win(code).is_some(), "{key} on Windows");
         assert!(macos_logic::evdev_to_mac(code).is_some(), "{key} on a Mac");
@@ -143,7 +192,10 @@ fn every_key_a_person_can_name_in_a_rule_is_deliverable_or_known_not_to_be() {
 fn ctrl_c_on_a_pc_keyboard_is_cmd_c_on_the_mac_and_back() {
     use macos_logic::{Modifiers, flags};
     // PC -> Mac. Windows reports left Ctrl as scan 0x1D and right Ctrl as the extended 0x1D.
-    let (lctrl, rctrl) = (win_logic::hook_key_to_evdev(0xA2, 0x1D, false).unwrap(), win_logic::hook_key_to_evdev(0xA3, 0x1D, true).unwrap());
+    let (lctrl, rctrl) = (
+        win_logic::hook_key_to_evdev(0xA2, 0x1D, false).unwrap(),
+        win_logic::hook_key_to_evdev(0xA3, 0x1D, true).unwrap(),
+    );
     assert_eq!((lctrl, rctrl), (29, 97));
     let mut mac = Modifiers::default();
     assert!(mac.update(swap_ctrl_meta(lctrl), true));
@@ -293,7 +345,8 @@ fn up_and_right_mean_the_same_on_every_os() {
 // --------------------------------------------------- Windows scaling and DPI
 
 fn random_layout(rng: &mut Rng) -> (Vec<Rect>, u32) {
-    let sizes = [(1920, 1080), (3840, 2160), (2560, 1440), (1366, 768), (1440, 900), (2880, 1800), (1080, 1920), (7680, 4320)];
+    let sizes =
+        [(1920, 1080), (3840, 2160), (2560, 1440), (1366, 768), (1440, 900), (2880, 1800), (1080, 1920), (7680, 4320)];
     let (w, h) = rng.pick(&sizes);
     let mut screens = vec![Rect::new(0, 0, w, h)];
     for _ in 0..rng.below(3) {
@@ -320,7 +373,7 @@ fn overlap(a: &Rect, b: &Rect) -> bool {
 /// that touched still touch.
 #[test]
 fn a_mixed_monitor_desktop_is_scaled_without_overlaps_or_gaps() {
-    let mut rng = Rng(0xD91_2024);
+    let mut rng = Rng(0x0D91_2024);
     let mut checked = 0;
     for _ in 0..4000 {
         let (screens, dpi) = random_layout(&mut rng);
@@ -344,9 +397,20 @@ fn a_mixed_monitor_desktop_is_scaled_without_overlaps_or_gaps() {
             let touch_y = a.bottom() == b.y || b.bottom() == a.y;
             if (touch_x && a.y < b.bottom() && b.y < a.bottom()) || (touch_y && a.x < b.right() && b.x < a.right()) {
                 let (l, m) = (&logical.screens[i], &logical.screens[i + 1]);
-                let gap = if l.right().min(m.right()) <= l.x.max(m.x) { (l.right() - m.x).abs().min((m.right() - l.x).abs()) } else { 0 };
-                let gap_y = if l.bottom().min(m.bottom()) <= l.y.max(m.y) { (l.bottom() - m.y).abs().min((m.bottom() - l.y).abs()) } else { 0 };
-                assert!(gap == 0 && gap_y == 0, "monitors that touched are {gap}/{gap_y} px apart after scaling: {screens:?} at {scale}");
+                let gap = if l.right().min(m.right()) <= l.x.max(m.x) {
+                    (l.right() - m.x).abs().min((m.right() - l.x).abs())
+                } else {
+                    0
+                };
+                let gap_y = if l.bottom().min(m.bottom()) <= l.y.max(m.y) {
+                    (l.bottom() - m.y).abs().min((m.bottom() - l.y).abs())
+                } else {
+                    0
+                };
+                assert!(
+                    gap == 0 && gap_y == 0,
+                    "monitors that touched are {gap}/{gap_y} px apart after scaling: {screens:?} at {scale}"
+                );
             }
         }
         // Every physical pixel maps into the reported space and back to within one pixel.
@@ -356,8 +420,14 @@ fn a_mixed_monitor_desktop_is_scaled_without_overlaps_or_gaps() {
             let there = space.to_logical(x, y);
             assert!(logical.screen_at(there).is_some(), "{there:?} is on a reported monitor");
             let (bx, by) = space.to_phys(there);
-            assert!((bx - x).abs() <= scale.ceil() as i32 && (by - y).abs() <= scale.ceil() as i32, "({x},{y}) -> {there:?} -> ({bx},{by}) at {scale}");
-            assert!(screens.iter().any(|r| (r.x..r.right()).contains(&bx) && (r.y..r.bottom()).contains(&by)), "lands on a monitor");
+            assert!(
+                (bx - x).abs() <= scale.ceil() as i32 && (by - y).abs() <= scale.ceil() as i32,
+                "({x},{y}) -> {there:?} -> ({bx},{by}) at {scale}"
+            );
+            assert!(
+                screens.iter().any(|r| (r.x..r.right()).contains(&bx) && (r.y..r.bottom()).contains(&by)),
+                "lands on a monitor"
+            );
         }
         // Absolute SendInput coordinates stay in range across the whole virtual desktop.
         let b = space.phys().bounds();
@@ -389,7 +459,8 @@ fn edges_are_hit_exactly_where_the_cursor_cannot_go_further() {
         for side in Side::ALL {
             armed.extend(space.logical().exposed_edges(side));
         }
-        let on_screen = |x: i32, y: i32| screens.iter().any(|r| (r.x..r.right()).contains(&x) && (r.y..r.bottom()).contains(&y));
+        let on_screen =
+            |x: i32, y: i32| screens.iter().any(|r| (r.x..r.right()).contains(&x) && (r.y..r.bottom()).contains(&y));
         // Near the ends of an edge's span, rounding to logical pixels may legitimately differ
         // by a pixel; those few pixels are left out.
         let slack = scale.ceil() as i32 * 2 + 2;
@@ -431,12 +502,34 @@ fn edges_are_hit_exactly_where_the_cursor_cannot_go_further() {
                         Side::Top => y == r.y,
                         Side::Bottom => y == r.bottom() - 1,
                     };
-                    assert!(at_border || near_a_seam(r, side, x, y) || screens.iter().any(|o| o.x <= x && x < o.right() && o.y <= y && y < o.bottom() && (match side { Side::Left => x == o.x, Side::Right => x == o.right() - 1, Side::Top => y == o.y, Side::Bottom => y == o.bottom() - 1 })), "({x},{y}) reported as {side:?} but is not on that edge of any monitor: {screens:?}");
+                    assert!(
+                        at_border
+                            || near_a_seam(r, side, x, y)
+                            || screens.iter().any(|o| o.x <= x
+                                && x < o.right()
+                                && o.y <= y
+                                && y < o.bottom()
+                                && (match side {
+                                    Side::Left => x == o.x,
+                                    Side::Right => x == o.right() - 1,
+                                    Side::Top => y == o.y,
+                                    Side::Bottom => y == o.bottom() - 1,
+                                })),
+                        "({x},{y}) reported as {side:?} but is not on that edge of any monitor: {screens:?}"
+                    );
                 }
                 if expected.len() == 1 {
-                    assert_eq!(got, Some(expected[0]), "pixel ({x},{y}) of {r:?} is the end of the reach on {:?}: {screens:?} at {scale}", expected[0]);
+                    assert_eq!(
+                        got,
+                        Some(expected[0]),
+                        "pixel ({x},{y}) of {r:?} is the end of the reach on {:?}: {screens:?} at {scale}",
+                        expected[0]
+                    );
                 } else if expected.len() > 1 {
-                    assert!(got.is_some_and(|s| expected.contains(&s)), "corner ({x},{y}): {got:?} not in {expected:?}");
+                    assert!(
+                        got.is_some_and(|s| expected.contains(&s)),
+                        "corner ({x},{y}): {got:?} not in {expected:?}"
+                    );
                 }
             }
         }
@@ -449,7 +542,9 @@ fn edges_are_hit_exactly_where_the_cursor_cannot_go_further() {
 /// on every pixel of desktops up to six 8K monitors wide.
 #[test]
 fn absolute_coordinates_land_on_the_pixel_asked_for_whichever_way_windows_converts() {
-    for size in [1, 2, 3, 640, 1366, 1920, 2560, 3000, 3440, 3840, 5120, 7680, 8192, 11_520, 15_360, 19_200, 30_720, 32_767] {
+    for size in
+        [1, 2, 3, 640, 1366, 1920, 2560, 3000, 3440, 3840, 5120, 7680, 8192, 11_520, 15_360, 19_200, 30_720, 32_767]
+    {
         for offset in 0..size {
             let n = i64::from(win_logic::normalize_axis(offset, size));
             assert!((0..=65535).contains(&n), "{offset}/{size}");
@@ -475,7 +570,9 @@ fn absolute_coordinates_land_on_the_pixel_asked_for_whichever_way_windows_conver
 // ------------------------------------------------------------ common logic
 
 /// What the pointer does, as a person sees it: the position at the moment of each click or key.
-fn replay(events: &[Inject]) -> (Vec<(Inject, (i64, i64))>, (i64, i64)) {
+type Place = (i64, i64);
+
+fn replay(events: &[Inject]) -> (Vec<(Inject, Place)>, Place) {
     let mut at = (0i64, 0i64);
     let mut log = Vec::new();
     for event in events {
@@ -509,7 +606,13 @@ fn coalescing_never_changes_where_anything_happens() {
         assert_eq!(replay(&events), replay(&out), "{events:?} -> {out:?}");
         assert!(out.len() <= events.len());
         // No two moves in a row that could have been one.
-        assert!(!out.windows(2).any(|w| matches!((w[0], w[1]), (Inject::MoveTo(_), Inject::MoveTo(_)) | (Inject::MoveBy { .. }, Inject::MoveBy { .. }))), "{out:?}");
+        assert!(
+            !out.windows(2).any(|w| matches!(
+                (w[0], w[1]),
+                (Inject::MoveTo(_), Inject::MoveTo(_)) | (Inject::MoveBy { .. }, Inject::MoveBy { .. })
+            )),
+            "{out:?}"
+        );
         reduced += events.len() - out.len();
         total += events.len();
     }
@@ -646,7 +749,7 @@ fn reconnecting_backs_off_and_starts_over() {
 /// released, last pressed first, each exactly once, buttons included.
 #[test]
 fn nothing_stays_pressed_after_the_peer_lets_go() {
-    let mut rng = Rng(0x57AC_0FF);
+    let mut rng = Rng(0x0057_AC0F);
     for _ in 0..500 {
         let mut held = linux_logic::Held::default();
         let mut down: BTreeSet<(bool, u32)> = BTreeSet::new();
