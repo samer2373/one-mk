@@ -477,9 +477,32 @@ impl App {
             self.start_pairing(now);
         }
         y = self.footer_rule(ui, c, b.bottom() + GAP);
+        y = self.alone_row(ui, c, y, _status);
         y = self.autostart_row(ui, c, y, true);
         y = self.received_row(ui, c, y, false);
         y - c.top()
+    }
+
+    /// Pairing is optional: what already works on this computer alone, as
+    /// two quiet buttons under a line saying so. Returns the next y.
+    fn alone_row(&mut self, ui: &mut Ui, c: Rect, y: f32, status: &Status) -> f32 {
+        let head = "Or use oneMK on this computer alone";
+        let hh = para(ui, pos2(c.left(), y), c.width(), head, semibold(T_BODY), pal().ink);
+        let mut choices: Vec<(&str, Tab)> = Vec::new();
+        if status.wallpaper.as_ref().is_some_and(|w| w.available) { choices.push(("Wallpaper", Tab::Wallpaper)); }
+        // Changing keys here needs macOS or Windows; Linux can't yet.
+        if cfg!(any(windows, target_os = "macos")) { choices.push(("Change keys", Tab::Keys)); }
+        choices.push(("Clipboard history", Tab::Files));
+        let top = y + hh + 8.0;
+        let gap = 8.0;
+        let w = (c.width() - gap * (choices.len() as f32 - 1.0)) / choices.len() as f32;
+        for (i, (label, tab)) in choices.iter().enumerate() {
+            let b = Rect::from_min_size(pos2(c.left() + i as f32 * (w + gap), top), vec2(w, 34.0));
+            if button(ui, b, Id::unique(("alone", *label)), label, Look::Quiet, !self.sheet_open(), Some(&format!("{label}, on this computer"))).clicked() {
+                self.set_tab(*tab);
+            }
+        }
+        top + 34.0 + GAP
     }
 
     /// The header: the screen as a small swatch, the name, and a line with

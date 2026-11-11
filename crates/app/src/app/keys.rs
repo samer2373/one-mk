@@ -788,9 +788,14 @@ impl App {
     }
 
     /// Runs `cmds` in order through `one-mk`; an error shows in `area`.
-    fn tune_cmds(&mut self, what: &str, area: &'static str, cmds: Vec<Vec<String>>, key: Option<String>) {
+    fn tune_cmds(&mut self, what: &str, area: &'static str, mut cmds: Vec<Vec<String>>, key: Option<String>) {
         if cmds.is_empty() {
             return;
+        }
+        // Nobody paired, and a first key rule: it has no one to be sent to, so
+        // it applies on this computer (where that can work) without a second step.
+        if area == "keyboard" && self.solo_rules_start() {
+            cmds.push(vec!["keymap".into(), "local".into(), "on".into()]);
         }
         self.keys.n += 1;
         let job = Job::Tune { what: what.into(), area, n: self.keys.n };
@@ -799,6 +804,16 @@ impl App {
             self.keys.error = None;
         }
         self.link.tune(job, cmds, key);
+    }
+
+    /// Whether the first key rule being made should also switch on "Also on
+    /// this computer": no computer is paired, none is set yet, and this
+    /// system can apply them.
+    fn solo_rules_start(&self) -> bool {
+        cfg!(any(windows, target_os = "macos"))
+            && self.running().is_some_and(|status| status.peers.is_empty())
+            && !self.prefs.input.local_rules
+            && self.prefs.input.keys.is_empty()
     }
 
     /// A tuning command finished.
@@ -1122,7 +1137,8 @@ impl App {
                 View::Mouse => self.mouse_panel(ui, at, w),
             };
             // Only where it can work: on Linux there is nothing to switch.
-            if cfg!(any(windows, target_os = "macos")) {
+            // (Alone on Linux it says why, rather than leaving a rule that seems to do nothing.)
+            if cfg!(any(windows, target_os = "macos")) || self.running().is_some_and(|status| status.peers.is_empty()) {
                 used += PANEL_GAP + self.local_rules_card(ui, at + vec2(0.0, used + PANEL_GAP), w);
             }
             if (self.keys.panel_heights.get(key).copied().unwrap_or(0.0) - used).abs() > 0.5 {
@@ -1135,7 +1151,8 @@ impl App {
     fn local_rules_card(&mut self, ui: &mut Ui, at: Pos2, width: f32) -> f32 {
         let available = cfg!(any(windows, target_os = "macos"));
         let input = self.prefs.input.clone();
-        let card = card_begin(ui, at, width, "Where your rules work");
+        let alone = self.running().is_some_and(|status| status.peers.is_empty());
+        let card = card_begin(ui, at, width, if alone { "On this computer" } else { "Where your rules work" });
         let content = card.inner;
         let row = Rect::from_min_size(content.min, vec2(content.width(), ROW));
         if widgets::switch_help_dimmed(ui, row, Id::unique("also-on-this-computer"), "Also on this computer (experimental)", "also-on-this-computer", input.local_rules,
@@ -1143,8 +1160,12 @@ impl App {
             self.tune_cmds("local rules", "local-rules", vec![vec!["keymap".into(), "local".into(),
                 if input.local_rules { "off".into() } else { "on".into() }]], None);
         }
-        let text = if available {
+        let text = if available && alone {
+            "You don't need a second computer: switch this on and your key and button rules work right here. Experimental, not yet tested on real hardware. Ctrl + Alt + Shift + Esc turns local rules off and brings you back here. Stopping oneMK restores the original mappings; your preference is kept for the next start."
+        } else if available {
             "Experimental, not yet tested on real hardware: apply your key and button rules here as well as on the other computers. Pointer speed and scrolling stay unchanged. Ctrl + Alt + Shift + Esc turns local rules off and brings you back here. Local rules keep working when this window closes. Stopping oneMK restores the original mappings; your preference is kept for the next start."
+        } else if alone {
+            "Not available on this desktop yet: changing this computer's own keys needs macOS or Windows. Key rules you make here work on the computers you pair."
         } else {
             "Not available on this desktop. Local rules need macOS or Windows; your rules still work on the other computers."
         };
