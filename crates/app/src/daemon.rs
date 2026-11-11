@@ -205,6 +205,9 @@ pub enum Job {
     LockAll,
     /// Sending this clipboard to a computer (`send`), or fetching its.
     Clip { send: bool, id: String, name: String },
+    /// A wallpaper command sent to the running service (kept whole, so
+    /// "Try again" sends this same command again).
+    Wallpaper(one_mk_wallpaper::Command),
     /// A setting changed with `one-mk <args>`; `what` names it in a sentence.
     Set { what: String, args: Vec<String> },
     /// Settings → Appearance saved by the window itself.
@@ -249,7 +252,7 @@ pub struct Link {
 
 impl Link {
     pub fn wallpaper(&self, command: one_mk_wallpaper::Command) {
-        self.job(Job::Set { what: "wallpaper".into(), args: Vec::new() }, move |link| {
+        self.job(Job::Wallpaper(command.clone()), move |link| {
             let json = serde_json::to_string(&command)?;
             let response = client::request(&link.dir, Request::LiveWallpaper(json), Duration::from_secs(660))?
                 .ok_or_else(|| anyhow::anyhow!("Start oneMK first"))?;
@@ -472,6 +475,9 @@ impl Link {
 
     /// `one-mk <args>`, with the settings folder; its error output on failure.
     fn one_mk(&self, args: &[&str]) -> anyhow::Result<String> {
+        // `one-mk` with nothing but the settings folder would start a second
+        // oneMK, not change anything.
+        anyhow::ensure!(!args.is_empty(), "nothing to run");
         let home = self.home_args();
         self.run_one_mk(&args.iter().copied().chain(home.iter().map(String::as_str)).collect::<Vec<_>>())
     }
@@ -843,7 +849,7 @@ impl Link {
                             // The settings folder goes first: these end their options with `--`.
                             let error = cmds
                                 .iter()
-                                .find_map(|c| link.run_one_mk(&link.home_args().iter().chain(c).map(String::as_str).collect::<Vec<_>>()).err())
+                                .find_map(|c| (!c.is_empty()).then(|| link.run_one_mk(&link.home_args().iter().chain(c).map(String::as_str).collect::<Vec<_>>()).err()).flatten())
                                 .map(|e| format!("{e:#}"));
                             link.send(Event::Done { what: job, error });
                         }
@@ -1227,6 +1233,37 @@ mod tests {
         let mut link = Link::new(Some(base.join("home")), tx, egui::Context::default()).unwrap();
         link.daemon = exe;
         (link, base)
+    }
+
+    /// "Try again" on a failed wallpaper change used to run `one-mk` with only
+    /// the settings folder: a second oneMK, which hit the busy port. The job
+    /// now carries its command, and no `one-mk` is run for it at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_wallpaper_change_keeps_its_command_and_never_runs_the_program() {
+        let base = std::env::temp_dir().join(format!("one-mk-app-wall-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let ran = base.join("ran");
+        let exe = base.join("one-mk");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(&exe, format!("#!/bin/sh\necho \"$@\" >> {}\n", ran.display())).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut link = Link::new(Some(base.join("home")), tx, egui::Context::default()).unwrap();
+        link.daemon = exe;
+        link.wallpaper(one_mk_wallpaper::Command::Off);
+        match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+            Event::Done { what, error } => {
+                assert_eq!(what, Job::Wallpaper(one_mk_wallpaper::Command::Off));
+                assert!(error.is_some(), "no service is running here");
+            }
+            _ => panic!("expected the job's result"),
+        }
+        assert!(!ran.exists(), "a wallpaper change must not start `one-mk`");
+        assert!(link.one_mk(&[]).is_err(), "`one-mk` with nothing to do is refused");
+        assert!(!ran.exists());
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[cfg(unix)]

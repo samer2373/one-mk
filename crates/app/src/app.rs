@@ -587,7 +587,7 @@ impl App {
 
     /// Whether `job` can simply be run again from an error toast.
     fn retryable(job: &Job) -> bool {
-        matches!(job, Job::Layout { .. } | Job::Swap { .. } | Job::TakeBack | Job::Start | Job::Autostart(_) | Job::Set { .. } | Job::Appearance(_) | Job::Open)
+        matches!(job, Job::Layout { .. } | Job::Swap { .. } | Job::TakeBack | Job::Start | Job::Autostart(_) | Job::Set { .. } | Job::Wallpaper(_) | Job::Appearance(_) | Job::Open)
     }
 
     /// Runs a failed job again, as the control that asked for it did.
@@ -618,6 +618,7 @@ impl App {
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
                 self.link.set(&what, &args);
             }
+            Job::Wallpaper(command) => self.link.wallpaper(command),
             Job::Open => {
                 self.busy.push(job);
                 self.link.open_downloads();
@@ -843,6 +844,7 @@ impl App {
                 let what = if send { format!("send this clipboard to {name}") } else { format!("get {name}'s clipboard") };
                 self.toast_error(format!("Couldn't {what}."), e, now);
             }
+            Job::Wallpaper(_) => self.toast_error("Couldn't change wallpaper.", e, now),
             Job::Set { what, args } => {
                 // Show what is really saved.
                 self.prefs = self.link.prefs();
