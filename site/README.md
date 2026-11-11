@@ -15,9 +15,12 @@ cookie or tracker.
 
 | path | what |
 |---|---|
-| `index.html` | the page: hero with the 3D desk, how it works, features, Keys (second 3D view), the window tour, security, platforms, install, FAQ, closing call, the Bigfoot Technology band, footer |
+| `index.html` | the page: hero with the 3D desk, how it works, features, Keys (second 3D view), the window tour, security, platforms, Download, FAQ, closing call, the Bigfoot Technology band, footer |
+| `404.html` | the page GitHub Pages shows for a missing address; self-contained (inline styles, absolute link home) because it is served at any depth |
 | `css/site.css` | all styles; colour, type and radius tokens from the app (`crates/app/src/style.rs`, `docs/brand/tokens.json`), light and dark |
-| `js/site.js` | theme toggle, download button by operating system, tabs, the scroll story, entrances, copy buttons, and the loader for the 3D views |
+| `js/detect.js` | which download fits the visitor's computer, as a pure function (unit-tested by `tools/checks.mjs`) |
+| `js/site.js` | theme toggle, the download buttons and the Download section, tabs, the scroll story, entrances, copy buttons, and the loader for the 3D views |
+| `.nojekyll` | tells GitHub Pages to serve the files as they are |
 | `js/desk.js` | the 3D desk and keyboard (three.js): procedural monitors, laptop and keycaps, the app's wallpapers, the pointer crossing screens |
 | `js/mouse-mesh.js` | the app's 3D mouse, packed small (see Credits) |
 | `vendor/three.min.js` | three.js r169, turned into a classic script so it also loads from `file://` |
@@ -101,17 +104,69 @@ and the tabs' arrow keys.
 disk); the head script loads it there and nowhere else. Rebuild it after changing a font with
 `python3 -I site/tools/inline-fonts.py site`.
 
-## Deploying
+## The Download section and platform detection
 
-Any static host works; upload the folder as it is (the `tools/` folder can be left out).
+Every release file is linked through `https://github.com/samer2373/one-mk/releases/latest/download/<name>`,
+so the links follow each new release by themselves as long as the file names stay the same
+(`.github/workflows/release.yml` makes them). Without scripts all three platforms are listed and nothing
+is hidden. With scripts `js/detect.js` picks one, in this order of trust:
 
-**GitHub Pages** publishes only the root or `/docs` of a branch, so either push the contents of `site/`
-to a `gh-pages` branch (for example `git subtree push --prefix site origin gh-pages`) and choose that
-branch under Settings, Pages, or add a small Pages workflow that uploads `site/` with
-`actions/upload-pages-artifact`. The page then lives at
-`https://samer2373.github.io/one-mk/`, which is the address already written in `index.html`
-(`canonical`, Open Graph and JSON-LD), `robots.txt` and `sitemap.xml`. On another domain, replace that
-address in those four places.
+- **Client hints** (Chromium: `navigator.userAgentData` and its `architecture`, `bitness`,
+  `platformVersion`): the only source that is sure about Apple silicon versus Intel, and Windows on ARM.
+- **The graphics chip** WebGL reports, on a Mac only when the hints are missing: "Apple M…" or
+  "Apple GPU" suggests Apple silicon, Intel, AMD or NVIDIA an Intel Mac. The page then says "looks like"
+  and keeps both builds one click away with the About This Mac hint.
+- **The user agent** otherwise. Every Mac browser claims "Intel Mac OS X", so it never decides the Mac's
+  chip; with nothing else known the Apple silicon build comes first and both are offered.
+- Windows and Linux are x86_64 only: on ARM the page says there is no build yet (and that x64 emulation on
+  Windows on ARM is untested) instead of offering a file. Linux recommends the `.deb` unless the user
+  agent names a non-Debian distribution, and always offers the AppImage too.
+- Phones, tablets (including an iPad asking for the desktop site), ChromeOS and unknown agents get a note
+  that oneMK is a desktop program and a button to copy or share the link; the downloads stay below.
+
+`node site/tools/checks.mjs OUT` runs 19 platforms through `detect()` and 7 of them through the real page
+with a faked user agent, client hints, touch and GPU.
+
+## Deploying (GitHub Pages)
+
+The site is published by `.github/workflows/pages.yml` to **https://samer2373.github.io/one-mk/**, a project
+site under `/one-mk/`. Every local path in the page is relative, so the same files also work from
+`file://`, from any static host, and at the root of a custom domain.
+
+One-time setup (by the repository owner): **Settings → Pages → Build and deployment → Source: GitHub
+Actions**. Nothing else; the workflow needs no secrets.
+
+Then every push to `main` that touches `site/**` or the workflow publishes the site; **Actions → Pages →
+Run workflow** publishes it by hand (do that after a release, so the sizes on the page follow it). The
+build job:
+
+1. copies `site/` to `_site/`, leaving out `tools/`, this README and `css/fonts-file.css` (the
+   `file://`-only fonts);
+2. reads the file sizes of the latest release from the GitHub API (if that fails, the sizes in the source
+   stay);
+3. runs `tools/stamp.sh _site <version> <SITE_URL> sizes.tsv`: the version from `sh scripts/version.sh`
+   goes into `<html data-version>`, every `<span data-version>` (hero and footer) and the JSON-LD; the
+   address replaces `https://samer2373.github.io/one-mk/` in the canonical link, Open Graph and Twitter
+   tags, JSON-LD, `404.html`, `robots.txt` and `sitemap.xml` (whose date becomes the deploy date);
+4. checks that every local `src`, `href` and `srcset` in `index.html` and `404.html` exists;
+5. uploads `_site/` with `actions/upload-pages-artifact`, and the deploy job publishes it with
+   `actions/deploy-pages` (environment `github-pages`, whose URL the run shows).
+
+The version and sizes are never edited by hand in the published copy. The source keeps `1.0.0` and
+1.0.0's sizes as a sensible fallback when the page is opened from the repository.
+
+**A custom domain** is one line: change `SITE_URL` in `.github/workflows/pages.yml` (for example to
+`https://onemk.app/`), add `site/CNAME` containing the bare domain, and set the domain under Settings →
+Pages. Nothing in the page itself changes.
+
+**To try the published layout locally**, under the same sub-path:
+
+```sh
+mkdir -p /tmp/x && ln -s "$PWD/site" /tmp/x/one-mk && python3 -m http.server -d /tmp/x 8091
+# then http://localhost:8091/one-mk/
+```
+
+**Another static host:** upload the stamped `_site/` folder (or `site/` as it is, without `tools/`).
 
 ## Credits and licences
 

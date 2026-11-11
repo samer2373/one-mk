@@ -1,0 +1,73 @@
+# Publishes the landing page in site/ to GitHub Pages:
+# https://samer2373.github.io/one-mk/ (a project site under /one-mk/).
+# Settings > Pages > Source must be "GitHub Actions". See site/README.md.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # The site's public address. For a custom domain, change this one line
+      # (and add site/CNAME with the domain).
+      SITE_URL: https://samer2373.github.io/one-mk/
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy the site without its tools and source-only files
+        run: |
+          mkdir _site
+          cp -R site/. _site/
+          rm -rf _site/tools _site/README.md _site/css/fonts-file.css
+
+      - name: Read the download sizes from the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
+            | python3 -c 'import json, sys; [print(a["name"], a["size"], sep="\t") for a in json.load(sys.stdin)["assets"]]' > sizes.tsv \
+            || { echo "::warning::could not read the latest release; keeping the sizes in the source"; : > sizes.tsv; }
+
+      - name: Stamp the release version, the address and the sizes
+        run: sh site/tools/stamp.sh _site "$(sh scripts/version.sh)" "$SITE_URL" sizes.tsv
+
+      - name: Check every local link resolves
+        run: |
+          missing=0
+          for f in _site/index.html _site/404.html; do
+            for ref in $(grep -oE '(src|href|srcset)="[^"#][^"]*"' "$f" | sed -E 's/^[a-z]+="//; s/"$//' | tr ',' '\n' | awk '{print $1}'); do
+              case $ref in http*|mailto:*|data:*|//*) continue ;; esac
+              [ -e "_site/$ref" ] || { echo "missing: $ref (in $f)"; missing=1; }
+            done
+          done
+          exit $missing
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

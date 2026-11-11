@@ -9,6 +9,8 @@
 appears on the next computer, with your keyboard, your clipboard and your files following it. Linux,
 Windows and macOS; no server, no IP addresses, no certificates to copy. Pairing takes about a minute.
 
+**Website:** [samer2373.github.io/one-mk](https://samer2373.github.io/one-mk/), built from [`site/`](site/README.md) and published by `.github/workflows/pages.yml`.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screens/desk-dark.png">
   <img src="docs/screens/desk-light.png" alt="oneMK's window: two computers on a 3D desk, with the chosen one's live connection and actions in a panel beside it">
