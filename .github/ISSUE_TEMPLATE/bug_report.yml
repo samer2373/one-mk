@@ -22,7 +22,7 @@ body:
     attributes:
       label: oneMK version
       description: The output of `one-mk --version` (the same on every computer, ideally).
-      placeholder: one-mk 1.1.1
+      placeholder: one-mk 1.2.0
     validations:
       required: true
   - type: textarea
