@@ -1155,7 +1155,7 @@ impl App {
         let card = card_begin(ui, at, width, if alone { "On this computer" } else { "Where your rules work" });
         let content = card.inner;
         let row = Rect::from_min_size(content.min, vec2(content.width(), ROW));
-        if widgets::switch_help_dimmed(ui, row, Id::unique("also-on-this-computer"), "Also on this computer (experimental)", "also-on-this-computer", input.local_rules,
+        if widgets::switch_help_dimmed(ui, row, Id::unique("also-on-this-computer"), "Also on this computer", "also-on-this-computer", input.local_rules,
             available && !self.tuning_busy() && !self.prefs.unreadable).clicked() {
             self.tune_cmds("local rules", "local-rules", vec![vec!["keymap".into(), "local".into(),
                 if input.local_rules { "off".into() } else { "on".into() }]], None);

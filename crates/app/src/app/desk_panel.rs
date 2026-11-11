@@ -493,16 +493,24 @@ impl App {
         // Changing keys here needs macOS or Windows; Linux can't yet.
         if cfg!(any(windows, target_os = "macos")) { choices.push(("Change keys", Tab::Keys)); }
         choices.push(("Clipboard history", Tab::Files));
-        let top = y + hh + 8.0;
+        // Each button is as wide as its words and they wrap to a new row, so
+        // no label is cut whatever the font or the card's width.
         let gap = 8.0;
-        let w = (c.width() - gap * (choices.len() as f32 - 1.0)) / choices.len() as f32;
-        for (i, (label, tab)) in choices.iter().enumerate() {
-            let b = Rect::from_min_size(pos2(c.left() + i as f32 * (w + gap), top), vec2(w, 34.0));
+        let mut x = 0.0;
+        let mut row_top = y + hh + 8.0;
+        for (label, tab) in &choices {
+            let w = (widgets::button_width(ui, label) + 8.0).min(c.width());
+            if x > 0.0 && x + w > c.width() {
+                x = 0.0;
+                row_top += 34.0 + gap;
+            }
+            let b = Rect::from_min_size(pos2(c.left() + x, row_top), vec2(w, 34.0));
             if button(ui, b, Id::unique(("alone", *label)), label, Look::Quiet, !self.sheet_open(), Some(&format!("{label}, on this computer"))).clicked() {
                 self.set_tab(*tab);
             }
+            x += w + gap;
         }
-        top + 34.0 + GAP
+        row_top + 34.0 + GAP
     }
 
     /// The header: the screen as a small swatch, the name, and a line with
