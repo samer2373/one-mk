@@ -254,7 +254,7 @@ pub fn player_source(config: &one_mk_wallpaper::PlayerConfig) -> Result<RgbaImag
 }
 
 pub fn render(image: &RgbaImage, plan: &Plan, monitor: &Monitor) -> Result<RgbaImage> {
-    let slice = plan.canvas.slice(monitor, &plan.media, plan.fit).context("Empty picture layout")?;
+    let slice = plan.slice(monitor).context("Empty picture layout")?;
     let width = (monitor.rect.width * monitor.scale).round() as u32;
     let height = (monitor.rect.height * monitor.scale).round() as u32;
     pixel_limits(width, height).context("This screen is too large for a picture wallpaper")?;
@@ -510,7 +510,7 @@ mod tests {
         Plan { hash: "a".repeat(64), title: "Picture".into(), media: Media { width: 8, height: 4, duration_ms: 1, frame_rate: 0 },
             canvas: one_mk_wallpaper::Canvas { monitors: [0, 4].into_iter().map(|horizontal| Monitor { computer: "host".into(), name: horizontal.to_string(),
                 rect: one_mk_wallpaper::Rect { x: f64::from(horizontal), y: 0.0, width: 4.0, height: 4.0 }, local: None, scale: 1.0, online: true }).collect() },
-            start_ms: 1, fit: one_mk_wallpaper::Fit::Stretch, computers: vec!["host".into()], pause_on_battery: false, paused: false, picture: true, asset_hash: None }
+            start_ms: 1, fit: one_mk_wallpaper::Fit::Stretch, computers: vec!["host".into()], pause_on_battery: false, paused: false, picture: true, asset_hash: None, spread: Default::default() }
     }
     #[test]
     fn pictures_are_recognized_without_admitting_arbitrary_extensions() {
@@ -564,6 +564,28 @@ mod tests {
         let after = render(&pixels, &plan, &plan.canvas.monitors[0]).unwrap();
         assert_eq!(after.dimensions(), (16, 8));
         assert_ne!(before.get_pixel(7, 3), after.get_pixel(15, 3));
+    }
+
+    #[test]
+    fn each_screen_shows_the_whole_picture_by_itself() {
+        use one_mk_wallpaper::{Fit, Spread};
+        let mut plan = plan();
+        plan.fit = Fit::Stretch;
+        plan.spread = Spread::Each;
+        // A picture whose left edge is red and right edge is blue.
+        let pixels = RgbaImage::from_fn(8, 8, |horizontal, _| if horizontal < 4 { image::Rgba([250, 0, 0, 255]) } else { image::Rgba([0, 0, 250, 255]) });
+        for monitor in &plan.canvas.monitors {
+            let shown = render(&pixels, &plan, monitor).unwrap();
+            let (width, _) = shown.dimensions();
+            assert_eq!(shown.get_pixel(0, 0).0, [250, 0, 0, 255], "every screen starts on the picture's left edge");
+            assert_eq!(shown.get_pixel(width - 1, 0).0, [0, 0, 250, 255], "and ends on its right edge");
+        }
+        plan.spread = Spread::Span;
+        let first = render(&pixels, &plan, &plan.canvas.monitors[0]).unwrap();
+        let last = &plan.canvas.monitors[plan.canvas.monitors.len() - 1];
+        let second = render(&pixels, &plan, last).unwrap();
+        assert_eq!(first.get_pixel(first.width() - 1, 0).0, [250, 0, 0, 255], "spanning cuts the picture between the screens");
+        assert_eq!(second.get_pixel(second.width() - 1, 0).0, [0, 0, 250, 255]);
     }
 
     #[test]

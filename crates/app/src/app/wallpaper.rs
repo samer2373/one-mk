@@ -1,6 +1,6 @@
 use super::page_ui::{self, GAP, MARK_INDENT, Page, ROW, Words, text_h, toggle_row};
 use super::*;
-use one_mk_wallpaper::{Canvas, Command, Fit, Media};
+use one_mk_wallpaper::{Canvas, Command, Fit, Media, Spread};
 
 #[derive(Default)]
 pub(super) struct WallpaperUi {
@@ -54,12 +54,13 @@ impl App {
         let enabled = accepts_drop(status.is_some(), wallpaper.available);
         let selected = plan.is_some();
         let fit_now = plan.map_or(Fit::Fill, |plan| plan.fit);
+        let spread_now = plan.map_or(Spread::Span, |plan| plan.spread);
         let hovering = ui.input(|input| !input.raw.hovered_files.is_empty());
         let computers: Vec<_> = status.as_ref().map(|status| std::iter::once((status.id.clone(), status.name.clone(), true))
             .chain(status.peers.iter().map(|peer| (peer.id.clone(), peer.name.clone(), peer.online))).collect()).unwrap_or_default();
         let out = page_ui::scroll("wallpaper-scroll").show_viewport(ui, |ui, _| {
             let origin = ui.cursor().min;
-            let mut page = Page::begin(ui, origin, area.width(), "Wallpaper", "One picture or video across every screen, like one wide monitor.");
+            let mut page = Page::begin(ui, origin, area.width(), "Wallpaper", "One picture or video across every screen, or the same on each.");
 
             // The preview: every screen, as it stands, each showing its part
             // of the one picture; what plays and how to change it under it.
@@ -72,7 +73,7 @@ impl App {
             let well = Rect::from_min_max(pos2(card.x + page_ui::CARD_PAD, stage.top() + page_ui::CARD_PAD), pos2(card.x + card.w - page_ui::CARD_PAD, stage.bottom() - 4.0));
             preview::stage(ui.painter(), well, 12, 16.0);
             let screens = well.shrink2(WELL_PAD);
-            draw_canvas(ui, screens, &canvas, plan.map(|plan| &plan.media), fit_now, self.wallpaper_ui.poster.as_ref(), &computers);
+            draw_canvas(ui, screens, &canvas, plan.map(|plan| &plan.media), (fit_now, spread_now), self.wallpaper_ui.poster.as_ref(), &computers);
             a11y_text(ui, Id::unique("wallpaper-stage"), stage, Role::Image, &match plan { Some(plan) => plan.playing_summary(&wallpaper.computers), None => "No wallpaper playing".into() }, None);
             let foot = card.row(ui, 70.0);
             let mut right = 0.0;
@@ -158,6 +159,14 @@ impl App {
             let track = Rect::from_min_size(pos2(row.right() - fit_w, row.center().y - 15.0), vec2(fit_w, 30.0));
             if let Some(chosen) = (Pills { id: Id::unique("wallpaper-fit"), track, cells: Pills::even(track, 3, 2.0), labels: &["Fill", "Fit", "Stretch"], names: vec!["Fill the screens".into(), "Fit inside the screens".into(), "Stretch across the screens".into()], chosen: Some(match fit_now { Fit::Fill => 0, Fit::Fit => 1, Fit::Stretch => 2 }), enabled: vec![enabled && selected; 3], role: Role::RadioGroup, font: T_META }).show(ui, true) {
                 self.wallpaper_command(Command::Fit { fit: [Fit::Fill, Fit::Fit, Fit::Stretch][chosen] });
+            }
+            // One picture across every screen, or the whole of it on each.
+            let row = card.row(ui, ROW);
+            let spread_w = fit_track_w(row.width(), text_width(ui, "On the screens", regular(T_BODY)) + 26.0 + 8.0).min(260.0);
+            label_help(ui, row, Id::unique("wallpaper-spread-label"), "On the screens", "wallpaper-spread", enabled && selected, spread_w + 12.0);
+            let track = Rect::from_min_size(pos2(row.right() - spread_w, row.center().y - 15.0), vec2(spread_w, 30.0));
+            if let Some(chosen) = (Pills { id: Id::unique("wallpaper-spread"), track, cells: Pills::even(track, 2, 2.0), labels: &["Across", "Each"], names: vec!["One picture across all the screens".into(), "The whole picture on each screen".into()], chosen: Some(match spread_now { Spread::Span => 0, Spread::Each => 1 }), enabled: vec![enabled && selected; 2], role: Role::RadioGroup, font: T_META }).show(ui, true) {
+                self.wallpaper_command(Command::Spread { spread: [Spread::Span, Spread::Each][chosen] });
             }
             let battery = plan.is_none_or(|plan| plan.pause_on_battery);
             let row = card.row(ui, ROW);
@@ -309,7 +318,7 @@ const WELL_PAD: egui::Vec2 = egui::Vec2 { x: 24.0, y: 22.0 };
 
 /// The screens, where they stand, each showing its part of the picture,
 /// named by computer under the first of each.
-fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit: Fit, poster: Option<&egui::TextureHandle>, computers: &[(String, String, bool)]) {
+fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, (fit, spread): (Fit, Spread), poster: Option<&egui::TextureHandle>, computers: &[(String, String, bool)]) {
     let Some(bounds) = canvas.bounds() else {
         // No screens known yet: a ghost of one, dashed, over the sentence.
         let p = ui.painter();
@@ -332,7 +341,11 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
     let top = area.center() - vec2((bounds.width * scale) as f32, (bounds.height * scale) as f32) / 2.0;
     let map = |rect: one_mk_wallpaper::Rect| Rect::from_min_size(top + vec2(((rect.x - bounds.x) * scale) as f32, ((rect.y - bounds.y) * scale) as f32), vec2((rect.width * scale) as f32, (rect.height * scale) as f32));
     let fallback = poster.map(|texture| Media { width: texture.size()[0] as u32, height: texture.size()[1] as u32, duration_ms: 1, frame_rate: 0 }).unwrap_or_default();
-    let image_rect = canvas.image_rect(media.unwrap_or(&fallback), fit).map(map);
+    let media = media.unwrap_or(&fallback);
+    let image_of = |monitor: &one_mk_wallpaper::Monitor| match spread {
+        Spread::Span => canvas.image_rect(media, fit),
+        Spread::Each => Some(Canvas::image_in(monitor.rect, media, fit)),
+    }.map(map);
     let p = ui.painter();
     // Each computer is named on its largest screen.
     let mut label_on: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
@@ -352,7 +365,7 @@ fn draw_canvas(ui: &Ui, area: Rect, canvas: &Canvas, media: Option<&Media>, fit:
         let (glass, r) = preview::monitor(p, screen, 0.0);
         let radius = CornerRadius::same(r);
         let mut pictured = false;
-        if let (Some(texture), Some(image_rect)) = (poster, image_rect) {
+        if let (Some(texture), Some(image_rect)) = (poster, image_of(monitor)) {
             // Each screen shows the part of the picture that falls on it.
             let picture = image_rect;
             let inside = glass.intersect(picture);

@@ -254,7 +254,7 @@ fn taps(position: f64, ratio: f64, source: u32) -> Taps {
 }
 
 fn mapping(config: &PlayerConfig, monitor: &Monitor, size: (u32, u32), source: (u32, u32)) -> Result<PixelMapping> {
-    let slice = config.plan.canvas.slice(monitor, &config.plan.media, config.plan.fit).context("Empty wallpaper canvas")?;
+    let slice = config.plan.slice(monitor).context("Empty wallpaper canvas")?;
     let across = slice.width * f64::from(source.0) / f64::from(size.0);
     let down = slice.height * f64::from(source.1) / f64::from(size.1);
     let columns = (0..size.0).map(|column| {
@@ -588,7 +588,7 @@ mod tests {
         PlayerConfig { computer: "pc".into(), path: "/tmp/test.video".into(), clock_offset_ms: 0, plan: one_mk_wallpaper::Plan {
             hash: "a".repeat(64), title: "test".into(), media: Media { width: 4, height: 2, duration_ms: 1000, frame_rate: 30 },
             canvas: one_mk_wallpaper::Canvas { monitors }, start_ms: 1, fit, computers: vec!["pc".into()],
-            pause_on_battery: false, paused: false, picture: false, asset_hash: None,
+            pause_on_battery: false, paused: false, picture: false, asset_hash: None, spread: Default::default(),
         } }
     }
     /// The source pixel each output pixel leans on most (the later one at an exact tie).

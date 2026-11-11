@@ -251,7 +251,6 @@ fn outputs(surface: Surface<'_>, config: &PlayerConfig, mtm: MainThreadMarker) -
     let screens = NSScreen::screens(mtm);
     ensure!(!screens.is_empty(), "No desktop screens are available");
     let primary_top = screens.objectAtIndex(0).frame().size.height;
-    let image = config.plan.canvas.image_rect(&config.plan.media, config.plan.fit).context("Empty canvas")?;
     let mut outputs = Vec::new();
     for screen in screens {
         let frame = screen.frame();
@@ -259,6 +258,7 @@ fn outputs(surface: Surface<'_>, config: &PlayerConfig, mtm: MainThreadMarker) -
             let local = monitor.local.unwrap_or(monitor.rect);
             (local.x - frame.origin.x).abs() < 2.0 && (local.y - (primary_top - frame.origin.y - frame.size.height)).abs() < 2.0
         }) else { continue };
+        let image = config.plan.image_rect_for(monitor).context("Empty canvas")?;
         let window = unsafe { NSWindow::initWithContentRect_styleMask_backing_defer(NSWindow::alloc(mtm), frame, NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel, NSBackingStoreType::Buffered, false) };
         unsafe { window.setReleasedWhenClosed(false); }
         window.setIgnoresMouseEvents(true);
