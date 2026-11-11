@@ -12,6 +12,7 @@ whether it is one picture **Across** all the screens (the default) or the
 whole picture **Each** screen shows by itself, the same on every screen of
 every computer, and which computers show it (**Play on**). **Pause** holds a video on its current
 frame; **Turn off** stops it everywhere and puts your own wallpaper back.
+Pictures up to 128 megapixels open; oneMK keeps them at 8192 pixels on the longest side.
 
 From a terminal:
 
