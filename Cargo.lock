@@ -3484,6 +3484,7 @@ dependencies = [
  "serde",
  "sha2",
  "socket2",
+ "tempfile",
  "tokio",
  "toml 1.1.8+spec-1.1.0",
  "tracing",
