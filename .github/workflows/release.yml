@@ -215,7 +215,14 @@ jobs:
           APPIMAGETOOL_SHA256: 46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1
         run: |
           if ! command -v desktop-file-validate >/dev/null; then
-            sh scripts/apt-install.sh desktop-file-utils || echo "::warning::desktop-file-utils could not be installed (the package hosts did not resolve); the packaging check still validates the desktop files"
+            if ! sh scripts/apt-install.sh desktop-file-utils; then
+              # appimagetool will not pack without desktop-file-validate, so use
+              # the built-in stand-in rather than fail the release.
+              echo "::warning::desktop-file-utils could not be installed (the package hosts did not resolve); validating the desktop file with scripts/desktop-file-validate-lite.sh"
+              mkdir -p "$RUNNER_TEMP/dfv"
+              install -m 0755 scripts/desktop-file-validate-lite.sh "$RUNNER_TEMP/dfv/desktop-file-validate"
+              export PATH="$RUNNER_TEMP/dfv:$PATH"
+            fi
           fi
           mkdir -p "$RUNNER_TEMP/appimagetool"
           curl -fsSL -o "$RUNNER_TEMP/appimagetool/appimagetool" \
