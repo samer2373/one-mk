@@ -710,7 +710,7 @@ impl Link {
     }
 
     pub fn download_update(&self) {
-        self.ctx.open_url(egui::OpenUrl::new_tab("https://github.com/samer2373/one-mk/releases/latest"));
+        one_mk_ctl::brand::open_url("https://github.com/samer2373/one-mk/releases/latest").ok();
     }
 
     /// Moves a peer to `side`: with an offset, to that exact place; without,

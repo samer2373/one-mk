@@ -26,6 +26,14 @@ const LOCKUP_H: f32 = 64.0;
 /// Below this width the button goes under the name.
 const STACK_BELOW: f32 = 460.0;
 
+/// Opens `url` in the default program for it, saying so in the log if that
+/// fails (there is no window of ours to tell).
+pub(super) fn open_link(url: &str) {
+    if let Err(e) = brand::open_url(url) {
+        eprintln!("oneMK: could not open {url}: {e}");
+    }
+}
+
 /// "Version 1.0.0": the build's own version.
 pub(super) fn version_words() -> String {
     format!("Version {}", env!("CARGO_PKG_VERSION"))
@@ -147,7 +155,7 @@ impl App {
         widgets::targets::note("about maker", hit);
         // Enter or Space on it (the keyboard's click) opens it too.
         if resp.on_hover_text(brand::MAKER_URL).clicked() {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(brand::MAKER_URL));
+            open_link(brand::MAKER_URL);
         }
 
         // Credits: what the window draws and isn't ours.
@@ -167,7 +175,7 @@ impl App {
         widgets::focus_ring(ui, &link, credit.expand(3.0), 6);
         widgets::a11y(&link, Role::Link, "Credit: open the 3D mouse model's page", None);
         if link.on_hover_text("Open the model's page").clicked() {
-            ui.ctx().open_url(egui::OpenUrl::new_tab(MOUSE_URL));
+            open_link(MOUSE_URL);
         }
         let fy = credit.bottom() + 6.0;
         let fonts = para(ui, pos2(r.left(), fy), r.width(), FONTS_CREDIT, regular(T_META), pal().ink2);
@@ -178,6 +186,25 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The window is built without egui's `links` feature, so egui's own
+    /// `open_url` does nothing there: every link goes through `open_link`.
+    #[test]
+    fn links_open_through_oneks_opener_not_eguis() {
+        let needle = ["open", "_url(egui::", "OpenUrl"].concat();
+        let mut dir = vec![std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))];
+        while let Some(d) = dir.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    dir.push(p);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    let text = std::fs::read_to_string(&p).unwrap();
+                    assert!(!text.lines().any(|l| l.contains(&needle) && !l.trim_start().starts_with("//") && !l.contains("let needle")), "{} calls egui's open_url", p.display());
+                }
+            }
+        }
+    }
 
     #[test]
     fn the_card_says_this_builds_version_and_licence() {
