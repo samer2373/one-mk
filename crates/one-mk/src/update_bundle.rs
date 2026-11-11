@@ -209,6 +209,10 @@ pub(super) fn acknowledge(executable: &Path, started_version: &str) -> Result<()
     // The previous app stays for "Go back to the previous version" until
     // the next update replaces it.
     fs::remove_file(marker)?;
+    // An update's staging folder (with the oldest app in it) can outlive the
+    // update when something in it was in use: the new window starting is the
+    // moment it is certain nobody needs it, and the lock is held.
+    if let Some(parent) = target.parent() { clean_staging(parent); }
     Ok(())
 }
 
@@ -262,6 +266,22 @@ mod tests {
             if path == Path::new("running") { return Ok("ABCDEFGHIJ".into()); }
             self.candidate.as_ref().cloned().map_err(|error| anyhow::anyhow!("{error}"))
         }
+    }
+
+    #[test]
+    fn leftover_staging_folders_go_and_nothing_else_does() {
+        let parent = tempfile::tempdir().unwrap();
+        let old = parent.path().join(".one-mk-bundle-60812-2/older.app/Contents/MacOS");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("one-mk-tray"), b"x").unwrap();
+        fs::create_dir_all(parent.path().join("one-mk.app/Contents")).unwrap();
+        fs::create_dir_all(parent.path().join(".one-mk.previous.app")).unwrap();
+        fs::write(parent.path().join(".one-mk-bundle-note"), b"a file, not a staging folder").unwrap();
+        clean_staging(parent.path());
+        assert!(!parent.path().join(".one-mk-bundle-60812-2").exists());
+        assert!(parent.path().join("one-mk.app/Contents").is_dir(), "the app stays");
+        assert!(parent.path().join(".one-mk.previous.app").is_dir(), "the app kept for Go back stays");
+        assert!(parent.path().join(".one-mk-bundle-note").is_file());
     }
 
     #[test]
