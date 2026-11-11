@@ -127,7 +127,8 @@ mod native;
 /// A picture's pixels. A decoder's own complaint ("Not enough bytes…") is
 /// said as what it means to a person; a size refusal is already worded.
 fn open(path: &Path) -> Result<RgbaImage> {
-    decode(path).map(downscaled).map_err(|error| if too_large(&error) { anyhow::anyhow!(TOO_LARGE) }
+    decode(path).map(downscaled).map_err(|error| if error.to_string().contains("too large") { error }
+        else if too_large(&error) { anyhow::anyhow!(TOO_LARGE) }
         else { error.context("This picture cannot be opened: it may be damaged or in a format oneMK can't read. Try a PNG, JPEG or WebP picture.") })
 }
 
