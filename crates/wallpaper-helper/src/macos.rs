@@ -300,7 +300,7 @@ fn outputs(surface: Surface<'_>, config: &PlayerConfig, mtm: MainThreadMarker) -
 pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     let mtm = MainThreadMarker::new().context("The wallpaper must start on the main thread")?;
     let app = NSApplication::sharedApplication(mtm);
-    app.setActivationPolicy(NSApplicationActivationPolicy::Prohibited);
+    app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     let context = WakeContext { version: 0, info: std::ptr::null_mut(), callbacks: [0; 7], perform: input_ready };
     let input_source = PowerSource(unsafe { CFRunLoopSourceCreate(std::ptr::null(), 0, &context) });
     ensure!(!input_source.0.is_null(), "The wallpaper could not listen for changes");
