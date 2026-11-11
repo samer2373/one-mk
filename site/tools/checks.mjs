@@ -5,17 +5,70 @@
 // - prefers-reduced-motion: no 3D, no marquee motion, controls hidden,
 // - file:// and a sub-path (/one-mk/): the 3D starts and nothing is missing,
 // - keyboard: the skip link comes first, tabs answer the arrow keys,
-// - every request stays on this host.
+// - every request stays on this host,
+// - the download chooser: 18 platforms as pure unit tests of js/detect.js, and
+//   7 of them in the browser with faked user agent, client hints, touch and GPU.
 import { launch, serve } from "./cdp.mjs";
 import { mkdirSync, mkdtempSync, symlinkSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 const site = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = process.argv[2]; mkdirSync(OUT, { recursive: true });
 const results = [];
 const ok = (name, pass, detail = "") => results.push(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? ": " + detail : ""}`);
 const real = (logs) => logs.filter((l) => !/favicon|DevTools/.test(l));
+
+// 0. Download detection, as unit tests (no browser).
+const UA = {
+  macChrome: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+  macSafari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15",
+  macFirefox: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:144.0) Gecko/20100101 Firefox/144.0",
+  winChrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+  winEdge: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
+  winFirefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:144.0) Gecko/20100101 Firefox/144.0",
+  ubuntuFirefox: "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0",
+  fedoraFirefox: "Mozilla/5.0 (X11; Fedora; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0",
+  linuxChrome: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+  linuxArm: "Mozilla/5.0 (X11; Linux aarch64; rv:144.0) Gecko/20100101 Firefox/144.0",
+  android: "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36",
+  iphone: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1",
+  chromeos: "Mozilla/5.0 (X11; CrOS x86_64 16181.47.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+  bot: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+};
+const F = { macArm: "one-mk-aarch64-apple-darwin.dmg", macIntel: "one-mk-x86_64-apple-darwin.dmg", win: "one-mk-x86_64-pc-windows-msvc-setup.exe", deb: "one-mk-x86_64-unknown-linux-gnu.deb", appImage: "one-mk-x86_64-unknown-linux-gnu.AppImage" };
+const CASES = [
+  ["Mac Chrome, Apple silicon (client hints)", { ua: UA.macChrome, platform: "MacIntel", uaData: { platform: "macOS", mobile: false }, hints: { architecture: "arm" } }, "mac", F.macArm, "Download for macOS (Apple silicon)", true],
+  ["Mac Chrome, Intel (client hints)", { ua: UA.macChrome, platform: "MacIntel", uaData: { platform: "macOS", mobile: false }, hints: { architecture: "x86" } }, "mac", F.macIntel, "Download for macOS (Intel)", true],
+  ["Mac Chrome, no hints, Apple M2 GPU", { ua: UA.macChrome, platform: "MacIntel", uaData: { platform: "macOS", mobile: false }, gl: "ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)" }, "mac", F.macArm, "Download for macOS (Apple silicon)", false],
+  ["Mac Safari, Apple silicon (Apple GPU)", { ua: UA.macSafari, platform: "MacIntel", gl: "Apple GPU" }, "mac", F.macArm, "Download for macOS (Apple silicon)", false],
+  ["Mac Safari, Intel GPU", { ua: UA.macSafari, platform: "MacIntel", gl: "Intel(R) Iris(TM) Plus Graphics 655" }, "mac", F.macIntel, "Download for macOS (Intel)", false],
+  ["Mac Firefox, nothing known", { ua: UA.macFirefox, platform: "MacIntel" }, "mac", F.macArm, "Download for macOS (Apple silicon)", false],
+  ["Windows 10 Chrome", { ua: UA.winChrome, platform: "Win32", uaData: { platform: "Windows", mobile: false }, hints: { architecture: "x86", bitness: "64", platformVersion: "10.0.0" } }, "windows", F.win, "Download for Windows", true],
+  ["Windows 11 Edge", { ua: UA.winEdge, platform: "Win32", uaData: { platform: "Windows", mobile: false }, hints: { architecture: "x86", bitness: "64", platformVersion: "15.0.0" } }, "windows", F.win, "Download for Windows", true],
+  ["Windows Firefox", { ua: UA.winFirefox, platform: "Win32" }, "windows", F.win, "Download for Windows", false],
+  ["Windows on ARM (client hints)", { ua: UA.winChrome, platform: "Win32", uaData: { platform: "Windows", mobile: false }, hints: { architecture: "arm", bitness: "64", platformVersion: "15.0.0" } }, "windows", null, "See the Windows downloads", true],
+  ["Ubuntu Firefox", { ua: UA.ubuntuFirefox, platform: "Linux x86_64" }, "linux", F.deb, "Download for Linux (.deb)", true],
+  ["Fedora Firefox", { ua: UA.fedoraFirefox, platform: "Linux x86_64" }, "linux", F.appImage, "Download for Linux (AppImage)", true],
+  ["Fedora Chrome (no distro in the UA)", { ua: UA.linuxChrome, platform: "Linux x86_64", uaData: { platform: "Linux", mobile: false }, hints: { architecture: "x86" } }, "linux", F.deb, "Download for Linux (.deb)", true],
+  ["Linux aarch64", { ua: UA.linuxArm, platform: "Linux aarch64" }, "linux", null, "See the Linux downloads", true],
+  ["Android", { ua: UA.android, platform: "Linux armv8l", uaData: { platform: "Android", mobile: true } }, null, null, "Get oneMK for your computer", false],
+  ["iPhone", { ua: UA.iphone, platform: "iPhone", maxTouchPoints: 5 }, null, null, "Get oneMK for your computer", false],
+  ["iPad asking for the desktop site", { ua: UA.macSafari, platform: "MacIntel", maxTouchPoints: 5 }, null, null, "Get oneMK for your computer", false],
+  ["ChromeOS", { ua: UA.chromeos, platform: "Linux x86_64", uaData: { platform: "Chrome OS", mobile: false } }, null, null, "Get oneMK for your computer", false],
+  ["A bot or unknown", { ua: UA.bot, platform: "" }, null, null, "Get oneMK for your computer", false],
+];
+{
+  const { detect } = createRequire(import.meta.url)(join(site, "js/detect.js"));
+  const bad = [];
+  for (const [name, env, panel, file, label, sure] of CASES) {
+    const r = detect(env);
+    const href = file ? "https://github.com/samer2373/one-mk/releases/latest/download/" + file : "#download";
+    if (r.panel !== panel || r.file !== file || r.label !== label || r.href !== href || r.sure !== sure) bad.push(`${name}: got ${JSON.stringify({ panel: r.panel, file: r.file, label: r.label, sure: r.sure })}`);
+  }
+  ok(`download detection, ${CASES.length} platforms (unit)`, bad.length === 0, bad.join(" | "));
+}
 
 const srv = await serve(site);
 let b = await launch();
@@ -69,6 +122,33 @@ b = await launch({ gl: false });
   p.close();
 }
 await b.close();
+// 3b. Download detection in the page, with the browser faking each platform.
+{
+  const pick = ["Mac Chrome, Apple silicon (client hints)", "Mac Safari, Intel GPU", "Mac Firefox, nothing known", "Windows 11 Edge", "Windows on ARM (client hints)", "Fedora Firefox", "iPad asking for the desktop site"];
+  b = await launch();
+  const bad = [];
+  for (const [name, env, panel, file, label] of CASES.filter((c) => pick.includes(c[0]))) {
+    const p = await b.page(); await p.size(1280, 800, 1);
+    const meta = env.uaData ? { platform: env.uaData.platform, platformVersion: env.hints?.platformVersion || "15.0.0", architecture: env.hints?.architecture || "", model: "", mobile: env.uaData.mobile, bitness: "64", brands: [{ brand: "Chromium", version: "141" }] } : undefined;
+    await p.send("Emulation.setUserAgentOverride", { userAgent: env.ua, platform: env.platform, ...(meta ? { userAgentMetadata: meta } : {}) });
+    if (env.maxTouchPoints) await p.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: env.maxTouchPoints });
+    await p.send("Page.addScriptToEvaluateOnNewDocument", { source: `
+      ${env.uaData ? "" : "Object.defineProperty(Navigator.prototype, 'userAgentData', { get: () => undefined });"}
+      (function (gl) { for (const C of [WebGLRenderingContext, typeof WebGL2RenderingContext === 'function' ? WebGL2RenderingContext : null]) { if (!C) continue;
+        const get = C.prototype.getParameter; C.prototype.getParameter = function (k) { return k === 0x9246 || k === 0x1F01 ? gl : get.call(this, k); }; } })(${JSON.stringify(env.gl || "Google SwiftShader")});` });
+    await p.goto(srv.url + "/", 1500);
+    for (let i = 0; i < 20 && !(await p.eval("document.documentElement.dataset.detectDone")); i++) await p.sleep(150);
+    const got = await p.eval(`(() => { const a = document.querySelector('.hero [data-download]'), card = document.querySelector('.dl-card.is-detected');
+      return { href: a.getAttribute('href'), label: a.textContent.trim(), panel: card ? card.dataset.panel : null,
+        badge: card ? !card.querySelector('[data-badge]').hidden : false, away: !document.querySelector('[data-dl-away]').hidden }; })()`);
+    const href = file ? "https://github.com/samer2373/one-mk/releases/latest/download/" + file : "#download";
+    if (got.href !== href || got.label !== label || got.panel !== panel || got.badge !== !!panel || got.away !== !panel) bad.push(`${name}: ${JSON.stringify(got)}`);
+    if (real(p.logs).length) bad.push(`${name}: ${real(p.logs).join("; ")}`);
+    p.close();
+  }
+  ok(`download detection in the page, ${pick.length} faked platforms`, bad.length === 0, bad.join(" | "));
+  await b.close();
+}
 // 4. file:// and a sub-path.
 b = await launch();
 {

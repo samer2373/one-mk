@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-version="1.0.0">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -74,13 +74,13 @@ else{l({rel:"manifest",href:"site.webmanifest"});["Inter-SemiBold","Inter-Regula
       <a href="#how">How it works</a>
       <a href="#features">Features</a>
       <a href="#security">Security</a>
-      <a href="#platforms">Platforms</a>
+      <a href="#download">Download</a>
       <a href="#faq">FAQ</a>
     </nav>
     <div class="bar__end">
-      <a class="icon-btn" href="https://github.com/samer2373/one-mk" aria-label="oneMK on GitHub"><svg aria-hidden="true"><use href="#i-github"/></svg></a>
+      <a class="gh" href="https://github.com/samer2373/one-mk" target="_blank" rel="noopener" aria-label="oneMK on GitHub"><svg aria-hidden="true"><use href="#i-github"/></svg><span>GitHub</span></a>
       <button class="icon-btn" type="button" data-theme-toggle aria-label="Switch to dark theme"><svg class="t-light" aria-hidden="true"><use href="#i-moon"/></svg><svg class="t-dark" aria-hidden="true"><use href="#i-sun"/></svg></button>
-      <a class="btn btn--primary btn--sm" href="#install">Download</a>
+      <a class="btn btn--primary btn--sm" href="#download">Download</a>
     </div>
   </div>
 </header>
@@ -92,9 +92,9 @@ else{l({rel:"manifest",href:"site.webmanifest"});["Inter-SemiBold","Inter-Regula
     <p class="hero__lede">Push the pointer off the edge of one screen and it lands on the next computer. Your keyboard, clipboard and files follow it. Free and open source, for Linux, macOS and Windows.</p>
     <div class="hero__actions">
       <a class="btn btn--primary btn--lg" data-download href="https://github.com/samer2373/one-mk/releases/latest"><svg aria-hidden="true"><use href="#i-down"/></svg><span data-download-label>Download oneMK</span></a>
-      <a class="btn btn--ghost btn--lg" href="https://github.com/samer2373/one-mk"><svg aria-hidden="true"><use href="#i-github"/></svg>View on GitHub</a>
+      <a class="btn btn--ghost btn--lg" href="https://github.com/samer2373/one-mk" target="_blank" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>View on GitHub</a>
     </div>
-    <p class="hero__meta"><span data-download-note>Version 1.0.0</span> · MIT or Apache-2.0 · <a href="#install">Other downloads</a></p>
+    <p class="hero__meta"><span data-download-note>Version <span data-version>1.0.0</span></span> · MIT or Apache-2.0 · <a href="#download">Other downloads</a></p>
   </div>
 
   <div class="stage" data-stage>
@@ -386,49 +386,114 @@ else{l({rel:"manifest",href:"site.webmanifest"});["Inter-SemiBold","Inter-Regula
   </div>
 </section>
 
-<section class="install" id="install" aria-labelledby="install-title">
-  <div class="wrap install__grid">
-    <div class="install__head">
-      <h2 id="install-title" class="h2">Install it on each computer.</h2>
-      <p class="lede">The first launch sets up start at login and tells you what it did. Then pair from the window, or run <code>one-mk pair</code> on both.</p>
+<section class="download" id="download" aria-labelledby="download-title">
+  <div class="wrap">
+    <div class="download__head">
+      <h2 id="download-title" class="h2">Download oneMK.</h2>
+      <p class="lede">Free for Linux, macOS and Windows. Install it on every computer you want to share, then pair them. Version <span data-version>1.0.0</span>, always the latest release.</p>
     </div>
-    <div class="install__body">
-      <div class="tabs tabs--os" role="tablist" aria-label="Operating system" data-tabs data-os-tabs>
-        <button role="tab" id="t-linux" aria-controls="p-linux" aria-selected="true" data-os="linux">Linux</button>
-        <button role="tab" id="t-mac" aria-controls="p-mac" aria-selected="false" tabindex="-1" data-os="mac">macOS</button>
-        <button role="tab" id="t-win" aria-controls="p-win" aria-selected="false" tabindex="-1" data-os="windows">Windows</button>
+    <div class="dl-away" data-dl-away hidden>
+      <p><b>oneMK is a desktop program.</b> It runs on the Linux, Mac or Windows computers you want to share, not on this device. Open this page on one of them, or send yourself the link.</p>
+      <div class="dl-away__actions">
+        <button type="button" class="btn btn--primary" data-share-link>Copy the link</button>
+        <span class="dl-away__done" data-share-done aria-live="polite"></span>
       </div>
-      <div role="tabpanel" id="p-linux" aria-labelledby="t-linux" class="os">
-        <p>One line installs the programs into <code>~/.local/bin</code> and checks what it downloads. Running it again upgrades in place.</p>
-        <div class="cmd"><pre><code>curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh</code></pre><button type="button" class="cmd__copy" data-copy aria-label="Copy the install command"><svg aria-hidden="true"><use href="#i-copy"/></svg></button></div>
-        <p>Or download a package for x86_64:</p>
-        <ul class="dl">
-          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-unknown-linux-gnu.deb"><b>Debian and Ubuntu</b><span>one-mk-x86_64-unknown-linux-gnu.deb</span></a></li>
-          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-unknown-linux-gnu.AppImage"><b>AppImage</b><span>one-mk-x86_64-unknown-linux-gnu.AppImage</span></a></li>
-          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-unknown-linux-gnu.tar.gz"><b>Archive</b><span>one-mk-x86_64-unknown-linux-gnu.tar.gz</span></a></li>
+    </div>
+    <div class="dl-grid" data-dl-grid>
+      <article class="dl-card" data-panel="mac" aria-labelledby="dl-mac">
+        <header class="dl-card__head">
+          <span class="dl-card__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 20h7M12 16.5V20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+          <div><h3 id="dl-mac">macOS</h3><p class="dl-card__req">macOS 11 or later · Apple silicon and Intel</p></div>
+          <span class="dl-card__badge" data-badge hidden>Detected for your computer</span>
+        </header>
+        <p class="dl-card__why" data-why hidden></p>
+        <ul class="assets">
+          <li><a class="asset" data-file="one-mk-aarch64-apple-darwin.dmg" href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-aarch64-apple-darwin.dmg"><span class="asset__name">Apple silicon <small>M1 and later</small></span><span class="asset__file">one-mk-aarch64-apple-darwin.dmg</span><span class="asset__size" data-size="one-mk-aarch64-apple-darwin.dmg">11.6 MB</span></a></li>
+          <li><a class="asset" data-file="one-mk-x86_64-apple-darwin.dmg" href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-apple-darwin.dmg"><span class="asset__name">Intel</span><span class="asset__file">one-mk-x86_64-apple-darwin.dmg</span><span class="asset__size" data-size="one-mk-x86_64-apple-darwin.dmg">13.3 MB</span></a></li>
         </ul>
-        <div class="cmd"><pre><code>sudo apt install ./one-mk-x86_64-unknown-linux-gnu.deb</code></pre><button type="button" class="cmd__copy" data-copy aria-label="Copy the apt command"><svg aria-hidden="true"><use href="#i-copy"/></svg></button></div>
-        <p class="small">On GNOME and KDE on Wayland the desktop asks your permission to share input; GNOME 50 asks again each time oneMK starts.</p>
-      </div>
-      <div role="tabpanel" id="p-mac" aria-labelledby="t-mac" class="os" hidden>
-        <p>Open the disk image and drag oneMK onto Applications. Releases are signed with a Developer ID and notarized.</p>
-        <ul class="dl">
-          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-aarch64-apple-darwin.dmg"><b>Apple silicon</b><span>one-mk-aarch64-apple-darwin.dmg</span></a></li>
-          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-apple-darwin.dmg"><b>Intel</b><span>one-mk-x86_64-apple-darwin.dmg</span></a></li>
+        <p class="dl-card__hint">Which one? Apple menu › About This Mac: “Chip: Apple M…” is Apple silicon, “Processor: Intel” is Intel.</p>
+        <details class="dl-more">
+          <summary>Install steps and more files</summary>
+          <ol class="steps">
+            <li>Open the disk image and drag oneMK onto Applications.</li>
+            <li>Open oneMK. It is signed with a Developer ID and notarized.</li>
+            <li>Allow Accessibility and Input Monitoring when it asks; it shows you where in System Settings.</li>
+          </ol>
+          <p>Or from a terminal; it picks the right build, installs into Applications and opens it:</p>
+          <div class="cmd"><pre><code>curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh</code></pre><button type="button" class="cmd__copy" data-copy aria-label="Copy the install command"><svg aria-hidden="true"><use href="#i-copy"/></svg></button></div>
+          <p class="small">Programs only, for the command line: <a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-aarch64-apple-darwin.tar.gz">Apple silicon .tar.gz</a> (<span data-size="one-mk-aarch64-apple-darwin.tar.gz">10.3 MB</span>), <a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-apple-darwin.tar.gz">Intel .tar.gz</a> (<span data-size="one-mk-x86_64-apple-darwin.tar.gz">11.5 MB</span>).</p>
+        </details>
+      </article>
+
+      <article class="dl-card" data-panel="windows" aria-labelledby="dl-win">
+        <header class="dl-card__head">
+          <span class="dl-card__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5l7-1v7H4zM13 4.2l7-1v8.3h-7zM4 12.5h7v7l-7-1zM13 12.5h7v8.3l-7-1z" fill="currentColor"/></svg></span>
+          <div><h3 id="dl-win">Windows</h3><p class="dl-card__req">Windows 10 and 11 · 64-bit (x64)</p></div>
+          <span class="dl-card__badge" data-badge hidden>Detected for your computer</span>
+        </header>
+        <p class="dl-card__why" data-why hidden></p>
+        <ul class="assets">
+          <li><a class="asset" data-file="one-mk-x86_64-pc-windows-msvc-setup.exe" href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-pc-windows-msvc-setup.exe"><span class="asset__name">Installer <small>for your user, no admin</small></span><span class="asset__file">one-mk-x86_64-pc-windows-msvc-setup.exe</span><span class="asset__size" data-size="one-mk-x86_64-pc-windows-msvc-setup.exe">9.1 MB</span></a></li>
+          <li><a class="asset" data-file="one-mk-x86_64-pc-windows-msvc.zip" href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-pc-windows-msvc.zip"><span class="asset__name">Portable <small>programs only</small></span><span class="asset__file">one-mk-x86_64-pc-windows-msvc.zip</span><span class="asset__size" data-size="one-mk-x86_64-pc-windows-msvc.zip">10.3 MB</span></a></li>
         </ul>
-        <p>Or install from a terminal; it puts oneMK in Applications and opens it:</p>
-        <div class="cmd"><pre><code>curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh</code></pre><button type="button" class="cmd__copy" data-copy aria-label="Copy the install command"><svg aria-hidden="true"><use href="#i-copy"/></svg></button></div>
-        <p class="small">oneMK asks for Accessibility and Input Monitoring in System Settings, and shows you where to find them.</p>
-      </div>
-      <div role="tabpanel" id="p-win" aria-labelledby="t-win" class="os" hidden>
-        <p>Run the installer. It installs for your user only, so it needs no administrator rights.</p>
-        <ul class="dl">
-          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-pc-windows-msvc-setup.exe"><b>Installer</b><span>one-mk-x86_64-pc-windows-msvc-setup.exe</span></a></li>
-          <li><a href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-pc-windows-msvc.zip"><b>Programs only</b><span>one-mk-x86_64-pc-windows-msvc.zip</span></a></li>
+        <p class="dl-card__hint">No build for Windows on ARM yet. Windows support is experimental: built and tested on every change, not yet run on real Windows machines.</p>
+        <details class="dl-more">
+          <summary>Install steps</summary>
+          <ol class="steps">
+            <li>Run the installer. It installs into your own user folder and needs no administrator rights.</li>
+            <li>The installer is not code-signed yet, so SmartScreen warns first: choose More info, then Run anyway.</li>
+            <li>oneMK starts at sign-in; it runs as you, so it does not reach the sign-in screen or UAC prompts.</li>
+          </ol>
+        </details>
+      </article>
+
+      <article class="dl-card" data-panel="linux" aria-labelledby="dl-linux">
+        <header class="dl-card__head">
+          <span class="dl-card__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M7.5 9.5l3 2.5-3 2.5M12.5 15h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+          <div><h3 id="dl-linux">Linux</h3><p class="dl-card__req">x86_64 · GNOME 45+ verified; KDE Plasma 6.1+, wlroots and X11 experimental</p></div>
+          <span class="dl-card__badge" data-badge hidden>Detected for your computer</span>
+        </header>
+        <p class="dl-card__why" data-why hidden></p>
+        <ul class="assets">
+          <li><a class="asset" data-file="one-mk-x86_64-unknown-linux-gnu.deb" href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-unknown-linux-gnu.deb"><span class="asset__name">.deb <small>Debian, Ubuntu, Mint, Pop!_OS</small></span><span class="asset__file">one-mk-x86_64-unknown-linux-gnu.deb</span><span class="asset__size" data-size="one-mk-x86_64-unknown-linux-gnu.deb">11.7 MB</span></a></li>
+          <li><a class="asset" data-file="one-mk-x86_64-unknown-linux-gnu.AppImage" href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-unknown-linux-gnu.AppImage"><span class="asset__name">AppImage <small>any distribution</small></span><span class="asset__file">one-mk-x86_64-unknown-linux-gnu.AppImage</span><span class="asset__size" data-size="one-mk-x86_64-unknown-linux-gnu.AppImage">16.5 MB</span></a></li>
+          <li><a class="asset" data-file="one-mk-x86_64-unknown-linux-gnu.tar.gz" href="https://github.com/samer2373/one-mk/releases/latest/download/one-mk-x86_64-unknown-linux-gnu.tar.gz"><span class="asset__name">.tar.gz <small>programs only</small></span><span class="asset__file">one-mk-x86_64-unknown-linux-gnu.tar.gz</span><span class="asset__size" data-size="one-mk-x86_64-unknown-linux-gnu.tar.gz">18.7 MB</span></a></li>
         </ul>
-        <p class="small">The installer is not code-signed yet, so SmartScreen warns before it runs. Windows 10 and 11, 64-bit.</p>
+        <p class="dl-card__hint">No build for ARM Linux yet. On GNOME and KDE on Wayland the desktop asks your permission to share input; GNOME 50 asks again each time oneMK starts.</p>
+        <details class="dl-more">
+          <summary>Install steps</summary>
+          <ol class="steps">
+            <li><b>.deb:</b> <code>sudo apt install ./one-mk-x86_64-unknown-linux-gnu.deb</code>, then open oneMK.</li>
+            <li><b>AppImage:</b> <code>chmod +x one-mk-x86_64-unknown-linux-gnu.AppImage</code> and run it; with no arguments it opens the window.</li>
+            <li><b>Or one line</b>, into <code>~/.local/bin</code>, checking what it downloads; running it again upgrades in place:</li>
+          </ol>
+          <div class="cmd"><pre><code>curl -fsSL https://raw.githubusercontent.com/samer2373/one-mk/main/install.sh | sh</code></pre><button type="button" class="cmd__copy" data-copy aria-label="Copy the install command"><svg aria-hidden="true"><use href="#i-copy"/></svg></button></div>
+        </details>
+      </article>
+    </div>
+
+    <div class="dl-extra">
+      <div class="dl-extra__item">
+        <h3>Check what you downloaded</h3>
+        <p>Every release lists each file’s SHA-256 in <a href="https://github.com/samer2373/one-mk/releases/latest/download/SHA256SUMS">SHA256SUMS</a> (also in the Ed25519-signed <a href="https://github.com/samer2373/one-mk/releases/latest/download/update-manifest.json">update-manifest.json</a>). In the folder with your download:</p>
+        <div class="cmd"><pre><code>sha256sum -c --ignore-missing SHA256SUMS</code></pre><button type="button" class="cmd__copy" data-copy aria-label="Copy the checksum command"><svg aria-hidden="true"><use href="#i-copy"/></svg></button></div>
+        <p class="small">On a Mac: <code>shasum -a 256 -c --ignore-missing SHA256SUMS</code></p>
       </div>
-      <p class="install__more">Every file, with <code>SHA256SUMS</code> and the signed list, is on the <a href="https://github.com/samer2373/one-mk/releases/latest">latest release</a>. To build from source you need stable Rust; see the <a href="https://github.com/samer2373/one-mk#readme">README</a>.</p>
+      <a class="dl-extra__item dl-source" href="https://github.com/samer2373/one-mk" target="_blank" rel="noopener">
+        <svg class="dl-source__icon" aria-hidden="true"><use href="#i-github"/></svg>
+        <h3>Source code</h3>
+        <p>github.com/samer2373/one-mk. Rust, MIT or Apache-2.0. Build it yourself with stable Rust.</p>
+        <span class="link">Open on GitHub <svg aria-hidden="true"><use href="#i-arrow"/></svg></span>
+      </a>
+      <div class="dl-extra__item">
+        <h3>After installing</h3>
+        <p>Run oneMK on each computer and choose <b>Pair another computer</b>, or run <code>one-mk pair</code> on both.</p>
+        <ul class="dl-links">
+          <li><a href="https://github.com/samer2373/one-mk/releases/latest">Release notes and every file</a></li>
+          <li><a href="https://github.com/samer2373/one-mk/blob/main/docs/TROUBLESHOOTING.md">Troubleshooting</a></li>
+          <li><a href="https://github.com/samer2373/one-mk/blob/main/docs/COMMANDS.md">Command reference</a></li>
+        </ul>
+      </div>
     </div>
   </div>
 </section>
@@ -480,7 +545,7 @@ else{l({rel:"manifest",href:"site.webmanifest"});["Inter-SemiBold","Inter-Regula
     <p class="lede">Free, open source, and set up in about a minute.</p>
     <div class="hero__actions">
       <a class="btn btn--primary btn--lg" data-download href="https://github.com/samer2373/one-mk/releases/latest"><svg aria-hidden="true"><use href="#i-down"/></svg><span data-download-label>Download oneMK</span></a>
-      <a class="btn btn--ghost btn--lg" href="https://github.com/samer2373/one-mk"><svg aria-hidden="true"><use href="#i-github"/></svg>Star on GitHub</a>
+      <a class="btn btn--ghost btn--lg" href="https://github.com/samer2373/one-mk" target="_blank" rel="noopener"><svg aria-hidden="true"><use href="#i-github"/></svg>Star on GitHub</a>
     </div>
   </div>
 </section>
@@ -508,13 +573,13 @@ else{l({rel:"manifest",href:"site.webmanifest"});["Inter-SemiBold","Inter-Regula
   <div class="wrap foot__grid">
     <div class="foot__brand">
       <a class="brand" href="#top" aria-label="oneMK, back to the top"><svg class="brand__key" aria-hidden="true"><use href="#key"/></svg><svg class="brand__wm" aria-hidden="true"><use href="#wm"/></svg></a>
-      <p>One mouse and keyboard for all your computers. Version 1.0.0.</p>
+      <p>One mouse and keyboard for all your computers. Version <span data-version>1.0.0</span>.</p>
       <p class="small">This page sets no cookies and makes no requests to anyone else.</p>
       <a class="madeby bf-link" href="https://bigfootjo.com/" target="_blank" rel="noopener" aria-label="Made by Bigfoot Technology (opens bigfootjo.com)"><img class="bf-tile" src="assets/brand/bigfoot/bigfoot-mark.svg" width="32" height="32" alt=""><span>Made by <b>Bigfoot Technology</b></span></a>
     </div>
     <nav class="foot__links" aria-label="Project">
       <h2>Project</h2>
-      <a href="https://github.com/samer2373/one-mk">Source on GitHub</a>
+      <a href="https://github.com/samer2373/one-mk" target="_blank" rel="noopener">Source on GitHub</a>
       <a href="https://github.com/samer2373/one-mk/releases/latest">Releases</a>
       <a href="https://github.com/samer2373/one-mk/tree/main/docs">Documentation</a>
       <a href="https://github.com/samer2373/one-mk/blob/main/docs/COMMANDS.md">Command reference</a>
@@ -535,6 +600,7 @@ else{l({rel:"manifest",href:"site.webmanifest"});["Inter-SemiBold","Inter-Regula
   <div class="foot__mark wrap" aria-hidden="true"><svg><use href="#wm"/></svg></div>
 </footer>
 
+<script src="js/detect.js" defer></script>
 <script src="js/site.js" defer></script>
 </body>
 </html>

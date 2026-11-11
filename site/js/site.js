@@ -33,31 +33,72 @@
   if (sys.addEventListener) sys.addEventListener("change", onSys);
 
   // ----------------------------------------------------------- download --
-  function detectOS() {
-    var ua = navigator.userAgent || "", p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
-    if (/iPhone|iPad|iPod|Android/i.test(ua)) return "mobile";
-    if (/Mac/i.test(p) || /Mac OS X/.test(ua)) return navigator.maxTouchPoints > 1 ? "mobile" : "mac";
-    if (/Win/i.test(p) || /Windows/.test(ua)) return "windows";
-    if (/Linux|X11|CrOS/i.test(p + ua)) return /CrOS/.test(ua) ? "other" : "linux";
-    return "other";
-  }
-  var os = detectOS();
-  var DL = {
-    mac: { file: "one-mk-aarch64-apple-darwin.dmg", label: "Download for Mac", note: "Apple silicon · <a href=\"" + REL + "one-mk-x86_64-apple-darwin.dmg\">Intel Mac</a>" },
-    windows: { file: "one-mk-x86_64-pc-windows-msvc-setup.exe", label: "Download for Windows", note: "Windows 10 and 11, 64-bit" },
-    linux: { file: "one-mk-x86_64-unknown-linux-gnu.AppImage", label: "Download for Linux", note: "AppImage, x86_64" }
+  // js/detect.js decides; this shows it: the hero buttons, the detected card
+  // lifted to the top of #download, the recommended file, or a note that
+  // oneMK is a desktop program. Without scripts every platform is listed.
+  var VERSION = root.dataset.version || "1.0.0";
+  var WHY = {
+    "mac:arm:sure": "Your browser reports an Apple silicon Mac.",
+    "mac:arm:": "Looks like Apple silicon, from the graphics chip your browser reports. Not sure? Check About This Mac.",
+    "mac:x86:sure": "Your browser reports an Intel Mac.",
+    "mac:x86:": "Looks like an Intel Mac, from the graphics chip your browser reports. Not sure? Check About This Mac.",
+    "mac:unknown:": "Your browser doesn\u2019t say whether this Mac has Apple silicon or Intel: About This Mac tells you.",
+    "windows:arm:sure": "Your computer reports Windows on ARM. There is no ARM build yet; the x64 installer may run under Windows\u2019 x64 emulation, but that is untested.",
+    "windows:arm:": "Your computer may be Windows on ARM. There is no ARM build yet; the x64 installer may run under Windows\u2019 x64 emulation, but that is untested.",
+    "linux:arm:sure": "Your computer reports an ARM processor. There is no ARM build yet; the files below are for x86_64 computers only. You can build oneMK from source."
   };
-  function setDownload(d) {
-    $$("[data-download]").forEach(function (a) { a.href = REL + d.file; });
-    $$("[data-download-label]").forEach(function (s) { s.textContent = d.label; });
-    var n = $("[data-download-note]"); if (n) n.innerHTML = "Version 1.0.0 · " + d.note;
+  function gather() {
+    var n = navigator, d = n.userAgentData;
+    return { ua: n.userAgent || "", platform: n.platform || "", maxTouchPoints: n.maxTouchPoints || 0,
+      uaData: d ? { platform: d.platform, mobile: d.mobile } : null, hints: {}, gl: "" };
   }
-  if (DL[os]) setDownload(DL[os]);
-  if (os === "mac" && navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
-    navigator.userAgentData.getHighEntropyValues(["architecture"]).then(function (v) {
-      if (v.architecture === "x86") setDownload({ file: "one-mk-x86_64-apple-darwin.dmg", label: "Download for Mac", note: "Intel · <a href=\"" + REL + "one-mk-aarch64-apple-darwin.dmg\">Apple silicon</a>" });
-    }).catch(function () {});
+  function glRenderer() {
+    try {
+      var c = doc.createElement("canvas"), g = c.getContext("webgl"), e = g && g.getExtension("WEBGL_debug_renderer_info");
+      var r = g ? (e ? g.getParameter(e.UNMASKED_RENDERER_WEBGL) : g.getParameter(g.RENDERER)) : "";
+      var lose = g && g.getExtension("WEBGL_lose_context"); if (lose) lose.loseContext();
+      return String(r || "");
+    } catch (err) { return ""; }
   }
+  function applyDownload(r) {
+    $$("[data-download]").forEach(function (a) { a.href = r.href; });
+    $$("[data-download-label]").forEach(function (sp) { sp.textContent = r.label; });
+    var n = $("[data-download-note]"); if (n) n.innerHTML = "Version " + VERSION + (r.note ? " \u00b7 " + r.note : "");
+    var grid = $("[data-dl-grid]");
+    $$("[data-panel]").forEach(function (card) {
+      var on = card.dataset.panel === r.panel;
+      card.classList.toggle("is-detected", on);
+      var badge = $("[data-badge]", card); if (badge) badge.hidden = !on;
+      var why = $("[data-why]", card), text = on ? WHY[r.panel + ":" + r.arch + ":" + (r.sure ? "sure" : "")] : "";
+      if (why) { why.textContent = text || ""; why.hidden = !text; }
+      $$("[data-file]", card).forEach(function (a) { a.classList.toggle("is-rec", on && r.recommend.indexOf(a.dataset.file) >= 0); });
+    });
+    if (grid) grid.classList.toggle("has-detected", !!r.panel);
+    var away = $("[data-dl-away]"); if (away) away.hidden = !r.mobile;
+    root.dataset.detected = [r.os, r.arch, r.sure ? "sure" : "guess"].join(" ");
+  }
+  if (window.OMKDetect) {
+    var env = gather();
+    applyDownload(OMKDetect.detect(env));
+    var refine = function () {
+      var r = OMKDetect.detect(env);
+      if (r.os === "mac" && !r.sure && !env.gl) { env.gl = glRenderer(); r = OMKDetect.detect(env); }
+      applyDownload(r);
+      root.dataset.detectDone = "1";
+    };
+    if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues)
+      navigator.userAgentData.getHighEntropyValues(["architecture", "bitness", "platformVersion"])
+        .then(function (v) { env.hints = v || {}; refine(); }, refine);
+    else refine();
+  }
+  var share = $("[data-share-link]");
+  if (share) share.addEventListener("click", function () {
+    var url = location.href.split("#")[0] + "#download", done = $("[data-share-done]");
+    var said = function (t) { if (done) done.textContent = t; };
+    if (navigator.share) { navigator.share({ title: "oneMK", url: url }).catch(function () {}); return; }
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(url).then(function () { said("Copied. Open it on your computer."); }, function () { said(url); });
+    else said(url);
+  });
 
   // --------------------------------------------------------------- tabs --
   $$("[data-tabs]").forEach(function (list) {
@@ -84,10 +125,6 @@
         e.preventDefault(); select(tabs[(j + tabs.length) % tabs.length], true);
       });
     });
-    if (list.hasAttribute("data-os-tabs")) {
-      var mine = tabs.filter(function (t) { return t.dataset.os === os; })[0];
-      if (mine) { tabs.forEach(function (t) { t.setAttribute("aria-selected", "false"); }); select(mine, false); }
-    }
   });
 
   // ------------------------------------------------------- copy buttons --
@@ -126,7 +163,7 @@
   if (sda) root.classList.add("sda");
   var revealSel = [".how .h2", ".how .lede", ".features .h2", ".features .lede", ".tile", ".remap__copy > *", ".remap__view",
     ".gallery .h2", ".gallery .lede", ".gallery__body", ".security__head", ".code", ".security__list > div", ".platforms .h2", ".platforms .lede",
-    ".plat", ".install__head", ".install__body", ".faq .h2", ".faq details", ".cta__in > *", ".maker__card", ".foot__grid > *"];
+    ".plat", ".download__head", ".dl-card", ".dl-extra__item", ".faq .h2", ".faq details", ".cta__in > *", ".maker__card", ".foot__grid > *"];
   $$(revealSel.join(",")).forEach(function (el) {
     el.setAttribute("data-reveal", "");
     var sib = el.parentNode ? $$(":scope > [data-reveal]", el.parentNode).indexOf(el) : 0;
