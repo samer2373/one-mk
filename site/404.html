@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en" data-version="1.0.0">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page not found · oneMK</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="https://samer2373.github.io/one-mk/favicon.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F4F3F0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111214" media="(prefers-color-scheme: dark)">
+<!-- GitHub Pages serves this page at any missing address, at any depth, so it
+     loads nothing by relative path: styles and pictures are inline, and the way
+     home is the site's absolute address (stamped by tools/stamp.sh). -->
+<script>
+(function(){var t;try{t=localStorage.getItem("omk-theme")}catch(e){}
+if(t!=="light"&&t!=="dark")t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";
+document.documentElement.dataset.theme=t;})();
+</script>
+<style>
+@font-face{font-family:"Inter";src:url("https://samer2373.github.io/one-mk/assets/fonts/Inter-Regular.woff2") format("woff2");font-weight:400;font-display:swap}
+@font-face{font-family:"Inter";src:url("https://samer2373.github.io/one-mk/assets/fonts/Inter-SemiBold.woff2") format("woff2");font-weight:600;font-display:swap}
+:root{--bg:#F4F3F0;--surface:#FFFFFF;--ink:#16171A;--ink2:#5F6168;--line:rgba(22,23,26,.08);--accent:#2F54EB;--focus:#2F54EB;--cap:#16171A;--top:#34363C;--ptr:#FFFFFF;--shadow:0 1px 2px rgba(22,23,26,.04),0 12px 32px rgba(22,23,26,.08);color-scheme:light}
+:root[data-theme="dark"]{--bg:#111214;--surface:#1A1B1F;--ink:#EDEDEB;--ink2:#A3A5AC;--line:rgba(255,255,255,.08);--accent:#3A5AF2;--focus:#7E97FF;--cap:#D6D4CD;--top:#F6F5F1;--ptr:#2F54EB;--shadow:inset 0 1px 0 rgba(255,255,255,.06);color-scheme:dark}
+@media (prefers-color-scheme:dark){:root:not([data-theme]){--bg:#111214;--surface:#1A1B1F;--ink:#EDEDEB;--ink2:#A3A5AC;--line:rgba(255,255,255,.08);--accent:#3A5AF2;--focus:#7E97FF;--cap:#D6D4CD;--top:#F6F5F1;--ptr:#2F54EB;color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;display:grid;place-items:center;padding:24px 16px;background:var(--bg);color:var(--ink);font:400 17px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+main{width:100%;max-width:560px;text-align:center}
+.mark{display:inline-flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none}
+.mark svg{display:block}
+.edge{position:relative;margin:48px auto 0;width:min(100%,420px);aspect-ratio:16/7;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.edge i{border-radius:12px;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow)}
+.edge i:last-child{background:transparent;border:2px dashed var(--line);box-shadow:none}
+.edge b{position:absolute;left:calc(50% - 12px);top:38%;width:22px;height:30px;animation:nudge 2.4s cubic-bezier(.2,.7,.1,1) infinite}
+@keyframes nudge{0%,20%{transform:translateX(-46px)}55%,80%{transform:translateX(4px)}100%{transform:translateX(-46px)}}
+@media (prefers-reduced-motion:reduce){.edge b{animation:none}}
+h1{text-wrap:balance;margin:40px 0 0;font-size:clamp(2.2rem,1.4rem + 3.4vw,3.6rem);line-height:1.02;letter-spacing:-.04em;font-weight:600}
+p{margin:16px auto 0;max-width:40ch;color:var(--ink2);text-wrap:pretty}
+.btn{display:inline-flex;align-items:center;gap:8px;height:50px;margin-top:32px;padding:0 24px;border-radius:14px;background:var(--accent);color:#fff;font-weight:600;font-size:16px;text-decoration:none;transition:transform .18s}
+.btn:hover{transform:translateY(-1px)}
+a:focus-visible{outline:2px solid var(--focus);outline-offset:3px;border-radius:8px}
+.small{margin-top:20px;font-size:14px}
+.small a{color:var(--ink)}
+</style>
+</head>
+<body>
+<main>
+  <a class="mark" href="https://samer2373.github.io/one-mk/" aria-label="oneMK home">
+    <svg width="32" height="32" viewBox="0 0 64 64" aria-hidden="true"><rect x="5" y="5" width="54" height="54" rx="15" fill="var(--cap)"/><rect x="12" y="8" width="40" height="40" rx="11" fill="var(--top)"/><path d="M24 17L24 39L29.2 34L32.6 42L36.4 40.4L33 32.6L40 32.6Z" fill="var(--ptr)"/></svg>
+    <svg width="90" height="22" viewBox="0 -79 428 105" aria-hidden="true"><path fill="currentColor" d="M39.6 1.6Q28.6 1.6 20.4 -2.2Q12.2 -5.9 7.6 -12.8Q3 -19.6 3 -28.5Q3 -37.6 7.6 -44.4Q12.2 -51.2 20.4 -55Q28.6 -58.8 39.6 -58.8Q50.5 -58.8 58.8 -55Q67 -51.2 71.6 -44.4Q76.2 -37.6 76.2 -28.5Q76.2 -19.6 71.6 -12.8Q67 -5.9 58.8 -2.2Q50.5 1.6 39.6 1.6ZM39.6 -13.5Q44.6 -13.5 48.2 -15.3Q51.7 -17.1 53.6 -20.5Q55.5 -23.9 55.5 -28.5Q55.5 -33.3 53.6 -36.7Q51.7 -40 48.2 -41.8Q44.6 -43.6 39.6 -43.6Q34.6 -43.6 31 -41.8Q27.4 -40 25.5 -36.7Q23.6 -33.3 23.6 -28.6Q23.6 -23.9 25.5 -20.5Q27.4 -17.1 31 -15.3Q34.6 -13.5 39.6 -13.5ZM78.1 -57.1H98.6L102.3 -34.3V0H81.9V-37.4ZM123.3 -58.8Q131.5 -58.8 137.3 -55.5Q143.1 -52.2 146.2 -46.2Q149.2 -40.2 149.2 -32V0H128.8V-29Q128.8 -35.4 125.6 -38.8Q122.3 -42.2 116.2 -42.2Q112 -42.2 108.8 -40.4Q105.7 -38.6 104 -35.3Q102.3 -32 102.3 -27.5L96 -30.8Q97.2 -39.9 101.1 -46.2Q105 -52.4 110.7 -55.6Q116.4 -58.8 123.3 -58.8ZM189.2 1.6Q178.8 1.6 170.7 -2.2Q162.5 -6 157.8 -12.9Q153.1 -19.7 153.1 -28.8Q153.1 -37.7 157.6 -44.5Q162.1 -51.2 169.9 -55Q177.8 -58.8 187.7 -58.8Q198 -58.8 205.2 -54.4Q212.5 -49.9 216.4 -41.8Q220.4 -33.7 220.4 -22.7H169.6V-35H208.9L202.2 -30.7Q201.8 -35.1 200 -38.2Q198.2 -41.2 195.2 -42.8Q192.3 -44.4 188.2 -44.4Q183.7 -44.4 180.5 -42.6Q177.3 -40.8 175.5 -37.7Q173.7 -34.5 173.7 -30.3Q173.7 -24.9 176.1 -21.2Q178.6 -17.4 183.3 -15.4Q188.1 -13.4 195 -13.4Q201.3 -13.4 207.6 -15.1Q213.8 -16.7 218.9 -19.7V-6.7Q213 -2.7 205.4 -0.6Q197.9 1.6 189.2 1.6ZM336.1 -75V0H316.4V-67.6L320.8 -67.1L291.8 0H270.8L241.7 -66.9L246.2 -67.4V0H226.5V-75H258.5L285.4 -10.6H277.4L304.1 -75ZM346.1 0V-75H366.7V-16.5L361.2 -20.8L403.7 -75H425.6L364.8 0ZM381.9 -35.8 397.1 -48.4 426.6 0H403.1Z"/></svg>
+  </a>
+  <div class="edge" aria-hidden="true"><i></i><i></i>
+    <b><svg viewBox="0 0 32 48" width="22" height="30"><path d="M2 2L2 40L11 31.5L17 45L23.5 42.3L17.5 29H30Z" fill="#fff" stroke="#111" stroke-width="2.4" stroke-linejoin="round"/></svg></b>
+  </div>
+  <h1>Nothing past this edge.</h1>
+  <p>This page doesn’t exist. The pointer has nowhere to go here, so let’s take it back home.</p>
+  <a class="btn" href="https://samer2373.github.io/one-mk/">Back to oneMK</a>
+  <p class="small">Looking for the program? <a href="https://github.com/samer2373/one-mk/releases/latest">Latest release on GitHub</a></p>
+</main>
+</body>
+</html>
