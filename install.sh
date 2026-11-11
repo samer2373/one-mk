@@ -30,7 +30,7 @@ case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)  target=aarch64-apple-darwin; file=one-mk-$target.app.zip ;;
     Darwin-x86_64) target=x86_64-apple-darwin; file=one-mk-$target.app.zip ;;
     Linux-x86_64)  target=x86_64-unknown-linux-gnu; file=one-mk-$target.tar.gz ;;
-    *) die "there is no oneMK build for $(uname -s) $(uname -m). On Windows, download the -setup.exe from https://github.com/samer2373/one-mk/releases/latest" ;;
+    *) die "there is no oneMK build for $(uname -s) $(uname -m). The builds are listed at https://github.com/samer2373/one-mk/releases/latest (on Windows, download the -setup.exe there)" ;;
 esac
 command -v curl >/dev/null || die "curl is needed to download oneMK; install it and run this again"
 
