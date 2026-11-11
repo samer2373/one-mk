@@ -33,6 +33,8 @@ pub enum Action {
     WallpaperPause(bool),
     Forget { peer: String },
     ToggleAutostart,
+    /// The maker's site (Bigfoot Technology), in the browser.
+    OpenMaker,
     Quit,
 }
 
@@ -205,6 +207,8 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
     }
     m.push(Entry::Separator);
     m.push(Entry::Item { label: "Start at login".into(), action: Action::ToggleAutostart, checked: Some(snap.autostart) });
+    m.push(Entry::Separator);
+    m.push(Entry::Item { label: format!("Made by {}", one_mk_ctl::brand::MAKER), action: Action::OpenMaker, checked: None });
     m.push(Entry::Item { label: "Quit oneMK".into(), action: Action::Quit, checked: None });
     m
 }
@@ -220,6 +224,17 @@ mod tests {
 
     fn snap(peers: Vec<PeerStatus>) -> Snapshot {
         Snapshot { status: Some(Status { name: "me".into(), peers, ..Default::default() }), autostart: false }
+    }
+
+    #[test]
+    fn the_maker_is_a_link_just_above_quit() {
+        for s in [Snapshot::default(), snap(vec![peer("a", Side::Left, true)])] {
+            let m = menu(&s);
+            let n = m.len();
+            assert_eq!(m[n - 2], Entry::Item { label: "Made by Bigfoot Technology".into(), action: Action::OpenMaker, checked: None });
+            assert!(matches!(&m[n - 1], Entry::Item { action: Action::Quit, .. }));
+            assert_eq!(m[n - 3], Entry::Separator);
+        }
     }
 
     #[test]

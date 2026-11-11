@@ -37,6 +37,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>
+  <key>NSHumanReadableCopyright</key><string>Made by Bigfoot Technology · bigfootjo.com</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSLocationUsageDescription</key><string>oneMK reads your Wi-Fi network name to switch layout profiles automatically, including while its window is closed. It does not track your location.</string>
