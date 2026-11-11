@@ -570,8 +570,8 @@ impl App {
                 let lines = self.running().map(|status| status.input.clone()).unwrap_or_default();
                 self.guide.start(&crate::guide::Permission::ALL, Box::new(crate::guide::StatusPermissions { lines }), now);
             }
-            Some(Fix::OpenFirewallSettings) => ui.ctx().open_url(egui::OpenUrl::new_tab("x-apple.systempreferences:com.apple.Network-Settings.extension?Firewall")),
-            Some(Fix::OpenPermissionSettings) => ui.ctx().open_url(egui::OpenUrl::new_tab("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")),
+            Some(Fix::OpenFirewallSettings) => about::open_link("x-apple.systempreferences:com.apple.Network-Settings.extension?Firewall"),
+            Some(Fix::OpenPermissionSettings) => about::open_link("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"),
             _ => {}
         }
     }

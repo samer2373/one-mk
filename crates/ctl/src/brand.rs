@@ -27,10 +27,17 @@ pub fn opener(url: &str) -> (PathBuf, Vec<String>) {
     }
 }
 
+/// Opens `url` (a web page, or a settings pane on a Mac) in the default
+/// program for it. The window can't ask egui to: it is built without egui's
+/// `links` feature, so `open_url` there does nothing.
+pub fn open_url(url: &str) -> std::io::Result<()> {
+    let (exe, args) = opener(url);
+    crate::proc::spawn_detached(&exe, &args, None)
+}
+
 /// Opens the maker's site in the default browser.
 pub fn open_site() -> std::io::Result<()> {
-    let (exe, args) = opener(MAKER_URL);
-    crate::proc::spawn_detached(&exe, &args, None)
+    open_url(MAKER_URL)
 }
 
 #[cfg(test)]
