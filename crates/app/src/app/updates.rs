@@ -92,7 +92,14 @@ impl App {
     /// `update-now` (the button and what it found) or `update-more`.
     pub(super) fn update_row(&mut self, ui: &mut Ui, key: &str, row: Rect) {
         let Some(status) = self.update_ui.status.clone() else {
-            ui.painter().text(row.left_center(), Align2::LEFT_CENTER, "Checking how updates work here…", regular(T_BODY), pal().ink2);
+            // Looking; or it could not be read, which the person is told (the
+            // answer never comes, so "looking" would be said for ever).
+            let said = self.update_output.as_deref().map(str::trim).filter(|said| !said.is_empty() && !self.busy.contains(&Job::Update));
+            let (text, ink) = match said {
+                Some(said) => (said, pal().ink),
+                None => ("Checking how updates work here…", pal().ink2),
+            };
+            ui.painter().text(row.left_center(), Align2::LEFT_CENTER, fit(ui.painter(), text, &regular(T_BODY), row.width()), regular(T_BODY), ink);
             return;
         };
         let busy = self.busy.contains(&Job::Update) || self.busy.contains(&Job::UpdateSettings);

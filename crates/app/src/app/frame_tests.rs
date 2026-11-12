@@ -515,3 +515,14 @@ pub(super) fn label_not_in_name(win: &Win) -> Vec<String> {
 mod flows;
 #[cfg(test)]
 mod pages;
+// The click-through flows use a shell script as `one-mk` and a unix socket as the daemon.
+#[cfg(unix)]
+mod qa;
+#[cfg(unix)]
+mod qa_files;
+#[cfg(unix)]
+mod qa_settings;
+#[cfg(unix)]
+mod qa_updates_settings;
+#[cfg(unix)]
+mod qa_wallpaper;

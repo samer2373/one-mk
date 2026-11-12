@@ -645,7 +645,8 @@ impl Pills<'_> {
             targets::note(&self.names[k], r.rect);
             #[cfg(any(debug_assertions, feature = "design-evidence"))]
             targets::note_id(r.id, &self.names[k]);
-            let (name, enabled) = (self.names[k].clone(), r.enabled());
+            // (A choice that is off is told so to screen readers, as buttons' are.)
+            let (name, enabled) = (self.names[k].clone(), enabled && r.enabled());
             let role = self.role;
             r.widget_info(move || WidgetInfo::selected(role, enabled, on, &name));
         }
