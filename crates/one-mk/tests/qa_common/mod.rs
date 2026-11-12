@@ -59,6 +59,10 @@ pub fn isolated(test: &str) -> bool {
         Ok(output) if output.status.success() => {}
         _ => return true,
     }
+    // One lab at a time per test binary: each runs two or more daemons whose links give up after 4 s of
+    // silence, which a busy two-core CI runner running eight labs at once does not always keep.
+    static TURNS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = TURNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let exe = std::env::current_exe().unwrap();
     let output = wrap(&[exe.to_str().unwrap(), "--exact", test, "--nocapture", "--test-threads=1"])
         .env(NETNS, "1")

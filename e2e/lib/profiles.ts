@@ -148,6 +148,14 @@ export function envScript(env: EnvSpec, profile = ''): string {
       C.prototype.getParameter = function(k){ return (k === 37446 || k === 0x1F01) ? p.gl : gp.apply(this, arguments); };
       C.prototype.getExtension = function(n){ return n === 'WEBGL_debug_renderer_info' ? { UNMASKED_RENDERER_WEBGL: 37446, UNMASKED_VENDOR_WEBGL: 37445 } : ge.apply(this, arguments); };
     });
+    // A browser on a machine with no graphics chip (a CI runner's Firefox) can offer WebGL 2 and refuse
+    // WebGL 1: the page asks for "webgl", so hand it the WebGL 2 context, which has the same names.
+    var gc = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function(type){
+      var c = gc.apply(this, arguments);
+      if (!c && (type === 'webgl' || type === 'experimental-webgl')) c = gc.call(this, 'webgl2');
+      return c;
+    };
   }
   if (name) window.__e2eProfile = name;
 })(${JSON.stringify(env)}, ${JSON.stringify(profile)});`;
