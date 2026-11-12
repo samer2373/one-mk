@@ -398,15 +398,19 @@ async fn stalled_handshakes_from_one_address_are_limited_and_the_limit_lifts() {
             let _ = tx.send(peer);
         }
     });
-    // A one-way relay (the server's answers are dropped) makes handshakes hang.
+    // A one-way relay (the server's answers are dropped) makes handshakes hang. It notes which clients
+    // have got a first packet through, so the test waits for the stuck handshakes instead of a fixed time.
     let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let hang = socket.local_addr().unwrap();
+    let seen: Arc<std::sync::Mutex<std::collections::HashSet<std::net::SocketAddr>>> = Arc::default();
+    let noted = seen.clone();
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65536];
         loop {
             match socket.recv_from(&mut buf).await {
                 Ok((n, from)) => {
                     if from != server_addr {
+                        noted.lock().unwrap().insert(from);
                         let _ = socket.send_to(&buf[..n], server_addr).await;
                     }
                 }
@@ -425,14 +429,25 @@ async fn stalled_handshakes_from_one_address_are_limited_and_the_limit_lifts() {
             })
         })
         .collect();
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    let started = std::time::Instant::now();
+    while seen.lock().unwrap().len() < 6 && started.elapsed() < Duration::from_secs(10) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // The server has now had the first packet of every stuck handshake.
+    tokio::time::sleep(Duration::from_millis(300)).await;
     for staller in &stallers {
         staller.abort();
     }
     // Mid-flood: a legitimate computer on the same address is turned away (or has to wait).
     let good = node();
     let early = good.connect_timeout(server_addr, Duration::from_millis(800)).await;
-    assert!(early.is_err(), "the address is out of handshake slots");
+    assert!(
+        early.is_err(),
+        "the address is out of handshake slots (clients through the relay: {}, failures counted: {:?}, after {:?})",
+        seen.lock().unwrap().len(),
+        server.failed_handshakes(),
+        started.elapsed()
+    );
     // The stuck handshakes time out after three seconds and the share comes back.
     tokio::time::sleep(Duration::from_millis(3000)).await;
     let late = good.connect_timeout(server_addr, Duration::from_secs(3)).await.expect("the limit lifted");
