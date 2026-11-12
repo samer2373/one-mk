@@ -81,20 +81,33 @@ fn a_windows_keyboard_reaches_linux_and_macos_except_for_keys_they_lack() {
 }
 
 #[test]
-fn a_mac_keyboard_reaches_windows_and_linux_except_fn_clear_and_the_jis_keypad_comma() {
+fn a_mac_keyboard_reaches_windows_and_linux_except_fn_and_clear() {
     let mac: BTreeSet<u32> = macos_logic::KEYMAP.iter().map(|&(_, e)| e).collect();
     let to_win: BTreeSet<u32> = mac.iter().copied().filter(|&c| win_logic::evdev_to_win(c).is_none()).collect();
     let to_x: BTreeSet<u32> = mac.iter().copied().filter(|&c| linux_logic::evdev_to_xkeycode(c).is_none()).collect();
     // Fn has no Windows key; Clear (the keypad key where a PC has Num Lock) is code 355, past
-    // what X can number; Windows has no JIS keypad comma of its own.
-    assert!(to_win.is_subset(&[464, 355, 95].into()), "{:?}", to_win.iter().map(|&c| name(c)).collect::<Vec<_>>());
+    // what X can number. The JIS keypad comma (95) is the keypad comma Windows types as scan code 0x7E.
+    assert!(to_win.is_subset(&[464, 355].into()), "{:?}", to_win.iter().map(|&c| name(c)).collect::<Vec<_>>());
     assert!(to_x.is_subset(&[464, 355].into()), "{:?}", to_x.iter().map(|&c| name(c)).collect::<Vec<_>>());
     // The Mac's own function and navigation keys are all there.
     for (kc, evdev) in macos_logic::KEYMAP {
-        if !matches!(evdev, 464 | 355 | 95) {
+        if !matches!(evdev, 464 | 355) {
             assert!(win_logic::evdev_to_win(*evdev).is_some(), "mac key {kc:#x} = {}", name(*evdev));
         }
     }
+}
+
+/// The key on a Mac's JIS keyboard with a keypad (kVK_JIS_KeypadComma, 0x5F) is typed on Windows as the
+/// keypad comma: scan code 0x7E, which is what a Windows keyboard's own keypad comma reports.
+#[test]
+fn the_mac_jis_keypad_comma_is_typed_on_windows_as_the_keypad_comma() {
+    let evdev = macos_logic::mac_to_evdev(0x5F).expect("the Mac key is known");
+    assert_eq!(evdev, 95, "KEY_KPJPCOMMA");
+    assert_eq!(win_logic::evdev_to_win(evdev), Some(WinKey::Scan { scan: 0x7E, extended: false }));
+    assert_eq!(win_logic::evdev_to_win(121), win_logic::evdev_to_win(evdev), "the same key as KEY_KPCOMMA");
+    // It is a way in only: a Windows keypad comma stays KEY_KPCOMMA (121), as before.
+    assert_eq!(win_logic::scan_to_evdev(0x7E, false), Some(121));
+    assert_eq!(win_logic::hook_key_to_evdev(0xC2, 0x7E, false), Some(121));
 }
 
 /// An X session sends keycodes that no Windows or Mac keyboard has: those are dropped, not
@@ -104,10 +117,10 @@ fn linux_keys_are_delivered_as_themselves_or_not_at_all() {
     for keycode in 0..=255u32 {
         let Some(evdev) = linux_logic::xkeycode_to_evdev(keycode) else { continue };
         assert_eq!(linux_logic::evdev_to_xkeycode(evdev), Some(keycode as u8));
-        // Print Screen's second code (210) and the JIS half/full-width key (85) are sent as their
-        // Windows twin and come back as that twin: a one-way alias, not a mix-up.
+        // Print Screen's second code (210), the JIS half/full-width key (85) and the JIS keypad comma (95)
+        // are sent as their Windows twin and come back as that twin: a one-way alias, not a mix-up.
         if let (Some(WinKey::Scan { scan, extended }), false) =
-            (win_logic::evdev_to_win(evdev), [210, 85].contains(&evdev))
+            (win_logic::evdev_to_win(evdev), [210, 85, 95].contains(&evdev))
         {
             assert_eq!(
                 win_logic::scan_to_evdev(scan, extended),
@@ -137,7 +150,7 @@ fn every_key_a_person_can_name_in_a_rule_is_deliverable_or_known_not_to_be() {
     assert!(named.len() > 150);
     let no_win: BTreeSet<u32> = named.iter().copied().filter(|&c| win_logic::evdev_to_win(c).is_none()).collect();
     let expected_no_win: BTreeSet<u32> =
-        [95, 101, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 161, 224, 225, 228, 229, 230, 248].into();
+        [101, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 161, 224, 225, 228, 229, 230, 248].into();
     assert!(
         no_win.is_subset(&expected_no_win),
         "newly missing on Windows: {:?}",
