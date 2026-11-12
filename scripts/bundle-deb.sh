@@ -65,6 +65,29 @@ set -- "$tmp"/packaged/usr/share/applications/*.desktop
 app_entry=usr/share/applications/$(basename "$1")
 install -m 644 "$1" "$root/$app_entry"
 
+# Depends. The shared libraries the four programs are linked against, and the
+# glibc version their symbols need (dpkg-shlibdeps reads both from the built
+# files, so the floor follows the build system: ubuntu-22.04 gives
+# libc6 (>= 2.35), the oldest Ubuntu this is meant for; Debian 12 has 2.36).
+# Added by hand are the libraries the window opens at run time, which
+# dpkg-shlibdeps cannot see. Found by installing the package on a clean Ubuntu
+# with --no-install-recommends and starting the window on an X server
+# (docs/PACKAGING.md): libxkbcommon (keyboard layouts), one OpenGL loader (the
+# window draws with OpenGL; libegl1 pulls in the Wayland client library, libgl1
+# the X11 one), and for X11 sessions libxi6, libxcursor1 and libxkbcommon-x11-0
+# (without them the window stops at start with "Failed to load one of xlib's
+# shared libraries" or a panic). All of these names exist in Ubuntu 22.04 and
+# Debian 12.
+command -v dpkg-shlibdeps >/dev/null || { echo "bundle-deb.sh: dpkg-shlibdeps (package dpkg-dev) is needed to write the package's Depends" >&2; exit 1; }
+mkdir -p "$tmp/shlibs/debian"
+printf 'Source: one-mk\n\nPackage: one-mk\nArchitecture: amd64\n' > "$tmp/shlibs/debian/control"
+shlibs=$(cd "$tmp/shlibs" && dpkg-shlibdeps -O -e"$root/usr/bin/one-mk" -e"$root/usr/bin/one-mk-tray" -e"$root/usr/bin/one-mk-app" -e"$root/usr/bin/one-mk-wallpaper" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+case "$shlibs" in
+    "libc6 (>= "*) ;;
+    *) echo "bundle-deb.sh: dpkg-shlibdeps found no libc6 dependency (got: $shlibs)" >&2; exit 1 ;;
+esac
+depends="$shlibs, libxkbcommon0, libxkbcommon-x11-0, libxcursor1, libxi6, libegl1 | libgl1"
+
 cat > "$root/DEBIAN/control" <<CONTROL
 Package: one-mk
 Version: $version
@@ -73,7 +96,8 @@ Maintainer: Samer Abu-Sleem <samer2373@users.noreply.github.com>
 Section: utils
 Priority: optional
 Homepage: https://github.com/samer2373/one-mk
-Recommends: pkexec | policykit-1
+Depends: $depends
+Recommends: pkexec | policykit-1, bubblewrap, libglib2.0-bin
 Description: Share one mouse and keyboard across your computers
  Move the pointer off the edge of one screen and it appears on the next.
  The clipboard and files follow. Run one-mk-app to open the window.

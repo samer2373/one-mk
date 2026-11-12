@@ -113,7 +113,7 @@ fn gif(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
                 if frame[8] & 0x80 != 0 { cursor.take(3usize << ((frame[8] & 7) + 1))?; }
                 if !(2..=8).contains(&cursor.byte()?) { return Err("invalid GIF LZW width".into()); }
                 cursor.blocks()?;
-                add_frame(&mut media, delay.max(10), delays)?;
+                add_frame(&mut media, gif_display_ms(delay), delays)?;
                 delay = 100;
             }
             0x3b if cursor.position == bytes.len() => return Ok(media),
@@ -121,6 +121,15 @@ fn gif(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
         }
     }
 }
+
+/// How long a browser shows a GIF frame whose delay is `delay_ms` (the file's
+/// hundredths of a second times ten): a delay of 10 ms or less, which most
+/// encoders write as "0" or "1" meaning "as soon as you can", is shown for 100 ms.
+/// Browsers do this (WebKit, Blink and Gecko agree) and every GIF tool relies on
+/// it, so a GIF with such delays plays at the speed its author saw. Anything
+/// longer is taken as written; the 60 fps limit stays in [`add_frame`] and
+/// [`validate_media`].
+pub(crate) fn gif_display_ms(delay_ms: u64) -> u64 { if delay_ms <= 10 { 100 } else { delay_ms } }
 
 fn add_frame(media: &mut Media, delay: u64, delays: &mut Vec<u32>) -> Result<(), String> {
     if delay < 17 { return Err("source exceeds 60 fps; convert first".into()); }

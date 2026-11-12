@@ -277,22 +277,69 @@ fn gif_metadata_is_bounded() {
     assert_eq!(inspect(&small).unwrap().frames, 2);
 }
 
+/// 1 x 1 GIF frames, one per entry, whose control block says this many hundredths of a second (None: no control block at all).
+fn gif_with_delays(centiseconds: &[Option<u8>]) -> Vec<u8> {
+    let mut bytes = gif_header(1, 1);
+    for delay in centiseconds {
+        if let Some(delay) = delay { bytes.extend_from_slice(&[0x21, 0xf9, 0x04, 0, *delay, 0, 0, 0]); }
+        bytes.extend_from_slice(GIF_FRAME);
+    }
+    bytes.push(b';');
+    bytes
+}
+
 #[test]
-fn gif_frames_too_fast_are_asked_to_be_converted() {
-    let mut fast = gif_header(1, 1);
-    for _ in 0..2 {
-        fast.extend_from_slice(b"\x21\xf9\x04\0\x01\0\0\0"); // 10 ms
-        fast.extend_from_slice(GIF_FRAME);
+fn gif_delays_of_ten_milliseconds_or_less_play_at_100_ms_like_a_browser() {
+    // 0 and 10 ms ("as soon as you can" in most encoders): every browser shows them for 100 ms.
+    assert_eq!(timeline(&gif_with_delays(&[Some(0), Some(0)])).unwrap().1, [100_000, 100_000]);
+    assert_eq!(timeline(&gif_with_delays(&[Some(1), Some(1)])).unwrap().1, [100_000, 100_000], "10 ms");
+    // Just above that, the delay is taken as written (20 ms is 50 fps, within the limit), and a frame with no control block is 100 ms.
+    assert_eq!(timeline(&gif_with_delays(&[Some(2), Some(2)])).unwrap().1, [20_000, 20_000]);
+    assert_eq!(timeline(&gif_with_delays(&[None, None])).unwrap().1, [100_000, 100_000]);
+    // Mixed, and the duration is the sum of what is shown.
+    let (media, delays) = timeline(&gif_with_delays(&[Some(0), Some(2), Some(1), Some(50), None])).unwrap();
+    assert_eq!(delays, [100_000, 20_000, 100_000, 500_000, 100_000]);
+    assert_eq!((media.frames, media.duration_ms), (5, 820));
+    // The longest delay a GIF can hold (655.35 s) is still over the duration limit.
+    let mut huge = gif_header(1, 1);
+    for _ in 0..2 { huge.extend_from_slice(b"\x21\xf9\x04\0\xff\xff\0\0"); huge.extend_from_slice(GIF_FRAME); }
+    huge.push(b';');
+    assert!(inspect(&huge).unwrap_err().contains("limit"));
+}
+
+#[test]
+fn zero_delay_gifs_are_still_bounded_by_the_duration_and_frame_limits() {
+    // Frames shown 100 ms each: 6000 fill the 600 s limit exactly, one more is over it. (Before, such files were refused as >60 fps.)
+    assert_eq!(inspect(&gif_with_delays(&vec![Some(0); 6000])).unwrap().duration_ms, MAX_DURATION_MS);
+    assert!(inspect(&gif_with_delays(&vec![Some(0); 6001])).unwrap_err().contains("limit"));
+    assert!(inspect(&gif_with_delays(&vec![Some(1); MAX_FRAMES as usize + 1])).unwrap_err().contains("limit"));
+    // One frame is not an animation, whatever its delay.
+    assert!(inspect(&gif_with_delays(&[Some(0)])).is_err());
+    // The pixel budget counts every frame, so a big canvas of zero-delay frames is refused before decoding.
+    let mut big = gif_header(4096, 2160);
+    for _ in 0..200 { big.extend_from_slice(b"\x21\xf9\x04\0\0\0\0\0"); big.extend_from_slice(GIF_FRAME); }
+    big.push(b';');
+    assert!(inspect(&big).unwrap_err().contains("pixel budget"));
+}
+
+#[test]
+fn real_frame_rate_bombs_in_other_formats_are_still_refused() {
+    // APNG at 10 ms, 1 ms and 0 ms a frame: still ">60 fps, convert first". (Only GIF follows the browser rule.)
+    let good = fixtures::apng();
+    let control = good.windows(4).position(|window| window == b"fcTL").unwrap() + 4;
+    for (numerator, denominator) in [(1u16, 100u16), (1, 1000), (0, 100), (1, 60)] {
+        let mut fast = good.clone();
+        fast[control + 20..control + 22].copy_from_slice(&numerator.to_be_bytes());
+        fast[control + 22..control + 24].copy_from_slice(&denominator.to_be_bytes());
+        // (the admission reads the fields; it does not check the chunk's CRC)
+        let error = inspect(&fast).unwrap_err();
+        assert!(error.contains("60 fps") && error.contains("convert first"), "{numerator}/{denominator}: {error}");
     }
-    fast.push(b';');
-    assert!(inspect(&fast).unwrap_err().contains("60 fps"));
-    let mut fine = gif_header(1, 1);
-    for _ in 0..2 {
-        fine.extend_from_slice(b"\x21\xf9\x04\0\x02\0\0\0"); // 20 ms
-        fine.extend_from_slice(GIF_FRAME);
-    }
-    fine.push(b';');
-    assert_eq!(timeline(&fine).unwrap().1, [20_000, 20_000]);
+    // WebM: two frames 5 ms apart (200 fps) are refused too, whatever the reason given.
+    let mut fast_webm = Webm::new();
+    fast_webm.relatives = vec![0, 5];
+    fast_webm.duration = Some(10f64.to_be_bytes().to_vec());
+    assert!(inspect(&fast_webm.bytes()).is_err());
 }
 
 // ---- PNG and APNG -----------------------------------------------------------------------
