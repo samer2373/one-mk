@@ -512,8 +512,7 @@ mod tests {
     #[test]
     fn start_at_login_shows_what_is_set() {
         for on in [false, true] {
-            let mut s = Snapshot::default();
-            s.autostart = on;
+            let s = Snapshot { autostart: on, ..Default::default() };
             assert!(menu(&s).contains(&Entry::Item { label: "Start at login".into(), action: Action::ToggleAutostart, checked: Some(on) }));
         }
     }

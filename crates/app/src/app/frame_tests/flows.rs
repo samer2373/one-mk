@@ -463,7 +463,7 @@ fn files_dropped_where_it_is_unclear_ask_which_computer() {
     std::fs::write(&file, "hello").unwrap();
     win.move_to(pos2(300.0, 300.0));
     // A file let go over a page without the desk opens Clipboard & files and asks.
-    win.drop_files(&[file.clone()]);
+    win.drop_files(std::slice::from_ref(&file));
     win.settle();
     assert_eq!(win.tab(), Tab::Files);
     assert!(win.app.pending_drop.is_some() || win.app.sheet_open(), "{:#?}", win.names());
@@ -814,4 +814,31 @@ fn the_toolbar_never_spills_onto_the_panel_under_a_banner() {
         }
     }
     assert!(bad.is_empty(), "{bad:#?}");
+}
+
+#[test]
+fn dragging_a_computer_across_the_desk_ends_with_it_placed_or_put_back_and_never_stuck() {
+    let mut win = Win::light(1200.0, 780.0);
+    win.status(Some(two()));
+    let from = win.find("Office PC, Windows, on your right").expect("computer").rect.center();
+    let to = pos2(from.x - 400.0, from.y);
+    win.drag(from, to);
+    win.settle();
+    // Let go: no drag is left holding the desk, and the window is still whole.
+    assert!(win.app.drag.is_none(), "a drag was left running");
+    assert!(win.app.drag_side.is_none() || win.app.pending_side.contains_key("p1") || win.app.busy.iter().any(|j| matches!(j, Job::Layout { .. })));
+    assert!(problems(&win).is_empty(), "{:#?}", problems(&win));
+}
+
+#[test]
+fn a_right_click_on_a_computer_offers_above_and_below_and_escape_closes_it() {
+    let mut win = Win::light(1200.0, 780.0);
+    win.status(Some(two()));
+    let at = win.find("Office PC, Windows, on your right").expect("computer").rect.center();
+    win.right_click_at(at);
+    assert!(win.find_containing("On the left").is_some() && win.find_containing("Above").is_some(), "{:#?}", win.names());
+    win.press(Key::Escape);
+    win.settle();
+    assert!(win.find_containing("On the left").is_none(), "the menu is still open: {:#?}", win.names());
+    assert!(problems(&win).is_empty(), "{:#?}", problems(&win));
 }
