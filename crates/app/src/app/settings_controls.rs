@@ -215,7 +215,7 @@ impl App {
         if let Some(status) = self.running() { options.extend(status.peers.iter().map(|peer| (peer.id.clone(), peer.name.clone()))); }
         let shown = options.iter().find(|(id, _)| id.is_empty() && chosen.is_empty() || !id.is_empty() && chosen.replace('-', "").starts_with(&id.replace('-', ""))).map_or("A computer that's gone".to_owned(), |(_, name)| name.clone());
         let w = (text_width(ui, &shown, regular(T_META)) + 40.0).clamp(110.0, (rect.width() * 0.5).max(110.0));
-        if let Some(id) = chooser(ui, Rect::from_min_size(pos2(head.right() - w, head.top()), vec2(w, 28.0)), Id::unique(("hook-computer", key)), &shown, &format!("Which computer: {label}"), &options, &chosen) {
+        if let Some(id) = chooser(ui, Rect::from_min_size(pos2(head.right() - w, head.top()), vec2(w, 28.0)), Id::unique(("hook-computer", key)), &shown, &format!("{shown}, which computer: {label}"), &options, &chosen) {
             chosen = id;
         }
         let save_w = 70.0;
@@ -228,7 +228,7 @@ impl App {
                 self.settings_command("the command", vec!["hooks".into(), format!("--{}", key.replace('_', "-")), String::new()]);
                 self.drafts.remove(key);
             }
-        } else if button(ui, save, Id::unique(("hook-save", index)), if current.is_empty() { "Add" } else { "Save" }, if changed || current.is_empty() { Look::Primary } else { Look::Quiet }, !command.trim().is_empty(), Some(&format!("Save command: {label}"))).clicked() {
+        } else if button(ui, save, Id::unique(("hook-save", index)), if current.is_empty() { "Add" } else { "Save" }, if changed || current.is_empty() { Look::Primary } else { Look::Quiet }, !command.trim().is_empty(), Some(&format!("{} command: {label}", if current.is_empty() { "Add" } else { "Save" }))).clicked() {
             match number(&seconds, 60).filter_positive() {
                 Ok(seconds) => self.settings_command("the command", hook_args(key, &command, &chosen, seconds, use_shell)),
                 Err(error) => self.toast_error(error, None, self.now),

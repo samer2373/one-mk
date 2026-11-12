@@ -128,6 +128,14 @@ pub fn a11y(r: &Response, role: Role, label: &str, selected: Option<bool>) {
     });
 }
 
+/// A control the window itself has turned off (it senses nothing): say so to
+/// a screen reader, which would otherwise offer it as pressable.
+pub fn a11y_off(r: &Response, enabled: bool) {
+    if !enabled {
+        r.ctx.accesskit_node_builder(r.id, |node| node.set_disabled());
+    }
+}
+
 /// A node for painted text, so screen readers can read it. `live` makes
 /// changes announced (headlines, toasts).
 pub fn a11y_text(ui: &Ui, id: Id, rect: Rect, role: Role, label: &str, live: Option<egui::accesskit::Live>) {
@@ -312,6 +320,7 @@ fn button_painted(ui: &mut Ui, rect: Rect, id: Id, label: &str, look: Look, enab
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     a11y(&r, Role::Button, a11y_label.unwrap_or(label), None);
+    a11y_off(&r, enabled);
     r
 }
 
@@ -329,6 +338,7 @@ pub fn icon_button(ui: &mut Ui, rect: Rect, id: Id, name: &str, enabled: bool, i
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     a11y(&r, Role::Button, name, None);
+    a11y_off(&r, enabled);
     r.on_hover_text(name)
 }
 

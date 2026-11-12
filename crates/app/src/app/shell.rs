@@ -505,6 +505,7 @@ impl App {
         }
         let name = if look.dot { format!("{full}, something needs you") } else { full.to_owned() };
         widgets::a11y(&resp, Role::Tab, &name, Some(look.chosen));
+        widgets::a11y_off(&resp, look.enabled);
         resp.on_hover_text(format!("{full}  {}", shortcut(tab)))
     }
 

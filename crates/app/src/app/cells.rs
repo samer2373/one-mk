@@ -125,7 +125,7 @@ impl App {
             let width = button_width(ui, SHOW_DESK).max(button_width(ui, HIDE_DESK));
             let at = card.label_right();
             let toggle = Rect::from_min_size(pos2(at.x - width, at.y - 14.0), vec2(width, 28.0));
-            let words = if self.files_ui.spatial { "Hide the desk" } else { "Show the desk, to drop files on a computer" };
+            let words = if self.files_ui.spatial { "Hide desk: hide the desk" } else { "Show desk: to drop files on a computer" };
             if button(ui, toggle, Id::unique("files-spatial"), label, Look::Quiet, true, Some(words)).clicked() {
                 self.files_ui.spatial = !self.files_ui.spatial;
             }
