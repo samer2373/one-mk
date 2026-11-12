@@ -433,11 +433,10 @@ async fn stalled_handshakes_from_one_address_are_limited_and_the_limit_lifts() {
     while seen.lock().unwrap().len() < 6 && started.elapsed() < Duration::from_secs(10) {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // The server has now had the first packet of every stuck handshake.
+    // The server has now had the first packet of every stuck handshake. They stay stuck for as long as
+    // their clients live: a client that goes away says so, and on some systems (Windows) that ends its
+    // handshake at once.
     tokio::time::sleep(Duration::from_millis(300)).await;
-    for staller in &stallers {
-        staller.abort();
-    }
     // Mid-flood: a legitimate computer on the same address is turned away (or has to wait).
     let good = node();
     let early = good.connect_timeout(server_addr, Duration::from_millis(800)).await;
@@ -448,7 +447,10 @@ async fn stalled_handshakes_from_one_address_are_limited_and_the_limit_lifts() {
         server.failed_handshakes(),
         started.elapsed()
     );
-    // The stuck handshakes time out after three seconds and the share comes back.
+    // The stuck clients go away, their handshakes end (or time out after three seconds) and the share comes back.
+    for staller in &stallers {
+        staller.abort();
+    }
     tokio::time::sleep(Duration::from_millis(3000)).await;
     let late = good.connect_timeout(server_addr, Duration::from_secs(3)).await.expect("the limit lifted");
     assert_eq!(late.fingerprint, server.identity().fingerprint);
