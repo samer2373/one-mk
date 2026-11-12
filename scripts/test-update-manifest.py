@@ -141,6 +141,35 @@ class Manifest(unittest.TestCase):
             self.assertEqual(out.stdout.strip(), expected, pipeline.group(1))
         self.assertEqual(listing.read_bytes().count(b'"sequence":'), 1, "exactly one sequence in the list")
 
+    def test_install_sh_reads_the_release_time_from_the_list_as_made(self):
+        # install.sh's age note and ONE_MK_MAX_AGE_DAYS read the signed release_time with a grep on the signed text.
+        self.stage_release()
+        make(self.stage)
+        script = (REPO / "install.sh").read_text()
+        pipeline = re.search(r"release_time=\$\((grep -o '[^']+' \"\$tmp/update-manifest.json\" \| sed '[^']+')\)", script)
+        self.assertIsNotNone(pipeline, "install.sh no longer reads the release time the way this test expects")
+        out = subprocess.run(["sh", "-c", pipeline.group(1)], env={**os.environ, "tmp": str(self.stage)}, capture_output=True, text=True)
+        self.assertEqual(out.stdout.strip(), self.manifest()["release_time"])
+        self.assertEqual((self.stage / "update-manifest.json").read_bytes().count(b'"release_time":'), 1)
+
+    def test_the_list_only_has_fields_every_updater_in_the_field_accepts(self):
+        # The updater's strict parser (crates/ctl/src/update_logic.rs, `deny_unknown_fields`) refuses a list with a
+        # field it does not know, and every installed oneMK has that parser. A new field (a freshness or expiry
+        # time, say) would stop all of them from updating: it may only be added once every client in use can read
+        # it, never by make-update-manifest.sh alone. This is the test to change on purpose then.
+        source = (REPO / "crates/ctl/src/update_logic.rs").read_text()
+        struct = re.search(r"#\[serde\(deny_unknown_fields\)\]\s*pub struct Manifest \{(.*?)\n\}", source, re.S)
+        self.assertIsNotNone(struct, "the updater's Manifest struct or its deny_unknown_fields moved")
+        known = set(re.findall(r"pub (\w+):", struct.group(1)))
+        self.assertEqual(known, {"version", "release_time", "sequence", "minimum_supported_version", "assets", "revoked", "next_key"})
+        self.stage_release()
+        make(self.stage)
+        data = self.manifest()
+        self.assertLessEqual(set(data), known, "the list has a field the updater's parser refuses")
+        self.assertGreaterEqual(set(data), known - {"next_key"}, "the list lacks a field the updater requires")
+        for asset in data["assets"]:
+            self.assertEqual(set(asset), {"name", "size", "sha256", "os", "arch", "kind"})
+
     def test_a_staged_manifest_or_checksum_file_is_never_listed_in_itself(self):
         self.stage_release()
         for name in ("SHA256SUMS", "update-manifest.json", "update-manifest.json.sig"):

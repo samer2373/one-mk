@@ -65,7 +65,12 @@ private key never leaves the publisher and the release workflow.
 - **install.sh** checks the download against `SHA256SUMS`, and against the
   signed list wherever OpenSSL 3 is available (most Linux systems). Without
   OpenSSL 3 (macOS ships LibreSSL) the first install relies on GitHub and
-  HTTPS; every later update goes through the signed updater.
+  HTTPS; every later update goes through the signed updater. On a computer
+  with no oneMK yet it also refuses a signed release older than its built-in
+  floor (the release before the newest, at most), but it cannot tell the
+  newest from the one before it; `ONE_MK_MAX_AGE_DAYS=N` refuses a release
+  published more than N days ago (docs/PACKAGING.md, "install.sh and replayed
+  releases").
 - **Downloads by hand** (the `.dmg`, `.exe`, `.deb`, AppImage) can be checked
   against `SHA256SUMS`. The Windows installer is not Authenticode-signed yet,
   so Windows SmartScreen warns about it.

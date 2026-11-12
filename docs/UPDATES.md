@@ -24,7 +24,7 @@ refuses an ad-hoc signed app. Publishing also waits for the workspace tests
 and clippy on all three systems and the release checks. Never rebuild or
 overwrite a published release. The sequence is `GITHUB_RUN_NUMBER`, also
 compiled into release clients as a sequence floor; keep numbering monotonic.
-`install.sh` carries its own floor, `MIN_SEQUENCE`, for fresh installs; raise it with each release (docs/PACKAGING.md, "install.sh and replayed releases").
+`install.sh` carries its own floor, `MIN_SEQUENCE`, for fresh installs; raise it with each release to the previous release's sequence, which CI checks on pull requests (docs/PACKAGING.md, "install.sh and replayed releases").
 
 A bad release is withdrawn by publishing a newer one with the repository
 variable `ONE_MK_REVOKED` (space-separated versions no updater may install
@@ -121,6 +121,38 @@ The embedded Ed25519 key is the trust anchor, not GitHub, HTTPS, a mirror, or
 same-sequence equivocation, version downgrades, revoked targets and unsupported
 minimum versions. Identical repeated checks are allowed. Deleting state loses
 learned replay protection. No release-time expiry penalizes offline users.
+
+### Freshness for `install.sh`
+
+A fresh install has no stored sequence, and a signed list never expires, so
+without more, whoever serves the download could pin a new computer to an older
+signed release. A static signed list cannot prove it is the latest: that needs
+a clock, or something signed more recently. What is done instead:
+
+- The update list has **no expiry or freshness field and cannot get one**:
+  the parser above refuses unknown fields and every installed client has it.
+  `make-update-manifest.sh` output is unchanged, so every updater in the field
+  accepts it as before (pinned by `scripts/test-update-manifest.py` and a test
+  in `crates/ctl/src/update_logic.rs`). The updater itself needs no expiry: its
+  high-water marks already reject anything older than what it has seen.
+- `install.sh` carries `MIN_SEQUENCE` (raised in each release's pull request to
+  the previous release's sequence, enforced in CI by
+  `check-release-consistency.py --base`), refuses an older version over a newer
+  installed one, prints the verified version, number and date, notes a release
+  older than 180 days, and, if asked with `ONE_MK_MAX_AGE_DAYS=N`, refuses one
+  older than N days by the computer's clock. Without that variable an old
+  release is never refused for its age, so the newest release stays
+  installable however quiet the project is.
+- To withdraw a release for fresh installs at once, raise `MIN_SEQUENCE` in a
+  pull request (to at most the newest published sequence).
+
+Remaining, and inherent: a fresh install can be handed the release just before
+the newest (and nothing older); an attacker who replaces `install.sh` as well,
+or a computer without OpenSSL 3 (macOS), is not covered; the installed oneMK's
+first update check offers the newest release. A periodically re-signed
+freshness statement would close more, at the price of the signing key in a
+scheduled job; it is not implemented (docs/PACKAGING.md, "install.sh and
+replayed releases").
 
 The manifest is at most 256 KiB; its detached signature is exactly 64 bytes.
 Strict JSON parsing refuses duplicate/unknown fields, unsafe names, invalid

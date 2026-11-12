@@ -10,7 +10,9 @@ Python 3 with PyYAML (CI installs it).
 import importlib.util
 import io
 import contextlib
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -269,6 +271,14 @@ class Consistency(unittest.TestCase):
         self.mutate("install.sh", "MIN_SEQUENCE=48\n", "MIN_SEQUENCE=soon\n")
         self.fails("metadata", "install.sh: one MIN_SEQUENCE")
 
+    def test_an_install_script_without_a_stale_age_fails(self):
+        self.mutate("install.sh", "STALE_DAYS=180\n", "STALE_DAYS=soon\n")
+        self.fails("metadata", "install.sh: one STALE_DAYS")
+
+    def test_dropping_the_pull_request_floor_check_from_ci_fails(self):
+        self.mutate(".github/workflows/ci.yml", '--only versions --base "origin/$BASE_REF"', '--only versions')
+        self.fails("metadata", "ci.yml checks install.sh's MIN_SEQUENCE against the pull request's base")
+
     def test_a_replay_floor_above_the_release_being_published_fails(self):
         import os
         os.environ.update(GITHUB_WORKFLOW="release", GITHUB_RUN_NUMBER="47")
@@ -315,6 +325,74 @@ class Consistency(unittest.TestCase):
         # A note that makes the renderer emit text outside XML rules (a control character).
         self.mutate("docs/release-notes/v1.2.0.md", "# oneMK 1.2.0", "# oneMK 1.2.0\n\nbad \x01 note")
         self.fails("metadata", "release notes v1.2.0.md render to well-formed AppStream XML")
+
+
+class InstallFloorAgainstBase(unittest.TestCase):
+    """--base: install.sh's MIN_SEQUENCE must not go down, and must go up in a pull request that changes the version."""
+
+    def repo(self, floor, version):
+        root = Path(tempfile.mkdtemp(prefix="one-mk-floor-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        self.write(root, floor, version)
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "PATH": os.environ["PATH"], "HOME": str(root)}
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True, env=env)
+        subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "base"], check=True, env=env)
+        subprocess.run(["git", "-C", str(root), "branch", "-q", "base"], check=True, env=env)
+        return root
+
+    @staticmethod
+    def write(root, floor, version):
+        (root / "install.sh").write_text(f"#!/bin/sh\nMIN_SEQUENCE={floor}\n")
+        (root / "Cargo.toml").write_text(f'[workspace]\n[workspace.package]\nversion = "{version}"\nedition = "2021"\n')
+
+    def check(self, root):
+        out = io.StringIO()
+        report = consistency.Report()
+        with contextlib.redirect_stdout(out):
+            consistency.install_floor_against_base(root, report, "base")
+        return report.failures, out.getvalue()
+
+    def test_a_release_that_raises_the_floor_passes(self):
+        root = self.repo(48, "1.2.0")
+        self.write(root, 55, "1.3.0")
+        self.assertEqual(self.check(root)[0], 0)
+
+    def test_a_release_that_leaves_the_floor_where_it_was_fails(self):
+        root = self.repo(48, "1.2.0")
+        self.write(root, 48, "1.3.0")
+        failures, output = self.check(root)
+        self.assertEqual(failures, 1, output)
+        self.assertIn("this changes the version (1.2.0 to 1.3.0), so MIN_SEQUENCE must be raised past 48", output)
+
+    def test_a_lowered_floor_fails_whatever_the_version(self):
+        for version in ("1.2.0", "1.3.0"):
+            root = self.repo(48, "1.2.0")
+            self.write(root, 40, version)
+            failures, output = self.check(root)
+            self.assertGreaterEqual(failures, 1, output)
+            self.assertIn("MIN_SEQUENCE 40 is not lower than 48", output)
+
+    def test_a_change_that_is_not_a_release_may_keep_the_floor(self):
+        root = self.repo(48, "1.2.0")
+        self.assertEqual(self.check(root)[0], 0)
+        self.write(root, 60, "1.2.0")
+        self.assertEqual(self.check(root)[0], 0, "raising it alone (a withdrawn release) is allowed")
+
+    def test_a_base_that_cannot_be_read_fails_instead_of_passing(self):
+        root = self.repo(48, "1.2.0")
+        subprocess.run(["git", "-C", str(root), "branch", "-q", "-m", "base", "other"], check=True)
+        failures, output = self.check(root)
+        self.assertEqual(failures, 1, output)
+        self.assertIn("base has install.sh and Cargo.toml to compare with", output)
+
+    def test_the_command_line_runs_it_on_this_checkout(self):
+        # --base against HEAD: the same files, so the version is unchanged and the floor is not lower.
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            consistency.main(["--root", str(REPO), "--only", "versions", "--base", "HEAD"])
+        self.assertIn("== install floor", out.getvalue())
+        self.assertIn("the version is unchanged from HEAD, so MIN_SEQUENCE may stay", out.getvalue())
 
 
 if __name__ == "__main__":

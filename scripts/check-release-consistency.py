@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fails when what oneMK releases has drifted apart. Static, offline, no build.
 
-    python3 scripts/check-release-consistency.py [--root DIR] [--only SECTION ...]
+    python3 scripts/check-release-consistency.py [--root DIR] [--only SECTION ...] [--base REF]
 
 Sections:
   versions   one version everywhere: Cargo.toml (the single source), every crate,
@@ -18,6 +18,9 @@ Sections:
              file), the polkit action, the Inno Setup script, the Homebrew and
              Flatpak templates, the GNOME extension manifests: well formed, and
              consistent with each other and with the code they name.
+
+With --base REF (CI gives a pull request's base branch) it also checks that install.sh's MIN_SEQUENCE
+never goes down and goes up in a pull request that changes the version.
 
 Exit status 1 when anything failed. scripts/test-release-consistency.py checks
 that each check here really fails on the mistake it is for.
@@ -85,12 +88,16 @@ def sections_of(toml):
     return result
 
 
-def workspace_version(root):
-    for line in sections_of(read(root, "Cargo.toml")).get("[workspace.package]", []):
+def version_in(cargo_toml):
+    for line in sections_of(cargo_toml).get("[workspace.package]", []):
         match = re.match(r'^\s*version\s*=\s*"([^"]+)"', line)
         if match:
             return match.group(1)
     return None
+
+
+def workspace_version(root):
+    return version_in(read(root, "Cargo.toml"))
 
 
 # ---------------------------------------------------------------- versions
@@ -544,9 +551,36 @@ def metadata(root, report):
     report.check(len(floor) == 1 and 1 <= int(floor[0]) < 2**63, "install.sh: one MIN_SEQUENCE, a positive plain number")
     report.check("GITHUB_RUN_NUMBER" in read(root, ".github/workflows/release.yml") and "make-update-manifest.sh release-files \"$GITHUB_RUN_NUMBER\"" in read(root, ".github/workflows/release.yml"),
                  "release.yml gives the update list the run number as its sequence (the number install.sh's MIN_SEQUENCE is compared with)")
+    stale = re.findall(r"^STALE_DAYS=([0-9]+)$", read(root, "install.sh"), re.M)
+    report.check(len(stale) == 1 and 1 <= int(stale[0]) <= 3650, "install.sh: one STALE_DAYS, a plain number of days")
+    report.check("--base" in read(root, ".github/workflows/ci.yml") and "check-release-consistency.py" in read(root, ".github/workflows/ci.yml"),
+                 "ci.yml checks install.sh's MIN_SEQUENCE against the pull request's base (check-release-consistency.py --base)")
     run_number = os.environ.get("GITHUB_RUN_NUMBER", "")
     if os.environ.get("GITHUB_WORKFLOW") == "release" and run_number.isdigit() and floor:
         report.check(int(floor[0]) <= int(run_number), f"install.sh: MIN_SEQUENCE {floor[0]} is not above this release's sequence {run_number}")
+
+
+def install_floor_against_base(root, report, base):
+    """install.sh's MIN_SEQUENCE is what keeps a fresh install from being pinned to an old release (docs/PACKAGING.md,
+    "install.sh and replayed releases"). It narrows the replay window only while it follows the releases, so a pull
+    request that changes the version (a release) must raise it past what the base branch has, and nothing may lower it."""
+    def at_base(path):
+        shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{path}"], capture_output=True, text=True)
+        return shown.stdout if shown.returncode == 0 else None
+    old_script, old_cargo = at_base("install.sh"), at_base("Cargo.toml")
+    if not report.check(old_script is not None and old_cargo is not None, f"{base} has install.sh and Cargo.toml to compare with"):
+        return
+    floor = r"^MIN_SEQUENCE=([0-9]+)$"
+    before, now = re.search(floor, old_script, re.M), re.search(floor, read(root, "install.sh"), re.M)
+    if not report.check(before is not None and now is not None, f"install.sh has a MIN_SEQUENCE here and on {base}"):
+        return
+    before, now = int(before.group(1)), int(now.group(1))
+    report.check(now >= before, f"install.sh: MIN_SEQUENCE {now} is not lower than {before} on {base}")
+    if version_in(old_cargo) != workspace_version(root):
+        report.check(now > before, f"install.sh: this changes the version ({version_in(old_cargo)} to {workspace_version(root)}), so MIN_SEQUENCE must be raised past {before} "
+                                   "to the previous release's sequence (its update-manifest.json), or a replay of an older release would stay installable")
+    else:
+        report.ok(f"install.sh: the version is unchanged from {base}, so MIN_SEQUENCE may stay")
 
 
 SECTIONS = {"versions": versions, "workflows": workflows, "artifacts": artifacts, "metadata": metadata}
@@ -555,6 +589,7 @@ SECTIONS = {"versions": versions, "workflows": workflows, "artifacts": artifacts
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument("--base", metavar="REF", help="also check that install.sh's MIN_SEQUENCE follows the releases, against this git ref (a pull request's base)")
     parser.add_argument("--only", nargs="+", choices=sorted(SECTIONS), default=sorted(SECTIONS, key=list(SECTIONS).index))
     arguments = parser.parse_args(argv)
     report = Report()
@@ -564,6 +599,12 @@ def main(argv=None):
             SECTIONS[section](arguments.root.resolve(), report)
         except Exception as error:  # a file the check needs is missing or malformed: that is a failure, not a crash
             report.bad(f"{section}: {type(error).__name__}: {error}")
+    if arguments.base:
+        print("== install floor")
+        try:
+            install_floor_against_base(arguments.root.resolve(), report, arguments.base)
+        except Exception as error:
+            report.bad(f"install floor: {type(error).__name__}: {error}")
     print("all release consistency checks passed" if report.failures == 0 else f"{report.failures} release consistency check(s) failed")
     return 1 if report.failures else 0
 

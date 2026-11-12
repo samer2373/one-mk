@@ -128,36 +128,85 @@ is exactly one file, that the list is reproducible, that bad input is refused
 and that a damaged signature never verifies. `scripts/test-install.sh` runs `install.sh`
 against fake releases (bad checksums and signatures, hostile and broken
 archives, offline, plain http, an unsupported system, repeat and read-only
-installs, and replays: a correctly signed older release is refused). The GNOME extensions are tested against stand-ins for the Shell:
+installs, and replays: a correctly signed older release is refused, and one past a chosen maximum age). The GNOME extensions are tested against stand-ins for the Shell:
 `node --test tools/gnome-wallpaper/test_production_video.mjs
 tools/gnome-wallpaper/test_pointer_extension.mjs`.
 
 ### `install.sh` and replayed releases
 
 A release's signature never expires, so someone who serves the download (a
-mirror, a network in between) could hand `install.sh` an older, correctly
-signed release, for example one with a known flaw. The updater refuses that by
-its stored sequence; a fresh install has none, so `install.sh` has two guards,
-both needing the signed list (OpenSSL 3; without it the script says the
-release's age was not checked):
+mirror, a network in between, a release object made by someone with write
+access to the repository but not the signing key) could hand `install.sh` an
+older, correctly signed release, for example one with a known flaw. The updater
+refuses that by its stored sequence; a fresh install has none, so `install.sh`
+has its own guards, all needing the signed list (OpenSSL 3; without it the
+script says the release's age was not checked):
 
 - `MIN_SEQUENCE` near the top of `install.sh`: a signed list whose `sequence`
   is lower is refused. The sequence is the release workflow's run number
   (`make-update-manifest.sh release-files "$GITHUB_RUN_NUMBER"`), which only
-  grows. **Raise it in each release's pull request** to the sequence of an
-  earlier release that is still fine to install (the previous release's, shown
-  by `update-manifest.json` in its assets). It cannot name the release being
-  built, whose run number is not known yet. `check-release-consistency.py`
+  grows. **Raise it in each release's pull request** to the sequence of the
+  *previous* release (shown by that release's `update-manifest.json`). It
+  cannot name the release being built, whose run number is not known yet, so a
+  fresh install can still be handed the previous release, and no older one.
+  The floor travels with the script, not with the release (`install.sh` is
+  fetched from `main`), which is why an old signed list cannot carry it. CI
+  keeps it honest: on a pull request `check-release-consistency.py --base`
+  fails when the version changes and `MIN_SEQUENCE` is not raised past the
+  base branch's, or when anything lowers it; `check-release-consistency.py`
   requires a plain positive number, and on the release run fails if it is above
   that run's number (which would make `install.sh` refuse the release itself).
 - the installed oneMK's `--version` against the signed list's `version`: an
   older release is not installed over a newer one.
+- the age: the signed `release_time` (the commit time of the tagged commit, or
+  `RELEASE_TIME`) against the computer's clock. `install.sh` prints "Release:
+  oneMK VERSION, number N, published DATE", and past `STALE_DAYS` (180) adds a
+  note that an old copy may be what is being served. `ONE_MK_MAX_AGE_DAYS=N`
+  makes it an error (`ONE_MK_MAX_AGE_DAYS=90 sh install.sh`), for people and
+  provisioning scripts that want a fixed window; it fails closed when the age
+  cannot be told (no OpenSSL 3, a clock before the release). It is off by
+  default on purpose: the newest release is allowed to be old.
 
-`ONE_MK_ALLOW_OLDER=1` skips both, for going back on purpose. The list has no
-expiry and no new field was added, so older clients and lists are unaffected.
-What this does not stop: a replay of a release between `MIN_SEQUENCE` and the
-latest on a computer with no oneMK yet, and anything on a system without
-OpenSSL 3 (macOS) where the list is not checked at all.
+`ONE_MK_ALLOW_OLDER=1` skips all of these, for going back on purpose.
+**Withdrawing a release for fresh installs without publishing another:** raise
+`MIN_SEQUENCE` in a pull request to `main` to the sequence of the newest
+release that is fine (never above the newest published one, or `install.sh`
+refuses everything). The script is fetched fresh, so that takes effect at the
+merge. This is the fast lever; `ONE_MK_REVOKED` in a newer release's list is
+the one the updater reads.
+
+What this does not stop, and cannot with a signed static list: a replay of the
+previous release (between `MIN_SEQUENCE` and the latest) on a computer with no
+oneMK yet, an attacker who can also replace `install.sh` itself, and anything
+on a system without OpenSSL 3 (macOS) where the list is not checked at all. A
+signed file proves only that the publisher signed it once; telling the latest
+from an earlier one needs a clock or something re-signed since. The window is
+one release wide, and it closes at the first update check of the installed
+oneMK when update checks are on (the default; daily and on opening the window),
+which offers the newest signed release and keeps its high-water mark from then
+on. An attacker who also blocks or replays that check keeps the old release.
+
+Why there is no `not_after` in the update list, and what would be needed for
+one:
+
+- **The list cannot grow a field.** The updater's parser
+  (`crates/ctl/src/update_logic.rs`, `Manifest`) is `deny_unknown_fields`, and
+  every installed oneMK has it: a list with an extra field would stop all of
+  them from updating. `scripts/test-update-manifest.py` and
+  `update_logic::tests::a_field_this_parser_does_not_know_is_refused_*` pin
+  that. The list `make-update-manifest.sh` writes is therefore unchanged, byte
+  for byte, and old updaters accept it as before.
+- **A hard expiry is unsafe where it would matter.** Only the latest release's
+  list is served at the "latest" address, and when the project is quiet
+  longer than any window, an expiry would make the newest release
+  uninstallable. A window renewed without a release needs a freshness
+  statement re-signed on a schedule, which puts the production key in a
+  scheduled job: not done, and an owner decision (it would be a small signed
+  file of "latest = version V, sequence N, valid until D", published as a
+  release asset beside the list and read only by `install.sh`; the updater
+  would not use it).
+- Age-based refusal is therefore left to the person (`ONE_MK_MAX_AGE_DAYS`),
+  and the floor stays a constant that a pull request updates.
 
 ## Linux on ARM (aarch64): not built, and why
 

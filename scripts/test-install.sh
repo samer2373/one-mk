@@ -65,8 +65,8 @@ sign() {
     local dir=$1 version=$2 sum
     sum=$(sha256sum "$dir/$file" | cut -d' ' -f1)
     (cd "$dir" && sha256sum "$file" > SHA256SUMS)
-    printf '{"assets":[{"arch":"x86_64","kind":"archive","name":"%s","os":"linux","sha256":"%s","size":%s}],"minimum_supported_version":"0.1.0","release_time":"2026-11-01T00:00:00Z","revoked":[],"sequence":%s,"version":"%s"}\n' \
-        "$file" "$sum" "$(stat -c %s "$dir/$file")" "${SEQ:-7}" "$version" > "$dir/update-manifest.json"
+    printf '{"assets":[{"arch":"x86_64","kind":"archive","name":"%s","os":"linux","sha256":"%s","size":%s}],"minimum_supported_version":"0.1.0","release_time":"%s","revoked":[],"sequence":%s,"version":"%s"}\n' \
+        "$file" "$sum" "$(stat -c %s "$dir/$file")" "${RT:-2026-11-01T00:00:00Z}" "${SEQ:-7}" "$version" > "$dir/update-manifest.json"
     openssl pkeyutl -sign -rawin -inkey "$scratch/test.pem" -in "$dir/update-manifest.json" -out "$dir/update-manifest.json.sig"
 }
 home=$scratch/home
@@ -412,6 +412,48 @@ replay "$scratch/v-same" && ok "the same version installs again" || bad "same ve
 replay "$scratch/v-old" ONE_MK_ALLOW_OLDER=1 && [ "$("$replay_home/.local/bin/one-mk" --version)" = "one-mk 1.9.9" ] && grep -q "because ONE_MK_ALLOW_OLDER is set" "$scratch/out" \
     && ok "ONE_MK_ALLOW_OLDER=1 goes back to an older release on purpose and says so" || bad "allowed downgrade: $(cat "$scratch/out")"
 replay "$scratch/v-new" && ok "a newer release installs over an older one" || bad "upgrade: $(cat "$scratch/out")"
+# 3. Age. The signed list has the release's time; install.sh prints it and, past STALE_DAYS, a note. Only
+# ONE_MK_MAX_AGE_DAYS (off by default: the newest release may be old) refuses by age. The releases here are
+# dated relative to this computer's clock, so the test does not depend on the day it runs.
+rm -rf "$replay_home/.local"   # (a newer oneMK is still installed from the checks above)
+ago() { date -u -d "@$(( $(date +%s) - $1 * 86400 - 3600 ))" +%Y-%m-%dT%H:%M:%SZ; }   # ago DAYS: a bit more than DAYS days back
+RT=$(ago 100) make_release "$scratch/age100" 1.0.0
+RT=$(ago 400) make_release "$scratch/age400" 1.0.0
+RT=$(date -u -d "@$(( $(date +%s) + 7 * 86400 ))" +%Y-%m-%dT%H:%M:%SZ) make_release "$scratch/agefuture" 1.0.0
+replay "$scratch/age100" && grep -q "Release: oneMK 1.0.0, number 7, published $(ago 100 | cut -dT -f1)\." "$scratch/out" && ! grep -q "^Note:" "$scratch/out" \
+    && ok "the verified release's version, number and date are printed, with no note for a recent release" || bad "age 100: $(cat "$scratch/out")"
+rm -rf "$replay_home/.local"
+replay "$scratch/age400" && grep -q "^Note: that is 400 days ago" "$scratch/out" && [ -x "$replay_home/.local/bin/one-mk" ] \
+    && ok "an old release (the newest may be old) installs by default, with a note" || bad "age 400 by default: $(cat "$scratch/out")"
+rm -rf "$replay_home/.local"
+if replay "$scratch/age400" ONE_MK_MAX_AGE_DAYS=90; then bad "a 400 day old release was installed with ONE_MK_MAX_AGE_DAYS=90"
+elif grep -q "published 400 days ago" "$scratch/out" && grep -q "nothing was installed" "$scratch/out" && [ ! -e "$replay_home/.local/bin/one-mk" ]; then
+    ok "ONE_MK_MAX_AGE_DAYS=90 refuses a 400 day old release"
+else bad "max age 90: $(cat "$scratch/out")"; fi
+replay "$scratch/age400" ONE_MK_MAX_AGE_DAYS=90 ONE_MK_ALLOW_OLDER=1 && [ -x "$replay_home/.local/bin/one-mk" ] && ok "ONE_MK_ALLOW_OLDER=1 overrides the maximum age" || bad "allow older with max age: $(cat "$scratch/out")"
+rm -rf "$replay_home/.local"
+replay "$scratch/age100" ONE_MK_MAX_AGE_DAYS=100 && [ -x "$replay_home/.local/bin/one-mk" ] && ok "a release exactly as old as the maximum installs" || bad "max age 100: $(cat "$scratch/out")"
+rm -rf "$replay_home/.local"
+if replay "$scratch/age100" ONE_MK_MAX_AGE_DAYS=99; then bad "a 100 day old release was installed with a maximum of 99"; else ok "a release one day over the maximum is refused"; fi
+if replay "$scratch/age100" ONE_MK_MAX_AGE_DAYS=ninety; then bad "a non-numeric ONE_MK_MAX_AGE_DAYS was accepted"
+elif grep -q "must be a whole number of days" "$scratch/out"; then ok "a non-numeric ONE_MK_MAX_AGE_DAYS is refused"; else bad "bad max age: $(cat "$scratch/out")"; fi
+# A release dated in the future (a wrong clock, or a forged date that is signed anyway): its age is unknown, so asking for a maximum fails closed.
+if replay "$scratch/agefuture" ONE_MK_MAX_AGE_DAYS=90; then bad "a release dated in the future passed a maximum age"
+elif grep -q "age cannot be told" "$scratch/out"; then ok "an unknowable age fails closed when a maximum is asked for"; else bad "future release: $(cat "$scratch/out")"; fi
+replay "$scratch/agefuture" && ok "without a maximum, a release dated in the future installs" || bad "future release by default: $(cat "$scratch/out")"
+rm -rf "$replay_home/.local"
+# Without OpenSSL 3 nothing is authenticated: asking for a maximum age is an error, not a silent skip.
+if replay "$scratch/age100" ONE_MK_MAX_AGE_DAYS=90 PATH="$scratch/libressl:/usr/bin:/bin"; then bad "ONE_MK_MAX_AGE_DAYS was ignored without OpenSSL 3"
+elif grep -q "needs OpenSSL 3" "$scratch/out" && [ ! -e "$replay_home/.local/bin/one-mk" ]; then ok "without OpenSSL 3, ONE_MK_MAX_AGE_DAYS refuses instead of being skipped"
+else bad "max age without OpenSSL 3: $(cat "$scratch/out")"; fi
+# The age is whole days by calendar arithmetic, around a leap day and the year's end.
+for date_text in 2024-02-29T23:59:59Z 2023-12-31T00:00:00Z 2000-03-01T12:00:00Z 1999-12-31T23:59:59Z; do
+    expected=$(( ( $(date +%s) - $(date -u -d "$date_text" +%s) ) / 86400 ))
+    RT=$date_text make_release "$scratch/age-d" 1.0.0
+    replay "$scratch/age-d" && grep -q "^Note: that is $expected days ago" "$scratch/out" && ok "age of a release made $date_text is $expected days" || bad "age arithmetic for $date_text: $(cat "$scratch/out")"
+    rm -rf "$replay_home/.local"
+done
+
 # The real script's floor is a plain number (a real release's sequence).
 floor=$(sed -n 's/^MIN_SEQUENCE=\([0-9][0-9]*\)$/\1/p' "$root/install.sh")
 [ -n "$floor" ] && [ "$floor" -ge 1 ] && ok "install.sh has a numeric MIN_SEQUENCE ($floor)" || bad "install.sh has no numeric MIN_SEQUENCE"
