@@ -62,8 +62,8 @@ jobs:
         with: { toolchain: stable, components: clippy }
       - run: cargo test --workspace --locked --no-fail-fast
         env: { RUST_BACKTRACE: "1" }
-      # On each system itself: the daemon (one-mk-net) can't be linted
-      # cross-compiled, and some code only exists on one system.
+      # On each system itself, with the real C build scripts (the cross check
+      # above stands in for them): some code only exists on one system.
       - run: cargo clippy --workspace --locked --all-targets -- -D warnings
 
   # The same release checks release.yml runs before publishing: licence
