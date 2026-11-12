@@ -60,11 +60,22 @@ jobs:
       - name: Page checks (site/tools/checks.mjs)
         run: node site/tools/checks.mjs "$RUNNER_TEMP/site-checks"
 
-      # Every test on every device profile; the runner starts and stops its own
-      # `python3 -m http.server` for the site.
+      # Every test on every device profile, against one `python3 -m http.server`
+      # for the site that this step starts and stops itself. (Letting the runner
+      # start nine of them, one per profile, crashed it once on Node 24 while it
+      # probed them: an assertion inside Node's HTTP client, nothing in the site.)
       - name: Run the suite
-        working-directory: e2e
-        run: npm test
+        run: |
+          python3 -m http.server --bind 127.0.0.1 --directory site 8765 > "$RUNNER_TEMP/site-server.log" 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 50); do
+            curl --silent --fail --output /dev/null http://127.0.0.1:8765/ && break
+            sleep 0.2
+          done
+          curl --silent --fail --output /dev/null http://127.0.0.1:8765/
+          cd e2e
+          SITE_URL=http://127.0.0.1:8765/ npm test
 
       - name: Run the suite from file://
         working-directory: e2e
