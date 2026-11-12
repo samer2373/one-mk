@@ -79,6 +79,7 @@ of the crate's tests; see `tests/live_wallpaper.rs`). Slow ones are `#[ignore]` 
 | `one-mk bench --count 0` printed NaN for every figure. | `--count` must be at least 1 (`main.rs`). | `qa_cli_surface::bench_measures_over_loopback...` |
 | The "unknown setting" warning for a settings file with a key this version does not know was printed on every read of the file: 14 times by one `doctor`, again on every daemon reload; and `eprintln!` panics when stderr is a closed pipe. | Said once per process, written without the panicking macro (`settings.rs`, `say_once`). | `qa_cli_surface::old_hand_edited_and_damaged_settings...` |
 | `one-mk run --port 80` as a normal user said "UDP port 80 is busy; is one-mk already running?". | Permission denied is said as such (`app.rs`, `bind`). | `app::tests::a_port_that_needs_more_rights_is_not_called_busy` |
+| `scripts/reliability-soak.sh` reported FAIL after a run with no failures at all (`${#FAILS[@]}` on an empty array under `set -u`). | Decided from `failures.log` instead. | A 1-minute, 3-computer soak now ends in PASS. |
 
 ## Not verifiable on this machine
 
