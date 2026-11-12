@@ -311,6 +311,16 @@ impl Link {
         Ok(Self { dir, custom_home, daemon, tray, tx, ctx, tuning: Default::default(), showing: Showing::new() })
     }
 
+    /// A link for the window's own tests: it names a folder of its own, never
+    /// watches the daemon, and its `one-mk` is a program that does not exist,
+    /// so nothing a test presses can start, stop or change a real oneMK.
+    #[cfg(test)]
+    pub fn detached(dir: PathBuf, tx: Sender<Event>, ctx: egui::Context) -> Self {
+        // Relative: never found on a path, and a login entry refuses it.
+        let daemon = PathBuf::from("one-mk-absent-in-tests");
+        Self { dir, custom_home: true, daemon, tray: None, tx, ctx, tuning: Default::default(), showing: Showing::new() }
+    }
+
     /// The settings folder a login entry for this window names: `None`
     /// for the usual one.
     fn login_home(&self) -> Option<PathBuf> { self.custom_home.then(|| install::absolute(&self.dir)) }

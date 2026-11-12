@@ -14,6 +14,8 @@ mod place;
 mod preview;
 mod shell;
 mod desk_cards;
+#[cfg(test)]
+mod frame_tests;
 mod desk_panel;
 mod settings_page;
 mod updates;
@@ -438,6 +440,12 @@ impl App {
         let link = Link::new(home, tx, cc.egui_ctx.clone())?;
         link.watch();
         link.first_run();
+        Ok(Self::assemble(cc.egui_ctx.clone(), link, rx, size))
+    }
+
+    /// The window's state before its first frame, for a link that is
+    /// already made (and watching, or not: the tests' is not).
+    fn assemble(ctx: egui::Context, link: Link, rx: Receiver<Event>, size: [f32; 2]) -> Self {
         let mut scene = Scene::default();
         scene.top_clear = 0.0;
         let mut me = Device::new("me", "This computer", me_kind(), true, ME_WALL);
@@ -459,11 +467,11 @@ impl App {
         }
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if let Some(z) = std::env::var("ONE_MK_APP_ZOOM").ok().and_then(|z| z.parse::<f32>().ok()) {
-            cc.egui_ctx.set_zoom_factor(z);
+            ctx.set_zoom_factor(z);
         }
         let glass = Glass::default();
-        widgets::set_glass(&cc.egui_ctx, glass.clone());
-        Ok(Self {
+        widgets::set_glass(&ctx, glass.clone());
+        Self {
             glass,
             themer: crate::style::Themer::default(),
             desk_ui: desk_panel::DeskUi::default(),
@@ -540,9 +548,9 @@ impl App {
             fonts: Fallbacks::default(),
             size: vec2(size[0], size[1]),
             now: 0.0,
-            ctx: cc.egui_ctx.clone(),
+            ctx,
             guide: crate::guide::Overlay::from_env(),
-        })
+        }
     }
 
     fn running(&self) -> Option<&Status> {
@@ -2168,7 +2176,7 @@ impl App {
         // one says why on the line below, as other messages do.
         let gy = if t.error && d.is_none() { rect.center().y - g.size().y / 2.0 } else { rect.top() + 10.0 };
         if t.error { widgets::status_mark(&p, pos2(rect.left() + 17.0, gy + 9.0), 7.0, widgets::Mark::Error); } else { p.circle_filled(pos2(rect.left() + 17.0, gy + 9.0), 3.5, dot); }
-        if t.error && g.elided {
+        if t.error && (g.elided || d.as_ref().is_some_and(|d| d.elided)) {
             resp.clone().on_hover_text(format!("{}{}", t.text, t.detail.as_ref().map_or(String::new(), |d| format!(" {d}"))));
         }
         p.galley(pos2(rect.left() + 30.0, gy), g, pal().ink);
@@ -2192,7 +2200,9 @@ impl App {
                     desk_cards::ToastButton::Act => t.act.as_ref().map_or("", ToastAct::hint),
                     desk_cards::ToastButton::Health => "Open Health to see what went wrong",
                 };
-                if button(&mut child, b, Id::unique(("toast-action", label)), label, Look::Quiet, true, Some(hint)).clicked() {
+                // Named by what it says first (a voice command says it), then what it does.
+                let named = format!("{label}: {hint}");
+                if button(&mut child, b, Id::unique(("toast-action", label)), label, Look::Quiet, true, Some(&named)).clicked() {
                     match which {
                         desk_cards::ToastButton::Retry => try_again = true,
                         desk_cards::ToastButton::Act => act = t.act.clone(),

@@ -81,7 +81,9 @@ fn matches(text: &str, query: &str) -> Option<Vec<std::ops::Range<usize>>> {
     for word in query.split_whitespace() {
         let w = word.to_lowercase();
         let at = lower.find(&w)?;
-        if same {
+        // The same total length does not make the same offsets (one letter
+        // can grow while another shrinks): light only what lands on characters.
+        if same && text.is_char_boundary(at) && text.is_char_boundary(at + w.len()) {
             out.push(at..at + w.len());
         }
     }
@@ -305,6 +307,8 @@ impl App {
                 .desired_width(field.width());
             let resp = child.add(edit);
             resp.request_focus();
+            // The field has no label of its own: its hint is only painted.
+            ctx.accesskit_node_builder(resp.id, |node| node.set_label("Search actions, computers and settings"));
             p.hline(input.x_range(), input.bottom() - 0.5, Stroke::new(1.0, pal().line));
             // The results.
             let list = Rect::from_min_size(pos2(r.left(), input.bottom() + 4.0), vec2(r.width(), list_h));
@@ -499,6 +503,28 @@ mod tests {
         assert!(matches("Lock every screen", "lock wall").is_none());
         // Case doesn't matter.
         assert!(matches("Keyboard shortcuts", "KEYB").is_some());
+    }
+
+    /// A computer's name comes from another computer: whatever it holds, the
+    /// lit ranges slice the title (the palette slices it by them).
+    #[test]
+    fn lit_ranges_always_fall_on_characters() {
+        // Lower-casing KELVIN SIGN shrinks it by two bytes and each Ⱥ grows by
+        // one: the whole keeps its length, but the offsets move.
+        let title = "Switch to \u{212A}ȺȺ";
+        for query in ["ⱥ", "k", "switch ⱥ", "ȺȺ", "İ", "ß", "ǅ"] {
+            for range in matches(title, query).unwrap_or_default() {
+                assert!(title.is_char_boundary(range.start) && title.is_char_boundary(range.end), "{query:?} {range:?}");
+                let _ = &title[range];
+            }
+        }
+        for title in ["Switch to İstanbul", "Switch to ǅurđevdan", "Switch to شركة", "Switch to 日本語", "Send to 🖥️ desk"] {
+            for query in ["i", "s", "sw", "日", "ش", "🖥", "desk", "ǆ"] {
+                for range in matches(title, query).unwrap_or_default() {
+                    assert!(title.is_char_boundary(range.start) && title.is_char_boundary(range.end), "{title:?} {query:?} {range:?}");
+                }
+            }
+        }
     }
 
     #[test]

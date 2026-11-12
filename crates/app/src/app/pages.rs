@@ -391,7 +391,7 @@ impl App {
             p.galley(pos2(b.left() + BANNER_TEXT_X, b.center().y - gh / 2.0), galley.clone(), pal().ink);
             let br = Rect::from_min_size(pos2(b.right() - 20.0 - bw, b.center().y - 16.0), vec2(bw, 32.0));
             let label = if running { "Checking…" } else { "Check again" };
-            if button(ui, br, Id::unique("recheck"), label, Look::Quiet, !running, Some("Run the checks again")).clicked() {
+            if button(ui, br, Id::unique("recheck"), label, Look::Quiet, !running, Some(if running { "Checking…: the checks are running" } else { "Check again: run the checks again" })).clicked() {
                 recheck = true;
             }
             a11y_text(ui, Id::unique("health-summary"), b, Role::Status, &format!("{bold} {rest}"), Some(Live::Polite));

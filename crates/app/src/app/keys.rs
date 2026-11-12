@@ -1465,7 +1465,7 @@ impl App {
             ui.ctx().accesskit_node_builder(Id::unique("keys-intro"), |node| node.set_description(guidance));
         }
         self.keyboard_navigator(ui, chooser_r, &chooser);
-        if small_button(ui, keypad_r, Id::unique("keys-more"), keypad, Some(if self.keys.keypad { "Hide the keypad" } else { "Show the keypad too" })).clicked() {
+        if small_button(ui, keypad_r, Id::unique("keys-more"), keypad, Some(if self.keys.keypad { "Hide keypad" } else { "Show keypad too" })).clicked() {
             self.keys.keypad = !self.keys.keypad;
         }
         if let (Some(rect), Some(label)) = (detail_r, detail) {
@@ -2225,7 +2225,7 @@ impl App {
                 spoken += &format!("{label}: {}. ", log.chips.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(", "));
             }
         }
-        let name = "Test keys: activate, then press keys. Tab leaves. Nothing is sent.";
+        let name = "Type here · nothing is sent: activate, then press keys to test your rules. Tab leaves.";
         widgets::a11y(&resp, Role::Button, name, None);
         ui.ctx().accesskit_node_builder(resp.id, |node| node.set_description(intro.clone()));
         let resp = resp.on_hover_text(&intro);

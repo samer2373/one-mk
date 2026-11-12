@@ -19,6 +19,10 @@ pub(super) struct NoticeLay {
     pub attention: bool,
 }
 
+/// The most lines a toast's message, and what it says under it, take.
+const TOAST_ROWS: usize = 3;
+const TOAST_DETAIL_ROWS: usize = 6;
+
 /// A toast laid out `w` wide: its message, its detail, and its height
 /// (with room for the action an error carries).
 pub(super) fn toast_lay(ui: &Ui, t: &Toast, w: f32) -> (std::sync::Arc<egui::Galley>, Option<std::sync::Arc<egui::Galley>>, f32) {
@@ -37,8 +41,17 @@ pub(super) fn toast_lay(ui: &Ui, t: &Toast, w: f32) -> (std::sync::Arc<egui::Gal
             return (line, None, 46.0);
         }
     }
-    let g = ui.painter().layout(t.text.clone(), regular(T_BODY), pal().ink, text_w);
-    let d = t.detail.as_ref().map(|d| ui.painter().layout(d.clone(), regular(T_META), pal().ink2, text_w));
+    // Whole, up to a few lines: a long account of what failed (a program's
+    // own output) must not make a toast taller than the window. What is
+    // cut ends in "…", and the full text is on hover and for a screen reader.
+    let lines = |text: &str, font: egui::FontId, color: Color32, rows: usize| {
+        let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, color, text_w);
+        job.wrap.max_rows = rows;
+        job.wrap.overflow_character = Some('…');
+        ui.painter().layout_job(job)
+    };
+    let g = lines(&t.text, regular(T_BODY), pal().ink, TOAST_ROWS);
+    let d = t.detail.as_ref().map(|d| lines(d, regular(T_META), pal().ink2, TOAST_DETAIL_ROWS));
     let h = 10.0 + g.size().y + d.as_ref().map_or(0.0, |d| d.size().y + 4.0) + 10.0;
     (g, d, h.max(if t.error { 52.0 } else { 0.0 }))
 }

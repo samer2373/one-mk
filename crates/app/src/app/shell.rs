@@ -438,7 +438,7 @@ impl App {
         let shown = !self.sheet_open() && self.status.is_some();
         let a11y_label = match label.as_str() {
             "Take back" => Some("Take back control of this computer".to_owned()),
-            "Use keyboard to stop" => Some(format!("Typing on every computer. {}", self.broadcast_stop_hint())),
+            "Use keyboard to stop" => Some(format!("{shown_label}: typing on every computer. {}", self.broadcast_stop_hint())),
             l if l != shown_label => Some(l.to_owned()),
             _ => None,
         };
@@ -505,6 +505,7 @@ impl App {
         }
         let name = if look.dot { format!("{full}, something needs you") } else { full.to_owned() };
         widgets::a11y(&resp, Role::Tab, &name, Some(look.chosen));
+        widgets::a11y_off(&resp, look.enabled);
         resp.on_hover_text(format!("{full}  {}", shortcut(tab)))
     }
 
