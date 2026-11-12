@@ -62,6 +62,9 @@ const ENTER_TIMEOUT: Duration = Duration::from_millis(750);
 const SLOW_ENTER: Duration = Duration::from_millis(120);
 /// `one-mk switch` gives up if the backend doesn't start capturing in this.
 const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
+/// What `switch` and `broadcast` answer while this computer's screen is locked: what is typed
+/// at a lock screen (the password) must never be captured and sent to another computer.
+const SCREEN_LOCKED: &str = "error this computer's screen is locked; unlock it first\n";
 /// Paired computers that are not connected are dialed again after this,
 /// doubling up to [`DIAL_MAX`] while they stay away. Only while one has an
 /// address to try: with every one connected no timer runs.
@@ -2985,6 +2988,12 @@ impl App {
     /// `one-mk switch` (and, later, its keyboard shortcut). The reply's
     /// first line is `ok`, `already`, `here` or `error <why>`.
     fn switch(&mut self, to: SwitchTo) -> String {
+        // Like `broadcast`: going to another computer starts capturing this one's keyboard
+        // and mouse, which at a lock screen would send the password elsewhere. Coming
+        // home is always allowed.
+        if to != SwitchTo::Here && self.lock_sync.is_locked() {
+            return SCREEN_LOCKED.into();
+        }
         if to != SwitchTo::Here {
             self.stop_broadcast(broadcast::End::Switched);
         }
@@ -5962,6 +5971,37 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("timed out waiting for {what}");
+    }
+
+    /// While this computer's screen is locked, going to another computer is
+    /// refused the same way for `switch` and `broadcast` (what is typed at a
+    /// lock screen must not be captured and sent elsewhere); coming home is
+    /// always allowed, and everything works again after unlocking.
+    #[tokio::test]
+    async fn switch_and_broadcast_are_both_refused_while_the_screen_is_locked() {
+        use one_mk_ctl::client::Toggle;
+        const REFUSED: &str = "error this computer's screen is locked; unlock it first\n";
+        let mut duo = Duo::start("switch-locked", None).await;
+        let fb = duo.fb.clone();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        duo.ha.events.send(Event::ScreenLocked(true)).unwrap();
+        eventually_async("A to know its screen is locked", || async { status(&duo.da).await.screen_locked }).await;
+        assert_eq!(ask(&duo.da, switch_to(&fb)).await, REFUSED);
+        assert_eq!(ask(&duo.da, Request::Switch(SwitchTo::Next)).await, REFUSED);
+        assert_eq!(ask(&duo.da, Request::Broadcast(Toggle::On)).await, REFUSED);
+        // Nothing was asked of the capture, and nobody is being controlled.
+        while let Ok(command) = duo.ha.capture.try_recv() {
+            assert!(!matches!(command, CaptureCmd::Activate { .. }), "{command:?}");
+        }
+        assert!(status(&duo.da).await.controlling.is_none());
+        // Home is always allowed.
+        assert_eq!(ask(&duo.da, Request::Switch(SwitchTo::Here)).await, "here\n\n");
+        // Unlocked: the same request goes through.
+        duo.ha.events.send(Event::ScreenLocked(false)).unwrap();
+        eventually_async("A to be unlocked", || async { !status(&duo.da).await.screen_locked }).await;
+        assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("ok\n"));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        duo.stop().await;
     }
 
     /// `lock-all` locks both screens once; with lock sync on everywhere,

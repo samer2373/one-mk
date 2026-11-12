@@ -1632,6 +1632,8 @@ impl App {
         if tab != self.tab {
             self.tab = tab;
             if tab == Tab::Files { self.clipboard_history = None; self.link.history(); }
+            // "Sure?" on Clear belongs to the visit: coming back later, it asks again.
+            self.clipboard_clear_confirm = false;
             self.tab_at = self.now;
             if tab == Tab::Health {
                 self.doctor_on_open();
