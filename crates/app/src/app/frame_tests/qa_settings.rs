@@ -52,6 +52,9 @@ fn the_appearance_is_saved_in_the_file_and_the_file_wins_over_the_window() {
     win.quiet();
     assert!(!settings_text(&win).contains("appearance = \"light\""), "{}", settings_text(&win));
     assert_eq!(win.app.link.prefs().appearance, crate::style::Appearance::System);
+    // The real window's watcher reads the file after its own save and tells the window, which then
+    // lets go of its choice; this test's window has no watcher, so it tells the window itself.
+    win.prefs_changed();
     // Somebody changes the file by hand: the window follows when it is told.
     win.settings("[window]\nappearance = \"dark\"\n");
     // The look cross-fades for 200 ms (on a desktop whose own look is dark there is nothing to fade
