@@ -3,7 +3,7 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
 use one_mk_ctl::client::Request;
 use one_mk_net::{Discovery, Identity, Node, Peer, TrustStore};
-use one_mk_net::invite::{Invitation, InvitationState, InviteSession, MAX_LINK, STEP_TIMEOUT};
+use one_mk_net::invite::{Invitation, InvitationState, InviteSession, MAX_LINK, step_timeout};
 use one_mk_proto::{DEFAULT_PORT, sanitize_name};
 use std::io::{IsTerminal, Read, Write};
 use std::collections::{HashMap, HashSet};
@@ -223,7 +223,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                 let service_port = args.service_port.unwrap_or(DEFAULT_PORT);
                 attempts.spawn(async move {
                     let mut slot = Some(slot);
-                    let exchange = tokio::time::timeout(STEP_TIMEOUT, InviteSession::accept_with_admission(&peer, identity.fingerprint, &identity.name, service_port, &state, || {
+                    let exchange = tokio::time::timeout(step_timeout(), InviteSession::accept_with_admission(&peer, identity.fingerprint, &identity.name, service_port, &state, || {
                         slot.take();
                         pending.admit(peer.fingerprint).context("invitation busy")
                     })).await;
@@ -251,7 +251,14 @@ async fn approval_until_cancelled<T>(decision: impl std::future::Future<Output =
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, confirm: bool, expiry: tokio::time::Instant, wall_expiry: u64, saved: &AtomicBool, machine: bool) -> Result<()> {
+async fn approve_and_save(dir: &Path, peer: &Peer, session: InviteSession, confirm: bool, expiry: tokio::time::Instant, wall_expiry: u64, saved: &AtomicBool, machine: bool) -> Result<()> {
+    approve_and_save_within(dir, peer, session, confirm, expiry, wall_expiry, saved, machine, step_timeout()).await
+}
+
+/// [`approve_and_save`], with `step` as the time the joiner has to take the answer (the tests give
+/// milliseconds).
+#[allow(clippy::too_many_arguments)]
+async fn approve_and_save_within(dir: &Path, peer: &Peer, mut session: InviteSession, confirm: bool, expiry: tokio::time::Instant, wall_expiry: u64, saved: &AtomicBool, machine: bool, step: Duration) -> Result<()> {
     let name = session.peer_name.clone();
     let port = session.service_port;
     println!("\n>>> {} joined: certificate {} <<<", name, grouped(peer.fingerprint));
@@ -265,7 +272,7 @@ async fn approve_and_save(dir: &Path, peer: &Peer, mut session: InviteSession, c
         read_approval(end, Some(wall_expiry)).await
     } else { println!("WARNING: --no-confirm skips comparing code {} and approves automatically.", grouped_code(&session.code)); true };
     let accept = accept && tokio::time::Instant::now() < end && one_mk_net::invite::unix_now() < wall_expiry;
-    let ok = tokio::time::timeout(STEP_TIMEOUT, session.confirm(accept)).await.context("invitation approval transport timed out")??;
+    let ok = tokio::time::timeout(step, session.confirm(accept)).await.context("invitation approval transport timed out")??;
     if !ok { bail!("device refused; invitation consumed; nothing saved here"); }
     let placed = save_marked(dir, peer, &name, port, true, saved).await?;
     acknowledge(session).await?;
@@ -341,7 +348,7 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
         discovery.stop().await;
     }
     let peer = connected.context("could not reach the invitation's pinned computer (offline, expired, or certificate mismatch)")?;
-    let mut session = tokio::time::timeout(STEP_TIMEOUT, InviteSession::join(&peer, identity.fingerprint, &identity.name, service_port, invitation)).await.context("invitation exchange timed out")??;
+    let mut session = tokio::time::timeout(step_timeout(), InviteSession::join(&peer, identity.fingerprint, &identity.name, service_port, invitation)).await.context("invitation exchange timed out")??;
     let name = session.peer_name.clone();
     let port = session.service_port;
     println!("Authenticated {name} ({}).", grouped(peer.fingerprint));
@@ -405,7 +412,12 @@ async fn read_approval(end: tokio::time::Instant, wall_expiry: Option<u64>) -> b
 }
 
 async fn acknowledge(session: InviteSession) -> Result<()> {
-    tokio::time::timeout(STEP_TIMEOUT, session.committed()).await.context("Trust saved locally, but peer commit is uncertain. Run `one-mk forget <peer>` on both computers and create a new invitation.")?
+    acknowledge_within(session, step_timeout()).await
+}
+
+/// [`acknowledge`], waiting `step` for the other computer to say it saved (the tests give milliseconds).
+async fn acknowledge_within(session: InviteSession, step: Duration) -> Result<()> {
+    tokio::time::timeout(step, session.committed()).await.context("Trust saved locally, but peer commit is uncertain. Run `one-mk forget <peer>` on both computers and create a new invitation.")?
         .context("Trust saved locally, but peer commit is uncertain. Run `one-mk forget <peer>` on both computers and create a new invitation.")
 }
 
@@ -636,6 +648,55 @@ mod tests {
         assert!(slots.acquire("2001:db8::9".parse().unwrap(), held.len(), true, fresh).is_none());
         drop(held);
         assert!(slots.acquire("2001:db8::9".parse().unwrap(), 0, true, fresh).is_some());
+    }
+
+    /// Two in-process computers that have finished the invitation exchange (the host's and the joiner's
+    /// side of it, and what each needs to go on).
+    async fn exchanged() -> (Node, Node, Peer, Peer, InviteSession, InviteSession, Invitation) {
+        let host = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let joiner = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let invitation = Invitation::new(host.identity().fingerprint, vec!["192.0.2.1:1234".parse().unwrap()], 24900, Duration::from_secs(60)).unwrap();
+        let state = InvitationState::new(&invitation);
+        let (outgoing, incoming) = tokio::join!(joiner.connect(host.local_addr().unwrap()), host.accept());
+        let (outgoing, incoming) = (outgoing.unwrap(), incoming.unwrap().unwrap());
+        let (host_session, join_session) = tokio::join!(
+            InviteSession::accept(&incoming, host.identity().fingerprint, "Host", 24900, &state),
+            InviteSession::join(&outgoing, joiner.identity().fingerprint, "Joiner", 24901, &invitation)
+        );
+        (host, joiner, incoming, outgoing, host_session.unwrap(), join_session.unwrap(), invitation)
+    }
+
+    /// The joiner has the exchange done and then goes quiet: the host stops waiting for its answer at
+    /// the step time (milliseconds here), says so, and saves nothing.
+    #[tokio::test]
+    async fn a_joiner_that_goes_quiet_before_answering_is_given_up_on_and_nothing_is_saved() {
+        let (host, joiner, incoming, outgoing, host_session, join_session, invitation) = exchanged().await;
+        let dir = std::env::temp_dir().join(format!("one-mk-invite-quiet-{}-{}", std::process::id(), host.identity().fingerprint));
+        let saved = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        let result = approve_and_save_within(&dir, &incoming, host_session, false, tokio::time::Instant::now() + Duration::from_secs(60), invitation.expires, &saved, false, Duration::from_millis(300)).await;
+        let error = format!("{:#}", result.unwrap_err());
+        assert!(error.contains("invitation approval transport timed out"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        assert!(!saved.load(Ordering::SeqCst));
+        assert!(TrustStore::load(&dir).is_ok_and(|trust| trust.devices().is_empty()), "something was saved");
+        drop((join_session, outgoing));
+        host.close(); joiner.close();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The host went quiet after the trust was written here: the joiner gives up at the step time with
+    /// the words that say what to do (forget on both and invite again), instead of hanging.
+    #[tokio::test]
+    async fn a_host_that_never_confirms_it_saved_is_given_up_on_with_what_to_do() {
+        let (host, joiner, incoming, outgoing, host_session, join_session, _invitation) = exchanged().await;
+        let started = std::time::Instant::now();
+        let error = format!("{:#}", acknowledge_within(join_session, Duration::from_millis(300)).await.unwrap_err());
+        assert!(error.contains("Trust saved locally, but peer commit is uncertain") && error.contains("one-mk forget"), "{error}");
+        assert!(error.contains("create a new invitation"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+        drop((host_session, incoming, outgoing));
+        host.close(); joiner.close();
     }
 
     #[tokio::test]

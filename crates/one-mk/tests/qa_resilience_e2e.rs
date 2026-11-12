@@ -196,6 +196,57 @@ fn lock_all_locks_every_screen_and_says_so() {
     assert!(lab.status_of(&alpha).is_some());
 }
 
+/// A locked computer is not entered: the pointer that would go onto its lock screen comes home and
+/// nothing is typed there (what is typed at a lock screen must not travel between computers, in
+/// either direction). The null backend's fake locker only locks, so "beta unlocked, alpha locked"
+/// is made by restarting beta (a restart is an unlocked screen).
+#[test]
+fn a_locked_computer_is_never_entered_over_an_edge() {
+    if !isolated("a_locked_computer_is_never_entered_over_an_edge") {
+        return;
+    }
+    let mut lab = Lab::new();
+    let (mut alpha, beta) = (lab.node("alpha"), lab.node("beta"));
+    // The refusal is an info line: ask for it, so the test sees that the refusal itself happened.
+    alpha.env.push(("RUST_LOG".into(), "warn,one_mk=info".into()));
+    lab.start_plain(&alpha);
+    lab.start_plain(&beta);
+    lab.pair(&alpha, &beta);
+    // Online and each knows the other's screens (a switch needs them).
+    let ready = |lab: &Lab, node: &Node| {
+        lab.status_of(node).is_some_and(|s| !s.peers.is_empty() && s.peers.iter().all(|p| p.online && !p.screens.is_empty()))
+    };
+    wait("both ready", 40, || (ready(&lab, &alpha) && ready(&lab, &beta)).then_some(()));
+    Lab::ok(&alpha, &["lock-all"]);
+    wait("both screens locked", 20, || (lab.status(&alpha).screen_locked && lab.status(&beta).screen_locked).then_some(()));
+    // Beta comes back unlocked while alpha stays locked.
+    lab.kill9(&beta);
+    lab.start_plain(&beta);
+    wait("beta online and unlocked, alpha locked", 40, || {
+        let (a, b) = (lab.status_of(&alpha)?, lab.status_of(&beta)?);
+        (a.screen_locked && !b.screen_locked && ready(&lab, &alpha) && ready(&lab, &beta)).then_some(())
+    });
+    // Beta goes to alpha (the same request as crossing its edge): alpha refuses, the pointer is home.
+    Lab::ok(&beta, &["switch", "alpha"]);
+    wait("beta to be home again", 20, || lab.status(&beta).controlling.is_none().then_some(()));
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(lab.status(&alpha).controlled_by.is_none(), "alpha's lock screen was controlled");
+    assert!(lab.status(&beta).controlling.is_none());
+    let log = Lab::log(&alpha);
+    assert!(log.contains("refused control: this computer's screen is locked"), "{log}");
+    assert!(!log.contains("is controlling this computer"), "{log}");
+    assert!(lab.status(&alpha).screen_locked);
+    // Alpha, locked, cannot go to beta either (nothing typed at its lock screen is sent).
+    let refused = Lab::run(&alpha, &["switch", "beta"]);
+    assert!(refused.failed().contains("this computer's screen is locked; unlock it first"), "{refused:?}");
+    // Control: once alpha is back unlocked, beta can go there.
+    lab.kill9(&alpha);
+    lab.start_plain(&alpha);
+    wait("both ready", 40, || (ready(&lab, &alpha) && ready(&lab, &beta)).then_some(()));
+    Lab::ok(&beta, &["switch", "alpha"]);
+    wait("beta controls the unlocked alpha", 20, || lab.status(&alpha).controlled_by.is_some().then_some(()));
+}
+
 #[test]
 fn a_full_restart_of_everything_comes_back_with_no_manual_step() {
     if !isolated("a_full_restart_of_everything_comes_back_with_no_manual_step") {

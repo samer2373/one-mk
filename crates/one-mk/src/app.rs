@@ -1488,6 +1488,15 @@ impl App {
         self.push.new_capture();
         self.handed_back = None;
         self.tapped.clear();
+        if self.lock_sync.is_locked() {
+            // No edge is armed while the screen is locked, but a capture already on its way (or a
+            // backend that reports one anyway) must never carry what is typed at a lock screen
+            // to another computer: the pointer stays, and what it caught is typed here.
+            self.switching = None;
+            tracing::debug!(%side, "not crossing: this computer's screen is locked");
+            self.hand_back(id);
+            return;
+        }
         if self.broadcast_activated(id) {
             return;
         }
@@ -1943,6 +1952,13 @@ impl App {
         if !self.trust.is_trusted(&fp) {
             tracing::warn!(peer = %peer.name, "refused control: this computer is no longer paired");
             peer.conn.close(3u32.into(), b"forgotten");
+            return;
+        }
+        if self.lock_sync.is_locked() {
+            // Whatever the controller types would go to the lock screen (its password, from another
+            // keyboard); oneMK sends no input to a lock screen. It goes home, as for a busy computer.
+            tracing::info!(peer = %peer.name, "refused control: this computer's screen is locked");
+            peer.ctl.send(Control::Busy { epoch });
             return;
         }
         if self.owner.is_some() && !self.is_owner(fp, id) {
@@ -3105,6 +3121,7 @@ impl App {
     /// the key-ups, leaving keys stuck after unlocking.
     fn let_go_for_lock(&mut self) {
         self.stop_broadcast(broadcast::End::ScreenLocked);
+        self.switching = None;
         self.go_home();
         if let Some((id, a)) = self.approach.take() {
             self.release_capture(id, Some(a.pos()));
@@ -3130,7 +3147,7 @@ impl App {
                 let _ = self.inject.send(Inject::Key { code, down: false });
             }
             self.unlock_release = Mods::default();
-            self.sync_dropzones();
+            self.update_sides(); // arms the edges again (and the drop zones)
             return;
         }
         tracing::debug!("screen locked");
@@ -3144,7 +3161,7 @@ impl App {
             }
         }
         self.let_go_for_lock();
-        self.sync_dropzones();
+        self.update_sides(); // disarms every edge (and the drop zones)
     }
 
     /// Peer `fp` asks us to lock: its `lock-all` (`all`), obeyed always,
@@ -3291,7 +3308,12 @@ impl App {
             }
             self.conflicts = conflicts;
         }
-        if self.locked {
+        if self.lock_sync.is_locked() {
+            // A locked screen forwards nothing across an edge and takes nothing from one (see
+            // `on_activated` and `on_enter`): no edge is armed, not even the way back, for no
+            // visit survives a lock (`let_go_for_lock`).
+            edges.clear();
+        } else if self.locked {
             // Only the edge of a visit in progress (or of a switch about to
             // start) stays armed, so the pointer can come back that way.
             let keep: Vec<Fingerprint> = self.remote.as_ref().map(|r| r.peer).into_iter().chain(switching).collect();
@@ -6000,7 +6022,94 @@ mod tests {
         duo.ha.events.send(Event::ScreenLocked(false)).unwrap();
         eventually_async("A to be unlocked", || async { !status(&duo.da).await.screen_locked }).await;
         assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("ok\n"));
+        assert_eq!(next_capture(&mut duo.ha).await, armed(Side::Right), "unlocking arms the edge again");
         assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        duo.stop().await;
+    }
+
+    /// A locked screen takes no edge crossing: what is typed at a lock screen (the password) must never
+    /// reach another computer, and nothing is typed into a lock screen from another one either. The
+    /// pointer stays where it is, and everything works again after unlocking.
+    #[tokio::test]
+    async fn a_locked_screen_does_not_cross_an_edge() {
+        let mut duo = Duo::start("edge-locked", None).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        while duo.ha.capture.try_recv().is_ok() {}
+        duo.ha.events.send(Event::ScreenLocked(true)).unwrap();
+        // No edge stays armed, so the desktop has nothing to capture the pointer with.
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetEdges(vec![]));
+        // A capture already on its way is handed straight back.
+        duo.ha.events.send(Event::Activated { id: 4, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 4, pos: None });
+        // Typed while it was held: here, never on B.
+        duo.ha.events.send(Event::Key { code: 30, down: true, device: None }).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(injected(&mut duo.hb), vec![], "nothing reached B");
+        assert!(status(&duo.da).await.controlling.is_none());
+        // Unlocked: the edge is armed again and crossing works.
+        duo.ha.events.send(Event::ScreenLocked(false)).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, armed(Side::Right));
+        duo.enter_b().await;
+        duo.stop().await;
+    }
+
+    /// A `switch` accepted just before the screen locked must not start once it is locked.
+    #[tokio::test]
+    async fn a_switch_pending_when_the_screen_locks_does_not_start() {
+        let mut duo = Duo::start("switch-then-lock", None).await;
+        let fb = duo.fb.clone();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("ok\n"));
+        duo.ha.events.send(Event::ScreenLocked(true)).unwrap();
+        eventually_async("A to know its screen is locked", || async { status(&duo.da).await.screen_locked }).await;
+        duo.ha.events.send(Event::Activated { id: 3, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        loop {
+            match next_capture(&mut duo.ha).await {
+                CaptureCmd::Release { id: 3, pos: None } => break,
+                CaptureCmd::Release { id: 3, .. } => panic!("not handed back where it was"),
+                _ => {}
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(injected(&mut duo.hb), vec![], "nothing reached B");
+        assert!(status(&duo.da).await.controlling.is_none());
+        duo.stop().await;
+    }
+
+    /// A locked computer cannot be controlled: the pointer that would go onto its lock screen comes
+    /// home, nothing is typed there, and control works again once it is unlocked. A computer that
+    /// locks while it is controlled lets go, and the controller cannot go back onto it.
+    #[tokio::test]
+    async fn a_locked_computer_is_not_entered() {
+        let mut duo = Duo::start("enter-locked", None).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // B is locked while the pointer is home.
+        duo.hb.events.send(Event::ScreenLocked(true)).unwrap();
+        eventually_async("B to know its screen is locked", || async { status(&duo.db).await.screen_locked }).await;
+        while duo.ha.capture.try_recv().is_ok() {}
+        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(_) }), "A is home again");
+        eventually_async("A to be home", || async { status(&duo.da).await.controlling.is_none() }).await;
+        duo.ha.events.send(Event::Key { code: 30, down: true, device: None }).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!injected(&mut duo.hb).iter().any(|i| matches!(i, Inject::Key { .. } | Inject::MoveTo(_))), "B's lock screen got input");
+        assert!(status(&duo.db).await.controlled_by.is_none());
+        // Unlocked: B can be entered.
+        duo.hb.events.send(Event::ScreenLocked(false)).unwrap();
+        eventually_async("B to be unlocked", || async { !status(&duo.db).await.screen_locked }).await;
+        duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
+        // B locks while controlled: A is sent home, and cannot go back while B stays locked.
+        duo.hb.events.send(Event::ScreenLocked(true)).unwrap();
+        assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 2, pos: Some(_) }));
+        eventually_async("A to be home", || async { status(&duo.da).await.controlling.is_none() }).await;
+        let _ = injected(&mut duo.hb);
+        duo.ha.events.send(Event::Activated { id: 3, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        loop {
+            if let CaptureCmd::Release { id: 3, pos: Some(_) } = next_capture(&mut duo.ha).await { break }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!injected(&mut duo.hb).iter().any(|i| matches!(i, Inject::MoveTo(_))), "B was entered while locked");
         duo.stop().await;
     }
 
