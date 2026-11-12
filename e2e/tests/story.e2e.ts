@@ -25,7 +25,7 @@ test('four steps in order, each with its heading, text and command or picture', 
   const how = screen.getByRole('heading', { name: 'Set up in about a minute.' });
   await expect(how).toBeVisible();
   const r = await browser.evaluate(() => Array.from(document.querySelectorAll('.how [data-step]')).map((s) => ({
-    n: (s as HTMLElement).dataset.step, h: (s.querySelector('h3')?.textContent ?? '').trim(), cmd: (s.querySelector('.step__cmd code')?.textContent ?? '').trim(), hasPic: !!s.querySelector('.step__pic picture'),
+    n: (s as HTMLElement).dataset.step ?? '', h: (s.querySelector('h3')?.textContent ?? '').trim(), cmd: (s.querySelector('.step__cmd code')?.textContent ?? '').trim(), hasPic: !!s.querySelector('.step__pic picture'),
   })));
   expect(r.map((s) => s.h)).toEqual(['Pair with six digits', 'Arrange your screens', 'Push past the edge', 'Everything follows']);
   expect(r.map((s) => s.n)).toEqual(['0', '1', '2', '3']);

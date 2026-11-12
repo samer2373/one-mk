@@ -33,7 +33,9 @@ for (const [name, type] of Object.entries(engines)) {
     ok((await page.evaluate(() => document.documentElement.dataset.theme)) === 'dark', `${tag}: follows prefers-color-scheme`);
     // The fonts come from the inlined stylesheet, which only file:// uses.
     ok((await page.locator('link[href="css/fonts-file.css"]').count()) === 1, `${tag}: file:// fonts stylesheet`);
-    ok((await page.evaluate(() => document.fonts.check('16px Inter'))), `${tag}: Inter loaded`);
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForFunction(() => Array.from(document.fonts).some((f) => f.family.includes('Inter') && f.status === 'loaded'));
+    ok(true, 'Inter loaded');
     // Download chooser ran, and the primary button points at a release file or the section.
     await page.waitForFunction(() => document.documentElement.dataset.detectDone === '1');
     const href = await page.locator('a[data-download]').first().getAttribute('href');

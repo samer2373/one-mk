@@ -19,9 +19,9 @@ const app = external
       },
     };
 
-function permissions(p: Profile) {
-  if (p.clipboard === 'chromium') return { 'clipboard-read': 'grant', 'clipboard-write': 'grant' } as const;
-  if (p.clipboard === 'webkit') return { 'clipboard-read': 'grant' } as const;
+function permissions(p: Profile): Record<string, 'grant'> | undefined {
+  if (p.clipboard === 'chromium') return { 'clipboard-read': 'grant', 'clipboard-write': 'grant' };
+  if (p.clipboard === 'webkit') return { 'clipboard-read': 'grant' };
   return undefined;
 }
 

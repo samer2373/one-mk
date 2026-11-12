@@ -29,6 +29,9 @@ const heroState = (browser: B) => browser.evaluate(() => {
   };
 });
 
+/** The scene starts drawing when it is within a few pixels of the screen, so bring it in (on a short screen it starts below the fold). */
+const showHero = (browser: B) => browser.evaluate("document.querySelector('[data-desk]').scrollIntoView({ block: 'center', behavior: 'instant' })");
+
 /** Software WebGL at 2560 px is too slow to drive interactively, so the interaction tests skip that one profile. */
 async function interactive(browser: B) {
   const p = await currentProfile(browser);
@@ -39,6 +42,7 @@ async function interactive(browser: B) {
 test3d('with WebGL the hero desk loads, fades the poster out, and shows the three computers', async ({ app, browser, guard }) => {
   await app.open('/');
   test.skip(!(await hasWebGL(browser)), 'this browser has no WebGL here');
+  await showHero(browser);
   await expect.poll(async () => (await heroState(browser)).live, { timeout: 100_000, message: 'the canvas never went live' }).toBe(true);
   const s = await heroState(browser);
   expect(s.three).toBe(true);
@@ -60,6 +64,7 @@ test3d('with WebGL the hero desk loads, fades the poster out, and shows the thre
 test3d('the buttons under the desk move the pointer to that computer, with mouse and keyboard', async ({ app, browser, screen, guard }) => {
   await app.open('/');
   await interactive(browser);
+  await showHero(browser);
   await expect.poll(async () => (await heroState(browser)).live, { timeout: 90_000 }).toBe(true);
   const group = screen.getByRole('group', { name: 'Move the pointer to a computer' });
   const mac = group.getByRole('button', { name: 'MacBook Air' });
@@ -85,6 +90,7 @@ test3d('moving the mouse over the desk drives the pointer and the hint says so (
   await app.open('/');
   const p = await currentProfile(browser);
   await interactive(browser);
+  await showHero(browser);
   await expect.poll(async () => (await heroState(browser)).live, { timeout: 90_000 }).toBe(true);
   await browser.evaluate("document.querySelector('[data-desk]').scrollIntoView({ block: 'center', behavior: 'instant' })");
   await browser.evaluate('new Promise(function (r) { setTimeout(r, 300); })');
@@ -100,7 +106,7 @@ test3d('moving the mouse over the desk drives the pointer and the hint says so (
 test3d('the Keys section loads its own 3D keyboard and the four quick setups change the caption and the pressed button', async ({ app, browser, screen, guard }) => {
   await app.open('/');
   await interactive(browser);
-  await browser.evaluate("document.querySelector('#keys').scrollIntoView({ block: 'center', behavior: 'instant' })");
+  await browser.evaluate("document.querySelector('[data-keys]').scrollIntoView({ block: 'center', behavior: 'instant' })");
   await expect.poll(() => browser.evaluate<boolean>("document.querySelector('[data-keys]').classList.contains('is-live')"), { timeout: 90_000 }).toBe(true);
   const status = () => browser.evaluate<string>("document.querySelector('[data-remap-status]').textContent.trim()");
   const pressed = () => browser.evaluate<string[]>("Array.from(document.querySelectorAll('[data-remap]')).map(function (b) { return b.getAttribute('aria-pressed'); })");
@@ -127,6 +133,7 @@ test3d('the Keys section loads its own 3D keyboard and the four quick setups cha
 test3d('switching the theme while the 3D scenes are live does not break them', async ({ app, browser, screen, guard }) => {
   await app.open('/');
   await interactive(browser);
+  await showHero(browser);
   await expect.poll(async () => (await heroState(browser)).live, { timeout: 90_000 }).toBe(true);
   const before = await browser.evaluate<string>('document.documentElement.dataset.theme');
   await screen.getByRole('button', { name: /Switch to (dark|light) theme/ }).tap();

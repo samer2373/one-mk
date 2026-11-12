@@ -107,7 +107,7 @@ test('the hero shows the poster of the active theme (and only that one) when the
   await app.open('/');
   const shown = () => browser.evaluate(() => {
     const vis = (s: string) => { const e = document.querySelector(s) as HTMLElement | null; return !!e && getComputedStyle(e).display !== 'none' && e.offsetWidth > 0; };
-    return { light: vis('.stage__poster img.t-light'), dark: vis('.stage__poster img.t-dark'), theme: document.documentElement.dataset.theme };
+    return { light: vis('.stage__poster img.t-light'), dark: vis('.stage__poster img.t-dark'), theme: document.documentElement.dataset.theme ?? '' };
   });
   const a = await shown();
   expect(a.light).toBe(a.theme === 'light');

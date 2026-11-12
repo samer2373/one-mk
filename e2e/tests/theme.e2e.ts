@@ -3,7 +3,10 @@ import { test, expect } from '../lib/support.ts';
 // Light, dark, the system preference, the toggle and what it remembers.
 
 /** The colours settle after the 450 ms cross-fade. */
-const fade = (browser: import('@e2e-dev/web').Browser) => expect.poll(() => browser.evaluate<boolean>("document.documentElement.classList.contains('theme-anim')"), { timeout: 3000 }).toBe(false);
+const fade = async (browser: import('@e2e-dev/web').Browser) => {
+  await expect.poll(() => browser.evaluate<boolean>("document.documentElement.classList.contains('theme-anim')"), { timeout: 3000 }).toBe(false);
+  await browser.evaluate('new Promise(function (r) { setTimeout(r, 400); })'); // the last colour transition
+};
 
 const state = (browser: import('@e2e-dev/web').Browser) => browser.evaluate(() => {
   const metas = Array.from(document.querySelectorAll('meta[name="theme-color"]')).map((m) => (m as HTMLMetaElement).content);

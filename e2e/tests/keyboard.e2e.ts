@@ -90,7 +90,13 @@ test('tab stops go through the sections in page order, and the download cards in
   const stops: { label: string; section: number; card: string; cardTop: number; cardLeft: number }[] = [];
   for (let i = 0; i < 170; i++) {
     await browser.keyboard.press('Tab');
-    const s = await browser.evaluate(() => {
+    const s = await browser.evaluate(async () => {
+      await new Promise((r) => setTimeout(r, 120));
+      await new Promise<void>((done) => {
+        let last = -1, same = 0, n = 0;
+        const tick = () => { same = window.scrollY === last ? same + 1 : 0; last = window.scrollY; if (same >= 3 || ++n > 90) done(); else requestAnimationFrame(tick); };
+        requestAnimationFrame(tick);
+      });
       const e = document.activeElement as HTMLElement | null;
       if (!e || e === document.body) return null;
       const blocks = Array.from(document.querySelectorAll('a.skip, header.bar, main > section, footer'));
@@ -110,7 +116,7 @@ test('tab stops go through the sections in page order, and the download cards in
   const cards: { card: string; top: number; left: number }[] = [];
   for (const s of stops) if (s.card && cards.at(-1)?.card !== s.card) cards.push({ card: s.card, top: s.cardTop, left: s.cardLeft });
   expect(cards.length).toBe(3);
-  const visual = [...cards].sort((a, b) => a.top - b.top || a.left - b.left).map((c) => c.card);
+  const visual = [...cards].sort((a, b) => (Math.abs(a.top - b.top) > 20 ? a.top - b.top : a.left - b.left)).map((c) => c.card);
   expect(cards.map((c) => c.card), 'Tab order of the download cards differs from what is on screen').toEqual(visual);
   await guard.check();
 });

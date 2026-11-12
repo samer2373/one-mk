@@ -45,7 +45,7 @@ for (const scheme of ['light', 'dark'] as const) {
     const r = await browser.evaluate(() => {
       const de = document.documentElement;
       const cs = getComputedStyle(document.body);
-      return { theme: de.dataset.theme, over: de.scrollWidth - de.clientWidth, bg: cs.backgroundColor, ink: cs.color };
+      return { theme: de.dataset.theme ?? '', over: de.scrollWidth - de.clientWidth, bg: cs.backgroundColor, ink: cs.color };
     });
     expect(r.theme).toBe(scheme);
     expect(r.over).toBeLessThanOrEqual(0);

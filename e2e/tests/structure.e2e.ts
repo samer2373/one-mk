@@ -20,7 +20,7 @@ test('the head is complete: title, description, icons, canonical, social card, s
       twitterCard: attr('meta[name="twitter:card"]', 'content'),
       colorScheme: attr('meta[name="color-scheme"]', 'content'),
       icons: Array.from(document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"]')).map((l) => l.getAttribute('href')),
-      ld: ld as never,
+      ldOk: ld !== 'invalid' && ld !== null,
       h1: document.querySelectorAll('h1').length,
     };
   });
@@ -36,8 +36,7 @@ test('the head is complete: title, description, icons, canonical, social card, s
   expect(head.twitterCard).toBe('summary_large_image');
   expect(head.colorScheme).toBe('light dark');
   expect(head.icons.length).toBeGreaterThanOrEqual(3);
-  expect(head.ld).not.toBe('invalid');
-  expect(head.ld).not.toBeNull();
+  expect(head.ldOk).toBe(true);
   expect(head.h1).toBe(1);
   await guard.check();
 });

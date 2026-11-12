@@ -134,7 +134,7 @@ test('each copy button copies exactly the command beside it and says so for a mo
     await expect(btn).toHaveAttribute('aria-label', 'Copied');
     const st = await browser.evaluate((k: number) => {
       const b = document.querySelectorAll('[data-copy]')[k] as HTMLElement;
-      return { done: b.classList.contains('is-done'), icon: b.querySelector('use')?.getAttribute('href'), code: (b.parentElement!.querySelector('code')?.textContent ?? ''), copied: (window as unknown as { __copied: string[] }).__copied.at(-1) ?? null };
+      return { done: b.classList.contains('is-done'), icon: b.querySelector('use')?.getAttribute('href') ?? null, code: (b.parentElement!.querySelector('code')?.textContent ?? ''), copied: (window as unknown as { __copied: string[] }).__copied.at(-1) ?? null };
     }, i);
     expect(st.done).toBe(true);
     expect(st.icon).toBe('#i-check');
@@ -142,7 +142,7 @@ test('each copy button copies exactly the command beside it and says so for a mo
     if (p0.clipboard !== 'none' || st.copied !== null) expect(st.copied).toBe(c.cmd);
     // It goes back to a copy button after about 1.6 s.
     await expect(btn).toHaveAttribute('aria-label', c.label, { timeout: 5000 });
-    const after = await browser.evaluate((k: number) => { const b = document.querySelectorAll('[data-copy]')[k] as HTMLElement; return { done: b.classList.contains('is-done'), icon: b.querySelector('use')?.getAttribute('href') }; }, i);
+    const after = await browser.evaluate((k: number) => { const b = document.querySelectorAll('[data-copy]')[k] as HTMLElement; return { done: b.classList.contains('is-done'), icon: b.querySelector('use')?.getAttribute('href') ?? null }; }, i);
     expect(after).toEqual({ done: false, icon: '#i-copy' });
   }
   await guard.check();
