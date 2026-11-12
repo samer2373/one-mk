@@ -314,7 +314,7 @@ impl Link {
     /// A link for the window's own tests: it names a folder of its own, never
     /// watches the daemon, and its `one-mk` is a program that does not exist,
     /// so nothing a test presses can start, stop or change a real oneMK.
-    #[cfg(test)]
+    #[cfg(all(test, not(windows)))]
     pub fn detached(dir: PathBuf, tx: Sender<Event>, ctx: egui::Context) -> Self {
         // Relative: never found on a path, and a login entry refuses it.
         let daemon = PathBuf::from("one-mk-absent-in-tests");

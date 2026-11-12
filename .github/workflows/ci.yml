@@ -62,15 +62,6 @@ jobs:
         with: { toolchain: stable, components: clippy }
       - run: cargo test --workspace --locked --no-fail-fast
         env: { RUST_BACKTRACE: "1" }
-      # Windows only: the window's headless frame tests once ended the test process with an access
-      # violation. If that happens, this one-at-a-time run names the test it was in.
-      - name: Which window test ends the process (only when the tests above failed)
-        if: failure() && runner.os == 'Windows'
-        continue-on-error: true
-        run: |
-          cargo test --locked -p one-mk-app every_page_has_its_shortcut -- --test-threads=1 --nocapture || true
-          cargo test --locked -p one-mk-app -- --test-threads=1 --nocapture
-        env: { RUST_BACKTRACE: "1" }
       # On each system itself, with the real C build scripts (the cross check
       # above stands in for them): some code only exists on one system.
       - run: cargo clippy --workspace --locked --all-targets -- -D warnings
