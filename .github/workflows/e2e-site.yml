@@ -58,7 +58,16 @@ jobs:
       # The page's own checks (weight, no WebGL, reduced motion, file://, the
       # download chooser as unit tests), in the Chrome the runner already has.
       - name: Page checks (site/tools/checks.mjs)
-        run: node site/tools/checks.mjs "$RUNNER_TEMP/site-checks"
+        # Starting Chrome for these checks failed once in a few runs ("chrome did not start"):
+        # try three times, but only that failure is retried; a check that fails is a failure.
+        run: |
+          for attempt in 1 2 3; do
+            node site/tools/checks.mjs "$RUNNER_TEMP/site-checks" 2> "$RUNNER_TEMP/site-checks.err" && exit 0
+            cat "$RUNNER_TEMP/site-checks.err" >&2
+            grep -q "chrome did not start" "$RUNNER_TEMP/site-checks.err" || exit 1
+            echo "::warning::Chrome did not start (attempt $attempt of 3)"
+          done
+          exit 1
 
       # Every test on every device profile, against one `python3 -m http.server`
       # for the site that this step starts and stops itself. (Letting the runner
