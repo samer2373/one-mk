@@ -63,7 +63,9 @@ fn animation(frames: image::Frames<'_>, media: &mut Media) -> Result<Vec<u8>, St
         pixels += u64::from(image.width()) * u64::from(image.height());
         if count > MAX_FRAMES || pixels > MAX_DECODED_PIXELS { return Err("decoded frame/pixel budget exceeded".into()); }
         let (numerator, denominator) = frame.delay().numer_denom_ms();
-        let delay = (u64::from(numerator) / u64::from(denominator)).max(10);
+        let delay = u64::from(numerator) / u64::from(denominator);
+        // The same rule as the container check (admission.rs): a GIF's 0 and 10 ms mean 100 ms.
+        let delay = if media.format == Format::Gif { crate::admission::gif_display_ms(delay) } else { delay.max(10) };
         if delay < 17 { return Err("decoded source exceeds 60 fps; convert first".into()); }
         duration = duration.checked_add(delay).ok_or("duration overflow")?;
         if duration > crate::MAX_DURATION_MS { return Err("decoded duration limit exceeded".into()); }
@@ -154,6 +156,40 @@ pub(crate) fn exec_webm(_codec: &str, _width: u32, _height: u32) -> Result<(), S
 mod tests {
     use super::*;
     mod fixtures { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mod.rs")); }
+
+    /// A two-frame GIF the `image` crate writes with this delay for both frames.
+    fn gif_with_delay(milliseconds: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
+            for index in 0..2u8 {
+                let pixels = image::RgbaImage::from_pixel(2, 2, image::Rgba([index, 16, 32, 255]));
+                encoder.encode_frame(image::Frame::from_parts(pixels, 0, 0, image::Delay::from_numer_denom_ms(milliseconds, 1))).unwrap();
+            }
+        }
+        bytes
+    }
+
+    /// The container check and the decoder must agree on how long a GIF frame is shown (both follow the browsers: 10 ms or less is 100 ms).
+    #[test]
+    fn the_decoder_and_the_container_check_agree_on_gif_delays() {
+        for (written, shown) in [(0, 100), (10, 100), (20, 20), (30, 30), (100, 100)] {
+            let bytes = gif_with_delay(written);
+            let media = crate::inspect(&bytes).unwrap();
+            assert_eq!(media.duration_ms, 2 * shown, "{written} ms: container");
+            // (decode() also restricts the process; this is the decoding it calls.)
+            let decoded = decode_with_limits(&bytes, media, image::Limits::default()).unwrap();
+            assert_eq!(decoded.media.duration_ms, 2 * shown, "{written} ms: decoder");
+        }
+    }
+
+    #[test]
+    fn a_frame_rate_over_sixty_is_still_refused_for_an_apng() {
+        let mut bytes = fixtures::apng();
+        let control = bytes.windows(4).position(|window| window == b"fcTL").unwrap() + 4;
+        bytes[control + 20..control + 24].copy_from_slice(&[0, 1, 0, 100]);
+        assert!(crate::inspect(&bytes).unwrap_err().contains("60 fps"));
+    }
 
     #[test]
     fn every_image_decoder_enforces_image_limits() {

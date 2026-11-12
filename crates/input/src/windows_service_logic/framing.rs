@@ -1,3 +1,4 @@
+use crate::typing::Text;
 use crate::{Event, Inject};
 use one_mk_proto::Pos;
 
@@ -30,6 +31,22 @@ impl Message {
             _ => Err(LogicError::Invalid),
         }
     }
+
+    /// The message for a peer from before character keys had a kind of their own (it reads kind 24 as unknown and
+    /// closes the channel): a character key goes as the plain key it was then, which is how the Windows side
+    /// injects it anyway (by key code). Everything else is as it is.
+    pub fn for_legacy_peer(&self) -> Self {
+        match self {
+            Self::Input(Inject::CharacterKey { code, down, .. }) => Self::Input(Inject::Key { code: *code, down: *down }),
+            other => other.clone(),
+        }
+    }
+}
+
+/// The same rules as the network encoding of a character key (`one_mk_proto`): a known key code and a printable
+/// character.
+fn character_key_valid(code: u32, character: char) -> bool {
+    one_mk_proto::typing::valid_key_code(code) && one_mk_proto::typing::printable(character)
 }
 
 /// Fixed storage, including the four-byte little-endian body length.
@@ -84,12 +101,26 @@ pub fn encode(message: &Message) -> Result<Frame, LogicError> {
                 payload[4..8].copy_from_slice(&dy.to_le_bytes());
                 (if matches!(input, Inject::MoveBy { .. }) { 17 } else { 20 }, 8)
             }
-            Inject::Button { button, down } | Inject::Key { code: button, down } | Inject::CharacterKey { code: button, down, .. } => {
+            Inject::Button { button, down } | Inject::Key { code: button, down } => {
                 payload[..4].copy_from_slice(&button.to_le_bytes());
                 payload[4] = u8::from(*down);
                 (if matches!(input, Inject::Button { .. }) { 18 } else { 22 }, 5)
             }
-            Inject::Text { .. } => return Err(LogicError::Invalid),
+            // Its own kind: kind 22 is a plain key, and an older peer reads 24 as unknown and refuses it (see
+            // `Message::for_legacy_peer`).
+            Inject::CharacterKey { code, down, character } => {
+                if !character_key_valid(*code, *character) { return Err(LogicError::Invalid); }
+                payload[..4].copy_from_slice(&code.to_le_bytes());
+                payload[4] = u8::from(*down);
+                payload[5..9].copy_from_slice(&u32::from(*character).to_le_bytes());
+                (24, 9)
+            }
+            Inject::Text { text } => {
+                let text = text.as_str().as_bytes();
+                payload[0] = text.len() as u8;
+                payload[1..=text.len()].copy_from_slice(text);
+                (25, 1 + text.len())
+            }
             Inject::Scroll { dx, dy } => {
                 finite(*dx, *dy)?;
                 payload[..8].copy_from_slice(&dx.to_le_bytes());
@@ -160,6 +191,22 @@ pub fn decode(bytes: &[u8]) -> Result<Message, LogicError> {
             let down = reader.boolean()?;
             Message::Input(if kind == 18 { Inject::Button { button: code, down } } else { Inject::Key { code, down } })
         }
+        24 => {
+            let code = u32::from_le_bytes(reader.array()?);
+            let down = reader.boolean()?;
+            let character = char::from_u32(u32::from_le_bytes(reader.array()?)).ok_or(LogicError::Invalid)?;
+            if !character_key_valid(code, character) { return Err(LogicError::Invalid); }
+            Message::Input(Inject::CharacterKey { code, down, character })
+        }
+        25 => {
+            let [length] = reader.array()?;
+            let length = usize::from(length);
+            let bytes = reader.0.get(..length).ok_or(LogicError::Truncated)?;
+            let text = std::str::from_utf8(bytes).map_err(|_| LogicError::Invalid)?;
+            let text = Text::new(text).ok_or(LogicError::Invalid)?;
+            reader.0 = &reader.0[length..];
+            Message::Input(Inject::Text { text })
+        }
         21 => Message::Input(Inject::ScrollStop),
         23 => Message::Input(Inject::Controlled(reader.boolean()?)),
         _ => return Err(LogicError::Invalid),
@@ -202,6 +249,91 @@ mod tests {
             bytes[..4].copy_from_slice(&length.to_le_bytes());
             assert_eq!(decode(&bytes), Err(LogicError::Trailing));
         }
+    }
+
+    /// Every `Inject` the helper may be asked to perform crosses the pipe as what it is. (The match is
+    /// exhaustive on purpose: a new variant must be put here, and given a wire form, before this compiles.)
+    #[test]
+    fn every_inject_variant_crosses_the_pipe_unchanged() {
+        let samples = [
+            Inject::MoveTo(Pos { x: 1.5, y: -3.0 }), Inject::MoveBy { dx: -4, dy: 5 }, Inject::Button { button: 272, down: true },
+            Inject::Scroll { dx: 0.25, dy: -1.0 }, Inject::ScrollDiscrete { dx: 1, dy: -1 }, Inject::ScrollStop,
+            Inject::Key { code: 30, down: true }, Inject::Key { code: 30, down: false },
+            Inject::Text { text: "@".into() }, Inject::Text { text: "é".into() }, Inject::Text { text: "e\u{301}".into() },
+            Inject::CharacterKey { code: 30, down: true, character: 'ß' },
+            Inject::CharacterKey { code: 30, down: false, character: 'ß' },
+            Inject::CharacterKey { code: 21, down: true, character: '😀' },
+            Inject::CharacterKey { code: 767, down: false, character: '界' },
+            Inject::Controlled(true),
+        ];
+        for sample in samples {
+            match sample {
+                Inject::MoveTo(_) | Inject::MoveBy { .. } | Inject::Button { .. } | Inject::Scroll { .. }
+                | Inject::ScrollDiscrete { .. } | Inject::ScrollStop | Inject::Key { .. } | Inject::Text { .. }
+                | Inject::CharacterKey { .. } | Inject::Controlled(_) => {}
+            }
+            let frame = encode(&Message::Input(sample)).unwrap_or_else(|error| panic!("{sample:?}: {error:?}"));
+            assert_eq!(decode(frame.as_bytes()), Ok(Message::Input(sample)), "{sample:?}");
+        }
+    }
+
+    #[test]
+    fn a_character_key_is_not_a_plain_key_on_the_wire() {
+        let character = Message::Input(Inject::CharacterKey { code: 30, down: true, character: 'ß' });
+        let plain = Message::Input(Inject::Key { code: 30, down: true });
+        let (character_frame, plain_frame) = (encode(&character).unwrap(), encode(&plain).unwrap());
+        assert_ne!(character_frame.as_bytes(), plain_frame.as_bytes());
+        assert_eq!(decode(character_frame.as_bytes()), Ok(character.clone()));
+        assert_ne!(decode(character_frame.as_bytes()), Ok(plain.clone()), "the character was lost");
+        // A peer from before character keys had a kind of their own gets the plain key it always got, and
+        // frames it sent are still read as they were.
+        assert_eq!(character.for_legacy_peer(), plain);
+        assert_eq!(plain.for_legacy_peer(), plain);
+        assert_eq!(Message::ReleaseAll.for_legacy_peer(), Message::ReleaseAll);
+        assert_eq!(Message::Input(Inject::Text { text: "@".into() }).for_legacy_peer(), Message::Input(Inject::Text { text: "@".into() }));
+        let old_frame = [9, 0, 0, 0, IPC_VERSION as u8, 0, 22, 0, 30, 0, 0, 0, 1];
+        assert_eq!(&old_frame[..], plain_frame.as_bytes());
+        assert_eq!(decode(&old_frame), Ok(plain));
+    }
+
+    #[test]
+    fn character_keys_and_text_are_validated_like_the_network_encoding() {
+        let ok = |code, character| Message::Input(Inject::CharacterKey { code, down: true, character });
+        for (code, character) in [(0, 'a'), (768, 'a'), (u32::MAX, 'a'), (30, '\n'), (30, '\u{0}'), (30, '\u{7f}'), (30, '\u{e000}')] {
+            assert_eq!(encode(&ok(code, character)).err(), Some(LogicError::Invalid), "{code} {character:?}");
+        }
+        let frame = encode(&ok(30, 'a')).unwrap();
+        // Frame: 4 length, 2 version, kind, reserved, then code(4) down(1) character(4).
+        for (offset, value, what) in [(8, 0u32, "code"), (8, 768, "code"), (13, 0xD800, "surrogate"), (13, 0x11_0000, "beyond Unicode"),
+            (13, 10, "control"), (13, 0xE000, "private use"), (13, 0x200B, "format")] {
+            let mut bytes = frame.as_bytes().to_vec();
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            assert_eq!(decode(&bytes), Err(LogicError::Invalid), "{what}");
+        }
+        let mut bytes = frame.as_bytes().to_vec();
+        bytes[12] = 2;
+        assert_eq!(decode(&bytes), Err(LogicError::Invalid), "direction");
+
+        // Text: one length byte and as many bytes, one printable grapheme.
+        let text = encode(&Message::Input(Inject::Text { text: "é".into() })).unwrap();
+        assert_eq!(&text.as_bytes()[6..], &[25, 0, 2, 0xC3, 0xA9]);
+        let body = |bytes: &[u8]| {
+            let mut frame = vec![0; 4];
+            frame.extend_from_slice(&IPC_VERSION.to_le_bytes());
+            frame.extend_from_slice(&[25, 0]);
+            frame.extend_from_slice(bytes);
+            let length = (frame.len() - 4) as u32;
+            frame[..4].copy_from_slice(&length.to_le_bytes());
+            decode(&frame)
+        };
+        assert_eq!(body(&[1, b'a']), Ok(Message::Input(Inject::Text { text: "a".into() })));
+        assert_eq!(body(&[0]), Err(LogicError::Invalid), "empty");
+        assert_eq!(body(&[9, b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h', b'i']), Err(LogicError::Invalid), "too long");
+        assert_eq!(body(&[2, b'a']), Err(LogicError::Truncated), "length beyond the frame");
+        assert_eq!(body(&[1, b'a', b'b']), Err(LogicError::Trailing));
+        assert_eq!(body(&[2, b'a', b'b']), Err(LogicError::Invalid), "two graphemes");
+        assert_eq!(body(&[1, 0xFF]), Err(LogicError::Invalid), "not UTF-8");
+        assert_eq!(body(&[1, b'\n']), Err(LogicError::Invalid), "not printable");
     }
 
     #[test]

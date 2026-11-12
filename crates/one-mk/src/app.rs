@@ -15,7 +15,7 @@ use crate::profiles::{NetworkId, Profiles};
 use crate::manage::{LayoutStatus, LayoutVerdict, LinkStats, PeerStatus, Status, on_your, placement, resolve_layout, takeback_hint};
 use crate::settings::{Gaming, Settings};
 use crate::transfer::{ConnPermit, Inbox};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use one_mk_ctl::client::SwitchTo;
 use one_mk_input::{Backend, CaptureCmd, DeviceRef, DisplaySleeper, Event, FocusProbe, Inhibitor, Inject, InjectTx, PowerEvent, ScreenLocker};
 use one_mk_input::dropzone::{DropTarget, Zone};
@@ -62,6 +62,9 @@ const ENTER_TIMEOUT: Duration = Duration::from_millis(750);
 const SLOW_ENTER: Duration = Duration::from_millis(120);
 /// `one-mk switch` gives up if the backend doesn't start capturing in this.
 const SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
+/// What `switch` and `broadcast` answer while this computer's screen is locked: what is typed
+/// at a lock screen (the password) must never be captured and sent to another computer.
+const SCREEN_LOCKED: &str = "error this computer's screen is locked; unlock it first\n";
 /// Paired computers that are not connected are dialed again after this,
 /// doubling up to [`DIAL_MAX`] while they stay away. Only while one has an
 /// address to try: with every one connected no timer runs.
@@ -84,6 +87,11 @@ const ABORTED_HANDSHAKES_NOTED: u32 = 3;
 /// only this often, or when something here changes (`Request::Reload`:
 /// a pairing, a forget), or it is discovered after this.
 const REMOVED_RETRY: Duration = Duration::from_secs(600);
+/// Both computers save a pairing at about the same moment, and the first to
+/// do so dials the other, which may not have saved yet and so refuses it. A
+/// refusal this soon after a pairing is not "it forgot us": no warning, and
+/// the ordinary redial tries again.
+const RECENTLY_PAIRED: Duration = Duration::from_secs(30);
 /// How often a paired computer that stays unreachable is mentioned in the log.
 const DIAL_LOG_EVERY: Duration = Duration::from_secs(600);
 /// How long a peer that connected to us may take to open its first stream.
@@ -657,6 +665,9 @@ struct App {
     /// Paired computers that refused this one because they forgot it, and
     /// when they last said so (see [`REMOVED_RETRY`]).
     removed: HashMap<Fingerprint, Instant>,
+    /// When each computer was paired, as far as this daemon saw it happen
+    /// (see [`RECENTLY_PAIRED`]); only the lately paired are kept.
+    paired_at: HashMap<Fingerprint, Instant>,
     /// Computers this one doesn't trust that it refused lately: where from,
     /// how often, when last (see [`App::unrecognised_notes`]). Never trusted
     /// because of this; at most [`UNRECOGNISED_KEPT`] of them.
@@ -826,6 +837,7 @@ pub async fn serve(
         dialing: HashSet::new(),
         dial_logged: HashMap::new(),
         removed: HashMap::new(),
+        paired_at: HashMap::new(),
         unrecognised: HashMap::new(),
         services,
         announced: HashSet::new(),
@@ -969,8 +981,14 @@ pub async fn serve(
 }
 
 fn bind(identity: Arc<Identity>, port: u16) -> Result<Node> {
-    Node::bind_any(identity, port)
-        .with_context(|| format!("UDP port {port} is busy; is one-mk already running? (use --port)"))
+    Node::bind_any(identity, port).map_err(|e| {
+        // A port this account may not use is not a port in use: "busy" would send people looking for another one-mk.
+        if format!("{e:#}").contains("Permission denied") {
+            e.context(format!("this account may not open UDP port {port} (ports below 1024 need extra rights); choose another with --port"))
+        } else {
+            e.context(format!("UDP port {port} is busy; is one-mk already running? (use --port)"))
+        }
+    })
 }
 
 async fn shutdown_signal() {
@@ -1470,6 +1488,15 @@ impl App {
         self.push.new_capture();
         self.handed_back = None;
         self.tapped.clear();
+        if self.lock_sync.is_locked() {
+            // No edge is armed while the screen is locked, but a capture already on its way (or a
+            // backend that reports one anyway) must never carry what is typed at a lock screen
+            // to another computer: the pointer stays, and what it caught is typed here.
+            self.switching = None;
+            tracing::debug!(%side, "not crossing: this computer's screen is locked");
+            self.hand_back(id);
+            return;
+        }
         if self.broadcast_activated(id) {
             return;
         }
@@ -1927,6 +1954,13 @@ impl App {
             peer.conn.close(3u32.into(), b"forgotten");
             return;
         }
+        if self.lock_sync.is_locked() {
+            // Whatever the controller types would go to the lock screen (its password, from another
+            // keyboard); oneMK sends no input to a lock screen. It goes home, as for a busy computer.
+            tracing::info!(peer = %peer.name, "refused control: this computer's screen is locked");
+            peer.ctl.send(Control::Busy { epoch });
+            return;
+        }
         if self.owner.is_some() && !self.is_owner(fp, id) {
             tracing::info!(peer = %peer.name, "refused control: another computer controls this one");
             peer.ctl.send(Control::Busy { epoch });
@@ -2095,7 +2129,9 @@ impl App {
                 }
             }
             AppEvent::Removed(fp) => {
-                if self.trust.is_trusted(&fp) && !self.peers.contains_key(&fp) {
+                if self.paired_at.get(&fp).is_some_and(|at| at.elapsed() < RECENTLY_PAIRED) {
+                    tracing::debug!(peer = %fp.short(), "refused just after pairing: it has probably not saved the pairing yet");
+                } else if self.trust.is_trusted(&fp) && !self.peers.contains_key(&fp) {
                     if !self.removed.contains_key(&fp) {
                         let name = self.name_for(fp);
                         println!("{}", one_mk_ctl::status::removed_hint(&name, &fp.short()));
@@ -2416,6 +2452,11 @@ impl App {
     }
 
     fn set_trust(&mut self, new: TrustStore) {
+        let now = Instant::now();
+        self.paired_at.retain(|_, at| now.duration_since(*at) < RECENTLY_PAIRED);
+        for fp in new.devices().iter().filter_map(|d| d.fingerprint()).filter(|fp| !self.trust.is_trusted(fp)) {
+            self.paired_at.insert(fp, now);
+        }
         self.trust = new;
         let computers = crate::hotkeys::numbered_from(self.node.identity(), &self.trust).len();
         self.shortcuts.set_computers(computers);
@@ -2963,6 +3004,12 @@ impl App {
     /// `one-mk switch` (and, later, its keyboard shortcut). The reply's
     /// first line is `ok`, `already`, `here` or `error <why>`.
     fn switch(&mut self, to: SwitchTo) -> String {
+        // Like `broadcast`: going to another computer starts capturing this one's keyboard
+        // and mouse, which at a lock screen would send the password elsewhere. Coming
+        // home is always allowed.
+        if to != SwitchTo::Here && self.lock_sync.is_locked() {
+            return SCREEN_LOCKED.into();
+        }
         if to != SwitchTo::Here {
             self.stop_broadcast(broadcast::End::Switched);
         }
@@ -3074,6 +3121,7 @@ impl App {
     /// the key-ups, leaving keys stuck after unlocking.
     fn let_go_for_lock(&mut self) {
         self.stop_broadcast(broadcast::End::ScreenLocked);
+        self.switching = None;
         self.go_home();
         if let Some((id, a)) = self.approach.take() {
             self.release_capture(id, Some(a.pos()));
@@ -3099,7 +3147,7 @@ impl App {
                 let _ = self.inject.send(Inject::Key { code, down: false });
             }
             self.unlock_release = Mods::default();
-            self.sync_dropzones();
+            self.update_sides(); // arms the edges again (and the drop zones)
             return;
         }
         tracing::debug!("screen locked");
@@ -3113,7 +3161,7 @@ impl App {
             }
         }
         self.let_go_for_lock();
-        self.sync_dropzones();
+        self.update_sides(); // disarms every edge (and the drop zones)
     }
 
     /// Peer `fp` asks us to lock: its `lock-all` (`all`), obeyed always,
@@ -3260,7 +3308,12 @@ impl App {
             }
             self.conflicts = conflicts;
         }
-        if self.locked {
+        if self.lock_sync.is_locked() {
+            // A locked screen forwards nothing across an edge and takes nothing from one (see
+            // `on_activated` and `on_enter`): no edge is armed, not even the way back, for no
+            // visit survives a lock (`let_go_for_lock`).
+            edges.clear();
+        } else if self.locked {
             // Only the edge of a visit in progress (or of a switch about to
             // start) stays armed, so the pointer can come back that way.
             let keep: Vec<Fingerprint> = self.remote.as_ref().map(|r| r.peer).into_iter().chain(switching).collect();
@@ -4394,7 +4447,10 @@ mod tests {
         };
         let ((), took) = tokio::join!(send, released);
         assert!(rx_done.try_recv().is_ok());
-        assert!(took < LEASE + Duration::from_millis(600), "the lease ran {took:?}");
+        // Starved, the lease would run on for as long as the flood lasts (many seconds). Windows' coarse timers
+        // and a busy runner add a second or so to a lease that is on time.
+        let slack = Duration::from_millis(if cfg!(windows) { 1500 } else { 600 });
+        assert!(took < LEASE + slack, "the lease ran {took:?}");
         assert_eq!(owner.next().await, Control::Revoked { epoch: 1 });
         drop((owner, flooder));
         duo.stop().await;
@@ -5133,6 +5189,50 @@ mod tests {
         assert_eq!(ask(&duo.da, Request::Reload).await, "ok\n");
         let db = duo.db.clone();
         eventually_async("B to connect again", || { let db = db.clone(); async move { let s = status(&db).await; s.removed.is_empty() && s.peers.iter().all(|p| p.online) } }).await;
+        duo.stop().await;
+    }
+
+    /// A port this account may not use is said to be that, not "busy; is
+    /// one-mk already running?" (found by QA with `run --port 80`). Where the
+    /// test may bind port 80 (root, or a namespace that allows it) there is
+    /// nothing to check.
+    #[tokio::test]
+    async fn a_port_that_needs_more_rights_is_not_called_busy() {
+        let identity = Arc::new(Identity::ephemeral().unwrap());
+        let Err(error) = bind(identity, 80) else { return };
+        let text = format!("{error:#}");
+        if text.contains("Permission denied") {
+            assert!(text.contains("may not open UDP port 80") && !text.contains("is busy"), "{text}");
+        }
+    }
+
+    /// Both computers save a pairing at about the same moment; the first to
+    /// do so dials the other, which may not have saved yet and refuses it.
+    /// That is not "it removed this computer" (no warning, nothing in the
+    /// status), and the two connect as soon as the other has saved.
+    #[tokio::test]
+    async fn a_refusal_just_after_a_pairing_is_not_a_removal() {
+        let duo = Duo::start("fresh-pair", None).await;
+        let (fa, fb) = (duo.fa.clone(), duo.fb.clone());
+        let a_kept = TrustStore::load(&duo.db).unwrap().find(&fa[..8]).unwrap().clone();
+        let b_kept = TrustStore::load(&duo.da).unwrap().find(&fb[..8]).unwrap().clone();
+        // Both forget each other: a pairing starts from nothing.
+        TrustStore::update(&duo.da, |t| Ok(t.remove(&fb[..8]))).unwrap();
+        TrustStore::update(&duo.db, |t| Ok(t.remove(&fa[..8]))).unwrap();
+        assert_eq!(ask(&duo.da, Request::Reload).await, "ok\n");
+        assert_eq!(ask(&duo.db, Request::Reload).await, "ok\n");
+        // B saves the pairing first and dials A, which refuses B for now.
+        TrustStore::update(&duo.db, |t| { t.upsert(a_kept); Ok(()) }).unwrap();
+        assert_eq!(ask(&duo.db, Request::Reload).await, "ok\n");
+        let dials = || tests::dials_by(&duo.db).load(std::sync::atomic::Ordering::SeqCst);
+        eventually("B to dial A", || dials() > 0).await;
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        assert!(status(&duo.db).await.removed.is_empty(), "a refusal right after pairing was taken for a removal");
+        // A saves it a moment later: B's next try connects.
+        TrustStore::update(&duo.da, |t| { t.upsert(b_kept); Ok(()) }).unwrap();
+        assert_eq!(ask(&duo.da, Request::Reload).await, "ok\n");
+        let db = duo.db.clone();
+        eventually_async("B and A to connect", || { let db = db.clone(); async move { let s = status(&db).await; s.removed.is_empty() && !s.peers.is_empty() && s.peers.iter().all(|p| p.online) } }).await;
         duo.stop().await;
     }
 
@@ -5896,6 +5996,124 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("timed out waiting for {what}");
+    }
+
+    /// While this computer's screen is locked, going to another computer is
+    /// refused the same way for `switch` and `broadcast` (what is typed at a
+    /// lock screen must not be captured and sent elsewhere); coming home is
+    /// always allowed, and everything works again after unlocking.
+    #[tokio::test]
+    async fn switch_and_broadcast_are_both_refused_while_the_screen_is_locked() {
+        use one_mk_ctl::client::Toggle;
+        const REFUSED: &str = "error this computer's screen is locked; unlock it first\n";
+        let mut duo = Duo::start("switch-locked", None).await;
+        let fb = duo.fb.clone();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        duo.ha.events.send(Event::ScreenLocked(true)).unwrap();
+        eventually_async("A to know its screen is locked", || async { status(&duo.da).await.screen_locked }).await;
+        assert_eq!(ask(&duo.da, switch_to(&fb)).await, REFUSED);
+        assert_eq!(ask(&duo.da, Request::Switch(SwitchTo::Next)).await, REFUSED);
+        assert_eq!(ask(&duo.da, Request::Broadcast(Toggle::On)).await, REFUSED);
+        // Nothing was asked of the capture, and nobody is being controlled.
+        while let Ok(command) = duo.ha.capture.try_recv() {
+            assert!(!matches!(command, CaptureCmd::Activate { .. }), "{command:?}");
+        }
+        assert!(status(&duo.da).await.controlling.is_none());
+        // Home is always allowed.
+        assert_eq!(ask(&duo.da, Request::Switch(SwitchTo::Here)).await, "here\n\n");
+        // Unlocked: the same request goes through.
+        duo.ha.events.send(Event::ScreenLocked(false)).unwrap();
+        eventually_async("A to be unlocked", || async { !status(&duo.da).await.screen_locked }).await;
+        assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("ok\n"));
+        assert_eq!(next_capture(&mut duo.ha).await, armed(Side::Right), "unlocking arms the edge again");
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        duo.stop().await;
+    }
+
+    /// A locked screen takes no edge crossing: what is typed at a lock screen (the password) must never
+    /// reach another computer, and nothing is typed into a lock screen from another one either. The
+    /// pointer stays where it is, and everything works again after unlocking.
+    #[tokio::test]
+    async fn a_locked_screen_does_not_cross_an_edge() {
+        let mut duo = Duo::start("edge-locked", None).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        while duo.ha.capture.try_recv().is_ok() {}
+        duo.ha.events.send(Event::ScreenLocked(true)).unwrap();
+        // No edge stays armed, so the desktop has nothing to capture the pointer with.
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetEdges(vec![]));
+        // A capture already on its way is handed straight back.
+        duo.ha.events.send(Event::Activated { id: 4, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 4, pos: None });
+        // Typed while it was held: here, never on B.
+        duo.ha.events.send(Event::Key { code: 30, down: true, device: None }).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(injected(&mut duo.hb), vec![], "nothing reached B");
+        assert!(status(&duo.da).await.controlling.is_none());
+        // Unlocked: the edge is armed again and crossing works.
+        duo.ha.events.send(Event::ScreenLocked(false)).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, armed(Side::Right));
+        duo.enter_b().await;
+        duo.stop().await;
+    }
+
+    /// A `switch` accepted just before the screen locked must not start once it is locked.
+    #[tokio::test]
+    async fn a_switch_pending_when_the_screen_locks_does_not_start() {
+        let mut duo = Duo::start("switch-then-lock", None).await;
+        let fb = duo.fb.clone();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("ok\n"));
+        duo.ha.events.send(Event::ScreenLocked(true)).unwrap();
+        eventually_async("A to know its screen is locked", || async { status(&duo.da).await.screen_locked }).await;
+        duo.ha.events.send(Event::Activated { id: 3, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        loop {
+            match next_capture(&mut duo.ha).await {
+                CaptureCmd::Release { id: 3, pos: None } => break,
+                CaptureCmd::Release { id: 3, .. } => panic!("not handed back where it was"),
+                _ => {}
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(injected(&mut duo.hb), vec![], "nothing reached B");
+        assert!(status(&duo.da).await.controlling.is_none());
+        duo.stop().await;
+    }
+
+    /// A locked computer cannot be controlled: the pointer that would go onto its lock screen comes
+    /// home, nothing is typed there, and control works again once it is unlocked. A computer that
+    /// locks while it is controlled lets go, and the controller cannot go back onto it.
+    #[tokio::test]
+    async fn a_locked_computer_is_not_entered() {
+        let mut duo = Duo::start("enter-locked", None).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // B is locked while the pointer is home.
+        duo.hb.events.send(Event::ScreenLocked(true)).unwrap();
+        eventually_async("B to know its screen is locked", || async { status(&duo.db).await.screen_locked }).await;
+        while duo.ha.capture.try_recv().is_ok() {}
+        duo.ha.events.send(Event::Activated { id: 1, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 1, pos: Some(_) }), "A is home again");
+        eventually_async("A to be home", || async { status(&duo.da).await.controlling.is_none() }).await;
+        duo.ha.events.send(Event::Key { code: 30, down: true, device: None }).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!injected(&mut duo.hb).iter().any(|i| matches!(i, Inject::Key { .. } | Inject::MoveTo(_))), "B's lock screen got input");
+        assert!(status(&duo.db).await.controlled_by.is_none());
+        // Unlocked: B can be entered.
+        duo.hb.events.send(Event::ScreenLocked(false)).unwrap();
+        eventually_async("B to be unlocked", || async { !status(&duo.db).await.screen_locked }).await;
+        duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(Pos::new(0.0, 540.0)));
+        // B locks while controlled: A is sent home, and cannot go back while B stays locked.
+        duo.hb.events.send(Event::ScreenLocked(true)).unwrap();
+        assert!(matches!(next_capture(&mut duo.ha).await, CaptureCmd::Release { id: 2, pos: Some(_) }));
+        eventually_async("A to be home", || async { status(&duo.da).await.controlling.is_none() }).await;
+        let _ = injected(&mut duo.hb);
+        duo.ha.events.send(Event::Activated { id: 3, side: Side::Right, pos: Pos::new(1919.0, 540.0) }).unwrap();
+        loop {
+            if let CaptureCmd::Release { id: 3, pos: Some(_) } = next_capture(&mut duo.ha).await { break }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!injected(&mut duo.hb).iter().any(|i| matches!(i, Inject::MoveTo(_))), "B was entered while locked");
+        duo.stop().await;
     }
 
     /// `lock-all` locks both screens once; with lock sync on everywhere,

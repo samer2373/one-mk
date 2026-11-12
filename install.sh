@@ -13,6 +13,17 @@
 #     that signed list. Without OpenSSL 3 (macOS ships LibreSSL) this step is
 #     skipped and says so; authenticity then rests on GitHub and HTTPS. On
 #     macOS the app's code signature is checked too.
+#   - the release's sequence number (signed, and the number the updater
+#     keeps as its replay floor) against MIN_SEQUENCE below, and the release's
+#     version against the oneMK already installed: a correctly signed but
+#     older release (replayed by a mirror or a network in between) is refused
+#     instead of installed. ONE_MK_ALLOW_OLDER=1 installs an older release on
+#     purpose.
+#   - optionally, the age of the release (the signed release_time against this
+#     computer's clock): ONE_MK_MAX_AGE_DAYS=N refuses a release published more
+#     than N days ago. Off by default, because the newest release is allowed to
+#     be old (nothing may stop a quiet project from being installable); without
+#     it a release more than STALE_DAYS old only prints a note.
 # Installing replaces each program by renaming a complete copy over it, so
 # re-running it while oneMK runs works, and a failure (at any point, also
 # after some programs were replaced) puts the previous installation back. ONE_MK_RELEASE_URL picks another release folder
@@ -26,11 +37,20 @@ PUBLIC_KEY='-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAHJamD3QRuJBIp8jnM/Grzzsh1Fn1BwkczvdT8/yIv+s=
 -----END PUBLIC KEY-----'
 
+# The oldest release this script installs, by the release sequence in the
+# signed update list (the CI run number that built it, which only grows:
+# docs/UPDATES.md). Each release raises it to an earlier release that is still
+# fine to install; scripts/check-release-consistency.py and the release
+# workflow check that it is a plain number and not above the release's own.
+MIN_SEQUENCE=48
+# Past this many days a release only earns a note (see ONE_MK_MAX_AGE_DAYS above).
+STALE_DAYS=180
+
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)  target=aarch64-apple-darwin; file=one-mk-$target.app.zip ;;
     Darwin-x86_64) target=x86_64-apple-darwin; file=one-mk-$target.app.zip ;;
     Linux-x86_64)  target=x86_64-unknown-linux-gnu; file=one-mk-$target.tar.gz ;;
-    *) die "there is no oneMK build for $(uname -s) $(uname -m). On Windows, download the -setup.exe from https://github.com/samer2373/one-mk/releases/latest" ;;
+    *) die "there is no oneMK build for $(uname -s) $(uname -m). The builds are listed at https://github.com/samer2373/one-mk/releases/latest (on Windows, download the -setup.exe there)" ;;
 esac
 command -v curl >/dev/null || die "curl is needed to download oneMK; install it and run this again"
 
@@ -60,6 +80,50 @@ expected=$(awk -v f="$file" '($2 == f || $2 == "*" f) { print $1; exit }' "$tmp/
 [ -n "$expected" ] || die "SHA256SUMS does not list $file; the release is incomplete (nothing was installed)"
 [ "$actual" = "$expected" ] || die "$file does not match SHA256SUMS (damaged or tampered download; nothing was installed)"
 
+# Succeeds if the decimal number $1 is lower than $2 (compared as text, so it cannot overflow).
+number_lt() {
+    a=$(printf '%s' "$1" | sed 's/^0*\(.\)/\1/'); b=$(printf '%s' "$2" | sed 's/^0*\(.\)/\1/')
+    [ "$a" != "$b" ] || return 1
+    if [ ${#a} -ne ${#b} ]; then [ ${#a} -lt ${#b} ]; else [ "$(printf '%s\n%s\n' "$a" "$b" | LC_ALL=C sort | head -n 1)" = "$a" ]; fi
+}
+# The version "one-mk --version" prints for program $1, if it is a plain MAJOR.MINOR.PATCH.
+program_version() {
+    [ -x "$1" ] || return 0
+    if command -v timeout >/dev/null; then out=$(timeout 10 "$1" --version 2>/dev/null || true); else out=$("$1" --version 2>/dev/null || true); fi
+    printf '%s\n' "$out" | sed -n '1s/^one-mk \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p'
+}
+# Succeeds if version $1 is newer than version $2 (plain MAJOR.MINOR.PATCH).
+version_newer() {
+    [ "$(awk -v a="$1" -v b="$2" 'BEGIN { split(a, x, "."); split(b, y, "."); for (i = 1; i <= 3; i++) { if (x[i] + 0 > y[i] + 0) { print 1; exit } if (x[i] + 0 < y[i] + 0) { print 0; exit } } print 0 }')" = 1 ]
+}
+# Whole days between the UTC time $1 (YYYY-MM-DDTHH:MM:SSZ) and now; nothing printed when unknown or in the future.
+days_since() {
+    now=$(date -u +%s 2>/dev/null) || return 0
+    printf '%s\n' "$1" | awk -v now="$now" '{
+        y = substr($0, 1, 4) + 0; m = substr($0, 6, 2) + 0; d = substr($0, 9, 2) + 0
+        if (m <= 2) y -= 1
+        era = int(y / 400); yoe = y - era * 400
+        doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+        days = era * 146097 + yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy - 719468
+        age = now - (days * 86400 + (substr($0, 12, 2) + 0) * 3600 + (substr($0, 15, 2) + 0) * 60 + (substr($0, 18, 2) + 0))
+        if (age >= 0) print int(age / 86400)
+    }'
+}
+# Refuses to put an older release over a newer installed oneMK $1 (needs the signed version, so OpenSSL 3).
+signed_version=
+refuse_older_than_installed() {
+    [ -n "$signed_version" ] || return 0
+    have=$(program_version "$1")
+    [ -n "$have" ] || return 0
+    if version_newer "$have" "$signed_version"; then
+        if [ -n "${ONE_MK_ALLOW_OLDER:-}" ]; then
+            echo "Note: oneMK $have is installed and this is the older $signed_version; installing it because ONE_MK_ALLOW_OLDER is set."
+        else
+            die "oneMK $have is installed and this release is the older $signed_version, which a replayed or outdated download could be (nothing was installed). To go back on purpose, run this again with ONE_MK_ALLOW_OLDER=1"
+        fi
+    fi
+}
+
 # The signed update list, where this system's OpenSSL can check Ed25519.
 case "$(openssl version 2>/dev/null || true)" in
     "OpenSSL "[3-9]*)
@@ -73,10 +137,34 @@ case "$(openssl version 2>/dev/null || true)" in
         name_re=$(printf '%s' "$file" | sed 's/\./\\./g')
         signed=$(grep -o "\"name\":\"$name_re\",\"os\":\"[a-z]*\",\"sha256\":\"[0-9a-f]*\"" "$tmp/update-manifest.json" | sed 's/.*"sha256":"//; s/"$//')
         [ "$signed" = "$actual" ] || die "$file does not match the signed update list (nothing was installed)"
+        # Not older than this script's floor: a signed list from the past still verifies.
+        sequence=$(grep -o '"sequence":[0-9]*[,}]' "$tmp/update-manifest.json" | sed 's/"sequence"://; s/[,}]$//')
+        case "$sequence" in
+            ""|*[!0-9]*) die "the signed update list has no release sequence (nothing was installed)" ;;
+        esac
+        if [ -z "${ONE_MK_ALLOW_OLDER:-}" ] && number_lt "$sequence" "$MIN_SEQUENCE"; then
+            die "this is an older oneMK release (number $sequence) than this installer accepts (at least $MIN_SEQUENCE): it is signed, but whoever serves the download could be replaying it. Get the current install.sh and run it again (nothing was installed)"
+        fi
+        signed_version=$(grep -o '"version":"[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"}' "$tmp/update-manifest.json" | sed 's/"version":"//; s/"}$//')
+        release_time=$(grep -o '"release_time":"[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z"' "$tmp/update-manifest.json" | sed 's/"release_time":"//; s/"$//')
+        age=
+        [ -z "$release_time" ] || age=$(days_since "$release_time")
+        if [ -n "${ONE_MK_MAX_AGE_DAYS:-}" ]; then
+            case "$ONE_MK_MAX_AGE_DAYS" in *[!0-9]*) die "ONE_MK_MAX_AGE_DAYS must be a whole number of days, not '$ONE_MK_MAX_AGE_DAYS' (nothing was installed)" ;; esac
+            [ -n "$age" ] || die "ONE_MK_MAX_AGE_DAYS is set, but the release's age cannot be told (no signed release time, or this computer's clock is before it); nothing was installed"
+            if [ -z "${ONE_MK_ALLOW_OLDER:-}" ] && [ "$age" -gt "$ONE_MK_MAX_AGE_DAYS" ]; then
+                die "this release was published $age days ago (${release_time%%T*}), more than the $ONE_MK_MAX_AGE_DAYS days ONE_MK_MAX_AGE_DAYS allows. It is signed, but an old release is also what a replaying download looks like. If it is the newest (https://github.com/samer2373/one-mk/releases/latest), run this again without ONE_MK_MAX_AGE_DAYS or with ONE_MK_ALLOW_OLDER=1 (nothing was installed)"
+            fi
+        fi
         echo "Verified: signed by the oneMK publisher, checksum matches."
+        echo "Release: oneMK $signed_version, number $sequence${release_time:+, published ${release_time%%T*}}."
+        if [ -n "$age" ] && [ "$age" -gt "$STALE_DAYS" ]; then
+            echo "Note: that is $age days ago. If a newer oneMK is listed at https://github.com/samer2373/one-mk/releases/latest, this download may be an old copy; get the newest install.sh and run it again (ONE_MK_MAX_AGE_DAYS=N makes this an error)."
+        fi
         ;;
     *)
-        echo "Verified against SHA256SUMS. (OpenSSL 3 is not available here, so the publisher's signature was not checked; oneMK's own updater checks it for every later update.)"
+        [ -z "${ONE_MK_MAX_AGE_DAYS:-}" ] || die "ONE_MK_MAX_AGE_DAYS needs OpenSSL 3 here to check the signed release time; nothing was installed"
+        echo "Verified against SHA256SUMS. (OpenSSL 3 is not available here, so the publisher's signature was not checked, and neither was whether this release is older than the oneMK you have; oneMK's own updater checks both for every later update.)"
         ;;
 esac
 
@@ -86,6 +174,9 @@ if [ "$(uname -s)" = Darwin ]; then
     [ -d "$tmp/app/one-mk.app/Contents/MacOS" ] || die "$file does not contain one-mk.app (nothing was installed)"
     codesign --verify --deep --strict "$tmp/app/one-mk.app" 2>/dev/null \
         || die "the app's code signature does not verify (nothing was installed)"
+    for old_app in /Applications "$HOME/Applications"; do
+        refuse_older_than_installed "$old_app/one-mk.app/Contents/MacOS/one-mk"
+    done
     dest=/Applications
     [ -w "$dest" ] || { dest="$HOME/Applications"; mkdir -p "$dest"; }
     # Copy next to the old app first (same disk), then swap by renaming.
@@ -150,6 +241,7 @@ else
     done
     case " $programs " in *" one-mk "*) ;; *) die "$file does not contain one-mk (nothing was installed)" ;; esac
     bin=$HOME/.local/bin
+    refuse_older_than_installed "$bin/one-mk"
     mkdir -p "$bin" || die "cannot create $bin"
     # A folder where a program goes would swallow the new copy (mv moves a
     # file into a folder) while the old version stays in use.

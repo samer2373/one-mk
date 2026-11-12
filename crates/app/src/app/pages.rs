@@ -249,12 +249,17 @@ impl App {
         // happening now), then the checks, worst first.
         // Off, the checks say so themselves (with Start).
         let live = if self.running().is_some() { self.live_lines() } else { vec![] };
-        let mut needs: Vec<Item> = live.iter().filter(|(c, _)| *c == pal().danger).map(|(_, l)| Item { title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Fail, here: None, k: usize::MAX }).collect();
         // A line that waits on the person (a permission dialog to answer)
         // or on oneMK (still setting up) is pending: never a tick.
         // On a Mac the guide walks through the permission; elsewhere the
         // dialog is the desktop's own, so the action is to check again.
         let ask = if cfg!(target_os = "macos") { Some(("Open guide", Fix::OpenPermissionGuide)) } else { Some(("Open guide", Fix::DesktopGuide)) };
+        // A missing permission the daemon says right now offers the guide, as the check that reports the
+        // same thing does (the live line is there before any check has run, and when none reports it).
+        let mut needs: Vec<Item> = live.iter().filter(|(c, _)| *c == pal().danger).map(|(_, l)| Item {
+            title: String::new(), detail: l.clone(), fix: None, verdict: Verdict::Fail, k: usize::MAX,
+            here: if l.contains("Accessibility") || l.contains("Input Monitoring") { ask } else { None },
+        }).collect();
         let mut works: Vec<Item> = vec![];
         // The daemon's shortcut line says what the "Keyboard shortcuts"
         // check says: one row, not two.
@@ -391,7 +396,7 @@ impl App {
             p.galley(pos2(b.left() + BANNER_TEXT_X, b.center().y - gh / 2.0), galley.clone(), pal().ink);
             let br = Rect::from_min_size(pos2(b.right() - 20.0 - bw, b.center().y - 16.0), vec2(bw, 32.0));
             let label = if running { "Checking…" } else { "Check again" };
-            if button(ui, br, Id::unique("recheck"), label, Look::Quiet, !running, Some("Run the checks again")).clicked() {
+            if button(ui, br, Id::unique("recheck"), label, Look::Quiet, !running, Some(if running { "Checking…: the checks are running" } else { "Check again: run the checks again" })).clicked() {
                 recheck = true;
             }
             a11y_text(ui, Id::unique("health-summary"), b, Role::Status, &format!("{bold} {rest}"), Some(Live::Polite));

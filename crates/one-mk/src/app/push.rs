@@ -74,7 +74,7 @@ impl App {
     /// its side: that whole side is left alone.
     pub(super) fn free_edges(&self, armed: &[(Edge, Fingerprint)]) -> Vec<(Edge, Kind)> {
         let Some(local) = &self.local else { return Vec::new() };
-        if self.locked || self.owner.is_some() {
+        if self.locked || self.owner.is_some() || self.lock_sync.is_locked() {
             return Vec::new();
         }
         let edge = &self.settings.edge;

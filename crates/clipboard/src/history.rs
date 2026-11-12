@@ -167,7 +167,7 @@ impl History {
     }
 
     pub fn record_hashed(&mut self, data: Arc<ClipData>, digest: Digest, concealed: bool, origin: &str) {
-        if concealed || self.max == 0 || self.next == u64::MAX || data.is_empty() || data.len() > self.item_cap || data.len() > self.byte_cap { return; }
+        if concealed || self.max == 0 || self.next == u64::MAX || data.has_no_content() || data.len() > self.item_cap || data.len() > self.byte_cap { return; }
         if self.entries.back().is_some_and(|entry| entry.digest == digest) { return; }
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
         self.bytes += data.len();

@@ -25,7 +25,8 @@ impl App {
             self.link.history();
         }
         let clear = Rect::from_min_size(pos2(at.x - clear_width, at.y - 14.0), vec2(clear_width, 28.0));
-        if button(ui, clear, Id::unique("history-clear"), clear_label, Look::Quiet, online && self.prefs.history_enabled, Some("Clear deletes all memory and saved history. Click again to confirm; Refresh cancels.")).clicked() {
+        let clear_name = if self.clipboard_clear_confirm { "Sure? Click again to delete all memory and saved history; Refresh cancels." } else { "Clear deletes all memory and saved history. Click again to confirm; Refresh cancels." };
+        if button(ui, clear, Id::unique("history-clear"), clear_label, Look::Quiet, online && self.prefs.history_enabled, Some(clear_name)).clicked() {
             if self.clipboard_clear_confirm { self.link.history_change(None); }
             self.clipboard_clear_confirm = !self.clipboard_clear_confirm;
             self.clipboard_reveal = None;
@@ -34,6 +35,7 @@ impl App {
         if toggle_row(ui, row, Id::unique("history-enabled"), &Words::new("Keep clipboard history"), Some("history-enabled"), self.prefs.history_enabled, true).clicked() {
             let enabled = !self.prefs.history_enabled;
             self.set_pref("clipboard history", &["clipboard", "history", if enabled { "on" } else { "off" }], |prefs| prefs.history_enabled = enabled);
+            self.clipboard_clear_confirm = false;
             self.clipboard_reveal = None;
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
         }
@@ -100,7 +102,8 @@ impl App {
                 response.request_focus();
                 self.link.history_change(Some(item.id));
             }
-            if button(ui, show, Id::unique(("history-show", item.id)), if revealed.is_some() { "Hide" } else { "Show" }, Look::Quiet, true, Some("Reveal or hide this item's preview on screen")).clicked() {
+            let show_name = format!("{} the preview of clipboard item {} on screen", if revealed.is_some() { "Hide" } else { "Show" }, item.id);
+            if button(ui, show, Id::unique(("history-show", item.id)), if revealed.is_some() { "Hide" } else { "Show" }, Look::Quiet, true, Some(&show_name)).clicked() {
                 self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
                 if revealed.is_some() { self.clipboard_reveal = None; }
                 else { self.link.history_reveal(item.id, self.clipboard_reveal_epoch); }

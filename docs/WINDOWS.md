@@ -12,6 +12,9 @@ step first run on real hardware is in [TESTING.md](TESTING.md).
 - **Install:** `one-mk-x86_64-pc-windows-msvc-setup.exe` installs for your account alone, into
   `%LOCALAPPDATA%\Programs\one-mk` (a `.zip` of the programs is also published). The installer is
   **not Authenticode-signed**, so SmartScreen warns about it.
+  Uninstalling ends the running programs, removes the start-at-sign-in entry, the *Send to* entries
+  and oneMK's folder from your `PATH`, and puts your own wallpaper back; your settings folder (pairings and
+  keys) is kept. This was written without a Windows computer to run it on ([PACKAGING.md](PACKAGING.md)).
 - **Sharing:** pointer and keyboard in both directions through low-level hooks and `SendInput`,
   clipboard, file transfer, the tray, the window, start at login, Explorer's *Send to* menu, media
   keys, lock sync, sleep sync, hotkeys (`RegisterHotKey`), network profiles (WlanAPI and IP Helper),

@@ -48,6 +48,13 @@ fn key_accessibility_activation(ui: &Ui, response: &egui::Response) -> bool {
     ui.input(|input| input.has_accesskit_action_request(response.id, egui::accesskit::Action::Click))
 }
 
+/// [`App::solo_rules_start`]'s decision: `can` this system apply rules to
+/// its own keys, how many `peers` are paired (`None`: oneMK is not running),
+/// is "Also on this computer" on, how many key `rules` exist.
+pub(super) fn solo_rules_start_with(can: bool, peers: Option<usize>, local_rules: bool, rules: usize) -> bool {
+    can && peers == Some(0) && !local_rules && rules == 0
+}
+
 fn gesture_args(button: &str, direction: &str, output: &str, scope: &Scope) -> Result<Vec<String>, String> {
     if !["middle", "button4", "button5"].contains(&button) || !["up", "down", "left", "right"].contains(&direction) {
         return Err("Choose a middle or side button and a swipe direction.".into());
@@ -810,10 +817,7 @@ impl App {
     /// this computer": no computer is paired, none is set yet, and this
     /// system can apply them.
     fn solo_rules_start(&self) -> bool {
-        cfg!(any(windows, target_os = "macos"))
-            && self.running().is_some_and(|status| status.peers.is_empty())
-            && !self.prefs.input.local_rules
-            && self.prefs.input.keys.is_empty()
+        solo_rules_start_with(cfg!(any(windows, target_os = "macos")), self.running().map(|status| status.peers.len()), self.prefs.input.local_rules, self.prefs.input.keys.len())
     }
 
     /// A tuning command finished.
@@ -1368,7 +1372,12 @@ impl App {
         for (i, c) in caps.iter().enumerate() {
             let id = Id::unique(("cap", c.code));
             let roving = c.code == self.keys.focus_key;
-            let kr = ui.interact(board.target_bounds(i).intersect(stage), id, widgets::sense(ui, if roving { Sense::focusable_noninteractive() } else { Sense::hover() }));
+            // A key the camera has moved off the stage has no area there: an empty one at the
+            // nearest point, never the inverted rectangle an empty intersection gives (a
+            // screen reader cannot place that).
+            let area = board.target_bounds(i).intersect(stage);
+            let area = if area.is_positive() { area } else { Rect::from_min_size(stage.clamp(area.center()), egui::Vec2::ZERO) };
+            let kr = ui.interact(area, id, widgets::sense(ui, if roving { Sense::focusable_noninteractive() } else { Sense::hover() }));
             if kr.has_focus() {
                 focused = Some(i);
                 ui.memory_mut(|m| m.set_focus_lock_filter(id, EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() }));
@@ -1465,7 +1474,7 @@ impl App {
             ui.ctx().accesskit_node_builder(Id::unique("keys-intro"), |node| node.set_description(guidance));
         }
         self.keyboard_navigator(ui, chooser_r, &chooser);
-        if small_button(ui, keypad_r, Id::unique("keys-more"), keypad, Some(if self.keys.keypad { "Hide the keypad" } else { "Show the keypad too" })).clicked() {
+        if small_button(ui, keypad_r, Id::unique("keys-more"), keypad, Some(if self.keys.keypad { "Hide keypad" } else { "Show keypad too" })).clicked() {
             self.keys.keypad = !self.keys.keypad;
         }
         if let (Some(rect), Some(label)) = (detail_r, detail) {
@@ -2225,7 +2234,7 @@ impl App {
                 spoken += &format!("{label}: {}. ", log.chips.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(", "));
             }
         }
-        let name = "Test keys: activate, then press keys. Tab leaves. Nothing is sent.";
+        let name = "Type here · nothing is sent: activate, then press keys to test your rules. Tab leaves.";
         widgets::a11y(&resp, Role::Button, name, None);
         ui.ctx().accesskit_node_builder(resp.id, |node| node.set_description(intro.clone()));
         let resp = resp.on_hover_text(&intro);

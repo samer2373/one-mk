@@ -158,3 +158,73 @@ impl Ctx {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use one_mk_proto::Side;
+
+    /// A tray with a folder of its own and programs that do not exist: nothing
+    /// pressed here can reach a real oneMK, window, login item or browser.
+    fn lonely(name: &str) -> (Ctx, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("omk-tray-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        (Ctx { dir: dir.clone(), custom_home: true, daemon: PathBuf::from("one-mk-absent-in-tests"), tray: PathBuf::from("one-mk-tray-absent-in-tests") }, dir)
+    }
+
+    #[test]
+    fn with_no_service_a_look_finds_nothing_and_the_menu_offers_to_start() {
+        let (ctx, dir) = lonely("snapshot");
+        let snap = ctx.snapshot();
+        assert!(snap.status.is_none());
+        assert!(crate::model::menu(&snap).iter().any(|e| matches!(e, crate::model::Entry::Item { action: Action::StartDaemon, .. })));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_menu_choice_with_no_service_fails_quietly_instead_of_panicking() {
+        let (ctx, dir) = lonely("perform");
+        for action in [
+            Action::Stop,
+            Action::TakeBack,
+            Action::Switch("here".into()),
+            Action::Switch("abcd".into()),
+            Action::LockPointer(true),
+            Action::LockPointer(false),
+            Action::Broadcast(true),
+            Action::Broadcast(false),
+            Action::LockAll,
+            Action::ClipSend("abcd".into()),
+            Action::ClipGet("abcd".into()),
+            Action::WallpaperPause(true),
+            Action::SetSide { peer: "abcd".into(), side: Side::Left },
+            Action::Forget { peer: "abcd".into() },
+            Action::StartDaemon,
+        ] {
+            ctx.perform(&action);
+        }
+        // Nothing was started.
+        assert!(!client::is_running(&dir));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_settings_folder_is_passed_on_only_when_it_was_chosen() {
+        let (mut ctx, dir) = lonely("home");
+        let args = ctx.home_args();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "--home");
+        ctx.custom_home = false;
+        assert!(ctx.home_args().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn asking_a_service_that_is_not_there_says_so() {
+        let (ctx, dir) = lonely("ask");
+        let err = ctx.ask(Request::LockAll).unwrap_err().to_string();
+        assert!(err.contains("not running"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

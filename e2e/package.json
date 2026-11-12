@@ -1,0 +1,24 @@
+{
+  "name": "one-mk-site-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic end-to-end tests for the oneMK landing page (site/), run with the e2e framework.",
+  "engines": { "node": ">=22.22.3" },
+  "scripts": {
+    "browsers": "e2e-web install chromium firefox webkit",
+    "browsers:deps": "e2e-web install chromium firefox webkit --with-deps",
+    "typecheck": "tsc --noEmit -p .",
+    "list": "e2e list",
+    "test": "e2e run",
+    "test:file": "node file-protocol.mjs",
+    "test:all": "e2e run && node file-protocol.mjs"
+  },
+  "devDependencies": {
+    "@e2e-dev/web": "0.15.5",
+    "e2e": "0.23.0",
+    "@types/node": "^24.0.0",
+    "playwright-core": "1.64.1",
+    "typescript": "^5.9.3"
+  }
+}

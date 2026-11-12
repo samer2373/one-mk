@@ -36,7 +36,9 @@ impl fmt::Debug for Fingerprint {
 impl FromStr for Fingerprint {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
-        anyhow::ensure!(s.len() == 64, "fingerprint must be 64 hex characters");
+        // Only ASCII hex digits: a multi-byte character would split the slices
+        // below (a panic), and `from_str_radix` alone also takes a leading `+`.
+        anyhow::ensure!(s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()), "fingerprint must be 64 hex characters");
         let mut out = [0u8; 32];
         for (i, b) in out.iter_mut().enumerate() {
             *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).context("invalid fingerprint")?;
@@ -67,9 +69,28 @@ impl Identity {
             (Ok(c), Ok(k)) => {
                 restrict_file(&key_path)?;
                 restrict_file(&cert_path)?;
+                usable(&c, &k).with_context(|| {
+                    format!(
+                        "this computer's identity in {} is damaged ({} and {} must be a matching pair). \
+                         If you have no copy of them, move both away to make a new identity, then pair this computer again \
+                         (the computers paired with it will not recognise a new identity)",
+                        dir.display(),
+                        cert_path.file_name().unwrap_or_default().to_string_lossy(),
+                        key_path.file_name().unwrap_or_default().to_string_lossy()
+                    )
+                })?;
                 (c, k)
             }
             _ => {
+                // One of the two is gone (a first run has neither): the pair is made again, and
+                // every computer paired with the old one will refuse this one until paired anew.
+                if cert_path.exists() || key_path.exists() {
+                    tracing::warn!(
+                        "{} or {} was missing: made a new identity for this computer; computers paired with the old one must be paired again",
+                        cert_path.display(),
+                        key_path.display()
+                    );
+                }
                 let (c, k) = generate()?;
                 write_private(&key_path, &k)?;
                 write_private(&cert_path, &c)
@@ -98,6 +119,14 @@ impl Identity {
     pub fn key(&self) -> PrivateKeyDer<'static> {
         PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(self.key.clone()))
     }
+}
+
+/// Whether `cert` and `key` can be used together for connections: what a
+/// damaged file would otherwise show only as a failure to open the port.
+fn usable(cert: &[u8], key: &[u8]) -> Result<()> {
+    let signing = rustls::crypto::ring::sign::any_supported_type(&PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.to_vec())))?;
+    rustls::sign::CertifiedKey::new(vec![CertificateDer::from(cert.to_vec())], signing).keys_match()?;
+    Ok(())
 }
 
 fn generate() -> Result<(Vec<u8>, Vec<u8>)> {
@@ -218,6 +247,59 @@ mod tests {
         std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o400)).unwrap();
         Identity::load_or_create(&dir).unwrap();
         assert_eq!(mode(&key), 0o400);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod damage_tests {
+    use super::*;
+
+    fn temp() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("one-mk-damaged-{}-{:x}", std::process::id(), rand::random::<u64>()))
+    }
+
+    /// A key or certificate that is empty, cut off or not one at all is an error that names the
+    /// files and leaves them alone, not a failure to "open the port" later and not a new identity.
+    #[test]
+    fn a_damaged_identity_is_reported_and_kept_not_replaced() {
+        let dir = temp();
+        let made = Identity::load_or_create(&dir).unwrap();
+        let (cert, key) = (std::fs::read(dir.join("identity.cert.der")).unwrap(), std::fs::read(dir.join("identity.key.der")).unwrap());
+        for (what, bad_cert, bad_key) in [
+            ("an empty key", cert.clone(), Vec::new()),
+            ("a cut key", cert.clone(), key[..40].to_vec()),
+            ("a random key", cert.clone(), vec![7u8; key.len()]),
+            ("a random certificate", vec![9u8; cert.len()], key.clone()),
+            ("an empty certificate", Vec::new(), key.clone()),
+            ("another computer's key", cert.clone(), generate().unwrap().1),
+        ] {
+            std::fs::write(dir.join("identity.cert.der"), &bad_cert).unwrap();
+            std::fs::write(dir.join("identity.key.der"), &bad_key).unwrap();
+            let error = Identity::load_or_create(&dir).err().unwrap_or_else(|| panic!("{what} was accepted"));
+            let text = format!("{error:#}");
+            assert!(text.contains("identity.key.der") && text.contains("identity.cert.der") && text.contains("damaged"), "{what}: {text}");
+            assert_eq!(std::fs::read(dir.join("identity.key.der")).unwrap(), bad_key, "{what}: the key was overwritten");
+            assert_eq!(std::fs::read(dir.join("identity.cert.der")).unwrap(), bad_cert, "{what}: the certificate was overwritten");
+        }
+        // Put the real ones back: it loads as the same computer.
+        std::fs::write(dir.join("identity.cert.der"), &cert).unwrap();
+        std::fs::write(dir.join("identity.key.der"), &key).unwrap();
+        assert_eq!(Identity::load_or_create(&dir).unwrap().fingerprint, made.fingerprint);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// With one of the two files gone the pair is made again (the old computer cannot be
+    /// recovered), which is no longer silent: its log line says paired computers must pair anew.
+    #[test]
+    fn a_missing_half_is_made_again_and_both_files_exist_afterwards() {
+        let dir = temp();
+        let first = Identity::load_or_create(&dir).unwrap().fingerprint;
+        std::fs::remove_file(dir.join("identity.cert.der")).unwrap();
+        let second = Identity::load_or_create(&dir).unwrap().fingerprint;
+        assert_ne!(first, second);
+        assert!(dir.join("identity.cert.der").exists() && dir.join("identity.key.der").exists());
+        assert_eq!(Identity::load_or_create(&dir).unwrap().fingerprint, second);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

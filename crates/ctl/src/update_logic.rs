@@ -335,6 +335,27 @@ mod tests {
         Ok(())
     }
 
+    /// Every installed oneMK has this parser. A list with a field it does not know (an expiry or freshness time,
+    /// say) is refused outright, so such a field can never be added to the list the release makes: it would stop
+    /// every deployed client from updating (docs/UPDATES.md, "Freshness for install.sh"). A fresh install.sh
+    /// gets freshness from its own constants instead. Change this only once no client in use is older than the
+    /// release that reads the new field.
+    #[test]
+    fn a_field_this_parser_does_not_know_is_refused_so_the_list_cannot_grow_one() -> Result<()> {
+        let text = String::from_utf8(serde_json::to_vec(&fixture())?)?;
+        assert!(parse(text.as_bytes()).is_ok());
+        for field in ["\"not_after\":\"2027-01-01T00:00:00Z\"", "\"valid_until\":1", "\"expires\":null"] {
+            let extended = text.replacen('{', &format!("{{{field},"), 1);
+            assert!(parse(extended.as_bytes()).is_err(), "{field} was accepted");
+        }
+        // The one optional field the parser does know, and the two it needs no value for.
+        let known = text.replace("\"next_key\":null", &format!("\"next_key\":\"{}\"", "00".repeat(32)));
+        assert!(parse(known.as_bytes()).is_ok());
+        let without_optional = text.replace(",\"revoked\":[]", "").replace(",\"next_key\":null", "");
+        assert!(parse(without_optional.as_bytes()).is_ok());
+        Ok(())
+    }
+
     #[test]
     fn install_paths() {
         assert!(!startup_due(100_000, 100_000));

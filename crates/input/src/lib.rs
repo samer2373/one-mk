@@ -6,6 +6,10 @@
 //! Key and button codes are Linux evdev codes on all platforms.
 
 mod common_logic;
+#[cfg(test)]
+mod cross_os_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod layout_tests;
 #[cfg(any(windows, target_os = "macos", test))]
 mod devcorr;
 pub mod cursoroverlay;

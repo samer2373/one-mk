@@ -369,47 +369,41 @@ impl Xvfb {
     }
 
     fn start_sized(height: i16) -> Option<Xvfb> {
-        // Our own display number, well above the desktop sessions' (:0, :1, ...):
-        // the first one in 20.. with no socket and no lock file. Another test
-        // may take it between the check and the start; then Xvfb exits and the
-        // next number is tried.
-        // Tests start servers in parallel threads: one at a time, or two would
-        // take the same number and each see the other's socket as its own.
-        static START: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _one_at_a_time = START.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        for number in 20..220u32 {
-            if std::path::Path::new(&format!("/tmp/.X11-unix/X{number}")).exists()
-                || std::path::Path::new(&format!("/tmp/.X{number}-lock")).exists()
-            {
-                continue;
-            }
-            let child = Command::new("Xvfb")
-                .args([&format!(":{number}"), "-screen", "0", &format!("{W}x{height}x24"), "-nolisten", "tcp", "-noreset"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn();
-            let Ok(mut child) = child else {
-                eprintln!("Xvfb not installed: skipping");
-                return None;
-            };
-            let socket = format!("/tmp/.X11-unix/X{number}");
-            for _ in 0..500 {
-                // The socket appears before the server is ready: wait for a
-                // connection that is accepted and answers.
-                if std::path::Path::new(&socket).exists()
-                    && x11rb::connect(Some(&format!(":{number}"))).is_ok_and(|(conn, _)| conn.get_input_focus().is_ok_and(|cookie| cookie.reply().is_ok()))
-                {
-                    return Some(Xvfb { child, display: format!(":{number}") });
-                }
-                if child.try_wait().ok().flatten().is_some() {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
+        // The server picks its own free display number (`-displayfd`: it takes the number under its
+        // own lock and writes it, once it listens, to the descriptor), so it is never one that another
+        // test (a thread here, or a whole other `cargo test` running at the same time, as on a busy
+        // machine or CI runner) has taken or is about to take. Looking for a free number first and
+        // starting the server on it, as this did, let two runs both believe they own `:20`: each then
+        // talked to the other's server, and keys, grabs and pointer positions of one showed up in the
+        // other (the flaky `kill_9_releases_the_grab`).
+        let child = Command::new("Xvfb")
+            .args(["-displayfd", "1", "-screen", "0", &format!("{W}x{height}x24"), "-nolisten", "tcp", "-noreset"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+        let Ok(mut child) = child else {
+            eprintln!("Xvfb not installed: skipping");
+            return None;
+        };
+        let mut line = String::new();
+        std::io::BufReader::new(child.stdout.take().expect("piped")).read_line(&mut line).unwrap();
+        let Ok(number) = line.trim().parse::<u32>() else {
             let _ = child.kill();
             let _ = child.wait();
+            panic!("Xvfb did not start: {line:?}");
+        };
+        let display = format!(":{number}");
+        // Ready for connections: one that is accepted and answers.
+        for _ in 0..500 {
+            if x11rb::connect(Some(&display)).is_ok_and(|(conn, _)| conn.get_input_focus().is_ok_and(|cookie| cookie.reply().is_ok())) {
+                return Some(Xvfb { child, display });
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
-        panic!("no free private display number for Xvfb");
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("Xvfb {display} never answered");
     }
 
     fn observer(&self) -> Observer {
@@ -530,22 +524,28 @@ impl Sync_ for RustConnection {
 }
 
 /// Polls `f` until it holds (the backend works on its own thread).
-fn eventually(what: &str, mut f: impl FnMut() -> bool) {
-    for _ in 0..200 {
+fn eventually(what: &str, f: impl FnMut() -> bool) {
+    eventually_for(Duration::from_secs(2), what, f);
+}
+
+/// [`eventually`] with its own limit: for what depends on another process getting to run.
+fn eventually_for(limit: Duration, what: &str, mut f: impl FnMut() -> bool) {
+    let end = std::time::Instant::now() + limit;
+    loop {
         if f() {
             return;
         }
+        assert!(std::time::Instant::now() < end, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("timed out waiting for {what}");
 }
 
 /// The next event that is not a status report or the list of devices.
 async fn next(events: &mut mpsc::UnboundedReceiver<Event>) -> Event {
     loop {
-        let ev = tokio::time::timeout(Duration::from_secs(3), events.recv())
+        let ev = tokio::time::timeout(Duration::from_secs(15), events.recv())
             .await
-            .expect("an event within 3 s")
+            .expect("an event within 15 s")
             .expect("backend alive");
         if !matches!(ev, Event::Status { .. } | Event::Devices(_)) {
             return ev;
@@ -824,18 +824,24 @@ fn kill_9_releases_the_grab() {
     let out = std::io::BufReader::new(child.stdout.take().unwrap());
     let captured = out.lines().map_while(Result::ok).any(|l| l.contains("CAPTURED"));
     assert!(captured, "the child captured");
+    // The grab is taken before `Activated` is reported, so it is there. The key is another matter: the
+    // child sent the press and the capture over two channels that its backend thread reads in no fixed
+    // order, so "captured" can be printed a moment before the press has reached the server (it did,
+    // on a loaded machine). Wait for it; it is the press the rest of the test is about.
     assert!(!o.can_grab(), "the child holds the keyboard");
-    assert!(o.key_down(38), "the child holds A down");
+    eventually_for(Duration::from_secs(20), "the child's press of A", || o.key_down(38));
     // SAFETY: plain kill(2) on our own child.
     unsafe { libc::kill(child.id() as i32, libc::SIGKILL) };
     child.wait().unwrap();
-    eventually("the grab gone with the killed process", || o.can_grab());
+    // The server notices the dead client when it next gets to run, which can take a while when the
+    // machine is busy.
+    eventually_for(Duration::from_secs(20), "the grab gone with the killed process", || o.can_grab());
     // XTest keeps keys pressed after the client that pressed them is gone;
     // the next start lets go of them.
     assert!(o.key_down(38), "XTest still holds A after kill -9");
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     let (_b, _locked) = rt.block_on(async { open_on(&x.display) }).unwrap();
-    eventually("A let go of by the next start", || !o.key_down(38));
+    eventually_for(Duration::from_secs(20), "A let go of by the next start", || !o.key_down(38));
 }
 
 /// The next list of devices for which `want` holds.

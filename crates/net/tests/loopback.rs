@@ -74,9 +74,16 @@ async fn stalled_handshake_does_not_block_accept() {
     let relay_addr = relay.local_addr().unwrap();
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65536];
-        while let Ok((n, from)) = relay.recv_from(&mut buf).await {
-            if from != server_addr {
-                let _ = relay.send_to(&buf[..n], server_addr).await;
+        loop {
+            match relay.recv_from(&mut buf).await {
+                Ok((n, from)) => {
+                    if from != server_addr {
+                        let _ = relay.send_to(&buf[..n], server_addr).await;
+                    }
+                }
+                // Windows reports an earlier send to a closed port as an error on the next receive.
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => continue,
+                Err(_) => break,
             }
         }
     });

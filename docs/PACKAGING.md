@@ -100,6 +100,145 @@ Optional tools (Pillow for the last one) are reported as skipped when missing.
 The macOS app and disk image and the Windows installer are built and opened by
 the release workflow itself (it signs, installs and runs them).
 
+Without building anything, `python3 scripts/check-release-consistency.py` (the
+`release-gates` job of `ci.yml`, and `release-checks` of the release workflow)
+fails when the release has drifted apart:
+
+- **versions**: `Cargo.toml`, every crate, `Cargo.lock`, the release notes
+  (`docs/release-notes/v<version>.md` exists, none for a newer version), the
+  version in `docs/COMMANDS.md` and the bug report template, the readers the
+  packaging scripts use;
+- **workflows**: every workflow declares its permissions and only `publish`
+  (and the Pages workflow) may write; third-party actions are pinned to a
+  commit (`actions/*` may use a major tag); checkouts keep no token; no secret
+  on pull requests, no `pull_request_target`; every `cargo` command is
+  `--locked`; every `run:` block is valid shell;
+- **artifacts**: every release file `install.sh`, the website, the README and
+  the docs name is one `release.yml` really makes, for a target it builds;
+- **metadata**: the `.desktop` files, the AppStream metainfo (also rendered
+  from every release notes file), the polkit action, the Inno Setup script,
+  the Homebrew and Flatpak templates and the GNOME extension manifests are
+  well formed and agree with each other and with the code they name.
+
+`python3 scripts/test-release-consistency.py` checks that each of those checks
+fails on the mistake it is for, and `python3 scripts/test-update-manifest.py`
+builds the signed update list from the file names the release makes and checks
+that every choice the updater makes (portable binary, AppImage, .deb, Mac app)
+is exactly one file, that the list is reproducible, that bad input is refused
+and that a damaged signature never verifies. `scripts/test-install.sh` runs `install.sh`
+against fake releases (bad checksums and signatures, hostile and broken
+archives, offline, plain http, an unsupported system, repeat and read-only
+installs, and replays: a correctly signed older release is refused, and one past a chosen maximum age). The GNOME extensions are tested against stand-ins for the Shell:
+`node --test tools/gnome-wallpaper/test_production_video.mjs
+tools/gnome-wallpaper/test_pointer_extension.mjs`.
+
+### `install.sh` and replayed releases
+
+A release's signature never expires, so someone who serves the download (a
+mirror, a network in between, a release object made by someone with write
+access to the repository but not the signing key) could hand `install.sh` an
+older, correctly signed release, for example one with a known flaw. The updater
+refuses that by its stored sequence; a fresh install has none, so `install.sh`
+has its own guards, all needing the signed list (OpenSSL 3; without it the
+script says the release's age was not checked):
+
+- `MIN_SEQUENCE` near the top of `install.sh`: a signed list whose `sequence`
+  is lower is refused. The sequence is the release workflow's run number
+  (`make-update-manifest.sh release-files "$GITHUB_RUN_NUMBER"`), which only
+  grows. **Raise it in each release's pull request** to the sequence of the
+  *previous* release (shown by that release's `update-manifest.json`). It
+  cannot name the release being built, whose run number is not known yet, so a
+  fresh install can still be handed the previous release, and no older one.
+  The floor travels with the script, not with the release (`install.sh` is
+  fetched from `main`), which is why an old signed list cannot carry it. CI
+  keeps it honest: on a pull request `check-release-consistency.py --base`
+  fails when the version changes and `MIN_SEQUENCE` is not raised past the
+  base branch's, or when anything lowers it; `check-release-consistency.py`
+  requires a plain positive number, and on the release run fails if it is above
+  that run's number (which would make `install.sh` refuse the release itself).
+- the installed oneMK's `--version` against the signed list's `version`: an
+  older release is not installed over a newer one.
+- the age: the signed `release_time` (the commit time of the tagged commit, or
+  `RELEASE_TIME`) against the computer's clock. `install.sh` prints "Release:
+  oneMK VERSION, number N, published DATE", and past `STALE_DAYS` (180) adds a
+  note that an old copy may be what is being served. `ONE_MK_MAX_AGE_DAYS=N`
+  makes it an error (`ONE_MK_MAX_AGE_DAYS=90 sh install.sh`), for people and
+  provisioning scripts that want a fixed window; it fails closed when the age
+  cannot be told (no OpenSSL 3, a clock before the release). It is off by
+  default on purpose: the newest release is allowed to be old.
+
+`ONE_MK_ALLOW_OLDER=1` skips all of these, for going back on purpose.
+**Withdrawing a release for fresh installs without publishing another:** raise
+`MIN_SEQUENCE` in a pull request to `main` to the sequence of the newest
+release that is fine (never above the newest published one, or `install.sh`
+refuses everything). The script is fetched fresh, so that takes effect at the
+merge. This is the fast lever; `ONE_MK_REVOKED` in a newer release's list is
+the one the updater reads.
+
+What this does not stop, and cannot with a signed static list: a replay of the
+previous release (between `MIN_SEQUENCE` and the latest) on a computer with no
+oneMK yet, an attacker who can also replace `install.sh` itself, and anything
+on a system without OpenSSL 3 (macOS) where the list is not checked at all. A
+signed file proves only that the publisher signed it once; telling the latest
+from an earlier one needs a clock or something re-signed since. The window is
+one release wide, and it closes at the first update check of the installed
+oneMK when update checks are on (the default; daily and on opening the window),
+which offers the newest signed release and keeps its high-water mark from then
+on. An attacker who also blocks or replays that check keeps the old release.
+
+Why there is no `not_after` in the update list, and what would be needed for
+one:
+
+- **The list cannot grow a field.** The updater's parser
+  (`crates/ctl/src/update_logic.rs`, `Manifest`) is `deny_unknown_fields`, and
+  every installed oneMK has it: a list with an extra field would stop all of
+  them from updating. `scripts/test-update-manifest.py` and
+  `update_logic::tests::a_field_this_parser_does_not_know_is_refused_*` pin
+  that. The list `make-update-manifest.sh` writes is therefore unchanged, byte
+  for byte, and old updaters accept it as before.
+- **A hard expiry is unsafe where it would matter.** Only the latest release's
+  list is served at the "latest" address, and when the project is quiet
+  longer than any window, an expiry would make the newest release
+  uninstallable. A window renewed without a release needs a freshness
+  statement re-signed on a schedule, which puts the production key in a
+  scheduled job: not done, and an owner decision (it would be a small signed
+  file of "latest = version V, sequence N, valid until D", published as a
+  release asset beside the list and read only by `install.sh`; the updater
+  would not use it).
+- Age-based refusal is therefore left to the person (`ONE_MK_MAX_AGE_DAYS`),
+  and the floor stays a constant that a pull request updates.
+
+## Linux on ARM (aarch64): not built, and why
+
+There is no `aarch64-unknown-linux-gnu` build, and `install.sh` and the site
+say so. Adding one was assessed and left out on purpose:
+
+- **Nothing in CI would test it.** The `test` job, clippy and every
+  hand-run check run on x86-64 only. The code has aarch64 branches (the decoder's
+  seccomp filter, the update's `arch` field) that have never run on an ARM
+  computer, and the input, GNOME bridge and wallpaper paths were only ever
+  exercised on x86-64. A package advertised for a platform nobody ran is the
+  kind of release this project tries not to make.
+- **A failing job would block every release.** `publish` needs every `build`
+  matrix job, so an ARM job that fails on the day (a runner label that is not
+  available to the repository, an `appimagetool` that cannot run, a package
+  that does not install) stops macOS, Windows and x86-64 Linux from publishing.
+  It would have to be added without being able to try it first.
+- **The packaging is x86-64 in more places than the matrix**: `bundle-deb.sh`
+  writes `Architecture: amd64`; the AppImage needs `appimagetool-aarch64` with
+  its own pinned checksum (and fetches its runtime when it packs); the Flatpak
+  and Homebrew files, the site's download list, the release notes table,
+  `install.sh`'s names and `check-release-consistency.py`'s expected set all
+  list the files by name and would have to change together.
+
+What it would take: a runner (`ubuntu-22.04-arm`, for public repositories) in
+the `build` matrix; `Architecture` and the `dpkg-shlibdeps` stub taken from the
+target; the aarch64 `appimagetool` pinned by checksum; a `test` job on the ARM
+runner (tests, clippy); the new file names added to the site, README, release
+notes, `install.sh` and the consistency check in the same change; then a real
+run on an ARM computer (input capture, the window, a pairing) before it is
+advertised.
+
 ## macOS `.app` and `.dmg`
 
 `scripts/bundle-mac.sh <release dir> <out.app.zip>` builds `one-mk.app` (the
@@ -203,21 +342,39 @@ checkout; then it installs it silently into a scratch folder and runs
 - installs for the current user only, into `%LOCALAPPDATA%\Programs\one-mk`
   (no administrator rights);
 - adds a Start menu shortcut to the window, and optionally one on the desktop;
-- optionally (a task, on by default) appends the folder to the user's `PATH`
-  if that exact entry is not there yet;
+- optionally (a task, on by default) adds the folder to the user's `PATH` as
+  one whole entry, only if no entry equal to it (ignoring case and a trailing
+  `\`) is there yet, so an upgrade or a second run adds nothing; the value is
+  written as an expandable string and only when it changes;
 - offers to open the window at the end.
 
-On uninstall, before any file is removed, it runs `one-mk integrate --remove`
-as the user (hidden; its exit code is ignored, so it never stops the
-uninstall), which deletes the *Send to* entries `one-mk integrate` wrote, only
-the files carrying its marker; without it they would point at the deleted
-`one-mk.exe`. This hook is syntax-reviewed only: Inno Setup is not available
-here, and CI builds and installs the installer but does not uninstall it.
+On uninstall, before any file is removed and as the user, all hidden and with
+no exit code checked (a failure never stops the uninstall), it:
 
-It does not open the firewall, run `one-mk install` (start at sign-in, the
-*Send to* entries) or take the folder out of `PATH` on uninstall. Start at
-sign-in is turned on from the window (or `one-mk install`); `one-mk integrate`
-adds the *Send to* entries. The installer is not code-signed, so SmartScreen will warn.
+1. runs `one-mk uninstall` (the start-at-sign-in entry, the *Send to* entries,
+   the wallpaper off and your own back; this asks the running oneMK, so it goes
+   first);
+2. ends the tray and the window, runs `one-mk stop`, then ends whatever still
+   runs from the install folder (matched by full path, so another copy of oneMK
+   elsewhere is left alone);
+3. removes the start-at-sign-in entry (`HKCU\...\Run\one-mk`) if it still
+   starts a program from the folder, and removes every `PATH` entry equal to
+   the folder, leaving the other entries untouched and the value alone if
+   nothing matched.
+
+The settings folder (pairings and keys) is kept, so installing again keeps the
+computers paired. All of this is `[Code]` in `installer/one-mk.iss`. **It was
+written without Inno Setup or Windows and has not been compiled or run:**
+`scripts/test-windows-path.py` runs the PATH and startup-entry string functions
+(the text of the `.iss`, in a small interpreter of the Pascal subset they use)
+against a plain model and on random inputs, and
+`scripts/check-release-consistency.py` checks the uninstall steps and their
+order by reading the script. CI compiles the installer and installs it
+silently, but does not uninstall it.
+
+It does not open the firewall. Start at sign-in is turned on from the window
+(or `one-mk install`); `one-mk integrate` adds the *Send to* entries. The
+installer is not code-signed, so SmartScreen will warn.
 
 ## Debian `.deb`
 
@@ -247,6 +404,25 @@ replay record). It starts and enables nothing, and ships no systemd unit or auto
 install`, run as yourself, writes the user service and the tray's autostart
 entry (and its own copy of the hidden entry) into the home folder. It is
 built on ubuntu-22.04 (glibc 2.35), the oldest distribution it is meant for.
+
+**Dependencies.** The control file has a `Depends:` line, made at build time:
+`dpkg-shlibdeps` reads the libraries the four programs are linked against and
+the glibc version their symbols need (on ubuntu-22.04: `libc6 (>= 2.35)`, which
+Debian 12 meets too, and `libgcc-s1`), and the script adds what the window opens
+at run time, which `dpkg-shlibdeps` cannot see: `libxkbcommon0`, one OpenGL
+loader (`libegl1 | libgl1`), and for X11 sessions `libxkbcommon-x11-0`,
+`libxcursor1` and `libxi6`. The last three were found by installing the
+package on a clean Ubuntu with `--no-install-recommends`, starting the window on
+an X server and adding libraries until it stayed up: without `libxi6` and
+`libxcursor1` it stops with "Failed to load one of xlib's shared libraries",
+without `libxkbcommon-x11-0` it panics. `Recommends:` holds `pkexec` (the
+update's root step), `bubblewrap` (the wallpaper import's sandbox) and
+`libglib2.0-bin` (`gsettings`, for the desktop picture). The daemon itself loads
+`libxkbcommon` only when it can, and talks to X11 with pure Rust. The script
+refuses to build without `dpkg-shlibdeps` (package `dpkg-dev`), and
+`scripts/check-packaging.sh` checks the line: each of those names, a `libc6`
+floor not below the newest glibc symbol in the built programs, and that the
+programs link nothing beyond libc and libgcc_s.
 
 The optional GNOME component is offline: `/usr/bin/one-mk-wallpaper` is the
 production renderer and `/usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/`
@@ -423,7 +599,7 @@ file, the released, CI-tested one was kept:
 
 | Dropped | Replaced by | Lost with it |
 |---|---|---|
-| `scripts/package-windows.sh`, `packaging/windows/one-mk.iss`, `packaging/windows/path-entries.pas`, `scripts/check-windows-path.sh` | `installer/one-mk.iss` | an all-users install in Program Files, firewall rules for private networks, running `one-mk install` at setup and `one-mk uninstall` at removal, taking the folder out of `PATH` on uninstall |
+| `scripts/package-windows.sh`, `packaging/windows/one-mk.iss`, `packaging/windows/path-entries.pas`, `scripts/check-windows-path.sh` | `installer/one-mk.iss` | an all-users install in Program Files, firewall rules for private networks, running `one-mk install` at setup |
 | `scripts/package-macos.sh`, `packaging/macos/Info.plist.in` | `scripts/bundle-mac.sh` | nothing of note (the released script also signs and notarizes) |
 | `scripts/package-deb.sh`, `packaging/linux/postinst`, `postrm`, `one-mk.1` | `scripts/bundle-deb.sh` | the packaged systemd user unit and tray autostart (`one-mk install` writes them per user instead; the hidden app-id entry is shipped again since the review of the merge), the man page, the copyright file, the full hicolor icon set, the AppStream file, `Depends`/`Recommends`, a reproducible build, `~` for pre-release versions |
 | `scripts/package-tarball.sh` | the workflow's "Package" step | a reproducible archive (sorted, time-clamped) |

@@ -70,6 +70,10 @@ Settings). The Windows installer is not Authenticode-signed yet, so SmartScreen 
   untrusted X session ([DRAG-FILES.md](DRAG-FILES.md)).
 - **A compromised account is out of scope.** Someone who can run programs as you can read your
   settings and keys anyway.
+- **Locked screens.** A locked computer never forwards its keyboard and mouse to another one (no
+  edge crossing, `switch` or `broadcast`; a visit in progress ends when it locks) and refuses to be
+  controlled, so a password typed at a lock screen stays on that computer and nothing is typed into
+  one from another ([EDGE-PUSH.md](EDGE-PUSH.md#a-locked-screen)).
 - **Windows secure desktop.** oneMK does not send input to the Windows lock screen, sign-in screen
   or UAC prompts, and there is no Windows service. Why that is deliberate: [WINDOWS.md](WINDOWS.md).
 - **Wallpaper videos** are decoded by your system's media framework with your rights, so accept

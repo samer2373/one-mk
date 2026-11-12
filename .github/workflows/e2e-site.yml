@@ -1,0 +1,104 @@
+# End-to-end tests of the landing page (site/) in Chromium, Firefox and WebKit,
+# at phone, tablet, laptop and large-desktop sizes. See e2e/README.md.
+name: Site e2e
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "e2e/**"
+      - ".github/workflows/e2e-site.yml"
+      - ".github/workflows/release.yml"
+  pull_request:
+    paths:
+      - "site/**"
+      - "e2e/**"
+      - ".github/workflows/e2e-site.yml"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      E2E_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false }
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install the test tools
+        working-directory: e2e
+        run: npm ci
+
+      - name: Type-check the tests
+        working-directory: e2e
+        run: npm run typecheck
+
+      - name: Install the browsers and their system libraries
+        working-directory: e2e
+        run: npm run browsers:deps
+
+      # The page's own checks (weight, no WebGL, reduced motion, file://, the
+      # download chooser as unit tests), in the Chrome the runner already has.
+      - name: Page checks (site/tools/checks.mjs)
+        # Starting Chrome for these checks failed once in a few runs ("chrome did not start"):
+        # try three times, but only that failure is retried; a check that fails is a failure.
+        run: |
+          for attempt in 1 2 3; do
+            node site/tools/checks.mjs "$RUNNER_TEMP/site-checks" 2> "$RUNNER_TEMP/site-checks.err" && exit 0
+            cat "$RUNNER_TEMP/site-checks.err" >&2
+            grep -q "chrome did not start" "$RUNNER_TEMP/site-checks.err" || exit 1
+            echo "::warning::Chrome did not start (attempt $attempt of 3)"
+          done
+          exit 1
+
+      # Every test on every device profile, against one `python3 -m http.server`
+      # for the site that this step starts and stops itself. (Letting the runner
+      # start nine of them, one per profile, crashed it once on Node 24 while it
+      # probed them: an assertion inside Node's HTTP client, nothing in the site.)
+      - name: Run the suite
+        run: |
+          python3 -m http.server --bind 127.0.0.1 --directory site 8765 > "$RUNNER_TEMP/site-server.log" 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 50); do
+            curl --silent --fail --output /dev/null http://127.0.0.1:8765/ && break
+            sleep 0.2
+          done
+          curl --silent --fail --output /dev/null http://127.0.0.1:8765/
+          cd e2e
+          SITE_URL=http://127.0.0.1:8765/ npm test
+
+      - name: Run the suite from file://
+        working-directory: e2e
+        run: npm run test:file
+
+      - name: Upload traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-site-traces
+          path: |
+            e2e/.e2e/results/
+            e2e/.e2e/report.json
+            e2e/.e2e/junit.xml
+            e2e/test-results/
+          if-no-files-found: ignore
+          retention-days: 14

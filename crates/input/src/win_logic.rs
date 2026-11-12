@@ -561,11 +561,14 @@ const KEY_TABLE: &[(u16, bool, u32)] = &[
     // Send-only aliases.
     (0x37, true, 210),  // KEY_PRINT                -> Print Screen
     (0x29, false, 85),  // KEY_ZENKAKUHANKAKU       -> JIS half/full width (` position)
+    // A Mac's JIS keypad comma (HID Keypad Comma, 0x85) arrives as KEY_KPJPCOMMA; Windows reads that same HID
+    // usage as set 1 scan code 0x7E, which is what comes back as KEY_KPCOMMA above.
+    (0x7E, false, 95),  // KEY_KPJPCOMMA            -> keypad comma
 ];
 
 /// The send-only aliases in [`KEY_TABLE`]; never used when reading scan codes.
 fn is_send_only(evdev: u32) -> bool {
-    matches!(evdev, 210 | 85)
+    matches!(evdev, 210 | 85 | 95)
 }
 
 /// Set 1 scan code (with the E0 prefix as `extended`) to evdev.
@@ -779,6 +782,7 @@ mod tests {
             match code {
                 210 => assert_eq!(back, Some(99)),     // KEY_PRINT types Print Screen
                 85 => assert_eq!(back, Some(41)),      // Zenkaku/Hankaku is the ` key
+                95 => assert_eq!(back, Some(121)),     // the JIS keypad comma is the keypad comma
                 _ => assert_eq!(back, Some(code), "key {code} via {win:?}"),
             }
         }

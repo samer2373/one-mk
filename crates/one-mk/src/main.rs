@@ -486,7 +486,7 @@ enum Cmd {
     /// Measure latency and CPU cost.
     Bench {
         /// Number of mouse events to send.
-        #[arg(long, default_value_t = 5000)]
+        #[arg(long, default_value_t = 5000, value_parser = clap::value_parser!(u32).range(1..))]
         count: u32,
         /// Events per second (gaming mice report 1000-8000).
         #[arg(long, default_value_t = 1000)]

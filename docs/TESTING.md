@@ -103,3 +103,32 @@ restart. Everything runs in a private network namespace with throwaway settings 
 input backend, so it never touches this computer's own oneMK, desktop or network. It needs
 `unshare` with unprivileged user namespaces. It does not cover real Wi-Fi drops, sleep and wake, other
 systems or real input backends: use the checklist above for those.
+
+The command line and the daemon also have end-to-end tests that run the real binary, in the same
+private way: `cargo test -p one-mk --test 'qa_*'`. They pair daemons, send files, move the
+clipboard, break settings files and kill daemons; [TEST-MATRIX-daemon.md](TEST-MATRIX-daemon.md)
+lists every command, what tests it, and what only real computers can check.
+
+## Checking the macOS and Windows code from Linux
+
+`bash scripts/cross-clippy.sh aarch64-apple-darwin` (or `x86_64-pc-windows-msvc`; needs
+`rustup target add` for it and clippy) lints the programs, the clipboard crate and the daemon (`one-mk`) for
+that system with `-D warnings`, on any Linux computer. CI runs it in the `native-cross-check` job. It is a
+compile check: nothing is linked or run, so it finds type, cfg and lint errors in the code only that system
+compiles, not behaviour. Pass `-p PACKAGE` to check fewer packages (`-j` follows `CROSS_CLIPPY_JOBS`).
+
+Plain `cargo clippy --target ...` fails for these crates here because two build scripts compile C for the
+target with that system's compiler. The script gets past both, for the check only:
+
+- `blake3` (clipboard, daemon, wallpaper crates) compiles SIMD C and assembly unless its `pure` feature is on.
+  The script sets `CARGO_FEATURE_PURE=1` for the command, which its build script reads to skip that; the Rust
+  library is still checked as the real build compiles it. This is enough for the clipboard crate by itself:
+  `CARGO_FEATURE_PURE=1 cargo clippy -p one-mk-clipboard --all-targets --target aarch64-apple-darwin`.
+  Real builds do not set it and keep blake3's default SIMD code.
+- `ring` (the daemon's TLS) compiles C and assembly with MSVC, Apple's clang or NASM. The script puts a
+  stand-in for the compiler, the archiver and `nasm` in a temporary folder: each writes the empty output file
+  it is asked for, which is all the check needs. This stand-in is why the check says nothing about whether
+  that C builds; the real builds on the macOS and Windows runners (`build` in release.yml, `test` in ci.yml)
+  do.
+
+Last run: clean for both targets (it found one unused import in a daemon test that only built on Linux).

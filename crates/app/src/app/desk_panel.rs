@@ -212,14 +212,29 @@ impl App {
     /// in a narrow window the row for layout learning's question. A narrow
     /// window's desk is short (the panel is under it): the toolbar stands as
     /// a column at its left, so the computers keep its height.
+    /// How many buttons the toolbar has: Choose computer (five computers or
+    /// more), Type on every computer and Timer (a computer online, or while
+    /// broadcasting), and Lock every screen.
+    pub(super) fn tool_count(&self) -> usize {
+        let Some(status) = self.running() else { return 1 };
+        let online = status.peers.iter().any(|p| p.online) || self.broadcasting();
+        usize::from(status.peers.len() + 1 >= 5) + if online { 2 } else { 0 } + 1
+    }
+
     pub(super) fn desk_room(&self, scene: Rect, band: f32, narrow: bool) -> (Rect, Option<Rect>, Option<Rect>) {
         let mut free = scene.shrink2(vec2(EDGE, 0.0));
         free.min.y += EDGE + band;
         let mut ask = None;
         let tools = self.desk_views_shown().then(|| {
             if narrow {
-                let col = Rect::from_min_size(free.min, vec2(TOOL_COLUMN, free.height()));
-                free = free.shrink2(vec2(TOOL_COLUMN + 8.0, 0.0));
+                // One column; where a banner leaves less height than the
+                // buttons need (the smallest window, a long sentence) the
+                // column wraps into more, rather than run into the panel.
+                let per = (((free.height() + 8.0) / (TOOL_H + 8.0)).floor() as usize).max(1);
+                let columns = self.tool_count().div_ceil(per).max(1) as f32;
+                let width = (TOOL_COLUMN + 8.0) * columns - 8.0;
+                let col = Rect::from_min_size(free.min, vec2(width, free.height()));
+                free = free.shrink2(vec2(width + 8.0, 0.0));
                 if self.suggestion_waiting() {
                     let row = Rect::from_min_size(free.min, vec2(free.width(), TOOL_H));
                     free.min.y = row.bottom() + 8.0;
@@ -269,6 +284,11 @@ impl App {
         let icons_only = narrow_window || full > row.width();
         let (mut x, mut y) = (row.left(), row.top());
         let mut place = |w: f32| {
+            // A column that has run out of height goes on in the next one (see `desk_room`).
+            if narrow_window && y > row.top() && y + TOOL_H > row.bottom() + 0.5 {
+                y = row.top();
+                x += TOOL_COLUMN + 8.0;
+            }
             let r = Rect::from_min_size(pos2(x, y), vec2(w, TOOL_H));
             if narrow_window {
                 y += TOOL_H + 8.0;
@@ -295,7 +315,7 @@ impl App {
         if menu {
             let label = if icons_only { "" } else { "Choose computer" };
             let r = place(if icons_only { 50.0 } else { label_w(ui, label) + 12.0 });
-            let resp = tool(ui, r, "desk-computers-menu", Icon::Desk, label, false, !self.sheet_open(), "Choose a computer: show full names and connection states");
+            let resp = tool(ui, r, "desk-computers-menu", Icon::Desk, label, false, !self.sheet_open(), "Choose computer: show full names and connection states");
             let c = pos2(r.right() - 14.0, r.center().y);
             let p = ui.painter();
             p.line_segment([c + vec2(-3.0, -1.5), c + vec2(0.0, 1.5)], Stroke::new(1.5, pal().ink2));
@@ -341,7 +361,7 @@ impl App {
         let label = if icons_only { "" } else { "Lock every screen" };
         let r = place(if icons_only { TOOL_H } else { label_w(ui, label) });
         let busy = self.busy.contains(&Job::LockAll);
-        let resp = tool(ui, r, "lock-all", Icon::Lock, label, false, !busy, "Lock this computer and every connected one");
+        let resp = tool(ui, r, "lock-all", Icon::Lock, label, false, !busy, "Lock every screen: lock this computer and every connected one");
         let resp = if icons_only { resp.on_hover_text("Lock every screen") } else { resp };
         if resp.clicked() {
             self.busy.push(Job::LockAll);
@@ -555,7 +575,7 @@ impl App {
             let job = Job::Switch { to: "here".into(), name: status.name.clone() };
             let busy = self.busy.contains(&job);
             let b = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), 38.0));
-            if button(ui, b, Id::unique("quick-switch-here"), "Switch back here", Look::Primary, !busy, Some("Bring the mouse and keyboard back to this computer")).clicked() {
+            if button(ui, b, Id::unique("quick-switch-here"), "Switch back here", Look::Primary, !busy, Some("Switch back here: bring the mouse and keyboard back to this computer")).clicked() {
                 self.busy.push(job);
                 self.link.switch("here", &status.name);
             }
@@ -750,7 +770,7 @@ impl App {
         let w = text_width(ui, label, widgets::button_font(Look::Danger)) + 26.0;
         // Its text flush with the panel's left edge.
         let b = Rect::from_min_size(pos2(c.left() - 13.0, y), vec2(w, 30.0));
-        if widgets::content_button(ui, b, Id::unique(("remove", &peer.id)), label, Look::Danger, !self.sheet_open(), Some(&format!("Remove {} (asks first)", peer.name))).clicked() {
+        if widgets::content_button(ui, b, Id::unique(("remove", &peer.id)), label, Look::Danger, !self.sheet_open(), Some(&format!("{label}: {} (asks first)", peer.name))).clicked() {
             self.removing = Some((peer.id.clone(), peer.name.clone(), now));
         }
         b.bottom() - c.top()
@@ -838,9 +858,9 @@ impl App {
     /// clipboard side by side.
     fn peer_actions(&mut self, ui: &mut Ui, c: Rect, y: f32, status: &Status, peer: &PeerStatus) -> f32 {
         let (job, label, name) = if status.controlling.as_ref() == Some(&peer.name) {
-            (Job::Switch { to: "here".into(), name: status.name.clone() }, "Switch back here", "Bring the mouse and keyboard back to this computer".to_owned())
+            (Job::Switch { to: "here".into(), name: status.name.clone() }, "Switch back here", "Switch back here: bring the mouse and keyboard back to this computer".to_owned())
         } else {
-            (Job::Switch { to: peer.id.clone(), name: peer.name.clone() }, "Switch to it", format!("Move the mouse and keyboard to {}", peer.name))
+            (Job::Switch { to: peer.id.clone(), name: peer.name.clone() }, "Switch to it", format!("Switch to it: move the mouse and keyboard to {}", peer.name))
         };
         let busy = self.busy.contains(&job);
         let b = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), 38.0));
@@ -865,7 +885,7 @@ impl App {
         }
         let job = Job::Clip { send: false, id: peer.id.clone(), name: peer.name.clone() };
         let busy = self.busy.contains(&job);
-        if widgets::content_button(ui, get, Id::unique(("quick-clip", false, &peer.id)), "Get clipboard", Look::Quiet, !busy, Some(&format!("Get {}'s clipboard", peer.name))).clicked() {
+        if widgets::content_button(ui, get, Id::unique(("quick-clip", false, &peer.id)), "Get clipboard", Look::Quiet, !busy, Some(&format!("Get clipboard: get {}'s clipboard", peer.name))).clicked() {
             self.busy.push(job);
             self.link.clip(false, &peer.id, &peer.name);
         }
