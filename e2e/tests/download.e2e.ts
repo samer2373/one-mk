@@ -150,6 +150,10 @@ for (const c of CASES.filter((x) => x.gl)) {
     await browser.emulateMedia({ reducedMotion: 'reduce' });
     await pretend(browser, c.env);
     await app.open('/');
+    // A browser with no graphics chip and no software renderer (the Firefox on a CI runner) has no WebGL to
+    // ask: the page then has no hint to give, which another test covers.
+    const webgl = await browser.evaluate<boolean>(`(function(){ try { var c = document.createElement('canvas'); return !!(c.getContext('webgl') || c.getContext('webgl2')); } catch (e) { return false; } })()`);
+    test.skip(!webgl, 'this browser has no WebGL here, so there is no graphics chip to ask');
     await detected(browser);
     check(c, await read(browser));
     await guard.check();
