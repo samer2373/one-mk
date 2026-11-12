@@ -544,12 +544,12 @@ impl Drop for Lab {
             let _ = child.kill();
             let _ = child.wait();
         }
-        if std::thread::panicking() {
-            if let Ok(entries) = std::fs::read_dir(self.root.path()) {
-                for entry in entries.flatten() {
-                    if let Ok(log) = std::fs::read_to_string(entry.path().join("daemon.log")) {
-                        eprintln!("--- {} daemon.log\n{log}", entry.path().display());
-                    }
+        if std::thread::panicking()
+            && let Ok(entries) = std::fs::read_dir(self.root.path())
+        {
+            for entry in entries.flatten() {
+                if let Ok(log) = std::fs::read_to_string(entry.path().join("daemon.log")) {
+                    eprintln!("--- {} daemon.log\n{log}", entry.path().display());
                 }
             }
         }

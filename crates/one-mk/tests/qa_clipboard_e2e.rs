@@ -14,6 +14,7 @@ fn display(node: &Node) -> String {
 }
 
 /// What a program would do on Ctrl+C: own the selection until someone else takes it.
+#[allow(clippy::zombie_processes)] // xclip stays on as the selection owner on purpose
 fn copy(node: &Node, target: &str, data: &[u8]) {
     let mut child = Command::new("xclip")
         .args(["-selection", "clipboard", "-display", &display(node), "-t", target, "-i"])
