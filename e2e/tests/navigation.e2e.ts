@@ -109,7 +109,8 @@ test('the footer links are all present and the footer brand link returns to the 
   await foot.getByRole('link', { name: 'oneMK, back to the top' }).tap();
   await expect(browser).toHaveURL(/#top$/);
   await settled(browser);
-  expect(await browser.evaluate<number>('Math.round(window.scrollY)')).toBeLessThan(5);
+  // The scroll to the top is animated; a slow computer is still on its way after the first settle.
+  await expect.poll(() => browser.evaluate<number>('Math.round(window.scrollY)'), { timeout: 15_000 }).toBeLessThan(5);
   await guard.check();
 });
 

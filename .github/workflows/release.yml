@@ -207,7 +207,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sh scripts/bundle-deb.sh target/${{ matrix.target }}/release one-mk-${{ matrix.target }}.deb
-          sudo dpkg -i one-mk-${{ matrix.target }}.deb
+          # apt installs what the package depends on (a bare dpkg -i stops at the first missing library).
+          sh scripts/apt-install.sh "$PWD/one-mk-${{ matrix.target }}.deb"
           one-mk id
       # AppImage (docs/PACKAGING.md). appimagetool is pinned by version and
       # checksum. The script runs `AppRun --version` on the AppDir before

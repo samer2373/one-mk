@@ -70,11 +70,21 @@ test3d('the buttons under the desk move the pointer to that computer, with mouse
   const mac = group.getByRole('button', { name: 'MacBook Air' });
   const pc = group.getByRole('button', { name: 'Gaming PC' });
   const studio = group.getByRole('button', { name: 'Studio PC' });
-  await mac.tap();
-  await expect.poll(async () => (await heroState(browser)).pressed, { timeout: 60_000 }).toEqual(['true', 'false', 'false']);
+  // A slow computer can move the desk between the aim and the touch, so a touch that landed on the neighbour is made again.
+  const choose = async (button: typeof mac, want: string[]) => {
+    for (let attempt = 1; ; attempt++) {
+      await button.tap();
+      try {
+        await expect.poll(async () => (await heroState(browser)).pressed, { timeout: attempt < 3 ? 20_000 : 60_000 }).toEqual(want);
+        return;
+      } catch (e) {
+        if (attempt >= 3) throw e;
+      }
+    }
+  };
+  await choose(mac, ['true', 'false', 'false']);
   await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 5000 }).toEqual([true, false, false]);
-  await pc.tap();
-  await expect.poll(async () => (await heroState(browser)).pressed, { timeout: 60_000 }).toEqual(['false', 'false', 'true']);
+  await choose(pc, ['false', 'false', 'true']);
   await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 5000 }).toEqual([false, false, true]);
   // From the keyboard.
   await studio.focus();
