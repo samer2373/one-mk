@@ -265,6 +265,20 @@ class Consistency(unittest.TestCase):
         self.mutate("installer/one-mk.iss", "RunKey = 'Software\\Microsoft\\Windows\\CurrentVersion\\Run'", "RunKey = 'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'")
         self.fails("metadata", "installer: removes the same startup entry")
 
+    def test_an_install_script_without_a_replay_floor_fails(self):
+        self.mutate("install.sh", "MIN_SEQUENCE=48\n", "MIN_SEQUENCE=soon\n")
+        self.fails("metadata", "install.sh: one MIN_SEQUENCE")
+
+    def test_a_replay_floor_above_the_release_being_published_fails(self):
+        import os
+        os.environ.update(GITHUB_WORKFLOW="release", GITHUB_RUN_NUMBER="47")
+        self.addCleanup(lambda: [os.environ.pop(name) for name in ("GITHUB_WORKFLOW", "GITHUB_RUN_NUMBER")])
+        self.fails("metadata", "MIN_SEQUENCE 48 is not above this release's sequence 47")
+
+    def test_a_release_that_does_not_number_its_update_list_by_the_run_fails(self):
+        self.mutate(".github/workflows/release.yml", 'make-update-manifest.sh release-files "$GITHUB_RUN_NUMBER"', 'make-update-manifest.sh release-files 1')
+        self.fails("metadata", "release.yml gives the update list the run number")
+
     def test_an_installer_missing_a_program_fails(self):
         self.mutate("installer/one-mk.iss", 'Source: "{#ReleaseDir}\\one-mk-wallpaper.exe"; DestDir: "{app}"\n', "")
         self.fails("metadata", "installer ships exactly the four programs")

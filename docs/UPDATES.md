@@ -24,6 +24,7 @@ refuses an ad-hoc signed app. Publishing also waits for the workspace tests
 and clippy on all three systems and the release checks. Never rebuild or
 overwrite a published release. The sequence is `GITHUB_RUN_NUMBER`, also
 compiled into release clients as a sequence floor; keep numbering monotonic.
+`install.sh` carries its own floor, `MIN_SEQUENCE`, for fresh installs; raise it with each release (docs/PACKAGING.md, "install.sh and replayed releases").
 
 A bad release is withdrawn by publishing a newer one with the repository
 variable `ONE_MK_REVOKED` (space-separated versions no updater may install

@@ -24,6 +24,7 @@ that each check here really fails on the mistake it is for.
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -535,6 +536,17 @@ def metadata(root, report):
     # Update key: the production flag and the key the installer trusts must be the same file the release signs against.
     key = read(root, "crates/one-mk/src/update_key.rs")
     report.check(re.search(r"PUBLIC_KEY: \[u8; 32\]", key) is not None and re.search(r"PRODUCTION_KEY: bool", key) is not None, "update_key.rs holds the public key and the production flag")
+
+    # install.sh refuses a signed release older than MIN_SEQUENCE (a replay). The sequence is the run
+    # number of the release workflow (make-update-manifest.sh is given $GITHUB_RUN_NUMBER), so on a
+    # release run the floor must not be above this very release, or install.sh would refuse it.
+    floor = re.findall(r"^MIN_SEQUENCE=([0-9]+)$", read(root, "install.sh"), re.M)
+    report.check(len(floor) == 1 and 1 <= int(floor[0]) < 2**63, "install.sh: one MIN_SEQUENCE, a positive plain number")
+    report.check("GITHUB_RUN_NUMBER" in read(root, ".github/workflows/release.yml") and "make-update-manifest.sh release-files \"$GITHUB_RUN_NUMBER\"" in read(root, ".github/workflows/release.yml"),
+                 "release.yml gives the update list the run number as its sequence (the number install.sh's MIN_SEQUENCE is compared with)")
+    run_number = os.environ.get("GITHUB_RUN_NUMBER", "")
+    if os.environ.get("GITHUB_WORKFLOW") == "release" and run_number.isdigit() and floor:
+        report.check(int(floor[0]) <= int(run_number), f"install.sh: MIN_SEQUENCE {floor[0]} is not above this release's sequence {run_number}")
 
 
 SECTIONS = {"versions": versions, "workflows": workflows, "artifacts": artifacts, "metadata": metadata}

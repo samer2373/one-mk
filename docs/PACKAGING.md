@@ -128,9 +128,36 @@ is exactly one file, that the list is reproducible, that bad input is refused
 and that a damaged signature never verifies. `scripts/test-install.sh` runs `install.sh`
 against fake releases (bad checksums and signatures, hostile and broken
 archives, offline, plain http, an unsupported system, repeat and read-only
-installs). The GNOME extensions are tested against stand-ins for the Shell:
+installs, and replays: a correctly signed older release is refused). The GNOME extensions are tested against stand-ins for the Shell:
 `node --test tools/gnome-wallpaper/test_production_video.mjs
 tools/gnome-wallpaper/test_pointer_extension.mjs`.
+
+### `install.sh` and replayed releases
+
+A release's signature never expires, so someone who serves the download (a
+mirror, a network in between) could hand `install.sh` an older, correctly
+signed release, for example one with a known flaw. The updater refuses that by
+its stored sequence; a fresh install has none, so `install.sh` has two guards,
+both needing the signed list (OpenSSL 3; without it the script says the
+release's age was not checked):
+
+- `MIN_SEQUENCE` near the top of `install.sh`: a signed list whose `sequence`
+  is lower is refused. The sequence is the release workflow's run number
+  (`make-update-manifest.sh release-files "$GITHUB_RUN_NUMBER"`), which only
+  grows. **Raise it in each release's pull request** to the sequence of an
+  earlier release that is still fine to install (the previous release's, shown
+  by `update-manifest.json` in its assets). It cannot name the release being
+  built, whose run number is not known yet. `check-release-consistency.py`
+  requires a plain positive number, and on the release run fails if it is above
+  that run's number (which would make `install.sh` refuse the release itself).
+- the installed oneMK's `--version` against the signed list's `version`: an
+  older release is not installed over a newer one.
+
+`ONE_MK_ALLOW_OLDER=1` skips both, for going back on purpose. The list has no
+expiry and no new field was added, so older clients and lists are unaffected.
+What this does not stop: a replay of a release between `MIN_SEQUENCE` and the
+latest on a computer with no oneMK yet, and anything on a system without
+OpenSSL 3 (macOS) where the list is not checked at all.
 
 ## macOS `.app` and `.dmg`
 

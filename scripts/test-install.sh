@@ -41,6 +41,9 @@ text = open(script).read()
 new = open(public).read().strip()
 text, count = re.subn(r"-----BEGIN PUBLIC KEY-----\n.*?\n-----END PUBLIC KEY-----", new, text, flags=re.S)
 assert count == 1
+# The fake releases are numbered 7: the floor of this copy is 5 (the real floor, a real release's number, is checked below).
+text, count = re.subn(r"^MIN_SEQUENCE=\d+$", "MIN_SEQUENCE=5", text, flags=re.M)
+assert count == 1
 open(out, "w").write(text)
 PY
 
@@ -62,8 +65,8 @@ sign() {
     local dir=$1 version=$2 sum
     sum=$(sha256sum "$dir/$file" | cut -d' ' -f1)
     (cd "$dir" && sha256sum "$file" > SHA256SUMS)
-    printf '{"assets":[{"arch":"x86_64","kind":"archive","name":"%s","os":"linux","sha256":"%s","size":%s}],"minimum_supported_version":"0.1.0","release_time":"2026-11-01T00:00:00Z","revoked":[],"sequence":7,"version":"%s"}\n' \
-        "$file" "$sum" "$(stat -c %s "$dir/$file")" "$version" > "$dir/update-manifest.json"
+    printf '{"assets":[{"arch":"x86_64","kind":"archive","name":"%s","os":"linux","sha256":"%s","size":%s}],"minimum_supported_version":"0.1.0","release_time":"2026-11-01T00:00:00Z","revoked":[],"sequence":%s,"version":"%s"}\n' \
+        "$file" "$sum" "$(stat -c %s "$dir/$file")" "${SEQ:-7}" "$version" > "$dir/update-manifest.json"
     openssl pkeyutl -sign -rawin -inkey "$scratch/test.pem" -in "$dir/update-manifest.json" -out "$dir/update-manifest.json.sig"
 }
 home=$scratch/home
@@ -305,8 +308,8 @@ first=$(snapshot)
 if run_install "$scratch/r4" && [ "$(snapshot)" = "$first" ] && [ -z "$(find "$bin" -name '.*.new.*' -o -name '.*.old.*')" ]; then
     ok "installing the same release again changes nothing and leaves nothing behind"
 else bad "a repeated install differs: $(cat "$scratch/out")"; fi
-run_install "$scratch/r3" && [ "$(installed_version)" = 0.1.33 ] && ok "an older release can be installed over a newer one by hand (install.sh does not refuse downgrades; the updater does)" \
-    || bad "installing an older release by hand: $(cat "$scratch/out")"
+run_install "$scratch/r3" && [ "$(installed_version)" = 0.1.33 ] && ok "when the installed version cannot be read (a program that does not print 'one-mk X.Y.Z'), an older release installs" \
+    || bad "installing an older release over programs without a version: $(cat "$scratch/out")"
 run_install "$scratch/r4" && [ "$(installed_version)" = 0.1.35 ] || bad "reinstalling 0.1.35: $(cat "$scratch/out")"
 run_url "file://$scratch/r4" && clean_tmp && ok "a run with TMPDIR set uses and removes its own temporary folder" || bad "TMPDIR run: $(cat "$scratch/out")"
 
@@ -351,5 +354,66 @@ rm -rf "$open_home"; mkdir -p "$open_home"
 env -i HOME="$open_home" PATH=/usr/bin:/bin ONE_MK_RELEASE_URL="file://$scratch/r-open" TMPDIR="$scratch/tmp" dash "$scratch/install.sh" > "$scratch/out" 2>&1
 sleep 0.5
 [ ! -e "$open_home/opened" ] && grep -q "Open oneMK with 'one-mk-app'" "$scratch/out" && ok "without a desktop session nothing is opened and the message says how" || bad "no-desktop run: $(cat "$scratch/out")"
+
+# ---- Replays: a correctly signed release that is older than it should be ----
+# 1. Below the script's floor (MIN_SEQUENCE, 5 in the test copy): refused, whatever is installed.
+replay_home=$scratch/home-replay; mkdir -p "$replay_home"
+replay() {   # replay RELEASE_DIR [NAME=VALUE...]: one run in the replay home
+    local dir=$1; shift
+    env -i HOME="$replay_home" PATH=/usr/bin:/bin ONE_MK_RELEASE_URL="file://$dir" TMPDIR="$scratch/tmp" "$@" dash "$scratch/install.sh" > "$scratch/out" 2>&1
+}
+SEQ=4 make_release "$scratch/seq4" 1.0.0
+if replay "$scratch/seq4"; then bad "a signed release below the floor was installed on a fresh computer"
+elif grep -q "older oneMK release (number 4)" "$scratch/out" && [ ! -e "$replay_home/.local/bin/one-mk" ]; then
+    ok "a replayed signed release below the floor is refused on a fresh install"
+else bad "below the floor: $(cat "$scratch/out")"; fi
+SEQ=5 make_release "$scratch/seq5" 1.0.0
+replay "$scratch/seq5" && [ -x "$replay_home/.local/bin/one-mk" ] && ok "a release exactly at the floor installs" || bad "at the floor: $(cat "$scratch/out")"
+rm -rf "$replay_home/.local"
+SEQ=1000000000000000000000 make_release "$scratch/seqbig" 1.0.0
+replay "$scratch/seqbig" && ok "a very long sequence number is compared as text, without overflow, and installs" || bad "long sequence: $(cat "$scratch/out")"
+rm -rf "$replay_home/.local"
+SEQ=0004 make_release "$scratch/seq0004" 1.0.0
+if replay "$scratch/seq0004"; then bad "a sequence written with leading zeros slipped under the floor"; else ok "leading zeros do not slip under the floor"; fi
+# A list with no sequence at all: refused.
+make_release "$scratch/noseq" 1.0.0
+sed -i 's/"sequence":7,//' "$scratch/noseq/update-manifest.json"
+openssl pkeyutl -sign -rawin -inkey "$scratch/test.pem" -in "$scratch/noseq/update-manifest.json" -out "$scratch/noseq/update-manifest.json.sig"
+if replay "$scratch/noseq"; then bad "a signed list without a sequence was installed"; elif grep -q "no release sequence" "$scratch/out"; then ok "a signed list without a sequence is refused"; else bad "no sequence: $(cat "$scratch/out")"; fi
+# ONE_MK_ALLOW_OLDER installs it on purpose.
+replay "$scratch/seq4" ONE_MK_ALLOW_OLDER=1 && [ -x "$replay_home/.local/bin/one-mk" ] && ok "ONE_MK_ALLOW_OLDER=1 installs a release below the floor on purpose" || bad "ALLOW_OLDER below the floor: $(cat "$scratch/out")"
+rm -rf "$replay_home/.local"
+# Without OpenSSL 3 the sequence cannot be checked (the list is not authenticated): the message says so.
+replay "$scratch/seq4" PATH="$scratch/libressl:/usr/bin:/bin" && grep -q "neither was whether this release is older" "$scratch/out" \
+    && ok "without OpenSSL 3 the missing replay check is said out loud" || bad "no-OpenSSL message: $(cat "$scratch/out")"
+rm -rf "$replay_home/.local"
+
+# 2. Older than the oneMK that is installed (the version is the signed list's): refused unless asked for.
+version_release() {   # version_release DIR VERSION [SEQUENCE]: its one-mk prints "one-mk VERSION" for --version
+    SEQ=${3:-7} make_release "$1" "$2"
+    local stage=$scratch/stage-v$RANDOM
+    mkdir -p "$stage" && tar xzf "$1/$file" -C "$stage"
+    printf '#!/bin/sh\n[ "$1" = --version ] && { echo "one-mk %s"; exit 0; }\nexit 0\n' "$2" > "$stage/one-mk-$target/one-mk"
+    chmod 755 "$stage/one-mk-$target/one-mk"
+    (cd "$stage" && tar czf "$1/$file" "one-mk-$target")
+    rm -rf "$stage"
+    SEQ=${3:-7} sign "$1" "$2"
+}
+version_release "$scratch/v-new" 1.10.0 20
+version_release "$scratch/v-old" 1.9.9 20
+version_release "$scratch/v-same" 1.10.0 20
+replay "$scratch/v-new" && [ "$("$replay_home/.local/bin/one-mk" --version)" = "one-mk 1.10.0" ] && ok "a release whose program prints its version installs" || bad "v-new: $(cat "$scratch/out")"
+before=$(sha256sum "$replay_home/.local/bin/one-mk")
+if replay "$scratch/v-old"; then bad "1.9.9 was installed over 1.10.0"
+elif grep -q "oneMK 1.10.0 is installed and this release is the older 1.9.9" "$scratch/out" && [ "$before" = "$(sha256sum "$replay_home/.local/bin/one-mk")" ]; then
+    ok "an older release is refused over a newer installed one (1.9.9 over 1.10.0: compared by number, not by text)"
+else bad "downgrade: $(cat "$scratch/out")"; fi
+replay "$scratch/v-same" && ok "the same version installs again" || bad "same version: $(cat "$scratch/out")"
+replay "$scratch/v-old" ONE_MK_ALLOW_OLDER=1 && [ "$("$replay_home/.local/bin/one-mk" --version)" = "one-mk 1.9.9" ] && grep -q "because ONE_MK_ALLOW_OLDER is set" "$scratch/out" \
+    && ok "ONE_MK_ALLOW_OLDER=1 goes back to an older release on purpose and says so" || bad "allowed downgrade: $(cat "$scratch/out")"
+replay "$scratch/v-new" && ok "a newer release installs over an older one" || bad "upgrade: $(cat "$scratch/out")"
+# The real script's floor is a plain number (a real release's sequence).
+floor=$(sed -n 's/^MIN_SEQUENCE=\([0-9][0-9]*\)$/\1/p' "$root/install.sh")
+[ -n "$floor" ] && [ "$floor" -ge 1 ] && ok "install.sh has a numeric MIN_SEQUENCE ($floor)" || bad "install.sh has no numeric MIN_SEQUENCE"
 
 [ "$fail" = 0 ] && echo "all install.sh checks passed" || { echo "some install.sh checks failed"; exit 1; }
