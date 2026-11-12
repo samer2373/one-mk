@@ -182,6 +182,14 @@ fn lock_all_locks_every_screen_and_says_so() {
     let refused = Lab::run(&alpha, &["broadcast", "on"]);
     assert!(refused.failed().contains("locked"), "{refused:?}");
     assert!(lab.status(&alpha).broadcast.is_empty());
+    // So is switching to another computer, in the same words (what is typed at a lock screen
+    // must not be captured and sent elsewhere); coming home is not refused.
+    for args in [&["switch", "beta"][..], &["switch", "next"]] {
+        let switched = Lab::run(&alpha, args);
+        assert!(switched.failed().contains("this computer's screen is locked; unlock it first"), "{args:?}: {switched:?}");
+    }
+    assert!(lab.status(&alpha).controlling.is_none());
+    assert!(Lab::run(&alpha, &["switch", "here"]).ok());
     // Settings of lock sync are remembered and shown.
     Lab::ok(&alpha, &["lock-sync", "on"]);
     assert!(Lab::ok(&alpha, &["lock-sync"]).contains("on"));

@@ -16,12 +16,12 @@ of the crate's tests; see `tests/live_wallpaper.rs`). Slow ones are `#[ignore]` 
 
 | File | Covers |
 |---|---|
-| `qa_pairing_e2e.rs` | pairing (matching codes, wrong code, refusal, garbage answers, EOF, nothing listening, re-pairing, no duplicate), invitations (burned after one use, expiry, tampered or malformed link, host says no, one open invitation per computer), no false "it removed this computer" after a fresh pairing |
+| `qa_pairing_e2e.rs` | pairing (matching codes, wrong code, refusal, garbage answers, EOF, nothing listening, re-pairing, no duplicate), invitations (burned after one use, expiry, tampered or malformed link, host says no, one open invitation per computer), no false "it removed this computer" after a fresh pairing, and the timeouts in milliseconds (no answer to the codes, the other computer going quiet after the codes, a peer that never takes part, nothing listening: see "Timeouts under test") |
 | `qa_daemon_e2e.rs` | layout on both computers (every side, offsets, Ctrl/Cmd swap, restart), rename and forget, switch/takeback/lock-pointer/broadcast, controller or controlled computer killed (`kill -9`), second daemon on one home, `stop`, SIGTERM, stale socket, status and doctor text and JSON |
 | `qa_send_e2e.rs` | `send`: small, zero-byte, binary, repeated names, folders, 16 odd file names, names that cannot be sent, folder vs file name clash, 200 MB intact, status progress, cancel (SIGINT) and resume, receiver killed mid-transfer and resume, unreachable receiver, unreadable file, read-only downloads, forgotten sender |
 | `qa_clipboard_e2e.rs` | clipboard text and image both ways, formats switched off, size limit, fetch refused then allowed, unknown computer, `--no-clipboard`, pointer-follow push, no echo back, history list/show/copy/delete/clear (JSON) |
 | `qa_hooks_profiles_e2e.rs` | hooks on enter/leave/connect/disconnect with their environment, timeout kill, no shell by default, hostile computer name in shell mode, layout profiles (save/use/list/delete/auto, reaching both computers), `bench --peer` |
-| `qa_resilience_e2e.rs` | SIGSTOP/SIGCONT stall and wake (idle, while controlling, during a send), 60 commands at once on one home, 1200 files from two senders at once, `lock-all`, power-cut restarts in both orders |
+| `qa_resilience_e2e.rs` | SIGSTOP/SIGCONT stall and wake (idle, while controlling, during a send), 60 commands at once on one home, 1200 files from two senders at once, `lock-all` (and `switch` and `broadcast` refused on a locked screen), power-cut restarts in both orders |
 | `qa_cli_surface.rs` | every command and subcommand `--help` (crawled) against `docs/COMMANDS.md`, every error path (no daemon, unknown computer, bad arguments: exit 2), JSON validity, update CLI refusals, bench, every settings command (sticks, shows, applies live, survives restart) and every refused one (file untouched), old/hand-edited/damaged `settings.toml` and `devices.toml` and identity, install/integrate/uninstall in a sandboxed home |
 
 ## Commands
@@ -33,12 +33,12 @@ of the crate's tests; see `tests/live_wallpaper.rs`). Slow ones are `#[ignore]` 
 | `stop` | `update.rs` | stop, stop when not running, SIGTERM, kill -9 then restart | |
 | `drag` | `drag.rs` 5 | `--zone` bounds, `--on --off` conflict, "not available" text on Wayland | edge drops need X11/Windows/macOS: not testable here |
 | `partials` | `qa_cli_fixes`, `transfer.rs` | none left after resume; one kept after cancel | `--clear` with a running transfer is unit only |
-| `send` | `transfer.rs` 32, `send.rs` 8, `qa_cli_fixes`, `qa_regressions` (Ctrl+C) | see `qa_send_e2e.rs` | disk-full receiver (needs a small filesystem) is unit only |
+| `send` | `transfer.rs` 32, `send.rs` 8, `qa_cli_fixes`, `qa_regressions` (Ctrl+C) | see `qa_send_e2e.rs` | a disk that fills half way is a unit test (`transfer::tests::a_disk_that_fills_up_half_way...`, a writer that runs out of room: message, partial kept, room given back, resume); a real full filesystem is not tried |
 | `clipboard` + `history` | `clipctl.rs`, `clip.rs`, `history.rs`, `scripts/test-clipboard-history.py` | settings sticks/shows/applies; history via CLI | sensitive-content mark and password-manager apps need a real X client that sets `x-kde-passwordManagerHint`: unit only; Wayland, macOS, Windows clipboards: owner |
 | `clip-send`, `clip-get` | `clipctl.rs` 9 | text, image, refusals | |
 | `notify` | `notify.rs` 8 | set/show | desktop notifications need a session bus: owner |
 | `invite`, `join` | `invite.rs` 16, `invitation_cli`, `pairing_layout_cli`, `scripts/test-invite-security.py` | see `qa_pairing_e2e.rs` | QR code rendering is not asserted |
-| `pair` | `pairing_layout_cli` (numeric and invitation, layout negotiation), `pair.rs` | success, wrong code, refusal, EOF, unreachable, repeat | the 120 s answer timeout is an `#[ignore]` test |
+| `pair` | `pairing_layout_cli` (numeric and invitation, layout negotiation), `pair.rs` | success, wrong code, refusal, EOF, unreachable, repeat | none: the 120 s answer timeout and the 30 s step timeout are tested in milliseconds (see "Timeouts under test") |
 | `devices`, `id` | `main.rs`, `qa_cli_fixes` | damaged files, odd names | |
 | `status` | `ctl/status.rs` 18 (rendering) | text and decoded, with peers, control, restarts | |
 | `takeback` | `app/tests` | hand-over, takeback, nothing to take back | the `Ctrl+Alt+Shift+Esc` emergency chord needs a real keyboard: owner |
@@ -80,6 +80,31 @@ of the crate's tests; see `tests/live_wallpaper.rs`). Slow ones are `#[ignore]` 
 | The "unknown setting" warning for a settings file with a key this version does not know was printed on every read of the file: 14 times by one `doctor`, again on every daemon reload; and `eprintln!` panics when stderr is a closed pipe. | Said once per process, written without the panicking macro (`settings.rs`, `say_once`). | `qa_cli_surface::old_hand_edited_and_damaged_settings...` |
 | `one-mk run --port 80` as a normal user said "UDP port 80 is busy; is one-mk already running?". | Permission denied is said as such (`app.rs`, `bind`). | `app::tests::a_port_that_needs_more_rights_is_not_called_busy` |
 | `scripts/reliability-soak.sh` reported FAIL after a run with no failures at all (`${#FAILS[@]}` on an empty array under `set -u`). | Decided from `failures.log` instead. | A 1-minute, 3-computer soak now ends in PASS. |
+
+## Timeouts under test
+
+Pairing waits 30 s per step (dialing, each message of the code agreement) and 120 s for a
+person to answer. Waiting that long in a test is slow, so a **debug build** reads the
+environment variables `ONE_MK_TEST_PAIR_STEP_MS` and `ONE_MK_TEST_PAIR_ANSWER_MS` (a positive
+number of milliseconds; anything else is ignored). A release build never reads them
+(`one_mk_net::test_timeout`), so no shipped build can be made to give up sooner, and the defaults
+and the messages ("no answer within 120 s") are exactly what they were. The same step time is a
+parameter of `Pairing::start_within`, which the unit tests in `crates/net/src/pairing.rs` use
+without touching the environment. The disk-full receiver has a test-only writer
+(`transfer::fault`) that runs out of room after a number of bytes and fails with ENOSPC, as a
+real disk does half way through a write.
+
+## The window's click-through flows
+
+`crates/app/src/app/frame_tests/qa*.rs` press what a person presses in the headless window
+(Keys: key selection, press-a-key, the list, no output and reset, per-keyboard rules and the
+keyboard list's three failure notes, the mouse's buttons, pointer and scrolling; layout
+profiles and the Wi-Fi they come on by; clipboard history reveal, copy and clear; the Wallpaper
+page with the helper unavailable and available; the update pill and install in every state;
+Settings reaching `settings.toml` through the real `one-mk`; first-run setup and the permission
+guide) and read back what the window shows and which `one-mk` command or daemon request it
+made. `one-mk` is a script that writes down its calls and can be told to fail; the daemon is a
+socket that writes down its requests. Neither can touch a real oneMK, login item or desktop.
 
 ## Not verifiable on this machine
 

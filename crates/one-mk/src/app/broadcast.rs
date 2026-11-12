@@ -286,7 +286,7 @@ impl App {
             return answer(Some(reply), self.no_targets());
         };
         if self.lock_sync.is_locked() {
-            return answer(Some(reply), "error this computer's screen is locked; unlock it first\n".into());
+            return answer(Some(reply), super::SCREEN_LOCKED.into());
         }
         // The person here wants this computer's mouse and keyboard: whoever
         // controls this computer lets go first (as for `one-mk switch`).

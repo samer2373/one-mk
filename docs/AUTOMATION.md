@@ -88,6 +88,13 @@ Locking uses logind on Linux, `LockWorkStation` on Windows and the login window 
 macOS (where no supported lock call exists, `lock-all` says this Mac couldn't be
 locked instead of pretending). Windows and macOS are **experimental**.
 
+While this computer's screen is locked, `one-mk switch` to another computer (and the
+jump and next shortcuts, which are the same request) and `one-mk broadcast on` are both
+refused with "this computer's screen is locked; unlock it first": starting either one
+captures this computer's keyboard and mouse, and what is typed at a lock screen (the
+password) must never be sent to another computer. `one-mk switch here` and `takeback`
+always work.
+
 ## Media keys
 
 Play/pause, stop, next and previous track, volume and mute, brightness (and
