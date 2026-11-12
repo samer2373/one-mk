@@ -510,6 +510,7 @@ fn the_keyboard_list_says_why_it_is_empty_or_failed() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn on_a_desktop_that_cannot_change_its_own_keys_the_switch_says_so() {
     // Linux: nobody paired, so the page explains why the rule has no effect here.
     let mut win = Win::light(1200.0, 780.0);

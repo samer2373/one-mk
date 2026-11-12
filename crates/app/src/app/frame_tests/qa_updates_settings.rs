@@ -335,6 +335,16 @@ fn missing(which: &[&str]) -> Status {
     status
 }
 
+/// On a Mac the permission guide opens by itself when a permission is missing; these tests want to start
+/// from the window without it, then open it the way a person would (the button), so close it first.
+fn dismiss_the_guide_a_mac_opens_by_itself(win: &mut Win) {
+    win.frames(3);
+    if win.app.guide.active() {
+        win.click("Close this guide");
+        win.frames(60);
+    }
+}
+
 const NEEDS_ACCESSIBILITY: &str = "one-mk needs Accessibility permission to share this Mac's mouse and keyboard.";
 const NEEDS_INPUT_MONITORING: &str = "one-mk needs Input Monitoring permission to send this Mac's mouse and keyboard.";
 
@@ -342,6 +352,7 @@ const NEEDS_INPUT_MONITORING: &str = "one-mk needs Input Monitoring permission t
 fn a_missing_permission_is_said_on_the_desk_and_in_health_and_goes_away_when_given() {
     let mut win = Win::light(1200.0, 780.0);
     win.status(Some(missing(&[NEEDS_ACCESSIBILITY])));
+    dismiss_the_guide_a_mac_opens_by_itself(&mut win);
     assert!(win.has_text("Waiting for this computer's permission"), "{}", win.texts_joined());
     assert!(win.app.health_trouble(), "the bar points at Health");
     win.go(Tab::Health);
@@ -361,6 +372,7 @@ fn a_missing_permission_is_said_on_the_desk_and_in_health_and_goes_away_when_giv
 fn the_permission_guide_walks_both_permissions_and_leaves_when_both_are_given() {
     let mut win = Win::light(1200.0, 780.0);
     win.status(Some(missing(&[NEEDS_ACCESSIBILITY])));
+    dismiss_the_guide_a_mac_opens_by_itself(&mut win);
     win.go(Tab::Health);
     let check = crate::view::Check {
         id: "input".into(),
@@ -403,6 +415,7 @@ fn a_live_missing_permission_line_has_the_same_open_guide_button_as_a_check() {
     for line in [NEEDS_ACCESSIBILITY, NEEDS_INPUT_MONITORING] {
         let mut win = Win::light(1200.0, 780.0);
         win.status(Some(missing(&[line])));
+        dismiss_the_guide_a_mac_opens_by_itself(&mut win);
         win.go(Tab::Health);
         win.send(Event::Doctor(Ok(vec![])));
         win.frames(2);

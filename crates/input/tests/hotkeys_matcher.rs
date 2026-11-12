@@ -73,8 +73,10 @@ fn shortcut_text_never_panics_and_what_parses_prints_and_parses_again() {
 
 #[test]
 fn chords_mean_what_the_documentation_says() {
-    for (text, label) in [("ctrl+alt+1", "Ctrl+Alt+1"), ("CTRL + ALT + PageDown", "Ctrl+Alt+PageDown")] {
-        assert_eq!(chord(text).label(), label, "{text}");
+    // A Mac's keycaps are called Control and Option.
+    let (ctrl, alt) = if cfg!(target_os = "macos") { ("Control", "Option") } else { ("Ctrl", "Alt") };
+    for (text, label) in [("ctrl+alt+1", format!("{ctrl}+{alt}+1")), ("CTRL + ALT + PageDown", format!("{ctrl}+{alt}+PageDown"))] {
+        assert_eq!(chord(text).label(), label.as_str(), "{text}");
     }
     assert_eq!(chord("cmd+1"), chord("super+1"));
     assert_eq!(chord("option+1"), chord("alt+1"));

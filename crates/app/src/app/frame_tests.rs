@@ -502,7 +502,9 @@ pub(super) fn label_not_in_name(win: &Win) -> Vec<String> {
             let word = t.text.trim().to_lowercase();
             let letters = word.chars().filter(|ch| ch.is_alphabetic()).count();
             // Painted wholly inside the control, readable, not shortened with an ellipsis.
-            if letters >= 2 && !word.contains('…') && !word.contains("ctrl") && word != "selected" && !word.contains('⌘') && c.rect.contains_rect(t.rect.shrink(0.5)) && t.clip.intersects(c.rect) && !name.contains(&word) {
+            // A shortcut painted on a button ("Ctrl+Alt+P", "Control+Option+P" on a Mac) is its value, not its label.
+            let chord = word.contains("ctrl") || (word.contains('+') && ["control", "alt", "option", "shift", "super", "win"].iter().any(|m| word.contains(m)));
+            if letters >= 2 && !word.contains('…') && !chord && word != "selected" && !word.contains('⌘') && c.rect.contains_rect(t.rect.shrink(0.5)) && t.clip.intersects(c.rect) && !name.contains(&word) {
                 out.push(format!("{:?} {:?} has {:?} painted on it", c.role, c.name, t.text));
                 break;
             }

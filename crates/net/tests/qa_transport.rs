@@ -317,7 +317,13 @@ async fn relay(to: std::net::SocketAddr) -> Relay {
     tokio::spawn(async move {
         let mut client = None;
         let mut buf = vec![0u8; 65536];
-        while let Ok((n, from)) = socket.recv_from(&mut buf).await {
+        loop {
+            // Windows reports an earlier send to a closed port as an error on the next receive.
+            let (n, from) = match socket.recv_from(&mut buf).await {
+                Ok(got) => got,
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => continue,
+                Err(_) => break,
+            };
             if !flag.load(Ordering::SeqCst) {
                 continue;
             }
@@ -397,9 +403,17 @@ async fn stalled_handshakes_from_one_address_are_limited_and_the_limit_lifts() {
     let hang = socket.local_addr().unwrap();
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65536];
-        while let Ok((n, from)) = socket.recv_from(&mut buf).await {
-            if from != server_addr {
-                let _ = socket.send_to(&buf[..n], server_addr).await;
+        loop {
+            match socket.recv_from(&mut buf).await {
+                Ok((n, from)) => {
+                    if from != server_addr {
+                        let _ = socket.send_to(&buf[..n], server_addr).await;
+                    }
+                }
+                // Windows reports an earlier send to a closed port (a stalled client that has gone) as an
+                // error on the next receive: that is not the end of the relay.
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => continue,
+                Err(_) => break,
             }
         }
     });
