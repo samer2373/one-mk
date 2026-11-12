@@ -472,33 +472,28 @@ impl Lab {
         if !have("Xvfb") || !have("xclip") {
             return false;
         }
-        let first = 300 + u32::from(node.port) % 500;
-        for attempt in 0..40 {
-            let number = 300 + (first - 300 + attempt * 7) % 500;
-            let socket = format!("/tmp/.X11-unix/X{number}");
-            if Path::new(&socket).exists() || Path::new(&format!("/tmp/.X{number}-lock")).exists() {
-                continue;
-            }
-            let mut child = Command::new("Xvfb")
-                .args([&format!(":{number}"), "-screen", "0", "640x480x24", "-nolisten", "tcp"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .unwrap();
-            let up = (0..50).any(|_| {
-                std::thread::sleep(Duration::from_millis(100));
-                child.try_wait().unwrap().is_some() || Path::new(&socket).exists()
-            });
-            if up && child.try_wait().unwrap().is_none() {
-                self.extra.push(child);
-                node.env.push(("DISPLAY".into(), format!(":{number}")));
-                return true;
-            }
+        // The server picks its own free display number (`-displayfd`), so two test processes starting
+        // at once can never both believe they own the same one.
+        let mut child = Command::new("Xvfb")
+            .args(["-displayfd", "1", "-screen", "0", "640x480x24", "-nolisten", "tcp"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        let out = child.stdout.take().unwrap();
+        // Xvfb writes the number once it is ready to accept clients, or exits without writing.
+        let read = std::io::BufRead::read_line(&mut std::io::BufReader::new(out), &mut line);
+        let number = line.trim().parse::<u32>().ok().filter(|_| read.is_ok());
+        let Some(number) = number else {
             let _ = child.kill();
             let _ = child.wait();
-        }
-        panic!("no free X display number");
+            panic!("Xvfb did not report a display number");
+        };
+        self.extra.push(child);
+        node.env.push(("DISPLAY".into(), format!(":{number}")));
+        true
     }
 
     /// Pairs two computers over loopback with `pair --machine`, both answering `yes`.
