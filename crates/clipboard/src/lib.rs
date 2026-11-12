@@ -73,6 +73,21 @@ impl ClipData {
             && self.html.as_ref().is_none_or(String::is_empty)
             && self.png.as_ref().is_none_or(Vec::is_empty)
     }
+
+    /// Drops the empty formats that sit next to one with something in it: an
+    /// empty text beside a picture (or beside HTML) is a leftover of how an
+    /// app copied, not a thing to carry, and it would otherwise hide the
+    /// picture from the platform's clipboard (which holds one format).
+    /// Content that is empty throughout is left as it is.
+    pub fn without_empty_formats(mut self) -> Self {
+        let full = |s: &Option<String>| s.as_ref().is_some_and(|s| !s.is_empty());
+        if full(&self.text) || full(&self.html) || self.png.as_ref().is_some_and(|p| !p.is_empty()) {
+            self.text = self.text.filter(|t| !t.is_empty());
+            self.html = self.html.filter(|h| !h.is_empty());
+            self.png = self.png.filter(|p| !p.is_empty());
+        }
+        self
+    }
 }
 
 /// What the user lets us share, applied when reading the clipboard (and
@@ -341,13 +356,29 @@ impl Raw {
         self
     }
 
+    /// Text or HTML with something in it (an empty one is a leftover, see
+    /// [`ClipData::without_empty_formats`]).
+    fn has_words(&self) -> bool {
+        self.text.as_ref().is_some_and(|t| !t.is_empty()) || self.html.as_ref().is_some_and(|h| !h.is_empty())
+    }
+
     /// When text or HTML is present, drops the image: apps like Excel put a
     /// rendered bitmap next to the text, which is huge and would be encoded
     /// (or make the snapshot too large) for nothing. Writing prefers text
-    /// over an image anyway.
+    /// over an image anyway. An empty text or HTML does not count: next to
+    /// a picture it is dropped instead, so that the picture is what was copied.
     fn prefer_text(mut self) -> Self {
-        if self.text.is_some() || self.html.is_some() {
+        if self.has_words() {
             self.image = None;
+        }
+        self.without_empty_formats()
+    }
+
+    /// As [`ClipData::without_empty_formats`].
+    fn without_empty_formats(mut self) -> Self {
+        if self.has_words() || self.image.is_some() {
+            self.text = self.text.filter(|t| !t.is_empty());
+            self.html = self.html.filter(|h| !h.is_empty());
         }
         self
     }
@@ -520,7 +551,8 @@ impl Backend {
                 }
                 // Text wins over an image (see `Raw::prefer_text`), so don't
                 // even fetch a possibly huge bitmap (an Excel range).
-                let image = if !filter.image || text.is_some() || html.is_some() {
+                let words = [&text, &html].into_iter().any(|s| s.as_ref().is_some_and(|s| !s.is_empty()));
+                let image = if !filter.image || words {
                     None
                 } else {
                     handle.get_image().ok().and_then(|i| {
@@ -538,6 +570,7 @@ impl Backend {
     /// HTML), so we choose: an image when there is no text, else HTML
     /// with its text, else text.
     fn write(&mut self, raw: Raw) -> Result<()> {
+        let raw = raw.without_empty_formats();
         match self {
             Backend::Memory(m) => {
                 let raw = match raw {
@@ -672,6 +705,7 @@ impl Worker {
                         let _ = reply.send(r);
                     }
                     Cmd::Write { data, origin, record, concealed, reply } => {
+                        let data = data.without_empty_formats();
                         let saved = (record && !concealed).then(|| Arc::new(data.clone()));
                         let r = self.write(data);
                         if concealed && let Ok(digest) = &r {

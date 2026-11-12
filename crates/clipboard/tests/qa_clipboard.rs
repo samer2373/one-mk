@@ -376,6 +376,59 @@ async fn an_empty_piece_of_text_is_content_to_the_clipboard_but_not_to_the_sende
     );
 }
 
+/// Some apps and the platform's own text read leave an empty text (or HTML) next to a copied picture. That
+/// is no text: the picture is what was copied, and it must be carried.
+#[tokio::test]
+async fn an_empty_text_next_to_a_picture_does_not_drop_the_picture() {
+    let (clipboard, memory) = Clipboard::memory();
+    let picture = rgba(5, 4, 3);
+    for (text, html) in [(Some(""), None), (None, Some("")), (Some(""), Some(""))] {
+        memory.set(Raw {
+            text: text.map(Into::into),
+            html: html.map(Into::into),
+            image: Some(picture.clone()),
+            concealed: false,
+        });
+        let Read::Changed { digest, data } = clipboard.read(vec![]).await.unwrap() else { panic!("expected the picture") };
+        assert_eq!(decode_png(data.png.as_ref().expect("the picture is kept")).unwrap(), picture);
+        assert!(data.text.is_none() && data.html.is_none(), "the empty companions are not carried: {data:?}");
+        assert!(!data.has_no_content());
+        assert_eq!(clipboard.digest().await.unwrap(), Some(digest));
+    }
+    // A text that says something still wins over the picture, with or without an empty HTML beside it.
+    memory.set(Raw { text: Some("cells".into()), html: Some(String::new()), image: Some(picture), concealed: false });
+    let Read::Changed { data, .. } = clipboard.read(vec![]).await.unwrap() else { panic!() };
+    assert_eq!(data.text.as_deref(), Some("cells"));
+    assert!(data.png.is_none());
+}
+
+/// The other direction: a picture that arrives with an empty text (a peer from before this was fixed sends one)
+/// is put on the clipboard as a picture, and reading it back is no new copy (no loop between two computers).
+#[tokio::test]
+async fn a_picture_with_an_empty_text_from_a_peer_is_written_as_a_picture_and_is_no_loop() {
+    let (clipboard, memory) = Clipboard::memory();
+    let picture = rgba(6, 3, 8);
+    let png = encode_png(&picture).unwrap();
+    for (text, html) in [(Some(""), None), (None, Some("")), (Some(""), Some(""))] {
+        let data = ClipData { text: text.map(Into::into), html: html.map(Into::into), png: Some(png.clone()) };
+        let written = clipboard.write(data).await.unwrap();
+        assert_eq!(memory.get().image.as_ref(), Some(&picture), "the picture is on the clipboard");
+        assert!(memory.get().text.is_none() && memory.get().html.is_none());
+        assert!(matches!(clipboard.read(vec![written]).await.unwrap(), Read::Unchanged(d) if d == written));
+        assert_eq!(clipboard.digest().await.unwrap(), Some(written));
+        // The same picture copied here by a person is the same content: no echo back to the peer.
+        memory.set(Raw { text: Some(String::new()), image: Some(picture.clone()), ..Raw::default() });
+        assert!(matches!(clipboard.read(vec![written]).await.unwrap(), Read::Unchanged(d) if d == written));
+        memory.set_text("something else");
+    }
+    // An empty HTML next to a real text is no HTML either: the text goes out as plain text.
+    clipboard.write(ClipData { text: Some("hello".into()), html: Some(String::new()), png: None }).await.unwrap();
+    assert_eq!((memory.get().text.as_deref(), memory.get().html), (Some("hello"), None));
+    // What is empty on its own stays as it was (see above): it is a format that is present.
+    clipboard.write(ClipData { text: Some(String::new()), ..ClipData::default() }).await.unwrap();
+    assert_eq!(memory.get().text.as_deref(), Some(""));
+}
+
 // ------------------------------------------------------------------ history
 
 #[test]

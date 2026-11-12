@@ -538,6 +538,8 @@ impl ClipSync {
         }
         // Whatever is left is formats we don't take: not worth reading.
         let _ = recv.stop(0u32.into());
+        // An older peer sends the empty text it read next to a picture: that is no text.
+        let data = data.without_empty_formats();
         if data.has_no_content() {
             return Ok(Received::Nothing);
         }
