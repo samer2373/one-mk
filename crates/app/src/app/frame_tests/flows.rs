@@ -20,12 +20,15 @@ fn every_page_has_its_shortcut_and_its_tab_in_the_bar() {
     let mut win = Win::light(1200.0, 780.0);
     win.status(Some(two()));
     for (tab, name) in [(Tab::Arrange, "Arrange"), (Tab::Wallpaper, "Wallpaper"), (Tab::Files, "Clipboard & files"), (Tab::Keys, "Keys & mouse"), (Tab::Health, "Health"), (Tab::Settings, "Settings"), (Tab::Desk, "Desk")] {
+        eprintln!("going to the {name} page");
         win.go(tab);
+        eprintln!("on the {name} page");
         let bar = win.find(name).unwrap_or_else(|| panic!("no tab {name}"));
         assert_eq!(bar.role, accesskit::Role::Tab);
     }
     // Ctrl+, is Settings as everywhere.
     win.go(Tab::Desk);
+    eprintln!("pressing Ctrl+,");
     win.shortcut(Key::Comma);
     win.settle();
     assert_eq!(win.tab(), Tab::Settings);
