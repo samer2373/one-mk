@@ -356,6 +356,7 @@ fn a_missing_permission_is_said_on_the_desk_and_in_health_and_goes_away_when_giv
     assert!(win.has_text("Waiting for this computer's permission"), "{}", win.texts_joined());
     assert!(win.app.health_trouble(), "the bar points at Health");
     win.go(Tab::Health);
+    win.health_check_ends();
     win.send(Event::Doctor(Ok(vec![])));
     assert!(
         win.has_text("Allow Accessibility in System Settings to share this Mac's mouse and keyboard."),
@@ -374,6 +375,7 @@ fn the_permission_guide_walks_both_permissions_and_leaves_when_both_are_given() 
     win.status(Some(missing(&[NEEDS_ACCESSIBILITY])));
     dismiss_the_guide_a_mac_opens_by_itself(&mut win);
     win.go(Tab::Health);
+    win.health_check_ends();
     let check = crate::view::Check {
         id: "input".into(),
         title: "Permissions".into(),
@@ -417,6 +419,7 @@ fn a_live_missing_permission_line_has_the_same_open_guide_button_as_a_check() {
         win.status(Some(missing(&[line])));
         dismiss_the_guide_a_mac_opens_by_itself(&mut win);
         win.go(Tab::Health);
+        win.health_check_ends();
         win.send(Event::Doctor(Ok(vec![])));
         win.frames(2);
         assert!(win.has_text("Open guide"), "{line}: {}", win.texts_joined());

@@ -190,6 +190,17 @@ impl Win {
         self.frames(45);
     }
 
+    /// Opening Health starts a real check on a thread (no daemon here, so it ends in an error); a slow
+    /// computer can deliver its result after a test has sent its own, and until it does the window's
+    /// "Check again" and "Open guide" buttons are off. Waits for it (at most 30 s) so what a test sends next is last.
+    pub fn health_check_ends(&mut self) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while self.app.busy.contains(&crate::daemon::Job::Doctor) && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            self.frames(1);
+        }
+    }
+
     /// Files let go over the window, at the pointer.
     pub fn drop_files(&mut self, files: &[PathBuf]) {
         self.dropped = files.iter().map(|f| std::sync::Arc::new(Dropped(f.clone())) as egui::DroppedFileHandle).collect();
