@@ -53,8 +53,10 @@ set back from the bounding box) minus:
 | probe | `learn` is not `off`, the side doesn't wrap, and an online computer's place is a guess | released at once where it is (a wall), and the push counted |
 
 Nothing extra is armed while the pointer is locked to this computer
-(`lock-pointer on`) or while a peer controls this computer. A capture that
-was already on its way when that changed is handed straight back.
+(`lock-pointer on`), while a peer controls this computer, or while this
+computer's screen is locked (no edge at all is armed then, not even those
+leading to peers: see "A locked screen" below). A capture that was already
+on its way when that changed is handed straight back.
 
 ## Wrap
 
@@ -113,11 +115,29 @@ they do when the pointer comes home).
 | Dead corners, dwell, modifier, fullscreen guard (`one-mk edge`) | apply, exactly as for crossing (the same `Approach`) | do not apply: a probe never moves the pointer |
 | `lock-pointer on` | not armed | not armed |
 | A peer controls this computer | not armed (re-armed when it lets go) | not armed |
-| Screen locked | handed back | handed back, not counted |
+| Screen locked | not armed; a capture on its way is handed back | not armed; handed back, not counted |
 | Visiting another computer (also gaming mode's relative motion) | cannot fire: the pointer is captured; edges stay armed so nothing changes at every crossing | the same |
 | Paired computer offline | its side never wraps | its side is not probed |
 | Every online computer placed by the user or confirmed | as set | no probes armed at all |
 | Input typed or clicked during the capture | typed here, as at any wall: a key as a tap, a click as a whole click, so nothing stays held | the same |
+
+## A locked screen
+
+Crossing an edge never happens on or onto a locked screen, in either direction, for ordinary
+crossings, pushes and wraps as for `one-mk switch` and `broadcast`: what is typed at a lock screen (the
+password) must never be sent to another computer, and oneMK sends no input to a lock screen
+([SECURITY-MODEL.md](SECURITY-MODEL.md), [WINDOWS.md](WINDOWS.md)).
+
+- **This computer locks** (while it controls another, or holds the pointer at an edge, or a
+  `switch` is about to start): the visit ends, everything held is released and the pointer comes
+  home, as before. From then on no edge is armed. A capture that arrives anyway (one already on
+  its way, or a backend that reports one) is handed straight back: the pointer stays where it is
+  and what it caught is typed here. Unlocking arms the edges again.
+- **The other computer is locked**: it refuses control (`Busy`, with "refused control: this
+  computer's screen is locked" in its log at `-v`), so a pointer sent to
+  it comes home at once and nothing is typed on its lock screen. A computer that locks while it
+  is being controlled lets go and sends the controller home. It can be entered again after
+  unlocking.
 
 ## Cost
 
