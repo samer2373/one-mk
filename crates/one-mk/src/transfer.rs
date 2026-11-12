@@ -1701,7 +1701,6 @@ fn outgoing_handle_checks_size_and_clears_nonblocking() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
 
     #[test]
     fn sanitize_rejects_escapes() {
@@ -1792,6 +1791,7 @@ mod tests {
         // A write to /dev/full fails with ENOSPC and is reported as such.
         #[cfg(target_os = "linux")]
         {
+            use std::io::Write as _;
             let f = OpenOptions::new().write(true).open("/dev/full").unwrap();
             let mut f = f;
             let r: Result<()> = f.write_all(&[1, 2, 3]).map_err(Into::into);

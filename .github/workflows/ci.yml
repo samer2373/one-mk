@@ -42,8 +42,12 @@ jobs:
         with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with: { toolchain: stable, targets: "${{ matrix.target }}", components: clippy }
-      # Clippy, not just check: the macOS and Windows code is only linted here.
-      - run: cargo clippy --locked -j 2 -p one-mk-wallpaper -p one-mk-wallpaper-helper -p one-mk-input -p one-mk-ctl -p one-mk-proto -p one-mk-app -p one-mk-tray --all-targets --target ${{ matrix.target }} -- -D warnings
+      # Clippy, not just check: the macOS and Windows code is only linted here. The
+      # script lints the clipboard crate and the daemon too: their C build scripts
+      # (blake3's SIMD, ring) cannot run for another system, so it skips blake3's
+      # and stands in for the C compiler (a compile check, nothing is built to run;
+      # see scripts/cross-clippy.sh and docs/TESTING.md).
+      - run: bash scripts/cross-clippy.sh ${{ matrix.target }}
 
   test:
     strategy:
