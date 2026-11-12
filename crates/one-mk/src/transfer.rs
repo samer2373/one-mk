@@ -21,7 +21,7 @@ use one_mk_net::{Fingerprint, open_stream, read_file_msg, write_file_msg};
 use one_mk_proto::{Batch, FileMsg, StreamKind};
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, File, OpenOptions};
-use std::io::{ErrorKind, Read as _, Seek, SeekFrom, Write as _};
+use std::io::{ErrorKind, Read as _, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -532,6 +532,7 @@ impl Inbox {
         // writer is always awaited, so nobody else touches the partial file
         // until it is done.
         let (tx, rx) = mpsc::channel::<Vec<u8>>(DEPTH);
+        let file = instrument(file, &part);
         let writer = tokio::task::spawn_blocking(move || write_part(file, offset, rx));
         let received = async {
             let mut remaining = size - offset;
@@ -1096,8 +1097,96 @@ fn open_part(root: &Path, id: &str, size: u64) -> Result<(File, PathBuf, u64)> {
     Ok((file, part, len))
 }
 
+/// What the writer needs of a partial file: a real file, or (in tests) one
+/// that runs out of room.
+trait PartFile: std::io::Read + std::io::Write + Seek + Send + 'static {
+    fn truncate(&mut self, len: u64) -> std::io::Result<()>;
+}
+
+impl PartFile for File {
+    fn truncate(&mut self, len: u64) -> std::io::Result<()> {
+        self.set_len(len)
+    }
+}
+
+/// The partial file as the writer gets it: itself.
+#[cfg(not(test))]
+fn instrument(file: File, _part: &Path) -> File {
+    file
+}
+
+#[cfg(test)]
+use fault::instrument;
+
+/// Test-only: a disk that fills up. A partial file inside a folder that has
+/// been [`arm`](fault::arm)ed accepts that many more bytes and then fails the
+/// way a full disk does (ENOSPC), as the real thing would half way through.
+#[cfg(test)]
+mod fault {
+    use super::*;
+
+    static ARMED: Mutex<Vec<(PathBuf, u64)>> = Mutex::new(Vec::new());
+
+    /// Files below `root` can take `bytes` more bytes.
+    pub fn arm(root: &Path, bytes: u64) {
+        let mut armed = ARMED.lock().unwrap();
+        armed.retain(|(r, _)| r != root);
+        armed.push((root.to_owned(), bytes));
+    }
+
+    /// The disk has room again.
+    pub fn disarm(root: &Path) {
+        ARMED.lock().unwrap().retain(|(r, _)| r != root);
+    }
+
+    pub struct Faulty {
+        file: File,
+        room: Option<u64>,
+    }
+
+    pub fn instrument(file: File, part: &Path) -> Faulty {
+        let room = ARMED.lock().unwrap().iter().find(|(root, _)| part.starts_with(root)).map(|(_, bytes)| *bytes);
+        Faulty { file, room }
+    }
+
+    impl std::io::Read for Faulty {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.file.read(buf)
+        }
+    }
+
+    impl Seek for Faulty {
+        fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+            self.file.seek(to)
+        }
+    }
+
+    impl std::io::Write for Faulty {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let Some(room) = &mut self.room else { return self.file.write(buf) };
+            if *room == 0 {
+                return Err(std::io::Error::from_raw_os_error(28));
+            }
+            let n = buf.len().min(usize::try_from(*room).unwrap_or(usize::MAX));
+            let written = self.file.write(&buf[..n])?;
+            *room -= written as u64;
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.file.flush()
+        }
+    }
+
+    impl PartFile for Faulty {
+        fn truncate(&mut self, len: u64) -> std::io::Result<()> {
+            self.file.set_len(len)
+        }
+    }
+}
+
 /// Hashes the existing prefix, then appends and hashes what arrives.
-fn write_part(mut file: File, offset: u64, mut rx: mpsc::Receiver<Vec<u8>>) -> Result<[u8; 32]> {
+fn write_part(mut file: impl PartFile, offset: u64, mut rx: mpsc::Receiver<Vec<u8>>) -> Result<[u8; 32]> {
     let mut hasher = blake3::Hasher::new();
     if offset > 0 {
         file.seek(SeekFrom::Start(0))?;
@@ -1112,7 +1201,7 @@ fn write_part(mut file: File, offset: u64, mut rx: mpsc::Receiver<Vec<u8>>) -> R
         }
     }
     file.seek(SeekFrom::Start(offset))?;
-    file.set_len(offset)?;
+    file.truncate(offset)?;
     while let Some(buf) = rx.blocking_recv() {
         hasher.update(&buf);
         file.write_all(&buf)?;
@@ -1612,6 +1701,7 @@ fn outgoing_handle_checks_size_and_clears_nonblocking() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
 
     #[test]
     fn sanitize_rejects_escapes() {
@@ -2217,6 +2307,74 @@ mod tests {
         assert!(fs::read_dir(&outside).unwrap().next().is_none(), "nothing written through the link");
         server.abort();
         for d in [src, root, outside] { let _ = fs::remove_dir_all(d); }
+    }
+
+    /// The receiving disk fills up half way through a file (here by a writer that
+    /// runs out of room, the way ENOSPC arrives in the middle of a write): the
+    /// sender is told in words that say what happened and what to do, what had
+    /// arrived is kept as a partial, nothing half-finished is put in place, the
+    /// room set aside for it is given back, and once there is room again the
+    /// same send carries on from where it stopped and the file is intact.
+    #[tokio::test]
+    async fn a_disk_that_fills_up_half_way_keeps_the_partial_says_why_and_resumes() {
+        let (pa, pb, _a, _b) = linked().await;
+        let (src, root) = (temp("full-src"), temp("full-dst"));
+        let body: Vec<u8> = (0..3_500_000u32).map(|n| (n.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+        fs::write(src.join("big.bin"), &body).unwrap();
+        let inbox = Inbox::new(root.clone());
+        let server = serve(&inbox, &pb);
+
+        // Room for a megabyte and a half: the second megabyte of the file runs out half way.
+        fault::arm(&root, 1_500_000);
+        let results = send_files(&pa.conn, collect(&[src.join("big.bin")]).unwrap(), Arc::new(Progress::default())).await;
+        let Outcome::Failed(why) = &results[0].1 else { panic!("{results:?}") };
+        assert!(why.contains("disk full on the receiving device"), "{why}");
+        assert!(why.contains("the partial file is kept") && why.contains("send again to resume"), "{why}");
+        // Nothing was put in place; what arrived is kept for the resume.
+        let names: Vec<_> = fs::read_dir(&root).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, [PARTIAL_DIR], "no half file in the folder: {names:?}");
+        let kept = inbox.partials();
+        assert_eq!(kept.count, 1);
+        assert_eq!(kept.bytes, 1_500_000, "everything that fit is kept");
+        // The room set aside for it is given back: nothing stays "promised".
+        for _ in 0..100 {
+            if inbox.limits.lock().unwrap().reserved_total == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(inbox.limits.lock().unwrap().reserved_total, 0);
+        assert!(inbox.limits.lock().unwrap().reserved.is_empty());
+
+        // Room again: the same send resumes after the part that is already there.
+        fault::disarm(&root);
+        let results = send_files(&pa.conn, collect(&[src.join("big.bin")]).unwrap(), Arc::new(Progress::default())).await;
+        let Outcome::Saved { name, resumed_from } = &results[0].1 else { panic!("{results:?}") };
+        assert_eq!((name.as_str(), *resumed_from), ("big.bin", 1_500_000));
+        assert_eq!(fs::read(root.join("big.bin")).unwrap(), body, "the file is intact");
+        assert_eq!(inbox.partials().count, 0, "nothing is left to resume");
+        server.abort();
+        for d in [src, root] { let _ = fs::remove_dir_all(d); }
+    }
+
+    /// A disk that is full before the first byte is refused up front, in words,
+    /// and leaves nothing (no empty partial, no promise of room).
+    #[tokio::test]
+    async fn a_disk_that_cannot_hold_the_file_is_refused_before_anything_is_written() {
+        let root = temp("nospace-dst");
+        let fp = Fingerprint([9; 32]);
+        let limits = Arc::<Mutex<Limits>>::default();
+        let size = u64::MAX / 4;
+        let id = part_id(fp, "huge.bin", size, 1);
+        let err = prepare(&root, &id, &fp_prefix(fp), size, PEER_PARTIAL_CAP, &limits, fp).err().expect("refused");
+        let said = format!("{err:#}");
+        assert!(said.contains("not enough free disk space") && said.contains("needed") && said.contains("free"), "{said}");
+        assert!(!root.join(PARTIAL_DIR).join(&id).exists());
+        let l = limits.lock().unwrap();
+        assert_eq!(l.reserved_total, 0);
+        assert!(l.reserved.is_empty());
+        drop(l);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 
 mod qa_common;
 use qa_common::*;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[test]
 fn pairing_with_matching_codes_saves_both_sides_and_the_daemons_connect() {
@@ -176,27 +176,104 @@ fn pairing_with_nothing_listening_says_how_to_connect_and_fails() {
     let lab = Lab::new();
     let alpha = lab.node("alpha");
     let dead = format!("127.0.0.1:{}", lab.node("nobody").port);
-    let out = Lab::run(&alpha, &["pair", "--no-discovery", "--connect", &dead]);
+    // The real wait is 30 s; this one is 1.5 s, and the message says what was waited.
+    let started = Instant::now();
+    let out = Lab::run(&quick(&alpha, 1_500, 120_000), &["pair", "--no-discovery", "--connect", &dead]);
     let error = out.failed();
     assert!(error.contains("could not reach") && error.contains(&dead) && error.contains("one-mk pair"), "{error}");
+    assert!(error.contains("within 1.5 s"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(20), "{:?}", started.elapsed());
     assert!(trusted(&alpha).devices().is_empty());
 }
 
-/// Nobody answers for two minutes: pairing gives up, saves nothing and keeps waiting.
+/// A computer with the pairing timeouts shortened (a debug build reads these
+/// variables; the defaults are 30 s per step and 120 s to answer).
+fn quick(node: &Node, step_ms: u64, answer_ms: u64) -> Node {
+    let mut node = node.clone();
+    node.env.push(("ONE_MK_TEST_PAIR_STEP_MS".into(), step_ms.to_string()));
+    node.env.push(("ONE_MK_TEST_PAIR_ANSWER_MS".into(), answer_ms.to_string()));
+    node
+}
+
+/// Nobody answers the codes in time: pairing gives up with a message that
+/// says how long it waited, saves nothing on either computer and keeps
+/// waiting for another try (the real wait is 120 s; this one is 2 s).
 #[test]
-#[ignore = "takes over two minutes (the answer timeout is 120 s); run with --ignored"]
 fn no_answer_to_the_codes_times_out_and_saves_nothing() {
     if !isolated("no_answer_to_the_codes_times_out_and_saves_nothing") {
         return;
     }
     let lab = Lab::new();
-    let (alpha, beta) = (lab.node("alpha"), lab.node("beta"));
+    let (alpha, beta) = (quick(&lab.node("alpha"), 30_000, 2_000), quick(&lab.node("beta"), 30_000, 2_000));
     let (mut host, mut joiner) = lab.pair_start(&alpha, &beta);
     host.expect("code\t", 20);
     joiner.expect("code\t", 20);
-    let retry = host.expect("retry", 130);
-    assert!(retry.contains("no answer within 120 s"), "{retry}");
+    let started = Instant::now();
+    let retry = host.expect("retry", 30);
+    assert!(retry.contains("no answer within 2 s"), "{retry}");
+    assert!(started.elapsed() >= Duration::from_millis(1500) && started.elapsed() < Duration::from_secs(20), "{:?}", started.elapsed());
+    // The other computer is told it is off, too, and is not left paired to nobody.
+    let theirs = joiner.expect("retry", 30);
+    assert!(theirs.contains("no answer within 2 s"), "{theirs}");
     assert!(trusted(&alpha).devices().is_empty() && trusted(&beta).devices().is_empty());
+    // Both went back to waiting: a later yes from both pairs them after all.
+    let mut again = host.try_expect("code\t", 30);
+    if again.is_none() {
+        again = joiner.try_expect("code\t", 1);
+    }
+    assert!(again.is_some(), "the retry never came back to the codes: {:?} {:?}", host.seen(), joiner.seen());
+}
+
+/// The other computer says yes to the codes and then goes quiet (asleep, Wi-Fi
+/// gone): the one waiting for its answer gives up after the same time, names
+/// what happened, and saves nothing.
+#[test]
+fn a_computer_that_goes_quiet_after_the_codes_is_given_up_on() {
+    if !isolated("a_computer_that_goes_quiet_after_the_codes_is_given_up_on") {
+        return;
+    }
+    let lab = Lab::new();
+    let (alpha, beta) = (quick(&lab.node("alpha"), 30_000, 2_000), quick(&lab.node("beta"), 30_000, 30_000));
+    let (mut host, mut joiner) = lab.pair_start(&alpha, &beta);
+    host.expect("code\t", 20);
+    joiner.expect("code\t", 20);
+    joiner.signal(libc::SIGSTOP);
+    host.say("yes");
+    host.expect("waiting", 10);
+    let retry = host.expect("retry", 30);
+    joiner.signal(libc::SIGCONT);
+    assert!(retry.contains("the other computer did not answer in time"), "{retry}");
+    assert!(trusted(&alpha).devices().is_empty() && trusted(&beta).devices().is_empty(), "something was saved");
+}
+
+/// A computer that connects and then never takes part in the code exchange
+/// (a step that runs out of time) is let go in the step's time, with the step
+/// named, and nothing is saved.
+#[test]
+fn a_peer_that_never_takes_part_in_the_exchange_is_let_go_in_the_step_time() {
+    if !isolated("a_peer_that_never_takes_part_in_the_exchange_is_let_go_in_the_step_time") {
+        return;
+    }
+    let lab = Lab::new();
+    let alpha = quick(&lab.node("alpha"), 1_500, 30_000);
+    let mut host = Proc::spawn(Lab::command(&alpha, &["pair", "--machine", "--no-discovery"]));
+    let me = host.expect("me\t", 20);
+    let port: u16 = me.split('\t').nth(3).unwrap().parse().unwrap();
+    // A stand-in for the other computer: a real QUIC peer with its own identity that
+    // dials and then says nothing at all.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let quiet = runtime.block_on(async {
+        let identity = std::sync::Arc::new(one_mk_net::Identity::ephemeral().unwrap());
+        let node = one_mk_net::Node::bind(identity, "127.0.0.1:0".parse().unwrap()).unwrap();
+        let peer = node.connect(format!("127.0.0.1:{port}").parse().unwrap()).await.unwrap();
+        (node, peer)
+    });
+    let started = Instant::now();
+    let retry = host.expect("retry", 30);
+    assert!(retry.contains("pairing:") && retry.contains("timed out"), "{retry}");
+    assert!(started.elapsed() < Duration::from_secs(15), "{:?}", started.elapsed());
+    assert!(trusted(&alpha).devices().is_empty());
+    drop(quiet);
 }
 
 fn invite_link(host: &mut Proc) -> String {

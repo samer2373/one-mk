@@ -27,12 +27,27 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-/// Each automatic step (dialing, the code exchange) must finish within this.
-const STEP_TIMEOUT: Duration = Duration::from_secs(30);
 /// One connection attempt.
 const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long a person has to compare the codes and answer.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Each automatic step (dialing, the code exchange) must finish within this:
+/// 30 s. (A debug build's tests shorten it, see `one_mk_net::test_timeout`.)
+fn step_timeout() -> Duration {
+    one_mk_net::step_timeout()
+}
+
+/// [`ANSWER_TIMEOUT`], or what a debug build's test shortened it to.
+fn answer_timeout() -> Duration {
+    one_mk_net::test_timeout(ANSWER_TIMEOUT, "ONE_MK_TEST_PAIR_ANSWER_MS")
+}
+
+/// "30 s", "120 s", "1.5 s": a time out for a message.
+fn seconds(time: Duration) -> String {
+    let s = time.as_secs_f64();
+    if (s - s.round()).abs() < 1e-6 { format!("{} s", s.round() as u64) } else { format!("{s:.1} s") }
+}
 /// Show troubleshooting hints if nothing turned up by then.
 const HINT_AFTER: Duration = Duration::from_secs(60);
 
@@ -226,11 +241,12 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
         || format!("  The other computer says its name is: {name}\n{twin_note}  Check that it shows this same code:\n\n      {}\n", pairing.sas),
         || format!("code\t{name}\t{}", pairing.sas),
     );
-    let ok = match answers.ask("  Do the codes match? [y/N] ", ANSWER_TIMEOUT).await {
+    let answer_within = answer_timeout();
+    let ok = match answers.ask("  Do the codes match? [y/N] ", answer_within).await {
         Some(ok) => ok,
         None => {
             let _ = tokio::time::timeout(Duration::from_secs(2), pairing.confirm(false)).await;
-            bail!("no answer within {} s", ANSWER_TIMEOUT.as_secs());
+            bail!("no answer within {}", seconds(answer_within));
         }
     };
     if !ok {
@@ -239,7 +255,7 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
         return Ok(());
     }
     out.say(|| "  Waiting for the other computer to confirm...".into(), || "waiting".into());
-    let (confirmed, peer_port) = tokio::time::timeout(ANSWER_TIMEOUT, pairing.confirm_port(true, Some(port)))
+    let (confirmed, peer_port) = tokio::time::timeout(answer_within, pairing.confirm_port(true, Some(port)))
         .await
         .context("the other computer did not answer in time")?
         .context("the other computer went away")?;
@@ -335,7 +351,7 @@ fn dial_explicit(node: Node, addr: SocketAddr, tx: mpsc::Sender<Peer>, err: mpsc
     dial_explicit_after(node, addr, Duration::ZERO, tx, err);
 }
 
-/// Dials `--connect`, retrying for `STEP_TIMEOUT`, then reports a clear
+/// Dials `--connect`, retrying for `step_timeout()`, then reports a clear
 /// error.
 fn dial_explicit_after(
     node: Node,
@@ -346,7 +362,8 @@ fn dial_explicit_after(
 ) {
     tokio::spawn(async move {
         tokio::time::sleep(delay).await;
-        let deadline = Instant::now() + STEP_TIMEOUT;
+        let window = step_timeout();
+        let deadline = Instant::now() + window;
         let mut last = String::new();
         while Instant::now() < deadline {
             let left = deadline.saturating_duration_since(Instant::now()).min(DIAL_TIMEOUT);
@@ -363,9 +380,9 @@ fn dial_explicit_after(
             }
         }
         let _ = err.send(format!(
-            "could not reach {addr} within {} s ({last}); check that `one-mk pair` is running there \
+            "could not reach {addr} within {} ({last}); check that `one-mk pair` is running there \
              and that the address and port match what it prints",
-            STEP_TIMEOUT.as_secs()
+            seconds(window)
         ));
     });
 }
@@ -422,6 +439,17 @@ impl Answers {
 mod tests {
     use super::*;
     use one_mk_proto::Side;
+
+    #[test]
+    fn the_times_in_the_messages_are_what_was_waited_for() {
+        assert_eq!(seconds(Duration::from_secs(30)), "30 s");
+        assert_eq!(seconds(Duration::from_secs(120)), "120 s");
+        assert_eq!(seconds(Duration::from_millis(1500)), "1.5 s");
+        assert_eq!(seconds(Duration::from_millis(2000)), "2 s");
+        // The defaults, as a person is told them.
+        assert_eq!(seconds(step_timeout()), "30 s");
+        assert_eq!(seconds(answer_timeout()), "120 s");
+    }
 
     /// Advice that names a computer must name it in a way that finds it:
     /// by id when its name fits another computer too, and it says how to

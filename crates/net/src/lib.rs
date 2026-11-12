@@ -14,7 +14,7 @@ mod trust;
 pub use discovery::{Discovery, Found, is_virtual as is_virtual_interface};
 pub use identity::{Fingerprint, Identity};
 pub use node::{Node, Peer};
-pub use pairing::{Pairing, Sas};
+pub use pairing::{Pairing, STEP_TIMEOUT, Sas, step_timeout, test_timeout};
 pub use stream::{
     ControlWriter, open_stream, read_clip_header, read_file_msg, read_frame, read_stream_kind, write_file_msg,
 };

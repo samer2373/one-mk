@@ -32,6 +32,26 @@ const MAX_NAME: usize = 1024;
 /// Every automatic step must finish within this.
 pub const STEP_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// `default`, or in a debug build the number of milliseconds the environment
+/// variable `var` holds: how the tests (and only they) wait milliseconds for a
+/// timeout that is half a minute in use. A release build never reads the
+/// environment, so no shipped build can be made to give up sooner than its
+/// default; everywhere else the defaults are what they were.
+pub fn test_timeout(default: Duration, var: &str) -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(ms) = std::env::var(var).ok().and_then(|v| v.parse::<u64>().ok()).filter(|ms| *ms > 0) {
+        return Duration::from_millis(ms);
+    }
+    let _ = var;
+    default
+}
+
+/// How long each step of the code agreement may take now ([`STEP_TIMEOUT`]; in
+/// a debug build `ONE_MK_TEST_PAIR_STEP_MS` shortens it).
+pub fn step_timeout() -> Duration {
+    test_timeout(STEP_TIMEOUT, "ONE_MK_TEST_PAIR_STEP_MS")
+}
+
 /// Short authentication string shown to the user on both devices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sas(pub u32);
@@ -55,11 +75,17 @@ impl Pairing {
     /// user confirms on each that the codes match. Each step times out
     /// after `STEP_TIMEOUT`.
     pub async fn start(peer: &Peer, me: Fingerprint, my_name: &str) -> Result<Self> {
+        Self::start_within(peer, me, my_name, step_timeout()).await
+    }
+
+    /// [`Pairing::start`] with each step given `limit`: how a test sees a step
+    /// run out of time without waiting half a minute for it.
+    pub async fn start_within(peer: &Peer, me: Fingerprint, my_name: &str, limit: Duration) -> Result<Self> {
         let my_name = sanitize_name(my_name);
         let (mut send, mut recv) = if peer.initiator {
-            step("opening the pairing stream", peer.open_stream(StreamKind::Pairing)).await?
+            step(limit, "opening the pairing stream", peer.open_stream(StreamKind::Pairing)).await?
         } else {
-            let (kind, send, recv) = step("waiting for the pairing stream", peer.accept_stream()).await?;
+            let (kind, send, recv) = step(limit, "waiting for the pairing stream", peer.accept_stream()).await?;
             ensure!(kind == StreamKind::Pairing, "peer did not start pairing");
             (send, recv)
         };
@@ -67,25 +93,25 @@ impl Pairing {
         // 1. Names, before any nonce.
         let mut frame = Vec::with_capacity(2 + my_name.len());
         put_bytes(&mut frame, my_name.as_bytes());
-        step("sending our name", send.write_all(&frame)).await?;
-        let peer_name_raw = step("receiving the peer's name", read_name(&mut recv)).await?;
+        step(limit, "sending our name", send.write_all(&frame)).await?;
+        let peer_name_raw = step(limit, "receiving the peer's name", read_name(&mut recv)).await?;
 
         let sas = if peer.initiator {
             let t = Transcript::new(me, peer.fingerprint, my_name.as_bytes(), &peer_name_raw);
             let na: [u8; 32] = rand::random();
-            step("sending the commitment", send.write_all(&t.commit(&na))).await?;
+            step(limit, "sending the commitment", send.write_all(&t.commit(&na))).await?;
             let mut nb = [0u8; 32];
-            step("receiving the peer's nonce", recv.read_exact(&mut nb)).await?;
-            step("revealing our nonce", send.write_all(&na)).await?;
+            step(limit, "receiving the peer's nonce", recv.read_exact(&mut nb)).await?;
+            step(limit, "revealing our nonce", send.write_all(&na)).await?;
             t.sas(&na, &nb)
         } else {
             let t = Transcript::new(peer.fingerprint, me, &peer_name_raw, my_name.as_bytes());
             let mut commit = [0u8; 32];
-            step("receiving the commitment", recv.read_exact(&mut commit)).await?;
+            step(limit, "receiving the commitment", recv.read_exact(&mut commit)).await?;
             let nb: [u8; 32] = rand::random();
-            step("sending our nonce", send.write_all(&nb)).await?;
+            step(limit, "sending our nonce", send.write_all(&nb)).await?;
             let mut na = [0u8; 32];
-            step("receiving the peer's nonce", recv.read_exact(&mut na)).await?;
+            step(limit, "receiving the peer's nonce", recv.read_exact(&mut na)).await?;
             ensure!(t.commit(&na) == commit, "pairing commitment mismatch");
             t.sas(&na, &nb)
         };
@@ -112,7 +138,7 @@ impl Pairing {
         // "went away" after saving nothing). Bounded: a peer that never
         // acknowledges can't hold us here.
         let _ = tokio::time::timeout(Duration::from_secs(3), self.send.stopped()).await;
-        let trailing = step("receiving the service port", self.recv.read_to_end(2)).await?;
+        let trailing = step(step_timeout(), "receiving the service port", self.recv.read_to_end(2)).await?;
         let port = match trailing.as_slice() {
             [] => None,
             [low, high] => Some(u16::from_le_bytes([*low, *high])),
@@ -123,11 +149,11 @@ impl Pairing {
     }
 }
 
-async fn step<T, E>(what: &str, fut: impl Future<Output = Result<T, E>>) -> Result<T>
+async fn step<T, E>(limit: Duration, what: &str, fut: impl Future<Output = Result<T, E>>) -> Result<T>
 where
     E: Into<anyhow::Error>,
 {
-    match tokio::time::timeout(STEP_TIMEOUT, fut).await {
+    match tokio::time::timeout(limit, fut).await {
         Ok(res) => res.map_err(Into::into).with_context(|| format!("pairing: {what}")),
         Err(_) => bail!("pairing: timed out {what}"),
     }
@@ -207,6 +233,67 @@ mod tests {
         };
         let (new, ()) = tokio::join!(local_pair.unwrap().confirm_port(true, Some(32123)), legacy);
         assert_eq!(new.unwrap(), (true, None));
+    }
+
+    async fn connected_pair() -> (crate::Node, crate::Node, Peer, Peer) {
+        use crate::{Identity, Node};
+        use std::sync::Arc;
+        let local = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let remote = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let (local_peer, remote_peer) = tokio::join!(local.connect(remote.local_addr().unwrap()), async { remote.accept().await.unwrap() });
+        (local, remote, local_peer.unwrap(), remote_peer.unwrap())
+    }
+
+    /// The other computer connects and then says nothing: every step ends by
+    /// itself, in the time it was given, and says which step it was.
+    #[tokio::test]
+    async fn a_silent_peer_times_out_in_the_time_given_and_says_which_step() {
+        let (local, _remote, local_peer, _remote_peer) = connected_pair().await;
+        let limit = Duration::from_millis(150);
+        // The one that dials opens the stream, sends its name and waits for the other's.
+        let started = std::time::Instant::now();
+        let error = Pairing::start_within(&local_peer, local.identity().fingerprint, "dialer", limit).await.err().expect("it must give up");
+        let waited = started.elapsed();
+        assert!(format!("{error:#}").contains("pairing: timed out receiving the peer's name"), "{error:#}");
+        assert!(waited >= limit && waited < Duration::from_secs(5), "{waited:?}");
+        // The one that is dialed waits for a stream that never comes.
+        let (_local, remote, _local_peer, remote_peer) = connected_pair().await;
+        let started = std::time::Instant::now();
+        let error = Pairing::start_within(&remote_peer, remote.identity().fingerprint, "listener", limit).await.err().expect("it must give up");
+        assert!(format!("{error:#}").contains("pairing: timed out waiting for the pairing stream"), "{error:#}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// A peer that stalls half way through (after the names, before its nonce)
+    /// is let go the same way, and nothing was ever returned that could be saved.
+    #[tokio::test]
+    async fn a_peer_that_stalls_after_the_names_is_let_go() {
+        let (local, remote, local_peer, remote_peer) = connected_pair().await;
+        let limit = Duration::from_millis(200);
+        let (dialer, ()) = tokio::join!(
+            Pairing::start_within(&local_peer, local.identity().fingerprint, "dialer", limit),
+            async {
+                // Answers the name step like a real peer, then goes quiet.
+                let (_, mut send, mut recv) = remote_peer.accept_stream().await.unwrap();
+                let mut frame = Vec::new();
+                put_bytes(&mut frame, b"listener");
+                send.write_all(&frame).await.unwrap();
+                let _ = read_name(&mut recv).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                drop((send, recv, remote));
+            }
+        );
+        let error = dialer.err().expect("the commitment is never answered");
+        assert!(format!("{error:#}").contains("pairing: timed out receiving the peer's nonce"), "{error:#}");
+    }
+
+    #[test]
+    fn the_timeouts_are_what_they_were_unless_a_debug_test_shortens_them() {
+        assert_eq!(STEP_TIMEOUT, Duration::from_secs(30));
+        // Nothing sets this variable here, and a value that is not a positive
+        // number of milliseconds is ignored.
+        assert_eq!(test_timeout(Duration::from_secs(120), "ONE_MK_TEST_NOT_SET_ANYWHERE"), Duration::from_secs(120));
+        assert_eq!(step_timeout(), STEP_TIMEOUT);
     }
 
     #[test]
