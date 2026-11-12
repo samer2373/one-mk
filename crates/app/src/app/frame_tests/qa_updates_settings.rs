@@ -425,6 +425,10 @@ fn a_live_missing_permission_line_has_the_same_open_guide_button_as_a_check() {
         win.frames(2);
         if cfg!(target_os = "macos") {
             assert!(win.app.guide.active(), "the same guide as the check's button");
+            // The guide is a card laid over the window (it covers the tabs on purpose), so close it
+            // before looking for controls lying on each other.
+            win.click("Close this guide");
+            win.frames(60);
         } else {
             // Elsewhere the permission is the desktop's own dialog: the same steps beside the button.
             assert!(win.has_text("Look for your desktop's sharing window"), "{}", win.texts_joined());

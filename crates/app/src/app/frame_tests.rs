@@ -70,7 +70,14 @@ pub(super) struct Win {
     /// The controls as the last frame without a sheet or palette drew them:
     /// what lies under one that is up now.
     behind: Vec<Item>,
+    /// Windows: the headless windows take turns (a test process there once died with an access
+    /// violation while several ran at once; nothing here needs them to overlap).
+    #[cfg(windows)]
+    _turn: std::sync::MutexGuard<'static, ()>,
 }
+
+#[cfg(windows)]
+static TURNS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 static SERIAL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
@@ -93,6 +100,8 @@ fn flatten(shapes: &[ClippedShape], out: &mut Vec<Painted>) {
 impl Win {
     /// A window `w` × `h` points, light or dark, at `ppp` pixels per point.
     pub fn new(w: f32, h: f32, dark: bool, ppp: f32) -> Self {
+        #[cfg(windows)]
+        let turn = TURNS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         crate::style::install(&ctx);
@@ -122,6 +131,8 @@ impl Win {
             frames: 0,
             shapes: vec![],
             behind: vec![],
+            #[cfg(windows)]
+            _turn: turn,
         };
         // The first frame says "looking for oneMK": no daemon has answered yet.
         win.settle();

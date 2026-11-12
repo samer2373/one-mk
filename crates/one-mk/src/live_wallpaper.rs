@@ -1444,7 +1444,17 @@ mod tests {
         assert!(error.contains("one-mk stop"), "{error}");
         assert_eq!(std::fs::read(cache(directory.path()).join("selection.json")).unwrap(), before, "the saved choice is untouched");
         drop(held);
-        turn_off_for_uninstall(directory.path()).await.unwrap();
+        // A process another test is starting at this moment can still hold the lock's open file
+        // between its fork and its exec (the descriptor is close-on-exec): give it a moment.
+        let mut result = turn_off_for_uninstall(directory.path()).await;
+        for _ in 0..40 {
+            if result.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            result = turn_off_for_uninstall(directory.path()).await;
+        }
+        result.unwrap();
     }
 
     /// Only an explicit "ok" from the running oneMK is success.
