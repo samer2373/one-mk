@@ -116,6 +116,9 @@ fn helper_refuses_oversized_and_crafted_images_without_replacing_outputs() {
 
 #[test]
 fn receiver_helper_rejects_non_png_and_corrupt_png_before_native_application() {
+    // On a live Wayland session `apply` returns for the overlay player before it reads the bundle, so this
+    // test (about the bundle) failed on a desktop and passed in headless CI: run it as a headless session.
+    unsafe { std::env::remove_var("WAYLAND_DISPLAY") };
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("slice.jpg");
     std::fs::write(&source, JPEG).unwrap();

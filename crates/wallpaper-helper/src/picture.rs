@@ -62,7 +62,20 @@ fn referenced(value: &serde_json::Value, path: &Path) -> bool {
     }
 }
 
+/// The half-written files a crash or a kill left behind: `atomic_file` writes a
+/// `*.tmp` first and renames it, so one that old has no writer. They are whole
+/// pictures (megabytes) and counted against the cache, so they must not pile up.
+fn remove_stale_partials(root: &Path, older_than: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let stale = entry.metadata().and_then(|metadata| metadata.modified()).is_ok_and(|modified| now.duration_since(modified).is_ok_and(|age| age >= older_than));
+        if stale && entry.path().extension().is_some_and(|extension| extension == "tmp") { let _ = std::fs::remove_file(entry.path()); }
+    }
+}
+
 fn prune_pictures(root: &Path, keep: &[PathBuf]) -> Result<()> {
+    remove_stale_partials(root, std::time::Duration::from_secs(600));
     let snapshot = root.join("previous.json");
     let saved = if snapshot.exists() { serde_json::from_slice(&std::fs::read(snapshot)?)? } else { serde_json::Value::Null };
     let current = root.join("current.json");
@@ -387,7 +400,9 @@ pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<on
     }
     std::fs::create_dir_all(root)?;
     prune_pictures(root, &[])?;
-    let files = slices(plan, computer, path, root)?;
+    // A bundle that is refused after some of its slices were written (trailing data, a later slice of the wrong size)
+    // must not leave those pictures behind: they would sit in the cache until the next wallpaper change.
+    let files = slices(plan, computer, path, root).inspect_err(|_| { let _ = prune_pictures(root, &[]); })?;
     #[cfg(any(target_os = "macos", windows))]
     {
         let result = native::apply(&files, root);
@@ -444,6 +459,7 @@ pub fn restore(root: &Path) -> Result<()> {
     }
     std::fs::remove_file(root.join("previous.json"))?;
     let _ = std::fs::remove_file(root.join("current.json"));
+    remove_stale_partials(root, std::time::Duration::ZERO);
     for entry in std::fs::read_dir(root)? {
         let path = entry?.path();
         if path.extension().is_some_and(|extension| extension == "png") { let _ = std::fs::remove_file(path); }

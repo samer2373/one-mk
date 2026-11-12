@@ -71,7 +71,7 @@ jobs:
         with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: stable }
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with: { tool: cargo-deny@0.20.2 }
       - name: THIRD-PARTY-NOTICES matches Cargo.lock
         run: python3 scripts/third-party-notices.py --check
@@ -79,6 +79,10 @@ jobs:
         run: cargo deny --locked --all-features check
       - name: install.sh against fake releases
         run: bash scripts/test-install.sh
+      - name: One version, pinned workflows, every download made, package metadata
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 scripts/check-release-consistency.py
       - name: Update manifest, signing and publish steps (stub gh)
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
@@ -215,7 +219,14 @@ jobs:
           APPIMAGETOOL_SHA256: 46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1
         run: |
           if ! command -v desktop-file-validate >/dev/null; then
-            sh scripts/apt-install.sh desktop-file-utils || echo "::warning::desktop-file-utils could not be installed (the package hosts did not resolve); the packaging check still validates the desktop files"
+            if ! sh scripts/apt-install.sh desktop-file-utils; then
+              # appimagetool will not pack without desktop-file-validate, so use
+              # the built-in stand-in rather than fail the release.
+              echo "::warning::desktop-file-utils could not be installed (the package hosts did not resolve); validating the desktop file with scripts/desktop-file-validate-lite.sh"
+              mkdir -p "$RUNNER_TEMP/dfv"
+              install -m 0755 scripts/desktop-file-validate-lite.sh "$RUNNER_TEMP/dfv/desktop-file-validate"
+              export PATH="$RUNNER_TEMP/dfv:$PATH"
+            fi
           fi
           mkdir -p "$RUNNER_TEMP/appimagetool"
           curl -fsSL -o "$RUNNER_TEMP/appimagetool/appimagetool" \

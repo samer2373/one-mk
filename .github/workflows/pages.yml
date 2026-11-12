@@ -29,6 +29,7 @@ jobs:
       SITE_URL: https://samer2373.github.io/one-mk/
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
 
       - name: Copy the site without its tools and source-only files
         run: |

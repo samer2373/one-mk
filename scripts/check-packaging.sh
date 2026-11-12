@@ -28,7 +28,7 @@
 need_binaries one-mk one-mk-tray one-mk-app one-mk-wallpaper
 BIN_DIR=$(cd "$BIN_DIR" && pwd)
 export BIN_DIR   # the package scripts run below use the same build
-scratch=$(mktemp -d /tmp/one-mk-pkg-check.XXXXXX)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/one-mk-pkg-check.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 fail=0
 ok()   { echo "ok      $*"; }

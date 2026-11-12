@@ -100,6 +100,38 @@ Optional tools (Pillow for the last one) are reported as skipped when missing.
 The macOS app and disk image and the Windows installer are built and opened by
 the release workflow itself (it signs, installs and runs them).
 
+Without building anything, `python3 scripts/check-release-consistency.py` (the
+`release-gates` job of `ci.yml`, and `release-checks` of the release workflow)
+fails when the release has drifted apart:
+
+- **versions**: `Cargo.toml`, every crate, `Cargo.lock`, the release notes
+  (`docs/release-notes/v<version>.md` exists, none for a newer version), the
+  version in `docs/COMMANDS.md` and the bug report template, the readers the
+  packaging scripts use;
+- **workflows**: every workflow declares its permissions and only `publish`
+  (and the Pages workflow) may write; third-party actions are pinned to a
+  commit (`actions/*` may use a major tag); checkouts keep no token; no secret
+  on pull requests, no `pull_request_target`; every `cargo` command is
+  `--locked`; every `run:` block is valid shell;
+- **artifacts**: every release file `install.sh`, the website, the README and
+  the docs name is one `release.yml` really makes, for a target it builds;
+- **metadata**: the `.desktop` files, the AppStream metainfo (also rendered
+  from every release notes file), the polkit action, the Inno Setup script,
+  the Homebrew and Flatpak templates and the GNOME extension manifests are
+  well formed and agree with each other and with the code they name.
+
+`python3 scripts/test-release-consistency.py` checks that each of those checks
+fails on the mistake it is for, and `python3 scripts/test-update-manifest.py`
+builds the signed update list from the file names the release makes and checks
+that every choice the updater makes (portable binary, AppImage, .deb, Mac app)
+is exactly one file, that the list is reproducible, that bad input is refused
+and that a damaged signature never verifies. `scripts/test-install.sh` runs `install.sh`
+against fake releases (bad checksums and signatures, hostile and broken
+archives, offline, plain http, an unsupported system, repeat and read-only
+installs). The GNOME extensions are tested against stand-ins for the Shell:
+`node --test tools/gnome-wallpaper/test_production_video.mjs
+tools/gnome-wallpaper/test_pointer_extension.mjs`.
+
 ## macOS `.app` and `.dmg`
 
 `scripts/bundle-mac.sh <release dir> <out.app.zip>` builds `one-mk.app` (the

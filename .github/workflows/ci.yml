@@ -20,6 +20,8 @@ jobs:
       - run: python3 scripts/check-wallpaper-artifact.py --self-test
       - run: python3 scripts/test-wallpaper-release-gates.py
       - run: python3 tools/gnome-wallpaper/test_presentation_cleanup.py
+      # The GNOME extensions against stand-ins for the Shell (Node is on the runner).
+      - run: node --test tools/gnome-wallpaper/test_production_video.mjs tools/gnome-wallpaper/test_pointer_extension.mjs
       - run: |
           cargo build --locked -j 2 -p one-mk-wall-import
           cargo metadata --locked --format-version 1 > target/wallpaper-metadata.json
@@ -70,7 +72,7 @@ jobs:
         with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with: { toolchain: stable }
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with: { tool: cargo-deny@0.20.2 }
       - run: python3 scripts/third-party-notices.py --check
       - run: cargo deny --locked --all-features check
@@ -78,6 +80,14 @@ jobs:
       - run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           bash scripts/check-updates.sh
+      # One version, workflows with least privilege and pinned actions, every
+      # advertised download made by release.yml, package metadata consistent
+      # (scripts/check-release-consistency.py), and its own tests.
+      - run: |
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          python3 scripts/check-release-consistency.py
+          python3 scripts/test-release-consistency.py
+          python3 scripts/test-update-manifest.py
 
   # The Linux packages and the package-manager files, built from a debug
   # build and checked without installing anything (scripts/check-packaging.sh).

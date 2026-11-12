@@ -51,6 +51,7 @@ make_release() {
     local dir=$1 version=$2 stage=$scratch/stage-$RANDOM
     mkdir -p "$dir" "$stage/one-mk-$target"
     for p in one-mk one-mk-tray one-mk-app one-mk-wallpaper; do cp "$shell" "$stage/one-mk-$target/$p"; done
+    if [ -n "${APP_SCRIPT:-}" ]; then printf '%s\n' "$APP_SCRIPT" > "$stage/one-mk-$target/one-mk-app"; chmod 755 "$stage/one-mk-$target/one-mk-app"; fi
     printf '%s\n' "$version" > "$stage/one-mk-$target/one-mk-version"
     cp "$root/LICENSE-MIT" "$stage/one-mk-$target/"
     (cd "$stage" && tar czf "$dir/$file" "one-mk-$target")
@@ -204,5 +205,151 @@ make_release "$scratch/damaged2" 0.1.34
 printf 'x' >> "$scratch/damaged2/$file"
 if run_install "$scratch/damaged2" "$scratch/libressl:/usr/bin:/bin" || [ "$(installed_version)" != 0.1.33 ]; then bad "without OpenSSL 3 a damaged download was installed"
 else ok "without OpenSSL 3 a damaged download is still refused"; fi
+
+# ---- More: the network, the archive, the platform, repeat runs, odd places ----
+# Every refusal below leaves the installed programs byte for byte as they were
+# and nothing behind in the temporary folder.
+mkdir -p "$scratch/tmp"
+run_url() {   # run_url URL [PATH]
+    env -i HOME="$home" PATH="${2:-/usr/bin:/bin}" ONE_MK_RELEASE_URL="$1" TMPDIR="$scratch/tmp" dash "$scratch/install.sh" > "$scratch/out" 2>&1
+}
+snapshot() { (cd "$bin" && sha256sum -- * 2>/dev/null; ls -A) | tr '\n' ' '; }
+clean_tmp() { [ -z "$(ls -A "$scratch/tmp")" ]; }
+refuse_url() {   # refuse_url DESCRIPTION MESSAGE URL [PATH]
+    local before after
+    before=$(snapshot)
+    if run_url "$3" ${4:+"$4"}; then bad "$1: installed anyway"; return; fi
+    after=$(snapshot)
+    if [ "$before" != "$after" ]; then bad "$1: the installation changed"
+    elif ! grep -q "$2" "$scratch/out"; then bad "$1: unclear message: $(cat "$scratch/out")"
+    elif ! clean_tmp; then bad "$1: left files in the temporary folder: $(ls -A "$scratch/tmp")"; rm -rf "$scratch/tmp"/*
+    else ok "$1 is refused: $(tail -1 "$scratch/out")"; fi
+}
+
+# Offline, or a release address that does not exist.
+refuse_url "an unreachable release (offline)" "could not download one-mk-$target.tar.gz" "file://$scratch/no-such-release"
+# A plain http address is never used, even to a computer that serves a perfectly good release.
+make_release "$scratch/r-http" 0.1.40
+port=$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+(cd "$scratch/r-http" && exec python3 -I -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) & pids+=($!)
+for _ in $(seq 1 20); do
+    curl -fs "http://127.0.0.1:$port/SHA256SUMS" >/dev/null 2>&1 && break; sleep 0.25
+done
+if curl -fs "http://127.0.0.1:$port/SHA256SUMS" >/dev/null 2>&1; then
+    refuse_url "a release offered over plain http" "could not download" "http://127.0.0.1:$port"
+else echo "note    could not start a local http server; the plain-http refusal is not exercised"; fi
+
+# SHA256SUMS that does not list the archive, or is empty.
+make_release "$scratch/unlisted" 0.1.41
+echo "0000000000000000000000000000000000000000000000000000000000000000  some-other-file" > "$scratch/unlisted/SHA256SUMS"
+refuse_url "a SHA256SUMS that does not list the archive" "does not list $file" "file://$scratch/unlisted"
+make_release "$scratch/nosums" 0.1.41
+: > "$scratch/nosums/SHA256SUMS"
+refuse_url "an empty SHA256SUMS" "does not list $file" "file://$scratch/nosums"
+
+# Archives that are not what they should be (checksums and signature are made for the bad file).
+make_release "$scratch/zero" 0.1.42
+: > "$scratch/zero/$file"; sign "$scratch/zero" 0.1.42
+refuse_url "a zero-byte archive with matching checksums" "not a valid archive" "file://$scratch/zero"
+make_release "$scratch/notgz" 0.1.42
+printf 'this is not an archive\n' > "$scratch/notgz/$file"; sign "$scratch/notgz" 0.1.42
+refuse_url "a text file named like the archive" "not a valid archive" "file://$scratch/notgz"
+make_release "$scratch/cut" 0.1.42
+head -c 150 "$scratch/cut/$file" > "$scratch/cut/part" && mv "$scratch/cut/part" "$scratch/cut/$file"; sign "$scratch/cut" 0.1.42
+refuse_url "a truncated archive with matching checksums" "not a valid archive" "file://$scratch/cut"
+mkdir -p "$scratch/noprog-src/one-mk-$target"
+cp "$shell" "$scratch/noprog-src/one-mk-$target/one-mk-app"
+make_release "$scratch/noprog" 0.1.42
+tar czf "$scratch/noprog/$file" -C "$scratch/noprog-src" "one-mk-$target"; sign "$scratch/noprog" 0.1.42
+refuse_url "an archive without the one-mk program" "does not contain one-mk" "file://$scratch/noprog"
+mkdir -p "$scratch/linkprog-src/one-mk-$target"
+cp "$shell" "$scratch/linkprog-src/one-mk-$target/one-mk-app"
+ln -s one-mk-app "$scratch/linkprog-src/one-mk-$target/one-mk"
+make_release "$scratch/linkprog" 0.1.42
+tar czf "$scratch/linkprog/$file" -C "$scratch/linkprog-src" "one-mk-$target"; sign "$scratch/linkprog" 0.1.42
+refuse_url "an archive whose one-mk is only a link" "does not contain one-mk" "file://$scratch/linkprog"
+make_release "$scratch/otherdir" 0.1.42
+mkdir -p "$scratch/otherdir-src/one-mk-aarch64-unknown-linux-gnu"
+cp "$shell" "$scratch/otherdir-src/one-mk-aarch64-unknown-linux-gnu/one-mk"
+tar czf "$scratch/otherdir/$file" -C "$scratch/otherdir-src" one-mk-aarch64-unknown-linux-gnu; sign "$scratch/otherdir" 0.1.42
+refuse_url "an archive whose top folder is another target's" "holds files outside" "file://$scratch/otherdir"
+make_release "$scratch/dotdot" 0.1.42
+python3 -I - "$scratch/dotdot/$file" "one-mk-$target" "$shell" <<'PY'
+import sys, tarfile
+out, folder, shell = sys.argv[1:]
+with tarfile.open(out, "w:gz") as tar:
+    tar.add(shell, arcname=f"{folder}/one-mk")
+    tar.add(shell, arcname=f"{folder}/../escaped")
+PY
+sign "$scratch/dotdot" 0.1.42
+refuse_url "an archive with a .. path component" "holds files outside" "file://$scratch/dotdot"
+[ ! -e "$scratch/escaped" ] && ok "nothing was written outside its folder by the .. archive" || bad "the .. archive wrote outside its folder"
+
+# Platforms the release has no build for say so, with where to go on Windows.
+mkdir -p "$scratch/uname-plan9" "$scratch/uname-arm"
+printf '#!/bin/sh\ncase "$1" in -s) echo Plan9 ;; -m) echo mips ;; *) exec /usr/bin/uname "$@" ;; esac\n' > "$scratch/uname-plan9/uname"
+printf '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo aarch64 ;; *) exec /usr/bin/uname "$@" ;; esac\n' > "$scratch/uname-arm/uname"
+chmod 755 "$scratch/uname-plan9/uname" "$scratch/uname-arm/uname"
+refuse_url "an unsupported system" "no oneMK build for Plan9 mips.*releases/latest" "file://$scratch/r3" "$scratch/uname-plan9:/usr/bin:/bin"
+refuse_url "Linux on ARM (no Linux ARM build is published)" "no oneMK build for Linux aarch64" "file://$scratch/r3" "$scratch/uname-arm:/usr/bin:/bin"
+
+# No curl: a clear message before anything is attempted.
+mkdir -p "$scratch/nocurl"
+for tool in /usr/bin/*; do [ "${tool##*/}" = curl ] || ln -s "$tool" "$scratch/nocurl/${tool##*/}"; done
+refuse_url "a computer without curl" "curl is needed" "file://$scratch/r3" "$scratch/nocurl"
+
+# Running it again, and again: the same files, nothing left over.
+make_release "$scratch/r4" 0.1.35
+run_install "$scratch/r4" && [ "$(installed_version)" = 0.1.35 ] || bad "install of 0.1.35: $(cat "$scratch/out")"
+first=$(snapshot)
+if run_install "$scratch/r4" && [ "$(snapshot)" = "$first" ] && [ -z "$(find "$bin" -name '.*.new.*' -o -name '.*.old.*')" ]; then
+    ok "installing the same release again changes nothing and leaves nothing behind"
+else bad "a repeated install differs: $(cat "$scratch/out")"; fi
+run_install "$scratch/r3" && [ "$(installed_version)" = 0.1.33 ] && ok "an older release can be installed over a newer one by hand (install.sh does not refuse downgrades; the updater does)" \
+    || bad "installing an older release by hand: $(cat "$scratch/out")"
+run_install "$scratch/r4" && [ "$(installed_version)" = 0.1.35 ] || bad "reinstalling 0.1.35: $(cat "$scratch/out")"
+run_url "file://$scratch/r4" && clean_tmp && ok "a run with TMPDIR set uses and removes its own temporary folder" || bad "TMPDIR run: $(cat "$scratch/out")"
+
+# A home folder with spaces and non-ASCII characters.
+odd="$scratch/hôme with spaces"
+mkdir -p "$odd"
+if env -i HOME="$odd" PATH=/usr/bin:/bin ONE_MK_RELEASE_URL="file://$scratch/r4" TMPDIR="$scratch/tmp" dash "$scratch/install.sh" > "$scratch/out" 2>&1 && [ -x "$odd/.local/bin/one-mk" ]; then
+    ok "installs into a home folder with spaces and non-ASCII characters"
+else bad "odd home folder: $(cat "$scratch/out")"; fi
+
+# The PATH hint appears only when ~/.local/bin is not on PATH.
+run_url "file://$scratch/r4" "/usr/bin:/bin"
+grep -q 'Add it to your PATH' "$scratch/out" && ok "tells to add ~/.local/bin to PATH when it is not there" || bad "no PATH hint: $(cat "$scratch/out")"
+run_url "file://$scratch/r4" "$bin:/usr/bin:/bin"
+! grep -q 'Add it to your PATH' "$scratch/out" && ok "says nothing about PATH when ~/.local/bin is on it" || bad "PATH hint although ~/.local/bin is on PATH"
+
+# A read-only ~/.local/bin: refused with a reason, nothing half-installed.
+if [ "$(id -u)" != 0 ]; then
+    ro="$scratch/home-readonly"
+    mkdir -p "$ro/.local/bin" && cp "$shell" "$ro/.local/bin/one-mk" && chmod 555 "$ro/.local/bin"
+    before=$(cd "$ro/.local/bin" && sha256sum one-mk; ls -A)
+    if env -i HOME="$ro" PATH=/usr/bin:/bin ONE_MK_RELEASE_URL="file://$scratch/r4" TMPDIR="$scratch/tmp" dash "$scratch/install.sh" > "$scratch/out" 2>&1; then
+        bad "a read-only ~/.local/bin: installed anyway"
+    elif grep -q "could not copy" "$scratch/out" && [ "$before" = "$(cd "$ro/.local/bin" && sha256sum one-mk; ls -A)" ] && clean_tmp; then
+        ok "a read-only ~/.local/bin is refused, nothing half-installed: $(tail -1 "$scratch/out")"
+    else bad "a read-only ~/.local/bin: $(cat "$scratch/out")"; fi
+    chmod 755 "$ro/.local/bin"
+fi
+
+# Opening the window: only with a desktop session, and never when asked not to.
+APP_SCRIPT='#!/bin/sh
+echo started > "$HOME/opened"' make_release "$scratch/r-open" 0.1.36
+open_home=$scratch/home-open; mkdir -p "$open_home"
+env -i HOME="$open_home" PATH=/usr/bin:/bin DISPLAY=:0 ONE_MK_RELEASE_URL="file://$scratch/r-open" TMPDIR="$scratch/tmp" dash "$scratch/install.sh" > "$scratch/out" 2>&1
+for _ in $(seq 1 20); do [ -e "$open_home/opened" ] && break; sleep 0.1; done
+[ -e "$open_home/opened" ] && grep -q "Opening oneMK" "$scratch/out" && ok "with a desktop session the window is opened after installing" || bad "the window was not opened: $(cat "$scratch/out")"
+rm -rf "$open_home"; mkdir -p "$open_home"
+env -i HOME="$open_home" PATH=/usr/bin:/bin DISPLAY=:0 ONE_MK_INSTALL_NO_OPEN=1 ONE_MK_RELEASE_URL="file://$scratch/r-open" TMPDIR="$scratch/tmp" dash "$scratch/install.sh" > "$scratch/out" 2>&1
+sleep 0.5
+[ ! -e "$open_home/opened" ] && ok "ONE_MK_INSTALL_NO_OPEN keeps the window closed" || bad "the window opened although ONE_MK_INSTALL_NO_OPEN is set"
+rm -rf "$open_home"; mkdir -p "$open_home"
+env -i HOME="$open_home" PATH=/usr/bin:/bin ONE_MK_RELEASE_URL="file://$scratch/r-open" TMPDIR="$scratch/tmp" dash "$scratch/install.sh" > "$scratch/out" 2>&1
+sleep 0.5
+[ ! -e "$open_home/opened" ] && grep -q "Open oneMK with 'one-mk-app'" "$scratch/out" && ok "without a desktop session nothing is opened and the message says how" || bad "no-desktop run: $(cat "$scratch/out")"
 
 [ "$fail" = 0 ] && echo "all install.sh checks passed" || { echo "some install.sh checks failed"; exit 1; }
