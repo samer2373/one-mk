@@ -127,6 +127,20 @@ class Manifest(unittest.TestCase):
         for asset in data["assets"]:
             self.assertIn(f'"name":"{asset["name"]}","os":"{asset["os"]}","sha256":"{asset["sha256"]}"'.encode(), first)
 
+    def test_install_sh_reads_the_sequence_and_version_from_the_list_as_made(self):
+        # install.sh checks a replay with two greps on the signed text: they must find what this script writes.
+        self.stage_release()
+        make(self.stage, "48")
+        listing = self.stage / "update-manifest.json"
+        script = (REPO / "install.sh").read_text()
+        sequence_pipeline = re.search(r"sequence=\$\((grep -o '\"sequence\":\[0-9\]\*\[,\}\]' \"\$tmp/update-manifest.json\" \| sed '[^']+')\)", script)
+        version_pipeline = re.search(r"signed_version=\$\((grep -o '[^']+' \"\$tmp/update-manifest.json\" \| sed '[^']+')\)", script)
+        self.assertTrue(sequence_pipeline and version_pipeline, "install.sh no longer reads the list the way this test expects")
+        for pipeline, expected in ((sequence_pipeline, "48"), (version_pipeline, self.manifest()["version"])):
+            out = subprocess.run(["sh", "-c", pipeline.group(1)], env={**os.environ, "tmp": str(self.stage)}, capture_output=True, text=True)
+            self.assertEqual(out.stdout.strip(), expected, pipeline.group(1))
+        self.assertEqual(listing.read_bytes().count(b'"sequence":'), 1, "exactly one sequence in the list")
+
     def test_a_staged_manifest_or_checksum_file_is_never_listed_in_itself(self):
         self.stage_release()
         for name in ("SHA256SUMS", "update-manifest.json", "update-manifest.json.sig"):
