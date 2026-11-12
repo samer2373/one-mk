@@ -65,7 +65,11 @@ pub const STOPPED: &str = "oneMK stopped unexpectedly while pairing. Try again."
 
 /// The short id (`abcd-ef01`) of a full fingerprint, as status reports it.
 fn short(fp: &str) -> String {
-    if fp.len() >= 8 && !fp.contains('-') { format!("{}-{}", &fp[..4], &fp[4..8]) } else { fp.into() }
+    // `get`, not a slice: a line that isn't hex must not cut a character in two.
+    match (fp.get(..4), fp.get(4..8)) {
+        (Some(first), Some(second)) if !fp.contains('-') => format!("{first}-{second}"),
+        _ => fp.into(),
+    }
 }
 
 impl Pairing {
@@ -196,6 +200,16 @@ mod tests {
         }
         assert!(Method::Connect("localhost:32123".into()).args(1).is_ok());
         for address in ["", "127.0.0.1:99999", "127.0.0.1:bad"] { assert!(Method::Connect(address.into()).args(1).is_err()); }
+    }
+
+    #[test]
+    fn a_short_id_is_cut_on_characters_whatever_the_line_holds() {
+        assert_eq!(short("0123456789abcdef"), "0123-4567");
+        assert_eq!(short("abcd-ef01"), "abcd-ef01", "already short");
+        assert_eq!(short("abc"), "abc");
+        // Byte 4 is inside a character here.
+        assert_eq!(short("abcéfghijk"), "abcéfghijk");
+        assert!(matches!(parse("paired\tééééééé\tOffice PC\tright"), Some(Step::Paired { .. })));
     }
 
     #[test]

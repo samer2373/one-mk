@@ -775,3 +775,43 @@ fn shift_tab_goes_back() {
     let f = win.items().into_iter().find(|i| i.focused).expect("focus");
     assert_eq!(f.name, "Desk");
 }
+
+// ---------- the narrow desk ----------
+
+pub(super) fn states_with_a_banner() -> Vec<(&'static str, Status)> {
+    let mut controlled = two();
+    controlled.controlled_by = Some("Office PC".into());
+    let mut broadcasting = crowded();
+    broadcasting.broadcast = vec!["Office PC".into(), "MacBook Pro".into(), "Living room".into(), "Build server".into()];
+    broadcasting.broadcast_hotkey = "Ctrl+Alt+B".into();
+    let mut asking = two();
+    asking.input = vec!["Waiting for your approval in the desktop's dialog (choose Allow).".into()];
+    let mut removed = with(vec![peer("p1", "Office PC", Side::Right, os::WINDOWS, false)]);
+    removed.removed = vec!["p1".into()];
+    let mut controlling = two();
+    controlling.controlling = Some("Office PC".into());
+    let mut named = hard_names();
+    named.controlled_by = Some("The very long name of the computer in the corner of the big office upstairs".into());
+    vec![("controlled", controlled), ("broadcasting", broadcasting), ("asking", asking), ("removed", removed), ("controlling", controlling), ("controlled by a long name", named)]
+}
+
+#[test]
+fn the_toolbar_never_spills_onto_the_panel_under_a_banner() {
+    let mut bad = vec![];
+    for (w, h) in [(820.0, 540.0), (900.0, 600.0), (999.0, 700.0)] {
+        for (label, status) in states_with_a_banner() {
+            let mut win = Win::light(w, h);
+            win.status(Some(status));
+            let layout = desk_panel::desk_layout(win.window(), shell::BAR_H);
+            assert!(layout.stacked, "{w}x{h} stacks the panel under the desk");
+            for item in win.controls() {
+                let tool = ["Type on every computer", "Timer", "Lock every screen", "Stop typing on every computer"].iter().any(|t| item.name.starts_with(t));
+                if tool && item.rect.bottom() > layout.panel.top() + 0.5 {
+                    bad.push(format!("{w}x{h} {label}: {:?} {:?} runs into the panel {:?}", item.name, item.rect, layout.panel));
+                }
+            }
+            bad.extend(problems(&win).into_iter().map(|p| format!("{w}x{h} {label}: {p}")));
+        }
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
+}

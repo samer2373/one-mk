@@ -3506,6 +3506,7 @@ dependencies = [
  "ksni",
  "one-mk-ctl",
  "one-mk-proto",
+ "one-mk-wallpaper",
  "tao",
  "tray-icon",
 ]

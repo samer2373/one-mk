@@ -212,14 +212,29 @@ impl App {
     /// in a narrow window the row for layout learning's question. A narrow
     /// window's desk is short (the panel is under it): the toolbar stands as
     /// a column at its left, so the computers keep its height.
+    /// How many buttons the toolbar has: Choose computer (five computers or
+    /// more), Type on every computer and Timer (a computer online, or while
+    /// broadcasting), and Lock every screen.
+    pub(super) fn tool_count(&self) -> usize {
+        let Some(status) = self.running() else { return 1 };
+        let online = status.peers.iter().any(|p| p.online) || self.broadcasting();
+        usize::from(status.peers.len() + 1 >= 5) + if online { 2 } else { 0 } + 1
+    }
+
     pub(super) fn desk_room(&self, scene: Rect, band: f32, narrow: bool) -> (Rect, Option<Rect>, Option<Rect>) {
         let mut free = scene.shrink2(vec2(EDGE, 0.0));
         free.min.y += EDGE + band;
         let mut ask = None;
         let tools = self.desk_views_shown().then(|| {
             if narrow {
-                let col = Rect::from_min_size(free.min, vec2(TOOL_COLUMN, free.height()));
-                free = free.shrink2(vec2(TOOL_COLUMN + 8.0, 0.0));
+                // One column; where a banner leaves less height than the
+                // buttons need (the smallest window, a long sentence) the
+                // column wraps into more, rather than run into the panel.
+                let per = (((free.height() + 8.0) / (TOOL_H + 8.0)).floor() as usize).max(1);
+                let columns = self.tool_count().div_ceil(per).max(1) as f32;
+                let width = (TOOL_COLUMN + 8.0) * columns - 8.0;
+                let col = Rect::from_min_size(free.min, vec2(width, free.height()));
+                free = free.shrink2(vec2(width + 8.0, 0.0));
                 if self.suggestion_waiting() {
                     let row = Rect::from_min_size(free.min, vec2(free.width(), TOOL_H));
                     free.min.y = row.bottom() + 8.0;
@@ -269,6 +284,11 @@ impl App {
         let icons_only = narrow_window || full > row.width();
         let (mut x, mut y) = (row.left(), row.top());
         let mut place = |w: f32| {
+            // A column that has run out of height goes on in the next one (see `desk_room`).
+            if narrow_window && y > row.top() && y + TOOL_H > row.bottom() + 0.5 {
+                y = row.top();
+                x += TOOL_COLUMN + 8.0;
+            }
             let r = Rect::from_min_size(pos2(x, y), vec2(w, TOOL_H));
             if narrow_window {
                 y += TOOL_H + 8.0;

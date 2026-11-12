@@ -67,3 +67,12 @@ fn many_computers_and_monitors() {
 fn long_unicode_and_right_to_left_names() {
     sweep("names", Some(Some(hard_names())), &PAGES);
 }
+
+/// A banner over the desk (control elsewhere, broadcast, a permission to
+/// give, a computer that removed this one) changes the room every page has.
+#[test]
+fn banners_over_the_desk() {
+    for (label, status) in flows::states_with_a_banner() {
+        sweep(label, Some(Some(status)), &[Tab::Desk, Tab::Arrange, Tab::Files, Tab::Health]);
+    }
+}

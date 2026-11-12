@@ -390,4 +390,131 @@ mod tests {
         assert!(m.iter().any(|e| matches!(e, Entry::Item { action: Action::TakeBack, .. })));
         assert!(!m.iter().any(|e| matches!(e, Entry::Item { action: Action::StartDaemon, .. })));
     }
+
+    // ---------- QA: states and names the first tests left out ----------
+
+    fn plan(paused: bool) -> one_mk_wallpaper::Plan {
+        one_mk_wallpaper::Plan {
+            hash: "a".repeat(64),
+            title: "Across the horizon.mp4".into(),
+            media: one_mk_wallpaper::Media { width: 3840, height: 1080, duration_ms: 10_000, frame_rate: 30 },
+            canvas: Default::default(),
+            start_ms: 1,
+            fit: Default::default(),
+            computers: vec![],
+            pause_on_battery: true,
+            paused,
+            picture: false,
+            asset_hash: None,
+            spread: Default::default(),
+        }
+    }
+
+    fn with_wallpaper(paused: Option<bool>) -> Snapshot {
+        let mut s = snap(vec![peer("desk", Side::Right, true)]);
+        let wall = one_mk_wallpaper::Status { plan: paused.map(plan), available: true, ..Default::default() };
+        s.status.as_mut().unwrap().wallpaper = Some(wall);
+        s
+    }
+
+    #[test]
+    fn the_wallpaper_can_be_paused_and_played_from_the_menu_only_while_one_plays() {
+        let item = |paused: bool| Entry::Item { label: "Pause the wallpaper".into(), action: Action::WallpaperPause(!paused), checked: Some(paused) };
+        assert!(menu(&with_wallpaper(Some(false))).contains(&item(false)), "playing: choosing it pauses");
+        assert!(menu(&with_wallpaper(Some(true))).contains(&item(true)), "paused: it is checked, choosing it plays");
+        assert!(!labels(&menu(&with_wallpaper(None))).iter().any(|l| l.contains("wallpaper")), "nothing chosen: no entry");
+        assert!(!labels(&menu(&snap(vec![]))).iter().any(|l| l.contains("wallpaper")));
+    }
+
+    #[test]
+    fn with_nobody_paired_the_menu_offers_pairing_and_what_works_alone() {
+        let m = menu(&snap(vec![]));
+        let l = labels(&m);
+        assert!(m.contains(&Entry::Item { label: "Pair a computer…".into(), action: Action::OpenApp, checked: None }), "{l:?}");
+        assert!(!l.iter().any(|x| x.starts_with("Switch") || x.contains("clipboard") && x.contains("computer") || x == "Type on every computer"), "{l:?}");
+        // Still there: keep the pointer, lock, take back, stop, start at login, quit.
+        for want in ["Keep the pointer here", "Lock every screen", "Take back control", "Stop oneMK", "Start at login", "Quit oneMK"] {
+            assert!(l.iter().any(|x| x == want), "{want}: {l:?}");
+        }
+        // And a paired computer takes the pairing line away.
+        assert!(!labels(&menu(&snap(vec![peer("a", Side::Left, false)]))).iter().any(|x| x == "Pair a computer…"));
+    }
+
+    #[test]
+    fn names_in_any_script_go_into_the_labels_whole() {
+        for name in ["日本語のコンピュータ名前", "مكتب العمل الرئيسي", "שלום עולם", "Мастерская", "a very long name that goes on and on and on and on and on and on and on", "🖥️ desk", "with \"quotes\" & <angle> brackets"] {
+            let s = snap(vec![peer(name, Side::Right, true)]);
+            let l = labels(&menu(&s));
+            for want in [format!("Switch to {name}"), format!("Send clipboard to {name}"), format!("Get clipboard from {name}"), format!("{name}: on your right"), format!("Remove {name}…"), format!("Yes, remove {name}")] {
+                assert!(l.contains(&want), "{want:?} in {l:?}");
+            }
+            assert_eq!(s.headline(), format!("Connected to {name} (on your right)"));
+        }
+    }
+
+    #[test]
+    fn every_actions_peer_is_the_id_not_the_name() {
+        // Two computers may share a name: the menu must say which by id.
+        let mut a = peer("desk", Side::Right, true);
+        let mut b = peer("desk", Side::Left, true);
+        a.id = "id-a".into();
+        b.id = "id-b".into();
+        let m = menu(&snap(vec![a, b]));
+        for id in ["id-a", "id-b"] {
+            assert!(m.iter().any(|e| matches!(e, Entry::Item { action: Action::Switch(p), .. } if p == id)), "{id}: {m:?}");
+            assert!(m.iter().any(|e| matches!(e, Entry::Item { action: Action::ClipSend(p), .. } if p == id)), "{id}");
+            assert!(m.iter().any(|e| matches!(e, Entry::Sub { items, .. } if items.iter().any(|i| matches!(i, Entry::Item { action: Action::SetSide { peer, .. }, .. } if peer == id)))), "{id}");
+        }
+    }
+
+    #[test]
+    fn being_controlled_offers_the_way_back_and_names_who() {
+        let mut s = snap(vec![peer("desk", Side::Right, true), peer("mac", Side::Left, true)]);
+        s.status.as_mut().unwrap().controlled_by = Some("mac".into());
+        assert_eq!(s.headline(), "mac is controlling this computer");
+        assert_eq!(s.icon_state(), IconState::Controlling);
+        let l = labels(&menu(&s));
+        assert!(l.contains(&"Switch back here".into()), "{l:?}");
+        assert!(l.contains(&"Take back control".into()));
+    }
+
+    #[test]
+    fn the_headline_says_broadcast_before_anything_else() {
+        let mut s = snap(vec![peer("a", Side::Right, true)]);
+        let st = s.status.as_mut().unwrap();
+        st.controlling = Some("a".into());
+        st.broadcast = vec!["a".into()];
+        assert_eq!(s.headline(), "Broadcasting to a");
+    }
+
+    #[test]
+    fn an_unknown_transfer_size_shows_dots_and_a_stalled_one_its_percent() {
+        let t = TransferStatus { id: 3, sending: true, peer: "desk".into(), files: 0, done: 10, total: 0, rate: 0 };
+        assert_eq!(transfer_line(&t), "Sending files to desk…");
+        let t = TransferStatus { total: 200, done: 50, rate: 0, files: 2, ..t };
+        assert_eq!(transfer_line(&t), "Sending 2 files to desk: 25%");
+        let t = TransferStatus { done: 900, total: 200, ..t };
+        assert_eq!(transfer_line(&t), "Sending 2 files to desk: 100%", "never past 100");
+    }
+
+    #[test]
+    fn side_labels_cover_every_side_and_the_menu_lists_each_once() {
+        for side in Side::ALL {
+            assert!(!side_label(side).is_empty());
+        }
+        let m = menu(&snap(vec![peer("desk", Side::Top, true)]));
+        let Some(Entry::Sub { label, items }) = m.iter().find(|e| matches!(e, Entry::Sub { .. })) else { panic!("{m:?}") };
+        assert_eq!(label, "desk: above");
+        let sides: Vec<_> = items.iter().filter_map(|e| match e { Entry::Item { label, checked, .. } => Some((label.as_str(), *checked)), _ => None }).collect();
+        assert_eq!(sides, [("Left", Some(false)), ("Right", Some(false)), ("Above", Some(true)), ("Below", Some(false))]);
+    }
+
+    #[test]
+    fn start_at_login_shows_what_is_set() {
+        for on in [false, true] {
+            let mut s = Snapshot::default();
+            s.autostart = on;
+            assert!(menu(&s).contains(&Entry::Item { label: "Start at login".into(), action: Action::ToggleAutostart, checked: Some(on) }));
+        }
+    }
 }
