@@ -17,6 +17,12 @@ pub const MAX_LINK: usize = 1600;
 pub const MAX_LIFETIME: Duration = Duration::from_secs(3600);
 pub const STEP_TIMEOUT: Duration = Duration::from_secs(10);
 pub const HEADER_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// How long each automatic step of an invitation may take now ([`STEP_TIMEOUT`]; in a debug build
+/// `ONE_MK_TEST_INVITE_STEP_MS` shortens it, see [`crate::test_timeout`]).
+pub fn step_timeout() -> Duration {
+    crate::test_timeout(STEP_TIMEOUT, "ONE_MK_TEST_INVITE_STEP_MS")
+}
 const MAX_GUESSES: u8 = 5;
 
 pub fn unix_now() -> u64 {
@@ -107,7 +113,9 @@ impl Invitation {
     }
 
     pub fn is_expired(&self) -> bool { unix_now() >= self.expires }
-    fn id(&self) -> [u8; 32] {
+    /// What the joiner names the invitation by in its first message (sent in the clear, a
+    /// one-way function of the secret, so not the credential); public so a test can play a joiner.
+    pub fn id(&self) -> [u8; 32] {
         let key = hmac::Key::new(hmac::HMAC_SHA256, self.secret.as_ref());
         hmac::sign(&key, b"one-mk invite id v1").as_ref().try_into().expect("SHA256 tag")
     }
@@ -337,6 +345,51 @@ fn sas(key: &hmac::Key, transcript: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_invitation_step_time_is_what_it_was_unless_a_debug_test_shortens_it() {
+        assert_eq!(STEP_TIMEOUT, Duration::from_secs(10));
+        // Nothing sets the variable here; a value that is not a positive number of milliseconds is ignored.
+        assert_eq!(step_timeout(), STEP_TIMEOUT);
+        assert_eq!(crate::test_timeout(STEP_TIMEOUT, "ONE_MK_TEST_NOT_SET_ANYWHERE"), STEP_TIMEOUT);
+    }
+
+    /// A joiner that sends its header and then stalls (a laptop lid, a dropped Wi-Fi) is given up on
+    /// when the step time runs out, in milliseconds here, and that must not burn the invitation: the
+    /// real joiner can still use it, once.
+    #[tokio::test]
+    async fn a_joiner_that_stalls_after_the_header_costs_nothing_and_leaves_the_invitation_usable() {
+        use crate::{Identity, Node};
+        use std::sync::Arc;
+        let host = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let staller = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let joiner = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let invitation = Invitation::new(host.identity().fingerprint, vec!["192.0.2.1:1234".parse().unwrap()], 24900, Duration::from_secs(60)).unwrap();
+        let state = InvitationState::new(&invitation);
+        let (stalled, incoming) = tokio::join!(staller.connect(host.local_addr().unwrap()), host.accept());
+        let (stalled, incoming) = (stalled.unwrap(), incoming.unwrap().unwrap());
+        // The right header, then nothing.
+        let (mut send, _recv) = stalled.open_stream(StreamKind::Pairing).await.unwrap();
+        let mut header = MAGIC.to_vec();
+        header.extend_from_slice(&invitation.id());
+        send.write_all(&header).await.unwrap();
+        let started = Instant::now();
+        let waited = tokio::time::timeout(Duration::from_millis(300), InviteSession::accept(&incoming, host.identity().fingerprint, "host", 24900, &state)).await;
+        assert!(waited.is_err(), "the exchange cannot finish without the joiner");
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+        assert!(state.active(), "a stalled joiner burned the invitation");
+        drop((send, stalled, incoming));
+        // The real joiner, on a new connection, still pairs with the same invitation.
+        let (outgoing, incoming) = tokio::join!(joiner.connect(host.local_addr().unwrap()), host.accept());
+        let (outgoing, incoming) = (outgoing.unwrap(), incoming.unwrap().unwrap());
+        let (host_session, join_session) = tokio::join!(
+            InviteSession::accept(&incoming, host.identity().fingerprint, "host", 24900, &state),
+            InviteSession::join(&outgoing, joiner.identity().fingerprint, "joiner", 24901, &invitation)
+        );
+        assert_eq!(host_session.unwrap().code, join_session.unwrap().code);
+        assert!(!state.active(), "and it is used up now");
+        host.close(); staller.close(); joiner.close();
+    }
+
     #[tokio::test]
     async fn silent_clients_have_a_short_header_deadline() {
         use crate::{Identity, Node};

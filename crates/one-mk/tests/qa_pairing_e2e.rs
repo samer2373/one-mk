@@ -401,6 +401,102 @@ fn a_declined_or_tampered_invitation_saves_nothing() {
     );
 }
 
+/// A computer with the invitation's step time shortened (a debug build reads this variable; the
+/// default is 10 s).
+fn quick_invitation(node: &Node, step_ms: u64) -> Node {
+    let mut node = node.clone();
+    node.env.push(("ONE_MK_TEST_INVITE_STEP_MS".into(), step_ms.to_string()));
+    node
+}
+
+/// Someone who dials the host with the right invitation header and then stalls (asleep, Wi-Fi gone)
+/// is let go when the step time runs out, the host says so, and the invitation is not burned: the real
+/// joiner then pairs with it. (The real step time is 10 s; this one is 1.5 s.)
+#[test]
+fn a_joiner_that_stalls_in_the_invitation_is_let_go_in_the_step_time_and_the_link_still_works() {
+    if !isolated("a_joiner_that_stalls_in_the_invitation_is_let_go_in_the_step_time_and_the_link_still_works") {
+        return;
+    }
+    let mut lab = Lab::new();
+    let (alpha, beta) = (lab.node("alpha"), lab.node("beta"));
+    lab.start_plain(&alpha);
+    lab.start_plain(&beta);
+    let mut host = invite(&quick_invitation(&alpha, 1_500), &[]);
+    let link = invite_link(&mut host);
+    let invitation = one_mk_net::invite::Invitation::parse(&link).unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let stalled = runtime.block_on(async {
+        let identity = std::sync::Arc::new(one_mk_net::Identity::ephemeral().unwrap());
+        let bind = format!("{}:0", reachable_address().unwrap());
+        let node = one_mk_net::Node::bind(identity, bind.parse().unwrap()).unwrap();
+        let peer = node.connect(invitation.addrs[0]).await.unwrap();
+        let (mut send, recv) = peer.open_stream(one_mk_proto::StreamKind::Pairing).await.unwrap();
+        let mut header = b"\xff\xffOMKI\x01".to_vec();
+        header.extend_from_slice(&invitation.id());
+        send.write_all(&header).await.unwrap();
+        (node, peer, send, recv)
+    });
+    let started = Instant::now();
+    wait("the host to give up on the stalled joiner", 20, || host.stderr().contains("Invitation attempt rejected").then_some(()));
+    assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    assert!(trusted(&alpha).devices().is_empty() && trusted(&beta).devices().is_empty());
+    // Not burned: the real joiner still gets through with the same link.
+    let mut joiner = join(&beta, &link);
+    host.expect("code\t", 20);
+    joiner.expect("code\t", 20);
+    host.say("yes");
+    joiner.say("yes");
+    host.expect("paired", 20);
+    joiner.expect("paired", 20);
+    assert!(host.finish(20).ok() && joiner.finish(20).ok());
+    assert_eq!(trusted(&alpha).devices().len(), 1);
+    assert_eq!(trusted(&beta).devices().len(), 1);
+    drop(stalled);
+}
+
+/// The host never answers the joiner (it is asleep, or is not oneMK at all): the joiner gives up in the
+/// step time with a message that says what happened, exits with an error and saves nothing.
+#[test]
+fn a_host_that_never_answers_a_joiner_is_given_up_on_in_the_step_time_and_nothing_is_saved() {
+    if !isolated("a_host_that_never_answers_a_joiner_is_given_up_on_in_the_step_time_and_nothing_is_saved") {
+        return;
+    }
+    let lab = Lab::new();
+    let beta = quick_invitation(&lab.node("beta"), 1_500);
+    // A real QUIC computer with its own identity that accepts the connection and then says nothing.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (node, link) = runtime.block_on(async {
+        let identity = std::sync::Arc::new(one_mk_net::Identity::ephemeral().unwrap());
+        let bind = format!("{}:0", reachable_address().unwrap());
+        let node = one_mk_net::Node::bind(identity.clone(), bind.parse().unwrap()).unwrap();
+        let invitation = one_mk_net::invite::Invitation::new(
+            identity.fingerprint,
+            vec![node.local_addr().unwrap()],
+            24900,
+            Duration::from_secs(300),
+        )
+        .unwrap();
+        (node, invitation.link())
+    });
+    let held = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let keep = held.clone();
+    let node = std::sync::Arc::new(node);
+    let accepting = node.clone();
+    runtime.spawn(async move {
+        while let Some(Ok(peer)) = accepting.accept().await {
+            keep.lock().unwrap().push(peer);
+        }
+    });
+    let started = Instant::now();
+    let out = join(&beta, &link).finish(40);
+    let error = out.failed();
+    assert!(error.contains("invitation exchange timed out"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(20), "{:?}", started.elapsed());
+    assert!(!held.lock().unwrap().is_empty(), "the joiner never reached the stand-in host");
+    assert!(trusted(&beta).devices().is_empty());
+    node.close();
+}
+
 #[test]
 fn a_second_invitation_cannot_be_opened_on_the_same_computer() {
     if !isolated("a_second_invitation_cannot_be_opened_on_the_same_computer") {

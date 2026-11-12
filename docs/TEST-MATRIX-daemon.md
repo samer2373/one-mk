@@ -16,7 +16,7 @@ of the crate's tests; see `tests/live_wallpaper.rs`). Slow ones are `#[ignore]` 
 
 | File | Covers |
 |---|---|
-| `qa_pairing_e2e.rs` | pairing (matching codes, wrong code, refusal, garbage answers, EOF, nothing listening, re-pairing, no duplicate), invitations (burned after one use, expiry, tampered or malformed link, host says no, one open invitation per computer), no false "it removed this computer" after a fresh pairing, and the timeouts in milliseconds (no answer to the codes, the other computer going quiet after the codes, a peer that never takes part, nothing listening: see "Timeouts under test") |
+| `qa_pairing_e2e.rs` | pairing (matching codes, wrong code, refusal, garbage answers, EOF, nothing listening, re-pairing, no duplicate), invitations (burned after one use, expiry, tampered or malformed link, host says no, one open invitation per computer), no false "it removed this computer" after a fresh pairing, and the timeouts in milliseconds (no answer to the codes, the other computer going quiet after the codes, a peer that never takes part, nothing listening, an invitation joiner that stalls or a host that never answers: see "Timeouts under test") |
 | `qa_daemon_e2e.rs` | layout on both computers (every side, offsets, Ctrl/Cmd swap, restart), rename and forget, switch/takeback/lock-pointer/broadcast, controller or controlled computer killed (`kill -9`), second daemon on one home, `stop`, SIGTERM, stale socket, status and doctor text and JSON |
 | `qa_send_e2e.rs` | `send`: small, zero-byte, binary, repeated names, folders, 16 odd file names, names that cannot be sent, folder vs file name clash, 200 MB intact, status progress, cancel (SIGINT) and resume, receiver killed mid-transfer and resume, unreachable receiver, unreadable file, read-only downloads, forgotten sender |
 | `qa_clipboard_e2e.rs` | clipboard text and image both ways, formats switched off, size limit, fetch refused then allowed, unknown computer, `--no-clipboard`, pointer-follow push, no echo back, history list/show/copy/delete/clear (JSON) |
@@ -88,7 +88,13 @@ person to answer. Waiting that long in a test is slow, so a **debug build** read
 environment variables `ONE_MK_TEST_PAIR_STEP_MS` and `ONE_MK_TEST_PAIR_ANSWER_MS` (a positive
 number of milliseconds; anything else is ignored). A release build never reads them
 (`one_mk_net::test_timeout`), so no shipped build can be made to give up sooner, and the defaults
-and the messages ("no answer within 120 s") are exactly what they were. The same step time is a
+and the messages ("no answer within 120 s") are exactly what they were. The invitation's 10 s step
+time has the same seam (`ONE_MK_TEST_INVITE_STEP_MS`, `one_mk_net::invite::step_timeout`): the host's
+exchange with a joiner, the wait for its answer, the join exchange and the wait for the commit.
+`net/invite.rs` tests a stalled joiner (the invitation stays usable), `one-mk/src/invite.rs` a joiner
+that never answers (nothing saved) and a host that never confirms its save (the "forget on both
+computers and invite again" message), and `qa_pairing_e2e.rs` a stalled joiner and a silent host
+against the real binary. The same step time is a
 parameter of `Pairing::start_within`, which the unit tests in `crates/net/src/pairing.rs` use
 without touching the environment. The disk-full receiver has a test-only writer
 (`transfer::fault`) that runs out of room after a number of bytes and fails with ENOSPC, as a
