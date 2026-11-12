@@ -24,6 +24,8 @@ spec = importlib.util.spec_from_file_location("consistency", HERE / "check-relea
 consistency = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(consistency)
 
+CURRENT = consistency.workspace_version(REPO)
+BUMPED = ".".join(CURRENT.split(".")[:2] + [str(int(CURRENT.split(".")[2]) + 1)])
 SKIP = shutil.ignore_patterns("target", ".git", "vendor", "screens", "node_modules", "fixtures", "update_fixtures", "*.png", "*.ico", "*.icns", "*.woff2", "*.mp4", "*.webm")
 
 
@@ -92,11 +94,11 @@ class Consistency(unittest.TestCase):
 
     # ------------------------------------------------------------- versions
     def test_a_version_bump_that_misses_the_lock_notes_and_docs_fails(self):
-        self.mutate("Cargo.toml", 'version = "1.2.0"', 'version = "1.2.1"')
-        self.fails("versions", "Cargo.lock holds every workspace crate at 1.2.1")
-        self.fails("versions", "docs/release-notes/v1.2.1.md exists")
-        self.fails("versions", "docs/COMMANDS.md is generated for 1.2.1")
-        self.fails("versions", "the bug report template's example version is 1.2.1")
+        self.mutate("Cargo.toml", f'version = "{CURRENT}"', f'version = "{BUMPED}"')
+        self.fails("versions", f"Cargo.lock holds every workspace crate at {BUMPED}")
+        self.fails("versions", f"docs/release-notes/v{BUMPED}.md exists")
+        self.fails("versions", f"docs/COMMANDS.md is generated for {BUMPED}")
+        self.fails("versions", f"the bug report template's example version is {BUMPED}")
 
     def test_a_crate_with_its_own_version_fails(self):
         self.mutate("crates/wall/Cargo.toml", "version.workspace = true", 'version = "0.3.0"')
@@ -115,13 +117,13 @@ class Consistency(unittest.TestCase):
         self.fails("versions", "the first `version")
 
     def test_a_hard_coded_installer_version_fails(self):
-        self.mutate("installer/one-mk.iss", "AppVersion={#AppVersion}", "AppVersion=1.2.0")
+        self.mutate("installer/one-mk.iss", "AppVersion={#AppVersion}", f"AppVersion={CURRENT}")
         self.fails("versions", "the Windows installer takes its version")
 
     def test_the_wrong_tag_is_refused_by_version_sh(self):
         status, output = run(self.copy, "versions")
         self.assertEqual(status, 0, output)
-        self.assertIn("scripts/version.sh --check accepts exactly the tag v1.2.0", output)
+        self.assertIn(f"scripts/version.sh --check accepts exactly the tag v{CURRENT}", output)
 
     # ------------------------------------------------------------ workflows
     def test_an_unpinned_third_party_action_fails(self):
