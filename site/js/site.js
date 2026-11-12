@@ -60,6 +60,7 @@
       return String(r || "");
     } catch (err) { return ""; }
   }
+  var dlOrder = $$("[data-dl-grid] > [data-panel]");
   function applyDownload(r) {
     $$("[data-download]").forEach(function (a) { a.href = r.href; });
     $$("[data-download-label]").forEach(function (sp) { sp.textContent = r.label; });
@@ -73,7 +74,13 @@
       if (why) { why.textContent = text || ""; why.hidden = !text; }
       $$("[data-file]", card).forEach(function (a) { a.classList.toggle("is-rec", on && r.recommend.indexOf(a.dataset.file) >= 0); });
     });
-    if (grid) grid.classList.toggle("has-detected", !!r.panel);
+    if (grid) {
+      grid.classList.toggle("has-detected", !!r.panel);
+      // The detected card leads on screen, so it leads in the document too: the Tab key and screen readers meet it first.
+      var want = dlOrder.slice(), lead = r.panel ? grid.querySelector('[data-panel="' + r.panel + '"]') : null;
+      if (lead) { want.splice(want.indexOf(lead), 1); want.unshift(lead); }
+      if (want.some(function (c, i) { return grid.children[i] !== c; })) want.forEach(function (c) { grid.appendChild(c); });
+    }
     var away = $("[data-dl-away]"); if (away) away.hidden = !r.mobile;
     root.dataset.detected = [r.os, r.arch, r.sure ? "sure" : "guess"].join(" ");
   }
