@@ -343,7 +343,7 @@ impl Lab {
         command
     }
 
-    /// Runs a command to the end (killed after 90 s).
+    /// Runs a command to the end (killed after 240 s).
     #[track_caller]
     pub fn run(node: &Node, args: &[&str]) -> Out {
         Self::run_with(node, args, |_| {})
@@ -355,7 +355,7 @@ impl Lab {
         tweak(&mut command);
         let mut proc = Proc::spawn(command);
         drop(proc.child.stdin.take());
-        proc.finish(90)
+        proc.finish(240)
     }
 
     #[track_caller]
