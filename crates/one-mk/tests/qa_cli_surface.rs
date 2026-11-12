@@ -765,6 +765,11 @@ fn install_integrate_and_uninstall_work_inside_a_sandboxed_home_and_undo_cleanly
     let stub = stubs.join("systemctl");
     std::fs::write(&stub, format!("#!/bin/sh\necho \"$@\" >> {}\nexit 1\n", log.display())).unwrap();
     std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    // A file manager on PATH, so `integrate` has somewhere to put its entries even on a machine (a CI
+    // runner) that has none; it is never run.
+    let nautilus = stubs.join("nautilus");
+    std::fs::write(&nautilus, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&nautilus, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let path = format!("{}:{}", stubs.display(), std::env::var("PATH").unwrap_or_default());
     let sandbox = |command: &mut std::process::Command| {
         command

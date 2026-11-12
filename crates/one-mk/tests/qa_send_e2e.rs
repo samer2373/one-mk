@@ -297,7 +297,9 @@ fn the_receiver_dying_mid_transfer_fails_the_send_cleanly_and_a_later_send_finis
     }
     let proc = Proc::spawn(Lab::command(&alpha, &["send", "--to", "beta", big.to_str().unwrap()]));
     wait("bytes arrive", 60, || {
-        lab.status(&beta).transfers.iter().any(|t| !t.sending && t.done > 1 << 20).then_some(())
+        // Well past what the receiver may still hold in memory, so a kill -9 leaves a real partial file
+        // even on a slow machine.
+        lab.status(&beta).transfers.iter().any(|t| !t.sending && t.done > 48 << 20).then_some(())
     });
     lab.kill9(&beta);
     let started = std::time::Instant::now();

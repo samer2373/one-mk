@@ -54,6 +54,8 @@ fn the_appearance_is_saved_in_the_file_and_the_file_wins_over_the_window() {
     assert_eq!(win.app.link.prefs().appearance, crate::style::Appearance::System);
     // Somebody changes the file by hand: the window follows when it is told.
     win.settings("[window]\nappearance = \"dark\"\n");
+    // The palette changes on the frame that follows the news, not inside it.
+    win.frames(5);
     assert_eq!(pal().theme, crate::style::Theme::Dark);
     win.frames(60);
     assert!(problems(&win).is_empty(), "{:#?}", problems(&win));
