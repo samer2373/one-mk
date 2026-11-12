@@ -575,7 +575,7 @@ impl App {
             let job = Job::Switch { to: "here".into(), name: status.name.clone() };
             let busy = self.busy.contains(&job);
             let b = Rect::from_min_size(pos2(c.left(), y), vec2(c.width(), 38.0));
-            if button(ui, b, Id::unique("quick-switch-here"), "Switch back here", Look::Primary, !busy, Some("Bring the mouse and keyboard back to this computer")).clicked() {
+            if button(ui, b, Id::unique("quick-switch-here"), "Switch back here", Look::Primary, !busy, Some("Switch back here: bring the mouse and keyboard back to this computer")).clicked() {
                 self.busy.push(job);
                 self.link.switch("here", &status.name);
             }
@@ -858,7 +858,7 @@ impl App {
     /// clipboard side by side.
     fn peer_actions(&mut self, ui: &mut Ui, c: Rect, y: f32, status: &Status, peer: &PeerStatus) -> f32 {
         let (job, label, name) = if status.controlling.as_ref() == Some(&peer.name) {
-            (Job::Switch { to: "here".into(), name: status.name.clone() }, "Switch back here", "Bring the mouse and keyboard back to this computer".to_owned())
+            (Job::Switch { to: "here".into(), name: status.name.clone() }, "Switch back here", "Switch back here: bring the mouse and keyboard back to this computer".to_owned())
         } else {
             (Job::Switch { to: peer.id.clone(), name: peer.name.clone() }, "Switch to it", format!("Switch to it: move the mouse and keyboard to {}", peer.name))
         };

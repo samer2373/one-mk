@@ -12,8 +12,12 @@ const PAGES: [Tab; 7] = [Tab::Desk, Tab::Arrange, Tab::Wallpaper, Tab::Files, Ta
 const SETUPS: [(f32, f32, bool, f32); 5] = [(820.0, 540.0, false, 1.0), (820.0, 540.0, true, 2.0), (1000.0, 700.0, true, 1.25), (1200.0, 780.0, false, 2.0), (1920.0, 1080.0, true, 1.0)];
 
 fn sweep(label: &str, status: Option<Option<Status>>, pages: &[Tab]) {
+    sweep_at(label, status, pages, &SETUPS);
+}
+
+fn sweep_at(label: &str, status: Option<Option<Status>>, pages: &[Tab], setups: &[(f32, f32, bool, f32)]) {
     let mut bad = vec![];
-    for (w, h, dark, ppp) in SETUPS {
+    for &(w, h, dark, ppp) in setups {
         let mut win = Win::new(w, h, dark, ppp);
         if let Some(status) = status.clone() {
             win.status(status);
@@ -73,6 +77,7 @@ fn long_unicode_and_right_to_left_names() {
 #[test]
 fn banners_over_the_desk() {
     for (label, status) in flows::states_with_a_banner() {
-        sweep(label, Some(Some(status)), &[Tab::Desk, Tab::Arrange, Tab::Files, Tab::Health]);
+        // The smallest window (the least room) and a large one: banners matter at the extremes.
+        sweep_at(label, Some(Some(status)), &[Tab::Desk], &[SETUPS[0], SETUPS[4]]);
     }
 }

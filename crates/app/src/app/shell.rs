@@ -438,7 +438,7 @@ impl App {
         let shown = !self.sheet_open() && self.status.is_some();
         let a11y_label = match label.as_str() {
             "Take back" => Some("Take back control of this computer".to_owned()),
-            "Use keyboard to stop" => Some(format!("Typing on every computer. {}", self.broadcast_stop_hint())),
+            "Use keyboard to stop" => Some(format!("{shown_label}: typing on every computer. {}", self.broadcast_stop_hint())),
             l if l != shown_label => Some(l.to_owned()),
             _ => None,
         };
