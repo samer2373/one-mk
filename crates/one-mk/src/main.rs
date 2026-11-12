@@ -18,6 +18,7 @@ macro_rules! println {
     ($($args:tt)*) => { print!("{}\n", format_args!($($args)*)) };
 }
 
+mod analytics;
 mod app;
 mod bench;
 mod clip;
@@ -545,6 +546,18 @@ fn main() -> ExitCode {
         return wallpaper_import::run(&raw[1..]);
     }
     let cli = Cli::parse();
+    let analytics = analytics::Session::from_env();
+    let analytics_event = match cli.cmd.as_ref() {
+        None | Some(Cmd::Run(_)) => Some(analytics::Event::DaemonStopped),
+        Some(Cmd::Pair { .. } | Cmd::Join(_) | Cmd::Invite(_)) => Some(analytics::Event::PairingFinished),
+        Some(Cmd::Layout { .. }) => Some(analytics::Event::LayoutFinished),
+        Some(Cmd::Profile { .. }) => Some(analytics::Event::ProfileFinished),
+        _ => None,
+    };
+    if matches!(cli.cmd.as_ref(), None | Some(Cmd::Run(_)))
+        && let Some(session) = &analytics {
+        session.capture(analytics::Event::DaemonStarted, None);
+    }
     let verbose = cli.verbose;
     let level = match verbose {
         // What happened to the wallpaper is worth keeping in the usual log.
@@ -577,6 +590,9 @@ fn main() -> ExitCode {
     } else { run(cli) };
     #[cfg(not(target_os = "macos"))]
     let result = run(cli);
+    if let (Some(session), Some(event)) = (&analytics, analytics_event) {
+        session.capture(event, Some(result.is_ok()));
+    }
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
