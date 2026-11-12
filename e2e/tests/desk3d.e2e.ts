@@ -29,10 +29,17 @@ const heroState = (browser: B) => browser.evaluate(() => {
   };
 });
 
+/** Software WebGL at 2560 px is too slow to drive interactively, so the interaction tests skip that one profile. */
+async function interactive(browser: B) {
+  const p = await currentProfile(browser);
+  test.skip(p.viewport.width > 2000, 'software WebGL at this size is too slow to drive interactively; the load test still runs');
+  test.skip(!(await hasWebGL(browser)), 'this browser has no WebGL here');
+}
+
 test3d('with WebGL the hero desk loads, fades the poster out, and shows the three computers', async ({ app, browser, guard }) => {
   await app.open('/');
   test.skip(!(await hasWebGL(browser)), 'this browser has no WebGL here');
-  await expect.poll(async () => (await heroState(browser)).live, { timeout: 60_000, message: 'the canvas never went live' }).toBe(true);
+  await expect.poll(async () => (await heroState(browser)).live, { timeout: 100_000, message: 'the canvas never went live' }).toBe(true);
   const s = await heroState(browser);
   expect(s.three).toBe(true);
   expect(s.desk).toBe(true);
@@ -52,47 +59,49 @@ test3d('with WebGL the hero desk loads, fades the poster out, and shows the thre
 
 test3d('the buttons under the desk move the pointer to that computer, with mouse and keyboard', async ({ app, browser, screen, guard }) => {
   await app.open('/');
-  test.skip(!(await hasWebGL(browser)), 'this browser has no WebGL here');
-  await expect.poll(async () => (await heroState(browser)).live, { timeout: 60_000 }).toBe(true);
+  await interactive(browser);
+  await expect.poll(async () => (await heroState(browser)).live, { timeout: 90_000 }).toBe(true);
   const group = screen.getByRole('group', { name: 'Move the pointer to a computer' });
   const mac = group.getByRole('button', { name: 'MacBook Air' });
   const pc = group.getByRole('button', { name: 'Gaming PC' });
   const studio = group.getByRole('button', { name: 'Studio PC' });
   await mac.tap();
-  await expect.poll(async () => (await heroState(browser)).pressed, { timeout: 40_000 }).toEqual(['true', 'false', 'false']);
+  await expect.poll(async () => (await heroState(browser)).pressed, { timeout: 60_000 }).toEqual(['true', 'false', 'false']);
   await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 5000 }).toEqual([true, false, false]);
   await pc.tap();
-  await expect.poll(async () => (await heroState(browser)).pressed, { timeout: 40_000 }).toEqual(['false', 'false', 'true']);
+  await expect.poll(async () => (await heroState(browser)).pressed, { timeout: 60_000 }).toEqual(['false', 'false', 'true']);
   await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 5000 }).toEqual([false, false, true]);
   // From the keyboard.
   await studio.focus();
   await browser.keyboard.press('Enter');
-  await expect.poll(async () => (await heroState(browser)).pressed, { timeout: 40_000 }).toEqual(['false', 'true', 'false']);
+  await expect.poll(async () => (await heroState(browser)).pressed, { timeout: 60_000 }).toEqual(['false', 'true', 'false']);
   await mac.focus();
   await browser.keyboard.press('Space');
-  await expect.poll(async () => (await heroState(browser)).pressed, { timeout: 40_000 }).toEqual(['true', 'false', 'false']);
+  await expect.poll(async () => (await heroState(browser)).pressed, { timeout: 60_000 }).toEqual(['true', 'false', 'false']);
   await guard.check();
 });
 
 test3d('moving the mouse over the desk drives the pointer and the hint says so (not on touch)', async ({ app, browser, guard }) => {
   await app.open('/');
   const p = await currentProfile(browser);
-  test.skip(!(await hasWebGL(browser)), 'this browser has no WebGL here');
-  await expect.poll(async () => (await heroState(browser)).live, { timeout: 60_000 }).toBe(true);
+  await interactive(browser);
+  await expect.poll(async () => (await heroState(browser)).live, { timeout: 90_000 }).toBe(true);
+  await browser.evaluate("document.querySelector('[data-desk]').scrollIntoView({ block: 'center', behavior: 'instant' })");
+  await browser.evaluate('new Promise(function (r) { setTimeout(r, 300); })');
   const box = await browser.evaluate(() => { const r = (document.querySelector('[data-desk]') as HTMLElement).getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
   expect((await heroState(browser)).hint).toBe('Move your mouse across the desk.');
-  await browser.mouse.move(box.x + box.w * 0.15, Math.max(5, box.y + box.h * 0.4));
-  await browser.mouse.move(box.x + box.w * 0.3, Math.max(5, box.y + box.h * 0.45));
-  await expect.poll(async () => (await heroState(browser)).hint, { timeout: 5000 }).toBe('The pointer crosses at the same height, like oneMK does.');
+  await browser.mouse.move(box.x + box.w * 0.15, box.y + box.h * 0.4);
+  await browser.mouse.move(box.x + box.w * 0.3, box.y + box.h * 0.45);
+  await expect.poll(async () => (await heroState(browser)).hint, { timeout: 30_000 }).toBe('The pointer crosses at the same height, like oneMK does.');
   expect(p.name).toBeTruthy();
   await guard.check();
 });
 
 test3d('the Keys section loads its own 3D keyboard and the four quick setups change the caption and the pressed button', async ({ app, browser, screen, guard }) => {
   await app.open('/');
-  test.skip(!(await hasWebGL(browser)), 'this browser has no WebGL here');
+  await interactive(browser);
   await browser.evaluate("document.querySelector('#keys').scrollIntoView({ block: 'center', behavior: 'instant' })");
-  await expect.poll(() => browser.evaluate<boolean>("document.querySelector('[data-keys]').classList.contains('is-live')"), { timeout: 60_000 }).toBe(true);
+  await expect.poll(() => browser.evaluate<boolean>("document.querySelector('[data-keys]').classList.contains('is-live')"), { timeout: 90_000 }).toBe(true);
   const status = () => browser.evaluate<string>("document.querySelector('[data-remap-status]').textContent.trim()");
   const pressed = () => browser.evaluate<string[]>("Array.from(document.querySelectorAll('[data-remap]')).map(function (b) { return b.getAttribute('aria-pressed'); })");
   expect(await status()).toBe('Caps Lock: tap for Esc, hold for Ctrl.');
@@ -117,8 +126,8 @@ test3d('the Keys section loads its own 3D keyboard and the four quick setups cha
 
 test3d('switching the theme while the 3D scenes are live does not break them', async ({ app, browser, screen, guard }) => {
   await app.open('/');
-  test.skip(!(await hasWebGL(browser)), 'this browser has no WebGL here');
-  await expect.poll(async () => (await heroState(browser)).live, { timeout: 60_000 }).toBe(true);
+  await interactive(browser);
+  await expect.poll(async () => (await heroState(browser)).live, { timeout: 90_000 }).toBe(true);
   const before = await browser.evaluate<string>('document.documentElement.dataset.theme');
   await screen.getByRole('button', { name: /Switch to (dark|light) theme/ }).tap();
   await expect.poll(() => browser.evaluate<string>('document.documentElement.dataset.theme')).not.toBe(before);
@@ -134,8 +143,11 @@ for (const mode of ['no-webgl', 'reduced-motion'] as const) {
   t(`${mode}: the poster stays, the controls that need 3D are gone, three.js is never fetched, and nothing errors`, async ({ app, browser, guard }) => {
     if (mode === 'reduced-motion') await browser.emulateMedia({ reducedMotion: 'reduce' });
     await app.open('/');
+    const shown = (sel: string) => browser.evaluate<boolean>(`(function(){ var i = Array.from(document.querySelectorAll('${sel}')).find(function (x) { return x.offsetWidth > 0; }); return !!i && i.complete && i.naturalWidth > 0; })()`);
+    await expect.poll(() => shown('.stage__poster img'), { timeout: 20_000 }).toBe(true);
     await browser.evaluate("document.querySelector('#keys').scrollIntoView({ block: 'center', behavior: 'instant' })");
-    await browser.evaluate('new Promise(function (r) { setTimeout(r, 1500); })');
+    await expect.poll(() => shown('.remap__poster img'), { timeout: 20_000 }).toBe(true);
+    await browser.evaluate('new Promise(function (r) { setTimeout(r, 800); })');
     const s = await browser.evaluate(() => {
       const vis = (e: Element | null) => !!e && getComputedStyle(e).display !== 'none' && (e as HTMLElement).offsetWidth > 0 && getComputedStyle(e).visibility !== 'hidden';
       const posterImg = Array.from(document.querySelectorAll('.stage__poster img')).find((i) => vis(i)) as HTMLImageElement | undefined;

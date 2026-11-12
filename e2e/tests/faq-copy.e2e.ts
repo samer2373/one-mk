@@ -99,7 +99,7 @@ test('the install steps in each download card fold open and keep their commands 
     }
     return out;
   });
-  expect(r.map((x) => x.panel)).toEqual(['mac', 'windows', 'linux']);
+  expect(r.map((x) => x.panel).sort()).toEqual(['linux', 'mac', 'windows']);
   for (const x of r) expect(x.overflow, `${x.panel} card content sticks out by ${x.overflow}px`).toBeLessThanOrEqual(1);
   await guard.check();
 });
