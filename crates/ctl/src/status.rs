@@ -791,6 +791,56 @@ mod tests {
         }
     }
 
+    /// What a program or a person gets when the daemon's answer is cut off, garbled or hostile:
+    /// reading and showing it never panics (the CLI, the tray and the window all read it).
+    #[test]
+    fn a_damaged_status_answer_never_panics_the_reader() {
+        let s = Status {
+            name: "desk".into(),
+            id: "abcd-ef01".into(),
+            port: 24900,
+            controlling: Some("mac mini".into()),
+            peers: vec![PeerStatus { id: "1234-5678".into(), name: "mac mini".into(), side: Side::Right, os: os::MACOS, online: true, swap: "auto".into(), screens: vec![Rect::new(0, 0, 1920, 1080)] }],
+            screens: vec![Rect::new(0, 0, 1920, 1080), Rect::new(-2592, 98, 1512, 982)],
+            offsets: vec![("1234-5678".into(), (3840, -98))],
+            input: vec!["Waiting for your approval.".into()],
+            ..Status::default()
+        };
+        let text = s.encode();
+        let show = |text: &str| {
+            if let Some(status) = Status::decode(text) {
+                let _ = status.render();
+                let _ = status.input_lines();
+                let _ = status.hotkeys_line();
+            }
+        };
+        // Cut at every byte (on a character boundary), and with each line dropped or repeated.
+        for end in (0..=text.len()).filter(|end| text.is_char_boundary(*end)) {
+            show(&text[..end]);
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        for skip in 0..lines.len() {
+            show(&lines.iter().enumerate().filter(|(i, _)| *i != skip).map(|(_, l)| format!("{l}\n")).collect::<String>());
+            show(&lines.iter().enumerate().flat_map(|(i, l)| std::iter::repeat_n(format!("{l}\n"), if i == skip { 3 } else { 1 })).collect::<String>());
+        }
+        // Fields of the wrong kind, absurd numbers, tabs and control characters where words go.
+        for junk in ["", "\n", "ok", "ok\n\t\t\t\n", "ok\nport\tnot a number\n", "ok\nport\t99999999999999999999\n", "ok\npeer\n", "ok\npeer\t\t\t\t\t\t\t\n", "ok\nscreens\t1,2,3\n", "ok\nscreen\t-1\t-1\t-1\t-1\n", "ok\nlink\tx\t-1\t-1\t-1\t-1\n", "ok\ntransfer\t1\t2\n", "ok\ncontrolling\t\u{1b}[2J\n", "ok\nname\t\u{0}\u{0}\n", "error boom\n", "\u{feff}ok\n"] {
+            show(junk);
+        }
+        let mut state = 0x9e3779b97f4a7c15u64;
+        for _ in 0..2000 {
+            let mut bytes = text.clone().into_bytes();
+            for _ in 0..4 {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let at = (state >> 8) as usize % bytes.len();
+                bytes[at] = b"\t\n 0-9a\x7f"[(state >> 40) as usize % 7];
+            }
+            show(&String::from_utf8_lossy(&bytes));
+        }
+    }
+
     #[test]
     fn status_survives_the_wire() {
         let s = Status {

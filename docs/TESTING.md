@@ -103,3 +103,8 @@ restart. Everything runs in a private network namespace with throwaway settings 
 input backend, so it never touches this computer's own oneMK, desktop or network. It needs
 `unshare` with unprivileged user namespaces. It does not cover real Wi-Fi drops, sleep and wake, other
 systems or real input backends: use the checklist above for those.
+
+The command line and the daemon also have end-to-end tests that run the real binary, in the same
+private way: `cargo test -p one-mk --test 'qa_*'`. They pair daemons, send files, move the
+clipboard, break settings files and kill daemons; [TEST-MATRIX-daemon.md](TEST-MATRIX-daemon.md)
+lists every command, what tests it, and what only real computers can check.

@@ -712,6 +712,19 @@ fn create_settings_dir(dir: &Path) -> Result<()> {
     builder.create(dir).with_context(|| format!("creating settings folder {}", dir.display()))
 }
 
+/// Says a thing about the settings file on stderr, once per process: `doctor`
+/// and the daemon read the file many times, and the same line for each read
+/// buried what else they print (and in a daemon, its log).
+fn say_once(line: String) {
+    static SAID: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let mut said = SAID.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !said.contains(&line) && said.len() < 64 {
+        // Not `eprintln!`, which panics when stderr is a closed pipe.
+        let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("{line}\n"));
+        said.push(line);
+    }
+}
+
 impl Settings {
     /// Reads `settings.toml`; a missing file means the defaults. A file that
     /// can't be read is an error, so the command line never overwrites a
@@ -733,7 +746,7 @@ impl Settings {
     pub fn view(dir: &Path) -> Result<Settings> {
         let settings = Self::load_lenient(dir)?;
         for problem in &settings.problems {
-            eprintln!("one-mk: {problem}");
+            say_once(format!("one-mk: {problem}"));
         }
         Ok(settings)
     }
@@ -770,7 +783,7 @@ impl Settings {
                 ignored.dedup();
                 let mut known = fields.clone();
                 for (key, components) in ignored {
-                    eprintln!("one-mk: unknown setting {key:?} in {}; not applied", path.display());
+                    say_once(format!("one-mk: unknown setting {key:?} in {}; not applied", path.display()));
                     let Some(components) = components else { continue };
                     let mut table = known.as_table_mut();
                     for (index, component) in components.iter().enumerate() {

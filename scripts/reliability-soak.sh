@@ -179,5 +179,5 @@ done
 grep -h 'WARN\|ERROR\|panicked' "$W"/logs/d*.log | sed 's/peer=[^ ]*//; s/[0-9a-f]\{4\}-[0-9a-f]\{4\}/ID/g; s/[0-9][0-9.]*/N/g' \
     | sort | uniq -c | sort -rn | head -15
 [ -s "$W/logs/failures.log" ] && { echo "failures:"; cut -c12- "$W/logs/failures.log" | sort | uniq -c | sort -rn | head -15; }
-[ "${#FAILS[@]}" = 0 ] && [ "$leak" = 0 ] && [ "$errors" = 0 ] && { log PASS; exit 0; }
+[ ! -s "$W/logs/failures.log" ] && [ "$leak" = 0 ] && [ "$errors" = 0 ] && { log PASS; exit 0; }
 log FAIL; exit 1
