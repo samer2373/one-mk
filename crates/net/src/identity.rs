@@ -36,7 +36,9 @@ impl fmt::Debug for Fingerprint {
 impl FromStr for Fingerprint {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
-        anyhow::ensure!(s.len() == 64, "fingerprint must be 64 hex characters");
+        // Only ASCII hex digits: a multi-byte character would split the slices
+        // below (a panic), and `from_str_radix` alone also takes a leading `+`.
+        anyhow::ensure!(s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()), "fingerprint must be 64 hex characters");
         let mut out = [0u8; 32];
         for (i, b) in out.iter_mut().enumerate() {
             *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).context("invalid fingerprint")?;
