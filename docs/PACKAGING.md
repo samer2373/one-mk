@@ -128,9 +128,67 @@ is exactly one file, that the list is reproducible, that bad input is refused
 and that a damaged signature never verifies. `scripts/test-install.sh` runs `install.sh`
 against fake releases (bad checksums and signatures, hostile and broken
 archives, offline, plain http, an unsupported system, repeat and read-only
-installs). The GNOME extensions are tested against stand-ins for the Shell:
+installs, and replays: a correctly signed older release is refused). The GNOME extensions are tested against stand-ins for the Shell:
 `node --test tools/gnome-wallpaper/test_production_video.mjs
 tools/gnome-wallpaper/test_pointer_extension.mjs`.
+
+### `install.sh` and replayed releases
+
+A release's signature never expires, so someone who serves the download (a
+mirror, a network in between) could hand `install.sh` an older, correctly
+signed release, for example one with a known flaw. The updater refuses that by
+its stored sequence; a fresh install has none, so `install.sh` has two guards,
+both needing the signed list (OpenSSL 3; without it the script says the
+release's age was not checked):
+
+- `MIN_SEQUENCE` near the top of `install.sh`: a signed list whose `sequence`
+  is lower is refused. The sequence is the release workflow's run number
+  (`make-update-manifest.sh release-files "$GITHUB_RUN_NUMBER"`), which only
+  grows. **Raise it in each release's pull request** to the sequence of an
+  earlier release that is still fine to install (the previous release's, shown
+  by `update-manifest.json` in its assets). It cannot name the release being
+  built, whose run number is not known yet. `check-release-consistency.py`
+  requires a plain positive number, and on the release run fails if it is above
+  that run's number (which would make `install.sh` refuse the release itself).
+- the installed oneMK's `--version` against the signed list's `version`: an
+  older release is not installed over a newer one.
+
+`ONE_MK_ALLOW_OLDER=1` skips both, for going back on purpose. The list has no
+expiry and no new field was added, so older clients and lists are unaffected.
+What this does not stop: a replay of a release between `MIN_SEQUENCE` and the
+latest on a computer with no oneMK yet, and anything on a system without
+OpenSSL 3 (macOS) where the list is not checked at all.
+
+## Linux on ARM (aarch64): not built, and why
+
+There is no `aarch64-unknown-linux-gnu` build, and `install.sh` and the site
+say so. Adding one was assessed and left out on purpose:
+
+- **Nothing in CI would test it.** The `test` job, clippy and every
+  hand-run check run on x86-64 only. The code has aarch64 branches (the decoder's
+  seccomp filter, the update's `arch` field) that have never run on an ARM
+  computer, and the input, GNOME bridge and wallpaper paths were only ever
+  exercised on x86-64. A package advertised for a platform nobody ran is the
+  kind of release this project tries not to make.
+- **A failing job would block every release.** `publish` needs every `build`
+  matrix job, so an ARM job that fails on the day (a runner label that is not
+  available to the repository, an `appimagetool` that cannot run, a package
+  that does not install) stops macOS, Windows and x86-64 Linux from publishing.
+  It would have to be added without being able to try it first.
+- **The packaging is x86-64 in more places than the matrix**: `bundle-deb.sh`
+  writes `Architecture: amd64`; the AppImage needs `appimagetool-aarch64` with
+  its own pinned checksum (and fetches its runtime when it packs); the Flatpak
+  and Homebrew files, the site's download list, the release notes table,
+  `install.sh`'s names and `check-release-consistency.py`'s expected set all
+  list the files by name and would have to change together.
+
+What it would take: a runner (`ubuntu-22.04-arm`, for public repositories) in
+the `build` matrix; `Architecture` and the `dpkg-shlibdeps` stub taken from the
+target; the aarch64 `appimagetool` pinned by checksum; a `test` job on the ARM
+runner (tests, clippy); the new file names added to the site, README, release
+notes, `install.sh` and the consistency check in the same change; then a real
+run on an ARM computer (input capture, the window, a pairing) before it is
+advertised.
 
 ## macOS `.app` and `.dmg`
 
@@ -235,21 +293,39 @@ checkout; then it installs it silently into a scratch folder and runs
 - installs for the current user only, into `%LOCALAPPDATA%\Programs\one-mk`
   (no administrator rights);
 - adds a Start menu shortcut to the window, and optionally one on the desktop;
-- optionally (a task, on by default) appends the folder to the user's `PATH`
-  if that exact entry is not there yet;
+- optionally (a task, on by default) adds the folder to the user's `PATH` as
+  one whole entry, only if no entry equal to it (ignoring case and a trailing
+  `\`) is there yet, so an upgrade or a second run adds nothing; the value is
+  written as an expandable string and only when it changes;
 - offers to open the window at the end.
 
-On uninstall, before any file is removed, it runs `one-mk integrate --remove`
-as the user (hidden; its exit code is ignored, so it never stops the
-uninstall), which deletes the *Send to* entries `one-mk integrate` wrote, only
-the files carrying its marker; without it they would point at the deleted
-`one-mk.exe`. This hook is syntax-reviewed only: Inno Setup is not available
-here, and CI builds and installs the installer but does not uninstall it.
+On uninstall, before any file is removed and as the user, all hidden and with
+no exit code checked (a failure never stops the uninstall), it:
 
-It does not open the firewall, run `one-mk install` (start at sign-in, the
-*Send to* entries) or take the folder out of `PATH` on uninstall. Start at
-sign-in is turned on from the window (or `one-mk install`); `one-mk integrate`
-adds the *Send to* entries. The installer is not code-signed, so SmartScreen will warn.
+1. runs `one-mk uninstall` (the start-at-sign-in entry, the *Send to* entries,
+   the wallpaper off and your own back; this asks the running oneMK, so it goes
+   first);
+2. ends the tray and the window, runs `one-mk stop`, then ends whatever still
+   runs from the install folder (matched by full path, so another copy of oneMK
+   elsewhere is left alone);
+3. removes the start-at-sign-in entry (`HKCU\...\Run\one-mk`) if it still
+   starts a program from the folder, and removes every `PATH` entry equal to
+   the folder, leaving the other entries untouched and the value alone if
+   nothing matched.
+
+The settings folder (pairings and keys) is kept, so installing again keeps the
+computers paired. All of this is `[Code]` in `installer/one-mk.iss`. **It was
+written without Inno Setup or Windows and has not been compiled or run:**
+`scripts/test-windows-path.py` runs the PATH and startup-entry string functions
+(the text of the `.iss`, in a small interpreter of the Pascal subset they use)
+against a plain model and on random inputs, and
+`scripts/check-release-consistency.py` checks the uninstall steps and their
+order by reading the script. CI compiles the installer and installs it
+silently, but does not uninstall it.
+
+It does not open the firewall. Start at sign-in is turned on from the window
+(or `one-mk install`); `one-mk integrate` adds the *Send to* entries. The
+installer is not code-signed, so SmartScreen will warn.
 
 ## Debian `.deb`
 
@@ -279,6 +355,25 @@ replay record). It starts and enables nothing, and ships no systemd unit or auto
 install`, run as yourself, writes the user service and the tray's autostart
 entry (and its own copy of the hidden entry) into the home folder. It is
 built on ubuntu-22.04 (glibc 2.35), the oldest distribution it is meant for.
+
+**Dependencies.** The control file has a `Depends:` line, made at build time:
+`dpkg-shlibdeps` reads the libraries the four programs are linked against and
+the glibc version their symbols need (on ubuntu-22.04: `libc6 (>= 2.35)`, which
+Debian 12 meets too, and `libgcc-s1`), and the script adds what the window opens
+at run time, which `dpkg-shlibdeps` cannot see: `libxkbcommon0`, one OpenGL
+loader (`libegl1 | libgl1`), and for X11 sessions `libxkbcommon-x11-0`,
+`libxcursor1` and `libxi6`. The last three were found by installing the
+package on a clean Ubuntu with `--no-install-recommends`, starting the window on
+an X server and adding libraries until it stayed up: without `libxi6` and
+`libxcursor1` it stops with "Failed to load one of xlib's shared libraries",
+without `libxkbcommon-x11-0` it panics. `Recommends:` holds `pkexec` (the
+update's root step), `bubblewrap` (the wallpaper import's sandbox) and
+`libglib2.0-bin` (`gsettings`, for the desktop picture). The daemon itself loads
+`libxkbcommon` only when it can, and talks to X11 with pure Rust. The script
+refuses to build without `dpkg-shlibdeps` (package `dpkg-dev`), and
+`scripts/check-packaging.sh` checks the line: each of those names, a `libc6`
+floor not below the newest glibc symbol in the built programs, and that the
+programs link nothing beyond libc and libgcc_s.
 
 The optional GNOME component is offline: `/usr/bin/one-mk-wallpaper` is the
 production renderer and `/usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/`
@@ -455,7 +550,7 @@ file, the released, CI-tested one was kept:
 
 | Dropped | Replaced by | Lost with it |
 |---|---|---|
-| `scripts/package-windows.sh`, `packaging/windows/one-mk.iss`, `packaging/windows/path-entries.pas`, `scripts/check-windows-path.sh` | `installer/one-mk.iss` | an all-users install in Program Files, firewall rules for private networks, running `one-mk install` at setup and `one-mk uninstall` at removal, taking the folder out of `PATH` on uninstall |
+| `scripts/package-windows.sh`, `packaging/windows/one-mk.iss`, `packaging/windows/path-entries.pas`, `scripts/check-windows-path.sh` | `installer/one-mk.iss` | an all-users install in Program Files, firewall rules for private networks, running `one-mk install` at setup |
 | `scripts/package-macos.sh`, `packaging/macos/Info.plist.in` | `scripts/bundle-mac.sh` | nothing of note (the released script also signs and notarizes) |
 | `scripts/package-deb.sh`, `packaging/linux/postinst`, `postrm`, `one-mk.1` | `scripts/bundle-deb.sh` | the packaged systemd user unit and tray autostart (`one-mk install` writes them per user instead; the hidden app-id entry is shipped again since the review of the merge), the man page, the copyright file, the full hicolor icon set, the AppStream file, `Depends`/`Recommends`, a reproducible build, `~` for pre-release versions |
 | `scripts/package-tarball.sh` | the workflow's "Package" step | a reproducible archive (sorted, time-clamped) |

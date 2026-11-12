@@ -88,6 +88,26 @@ if command -v dpkg-deb >/dev/null; then
         check ".deb AppStream metainfo validates" appstreamcli validate --no-net "$meta"
     else skip "appstreamcli not installed"; fi
     grep -q "^Version: $VERSION$" "$root/DEBIAN/control" && ok ".deb control version matches Cargo.toml ($VERSION)" || bad ".deb control version"
+    # Depends: what the programs are linked against (with the glibc floor their symbols need) and what the
+    # window loads at run time (see scripts/bundle-deb.sh). A package without Depends installs on a system
+    # where the programs cannot start.
+    [ "$(grep -c '^Depends: ' "$root/DEBIAN/control")" = 1 ] && ok ".deb has one Depends line" || bad ".deb has no single Depends line"
+    depends=$(dpkg-deb -f "$deb" Depends)
+    for want in "libc6 (>= " "libgcc-s1" "libxkbcommon0" "libxkbcommon-x11-0" "libxcursor1" "libxi6" "libegl1 | libgl1"; do
+        case ", $depends," in *", $want"*) ok ".deb Depends has $want" ;; *) bad ".deb Depends is missing $want (Depends: $depends)" ;; esac
+    done
+    case "$(dpkg-deb -f "$deb" Recommends)" in *pkexec*) ok ".deb still recommends pkexec for the update's root step" ;; *) bad ".deb Recommends lost pkexec" ;; esac
+    if command -v readelf >/dev/null; then
+        # The libc6 floor must not be below the newest glibc symbol any program uses (or it installs where it cannot run).
+        need=$(for p in one-mk one-mk-tray one-mk-app one-mk-wallpaper; do readelf -V "$root/usr/bin/$p" 2>/dev/null; done | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)
+        floor=$(printf '%s' "$depends" | sed -n 's/^libc6 (>= \([0-9.]*\)).*/\1/p')
+        if [ -n "$need" ] && [ -n "$floor" ] && [ "$(printf '%s\n%s\n' "$need" "$floor" | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)" = "$floor" ]; then
+            ok ".deb Depends libc6 (>= $floor), the newest glibc symbol the programs need is $need"
+        else bad ".deb libc6 floor ($floor) is below the glibc version the programs need ($need)"; fi
+        # Every library a program is linked against is either libc6's, libgcc-s1's or named above.
+        linked=$(for p in one-mk one-mk-tray one-mk-app one-mk-wallpaper; do readelf -d "$root/usr/bin/$p"; done | sed -n 's/.*Shared library: \[\(.*\)\]/\1/p' | sort -u | grep -Ev '^(libc\.so\.6|libm\.so\.6|libgcc_s\.so\.1|ld-linux-x86-64\.so\.2|libdl\.so\.2|libpthread\.so\.0|librt\.so\.1|libutil\.so\.1)$' || true)
+        [ -z "$linked" ] && ok ".deb programs link only libc and libgcc_s, which Depends covers" || bad ".deb programs link other libraries that Depends does not cover: $linked"
+    else skip ".deb glibc floor and linked libraries (readelf is not installed)"; fi
     got=$("$root/usr/bin/one-mk" --version) && [ "$got" = "one-mk $VERSION" ] && ok "unpacked one-mk --version: $got" || bad "one-mk --version said '$got'"
     check "unpacked one-mk-app prints help successfully" sh -c "'$root/usr/bin/one-mk-app' --help > '$scratch/app-help' && grep -q 'Usage: one-mk-app' '$scratch/app-help'"
     got=$("$root/usr/bin/one-mk-app" --version) && [ "$got" = "one-mk-app $VERSION" ] && ok "unpacked one-mk-app --version: $got" || bad "one-mk-app --version said '$got'"
