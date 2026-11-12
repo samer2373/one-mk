@@ -245,6 +245,26 @@ class Consistency(unittest.TestCase):
         self.mutate("installer/one-mk.iss", '"..\\LICENSE-MIT"', '"..\\LICENCE-MIT"')
         self.fails("metadata", "installer source")
 
+    def test_an_installer_that_leaves_the_path_entry_behind_fails(self):
+        self.mutate("installer/one-mk.iss", "  RemoveAppFromPath;\nend;", "end;")
+        self.fails("metadata", "installer: uninstalling takes the folder out of PATH")
+
+    def test_an_installer_that_does_not_run_one_mk_uninstall_fails(self):
+        self.mutate("installer/one-mk.iss", "Exec(Exe, 'uninstall',", "Exec(Exe, 'integrate --remove',")
+        self.fails("metadata", "installer: uninstalling runs `one-mk uninstall`")
+
+    def test_an_installer_that_does_not_stop_the_daemon_fails(self):
+        self.mutate("installer/one-mk.iss", "Exec(Exe, 'stop',", "Exec(Exe, 'status',")
+        self.fails("metadata", "installer: uninstalling stops the daemon")
+
+    def test_an_installer_that_appends_to_the_path_blindly_fails(self):
+        self.mutate("installer/one-mk.iss", "[Code]", '[Registry]\nRoot: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"\n\n[Code]')
+        self.fails("metadata", "installer: PATH is changed by whole entries")
+
+    def test_an_installer_removing_another_startup_entry_fails(self):
+        self.mutate("installer/one-mk.iss", "RunKey = 'Software\\Microsoft\\Windows\\CurrentVersion\\Run'", "RunKey = 'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'")
+        self.fails("metadata", "installer: removes the same startup entry")
+
     def test_an_installer_missing_a_program_fails(self):
         self.mutate("installer/one-mk.iss", 'Source: "{#ReleaseDir}\\one-mk-wallpaper.exe"; DestDir: "{app}"\n', "")
         self.fails("metadata", "installer ships exactly the four programs")

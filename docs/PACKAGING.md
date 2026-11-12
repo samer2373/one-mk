@@ -235,21 +235,39 @@ checkout; then it installs it silently into a scratch folder and runs
 - installs for the current user only, into `%LOCALAPPDATA%\Programs\one-mk`
   (no administrator rights);
 - adds a Start menu shortcut to the window, and optionally one on the desktop;
-- optionally (a task, on by default) appends the folder to the user's `PATH`
-  if that exact entry is not there yet;
+- optionally (a task, on by default) adds the folder to the user's `PATH` as
+  one whole entry, only if no entry equal to it (ignoring case and a trailing
+  `\`) is there yet, so an upgrade or a second run adds nothing; the value is
+  written as an expandable string and only when it changes;
 - offers to open the window at the end.
 
-On uninstall, before any file is removed, it runs `one-mk integrate --remove`
-as the user (hidden; its exit code is ignored, so it never stops the
-uninstall), which deletes the *Send to* entries `one-mk integrate` wrote, only
-the files carrying its marker; without it they would point at the deleted
-`one-mk.exe`. This hook is syntax-reviewed only: Inno Setup is not available
-here, and CI builds and installs the installer but does not uninstall it.
+On uninstall, before any file is removed and as the user, all hidden and with
+no exit code checked (a failure never stops the uninstall), it:
 
-It does not open the firewall, run `one-mk install` (start at sign-in, the
-*Send to* entries) or take the folder out of `PATH` on uninstall. Start at
-sign-in is turned on from the window (or `one-mk install`); `one-mk integrate`
-adds the *Send to* entries. The installer is not code-signed, so SmartScreen will warn.
+1. runs `one-mk uninstall` (the start-at-sign-in entry, the *Send to* entries,
+   the wallpaper off and your own back; this asks the running oneMK, so it goes
+   first);
+2. ends the tray and the window, runs `one-mk stop`, then ends whatever still
+   runs from the install folder (matched by full path, so another copy of oneMK
+   elsewhere is left alone);
+3. removes the start-at-sign-in entry (`HKCU\...\Run\one-mk`) if it still
+   starts a program from the folder, and removes every `PATH` entry equal to
+   the folder, leaving the other entries untouched and the value alone if
+   nothing matched.
+
+The settings folder (pairings and keys) is kept, so installing again keeps the
+computers paired. All of this is `[Code]` in `installer/one-mk.iss`. **It was
+written without Inno Setup or Windows and has not been compiled or run:**
+`scripts/test-windows-path.py` runs the PATH and startup-entry string functions
+(the text of the `.iss`, in a small interpreter of the Pascal subset they use)
+against a plain model and on random inputs, and
+`scripts/check-release-consistency.py` checks the uninstall steps and their
+order by reading the script. CI compiles the installer and installs it
+silently, but does not uninstall it.
+
+It does not open the firewall. Start at sign-in is turned on from the window
+(or `one-mk install`); `one-mk integrate` adds the *Send to* entries. The
+installer is not code-signed, so SmartScreen will warn.
 
 ## Debian `.deb`
 
@@ -455,7 +473,7 @@ file, the released, CI-tested one was kept:
 
 | Dropped | Replaced by | Lost with it |
 |---|---|---|
-| `scripts/package-windows.sh`, `packaging/windows/one-mk.iss`, `packaging/windows/path-entries.pas`, `scripts/check-windows-path.sh` | `installer/one-mk.iss` | an all-users install in Program Files, firewall rules for private networks, running `one-mk install` at setup and `one-mk uninstall` at removal, taking the folder out of `PATH` on uninstall |
+| `scripts/package-windows.sh`, `packaging/windows/one-mk.iss`, `packaging/windows/path-entries.pas`, `scripts/check-windows-path.sh` | `installer/one-mk.iss` | an all-users install in Program Files, firewall rules for private networks, running `one-mk install` at setup |
 | `scripts/package-macos.sh`, `packaging/macos/Info.plist.in` | `scripts/bundle-mac.sh` | nothing of note (the released script also signs and notarizes) |
 | `scripts/package-deb.sh`, `packaging/linux/postinst`, `postrm`, `one-mk.1` | `scripts/bundle-deb.sh` | the packaged systemd user unit and tray autostart (`one-mk install` writes them per user instead; the hidden app-id entry is shipped again since the review of the merge), the man page, the copyright file, the full hicolor icon set, the AppStream file, `Depends`/`Recommends`, a reproducible build, `~` for pre-release versions |
 | `scripts/package-tarball.sh` | the workflow's "Package" step | a reproducible archive (sorted, time-clamped) |

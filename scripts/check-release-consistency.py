@@ -471,7 +471,19 @@ def metadata(root, report):
         report.check(target.is_file(), f"installer source {source} exists")
     for icon in re.findall(r"^SetupIconFile=(.*)$", iss, re.M):
         report.check((root / "installer" / icon.replace("\\", "/")).resolve().is_file(), f"installer icon {icon} exists")
-    report.check("integrate --remove" in iss, "installer: uninstalling takes out the Send-to entries")
+    # Uninstalling (Inno Setup is not available on Linux: these read the script's text, and
+    # scripts/test-windows-path.py runs its PATH functions; CI compiles and installs it on Windows).
+    step = re.search(r"^procedure CurUninstallStepChanged\(.*?^end;\n", iss, re.M | re.S)
+    step = step.group(0) if step else ""
+    report.check("usUninstall" in step and "'uninstall'" in step, "installer: uninstalling runs `one-mk uninstall` (login entry, Send-to entries, wallpaper) before any file is removed")
+    report.check("'stop'" in step and "EndRunningPrograms(False)" in step, "installer: uninstalling stops the daemon, the tray, the window and the wallpaper helper")
+    report.check("RemoveAppFromPath" in step and "RemoveStartAtSignIn" in step, "installer: uninstalling takes the folder out of PATH and the startup entry out of the registry")
+    report.check("ChangesEnvironment=yes" in iss, "installer: other programs are told when PATH changes")
+    report.check("{olddata}" not in iss and "RegWriteExpandStringValue(HKCU, EnvironmentKey, 'Path'" in iss, "installer: PATH is changed by whole entries (no blind append), as an expandable value")
+    run_key = re.search(r'const RUN_KEY: &str = r"HKCU\\([^"]+)"', read(root, "crates/ctl/src/install.rs"))
+    report.check(run_key is not None and f"RunKey = '{run_key.group(1)}'" in iss and "RegDeleteValue(HKCU, RunKey, 'one-mk')" in iss, "installer: removes the same startup entry `one-mk install` writes on Windows")
+    report.check("taskkill" not in iss.lower() and "ExecutablePath.StartsWith(" in iss, "installer: running programs are ended by full path, not by name alone")
+    report.check("scripts/test-windows-path.py" in read(root, ".github/workflows/ci.yml"), "ci.yml runs scripts/test-windows-path.py (the installer's PATH logic)")
 
     # Homebrew cask: labels and bundle id are what the code and the app use.
     cask = read(root, "packaging/homebrew/one-mk.rb.in")

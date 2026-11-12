@@ -88,6 +88,7 @@ jobs:
           python3 scripts/check-release-consistency.py
           python3 scripts/test-release-consistency.py
           python3 scripts/test-update-manifest.py
+          python3 scripts/test-windows-path.py
 
   # The Linux packages and the package-manager files, built from a debug
   # build and checked without installing anything (scripts/check-packaging.sh).
