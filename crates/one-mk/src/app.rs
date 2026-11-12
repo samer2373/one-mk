@@ -4447,7 +4447,10 @@ mod tests {
         };
         let ((), took) = tokio::join!(send, released);
         assert!(rx_done.try_recv().is_ok());
-        assert!(took < LEASE + Duration::from_millis(600), "the lease ran {took:?}");
+        // Starved, the lease would run on for as long as the flood lasts (many seconds). Windows' coarse timers
+        // and a busy runner add a second or so to a lease that is on time.
+        let slack = Duration::from_millis(if cfg!(windows) { 1500 } else { 600 });
+        assert!(took < LEASE + slack, "the lease ran {took:?}");
         assert_eq!(owner.next().await, Control::Revoked { epoch: 1 });
         drop((owner, flooder));
         duo.stop().await;
