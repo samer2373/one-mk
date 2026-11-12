@@ -379,6 +379,21 @@ class InstallFloorAgainstBase(unittest.TestCase):
         self.write(root, 60, "1.2.0")
         self.assertEqual(self.check(root)[0], 0, "raising it alone (a withdrawn release) is allowed")
 
+    def test_the_change_that_introduces_the_floor_passes_and_losing_it_fails(self):
+        root = self.repo(48, "1.2.0")
+        (root / "install.sh").write_text("#!/bin/sh\n")  # a base that has no floor yet
+        subprocess.run(["git", "-C", str(root), "commit", "-qam", "no floor"], check=True,
+                       env={"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                            "GIT_COMMITTER_EMAIL": "t@t", "PATH": os.environ["PATH"], "HOME": str(root)})
+        subprocess.run(["git", "-C", str(root), "branch", "-q", "-f", "base"], check=True)
+        self.write(root, 48, "1.2.0")
+        failures, output = self.check(root)
+        self.assertEqual(failures, 0, output)
+        self.assertIn("is new here", output)
+        (root / "install.sh").write_text("#!/bin/sh\n")  # neither side has one: that is a failure
+        failures, output = self.check(root)
+        self.assertEqual(failures, 1, output)
+
     def test_a_base_that_cannot_be_read_fails_instead_of_passing(self):
         root = self.repo(48, "1.2.0")
         subprocess.run(["git", "-C", str(root), "branch", "-q", "-m", "base", "other"], check=True)

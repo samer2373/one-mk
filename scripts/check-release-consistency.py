@@ -572,6 +572,10 @@ def install_floor_against_base(root, report, base):
         return
     floor = r"^MIN_SEQUENCE=([0-9]+)$"
     before, now = re.search(floor, old_script, re.M), re.search(floor, read(root, "install.sh"), re.M)
+    if before is None and now is not None:
+        # The change that introduces the floor: there is nothing on the base to compare with yet.
+        report.ok(f"install.sh: MIN_SEQUENCE {now.group(1)} is new here ({base} has none yet)")
+        return
     if not report.check(before is not None and now is not None, f"install.sh has a MIN_SEQUENCE here and on {base}"):
         return
     before, now = int(before.group(1)), int(now.group(1))
