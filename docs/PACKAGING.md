@@ -159,6 +159,37 @@ What this does not stop: a replay of a release between `MIN_SEQUENCE` and the
 latest on a computer with no oneMK yet, and anything on a system without
 OpenSSL 3 (macOS) where the list is not checked at all.
 
+## Linux on ARM (aarch64): not built, and why
+
+There is no `aarch64-unknown-linux-gnu` build, and `install.sh` and the site
+say so. Adding one was assessed and left out on purpose:
+
+- **Nothing in CI would test it.** The `test` job, clippy and every
+  hand-run check run on x86-64 only. The code has aarch64 branches (the decoder's
+  seccomp filter, the update's `arch` field) that have never run on an ARM
+  computer, and the input, GNOME bridge and wallpaper paths were only ever
+  exercised on x86-64. A package advertised for a platform nobody ran is the
+  kind of release this project tries not to make.
+- **A failing job would block every release.** `publish` needs every `build`
+  matrix job, so an ARM job that fails on the day (a runner label that is not
+  available to the repository, an `appimagetool` that cannot run, a package
+  that does not install) stops macOS, Windows and x86-64 Linux from publishing.
+  It would have to be added without being able to try it first.
+- **The packaging is x86-64 in more places than the matrix**: `bundle-deb.sh`
+  writes `Architecture: amd64`; the AppImage needs `appimagetool-aarch64` with
+  its own pinned checksum (and fetches its runtime when it packs); the Flatpak
+  and Homebrew files, the site's download list, the release notes table,
+  `install.sh`'s names and `check-release-consistency.py`'s expected set all
+  list the files by name and would have to change together.
+
+What it would take: a runner (`ubuntu-22.04-arm`, for public repositories) in
+the `build` matrix; `Architecture` and the `dpkg-shlibdeps` stub taken from the
+target; the aarch64 `appimagetool` pinned by checksum; a `test` job on the ARM
+runner (tests, clippy); the new file names added to the site, README, release
+notes, `install.sh` and the consistency check in the same change; then a real
+run on an ARM computer (input capture, the window, a pairing) before it is
+advertised.
+
 ## macOS `.app` and `.dmg`
 
 `scripts/bundle-mac.sh <release dir> <out.app.zip>` builds `one-mk.app` (the
@@ -324,6 +355,25 @@ replay record). It starts and enables nothing, and ships no systemd unit or auto
 install`, run as yourself, writes the user service and the tray's autostart
 entry (and its own copy of the hidden entry) into the home folder. It is
 built on ubuntu-22.04 (glibc 2.35), the oldest distribution it is meant for.
+
+**Dependencies.** The control file has a `Depends:` line, made at build time:
+`dpkg-shlibdeps` reads the libraries the four programs are linked against and
+the glibc version their symbols need (on ubuntu-22.04: `libc6 (>= 2.35)`, which
+Debian 12 meets too, and `libgcc-s1`), and the script adds what the window opens
+at run time, which `dpkg-shlibdeps` cannot see: `libxkbcommon0`, one OpenGL
+loader (`libegl1 | libgl1`), and for X11 sessions `libxkbcommon-x11-0`,
+`libxcursor1` and `libxi6`. The last three were found by installing the
+package on a clean Ubuntu with `--no-install-recommends`, starting the window on
+an X server and adding libraries until it stayed up: without `libxi6` and
+`libxcursor1` it stops with "Failed to load one of xlib's shared libraries",
+without `libxkbcommon-x11-0` it panics. `Recommends:` holds `pkexec` (the
+update's root step), `bubblewrap` (the wallpaper import's sandbox) and
+`libglib2.0-bin` (`gsettings`, for the desktop picture). The daemon itself loads
+`libxkbcommon` only when it can, and talks to X11 with pure Rust. The script
+refuses to build without `dpkg-shlibdeps` (package `dpkg-dev`), and
+`scripts/check-packaging.sh` checks the line: each of those names, a `libc6`
+floor not below the newest glibc symbol in the built programs, and that the
+programs link nothing beyond libc and libgcc_s.
 
 The optional GNOME component is offline: `/usr/bin/one-mk-wallpaper` is the
 production renderer and `/usr/share/one-mk/gnome-extension/one-mk-wallpaper@one-mk.org/`
