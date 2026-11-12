@@ -395,3 +395,31 @@ fn off_macos_a_missing_permission_never_pops_the_guide_up_by_itself() {
     win.frames(60);
     assert_eq!(win.app.guide.active(), cfg!(target_os = "macos"));
 }
+
+#[test]
+fn a_live_missing_permission_line_has_the_same_open_guide_button_as_a_check() {
+    // No doctor check reports anything: the daemon's own line is all Health has, and it must still say
+    // where to go, with the button a doctor-reported "Permissions" row gets.
+    for line in [NEEDS_ACCESSIBILITY, NEEDS_INPUT_MONITORING] {
+        let mut win = Win::light(1200.0, 780.0);
+        win.status(Some(missing(&[line])));
+        win.go(Tab::Health);
+        win.send(Event::Doctor(Ok(vec![])));
+        win.frames(2);
+        assert!(win.has_text("Open guide"), "{line}: {}", win.texts_joined());
+        assert!(!win.app.guide.active());
+        win.click("Open guide");
+        win.frames(2);
+        if cfg!(target_os = "macos") {
+            assert!(win.app.guide.active(), "the same guide as the check's button");
+        } else {
+            // Elsewhere the permission is the desktop's own dialog: the same steps beside the button.
+            assert!(win.has_text("Look for your desktop's sharing window"), "{}", win.texts_joined());
+        }
+        assert!(problems(&win).is_empty(), "{:#?}", problems(&win));
+        // Allowed: the line and its button go away.
+        win.status(Some(missing(&[])));
+        win.frames(2);
+        assert!(!win.has_text("Open guide"), "{}", win.texts_joined());
+    }
+}
