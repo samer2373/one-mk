@@ -1126,9 +1126,12 @@ fn write_part(mut file: File, offset: u64, mut rx: mpsc::Receiver<Vec<u8>>) -> R
 fn place(root: &Path, parts: &[String], part: &Path) -> Result<String> {
     let (name, dirs) = parts.split_last().context("empty path")?;
     let mut dir = root.to_path_buf();
+    let mut folders = Vec::with_capacity(dirs.len());
     for d in dirs {
-        dir.push(d);
+        let folder = folder_name(&dir, d);
+        dir.push(&folder);
         real_dir(&dir)?;
+        folders.push(folder);
     }
     for n in 0..10_000 {
         let candidate = if n == 0 { name.clone() } else { numbered(name, n) };
@@ -1147,12 +1150,34 @@ fn place(root: &Path, parts: &[String], part: &Path) -> Result<String> {
             Err(_) => false,
         };
         if done {
-            let mut rel: Vec<&str> = dirs.iter().map(String::as_str).collect();
+            let mut rel: Vec<&str> = folders.iter().map(String::as_str).collect();
             rel.push(&candidate);
             return Ok(rel.join("/"));
         }
     }
     bail!("no free name for {name}")
+}
+
+/// The name a received folder takes inside `parent`: its own, or "name (n)" when a file (received
+/// earlier, say) already has that name, as a second file of the same name would be numbered. Anything
+/// else that is in the way, a link above all, is left for [`real_dir`] to refuse.
+fn folder_name(parent: &Path, name: &str) -> String {
+    let taken = |candidate: &str| fs::symlink_metadata(long(&parent.join(candidate))).is_ok_and(|m| m.is_file());
+    if !taken(name) {
+        return name.to_owned();
+    }
+    for n in 1..10_000 {
+        let suffix = format!(" ({n})");
+        let mut end = name.len().min(255usize.saturating_sub(suffix.len()));
+        while !name.is_char_boundary(end) {
+            end -= 1;
+        }
+        let candidate = format!("{}{suffix}", &name[..end]);
+        if !taken(&candidate) {
+            return candidate;
+        }
+    }
+    name.to_owned()
 }
 
 /// "photo.jpg" → "photo (n).jpg"; ".bashrc" → ".bashrc (n)". The result
@@ -2079,6 +2104,34 @@ mod tests {
         assert!(fs::read_dir(&outside).unwrap().next().is_none());
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&outside);
+    }
+
+    /// A folder whose name a received file already has is numbered like a second file would be
+    /// (found by QA: it failed with "exists and is not a folder"), every file of it goes into
+    /// the same numbered folder, and folders of the same name still merge.
+    #[test]
+    fn a_folder_named_like_a_received_file_is_numbered_not_refused() {
+        let root = temp("folder-vs-file");
+        let part = |text: &str| {
+            let path = root.join(format!("{text}.part"));
+            fs::write(&path, text).unwrap();
+            path
+        };
+        fs::write(root.join("clash"), "a file").unwrap();
+        fs::write(root.join("clash (1)"), "another file").unwrap();
+        assert_eq!(place(&root, &["clash".into(), "one.txt".into()], &part("one")).unwrap(), "clash (2)/one.txt");
+        assert_eq!(place(&root, &["clash".into(), "sub".into(), "two.txt".into()], &part("two")).unwrap(), "clash (2)/sub/two.txt");
+        assert_eq!(place(&root, &["clash".into(), "one.txt".into()], &part("three")).unwrap(), "clash (2)/one (1).txt");
+        assert_eq!(fs::read_to_string(root.join("clash")).unwrap(), "a file");
+        assert_eq!(fs::read_to_string(root.join("clash (1)")).unwrap(), "another file");
+        // A folder that is a folder merges as before; a long folder name still gets its number.
+        fs::create_dir_all(root.join("album")).unwrap();
+        assert_eq!(place(&root, &["album".into(), "x.txt".into()], &part("x")).unwrap(), "album/x.txt");
+        let long = "d".repeat(255);
+        fs::write(root.join(&long), "file").unwrap();
+        let placed = place(&root, &[long.clone(), "y.txt".into()], &part("y")).unwrap();
+        assert!(placed.ends_with("/y.txt") && placed.split('/').next().unwrap().len() <= 255 && placed.starts_with(&long[..200]), "{placed}");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

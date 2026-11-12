@@ -15,7 +15,7 @@ use crate::profiles::{NetworkId, Profiles};
 use crate::manage::{LayoutStatus, LayoutVerdict, LinkStats, PeerStatus, Status, on_your, placement, resolve_layout, takeback_hint};
 use crate::settings::{Gaming, Settings};
 use crate::transfer::{ConnPermit, Inbox};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use one_mk_ctl::client::SwitchTo;
 use one_mk_input::{Backend, CaptureCmd, DeviceRef, DisplaySleeper, Event, FocusProbe, Inhibitor, Inject, InjectTx, PowerEvent, ScreenLocker};
 use one_mk_input::dropzone::{DropTarget, Zone};
@@ -84,6 +84,11 @@ const ABORTED_HANDSHAKES_NOTED: u32 = 3;
 /// only this often, or when something here changes (`Request::Reload`:
 /// a pairing, a forget), or it is discovered after this.
 const REMOVED_RETRY: Duration = Duration::from_secs(600);
+/// Both computers save a pairing at about the same moment, and the first to
+/// do so dials the other, which may not have saved yet and so refuses it. A
+/// refusal this soon after a pairing is not "it forgot us": no warning, and
+/// the ordinary redial tries again.
+const RECENTLY_PAIRED: Duration = Duration::from_secs(30);
 /// How often a paired computer that stays unreachable is mentioned in the log.
 const DIAL_LOG_EVERY: Duration = Duration::from_secs(600);
 /// How long a peer that connected to us may take to open its first stream.
@@ -657,6 +662,9 @@ struct App {
     /// Paired computers that refused this one because they forgot it, and
     /// when they last said so (see [`REMOVED_RETRY`]).
     removed: HashMap<Fingerprint, Instant>,
+    /// When each computer was paired, as far as this daemon saw it happen
+    /// (see [`RECENTLY_PAIRED`]); only the lately paired are kept.
+    paired_at: HashMap<Fingerprint, Instant>,
     /// Computers this one doesn't trust that it refused lately: where from,
     /// how often, when last (see [`App::unrecognised_notes`]). Never trusted
     /// because of this; at most [`UNRECOGNISED_KEPT`] of them.
@@ -826,6 +834,7 @@ pub async fn serve(
         dialing: HashSet::new(),
         dial_logged: HashMap::new(),
         removed: HashMap::new(),
+        paired_at: HashMap::new(),
         unrecognised: HashMap::new(),
         services,
         announced: HashSet::new(),
@@ -969,8 +978,14 @@ pub async fn serve(
 }
 
 fn bind(identity: Arc<Identity>, port: u16) -> Result<Node> {
-    Node::bind_any(identity, port)
-        .with_context(|| format!("UDP port {port} is busy; is one-mk already running? (use --port)"))
+    Node::bind_any(identity, port).map_err(|e| {
+        // A port this account may not use is not a port in use: "busy" would send people looking for another one-mk.
+        if format!("{e:#}").contains("Permission denied") {
+            e.context(format!("this account may not open UDP port {port} (ports below 1024 need extra rights); choose another with --port"))
+        } else {
+            e.context(format!("UDP port {port} is busy; is one-mk already running? (use --port)"))
+        }
+    })
 }
 
 async fn shutdown_signal() {
@@ -2095,7 +2110,9 @@ impl App {
                 }
             }
             AppEvent::Removed(fp) => {
-                if self.trust.is_trusted(&fp) && !self.peers.contains_key(&fp) {
+                if self.paired_at.get(&fp).is_some_and(|at| at.elapsed() < RECENTLY_PAIRED) {
+                    tracing::debug!(peer = %fp.short(), "refused just after pairing: it has probably not saved the pairing yet");
+                } else if self.trust.is_trusted(&fp) && !self.peers.contains_key(&fp) {
                     if !self.removed.contains_key(&fp) {
                         let name = self.name_for(fp);
                         println!("{}", one_mk_ctl::status::removed_hint(&name, &fp.short()));
@@ -2416,6 +2433,11 @@ impl App {
     }
 
     fn set_trust(&mut self, new: TrustStore) {
+        let now = Instant::now();
+        self.paired_at.retain(|_, at| now.duration_since(*at) < RECENTLY_PAIRED);
+        for fp in new.devices().iter().filter_map(|d| d.fingerprint()).filter(|fp| !self.trust.is_trusted(fp)) {
+            self.paired_at.insert(fp, now);
+        }
         self.trust = new;
         let computers = crate::hotkeys::numbered_from(self.node.identity(), &self.trust).len();
         self.shortcuts.set_computers(computers);
@@ -5133,6 +5155,50 @@ mod tests {
         assert_eq!(ask(&duo.da, Request::Reload).await, "ok\n");
         let db = duo.db.clone();
         eventually_async("B to connect again", || { let db = db.clone(); async move { let s = status(&db).await; s.removed.is_empty() && s.peers.iter().all(|p| p.online) } }).await;
+        duo.stop().await;
+    }
+
+    /// A port this account may not use is said to be that, not "busy; is
+    /// one-mk already running?" (found by QA with `run --port 80`). Where the
+    /// test may bind port 80 (root, or a namespace that allows it) there is
+    /// nothing to check.
+    #[tokio::test]
+    async fn a_port_that_needs_more_rights_is_not_called_busy() {
+        let identity = Arc::new(Identity::ephemeral().unwrap());
+        let Err(error) = bind(identity, 80) else { return };
+        let text = format!("{error:#}");
+        if text.contains("Permission denied") {
+            assert!(text.contains("may not open UDP port 80") && !text.contains("is busy"), "{text}");
+        }
+    }
+
+    /// Both computers save a pairing at about the same moment; the first to
+    /// do so dials the other, which may not have saved yet and refuses it.
+    /// That is not "it removed this computer" (no warning, nothing in the
+    /// status), and the two connect as soon as the other has saved.
+    #[tokio::test]
+    async fn a_refusal_just_after_a_pairing_is_not_a_removal() {
+        let duo = Duo::start("fresh-pair", None).await;
+        let (fa, fb) = (duo.fa.clone(), duo.fb.clone());
+        let a_kept = TrustStore::load(&duo.db).unwrap().find(&fa[..8]).unwrap().clone();
+        let b_kept = TrustStore::load(&duo.da).unwrap().find(&fb[..8]).unwrap().clone();
+        // Both forget each other: a pairing starts from nothing.
+        TrustStore::update(&duo.da, |t| Ok(t.remove(&fb[..8]))).unwrap();
+        TrustStore::update(&duo.db, |t| Ok(t.remove(&fa[..8]))).unwrap();
+        assert_eq!(ask(&duo.da, Request::Reload).await, "ok\n");
+        assert_eq!(ask(&duo.db, Request::Reload).await, "ok\n");
+        // B saves the pairing first and dials A, which refuses B for now.
+        TrustStore::update(&duo.db, |t| { t.upsert(a_kept); Ok(()) }).unwrap();
+        assert_eq!(ask(&duo.db, Request::Reload).await, "ok\n");
+        let dials = || tests::dials_by(&duo.db).load(std::sync::atomic::Ordering::SeqCst);
+        eventually("B to dial A", || dials() > 0).await;
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        assert!(status(&duo.db).await.removed.is_empty(), "a refusal right after pairing was taken for a removal");
+        // A saves it a moment later: B's next try connects.
+        TrustStore::update(&duo.da, |t| { t.upsert(b_kept); Ok(()) }).unwrap();
+        assert_eq!(ask(&duo.da, Request::Reload).await, "ok\n");
+        let db = duo.db.clone();
+        eventually_async("B and A to connect", || { let db = db.clone(); async move { let s = status(&db).await; s.removed.is_empty() && !s.peers.is_empty() && s.peers.iter().all(|p| p.online) } }).await;
         duo.stop().await;
     }
 
