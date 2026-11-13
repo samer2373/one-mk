@@ -697,6 +697,12 @@ impl Runtime {
         if let Some(asleep) = asleep { state.asleep = asleep; }
         if state.player.is_none() && state.status.plan.as_ref().is_none_or(|plan| plan.picture && state.picture_mode == one_mk_wallpaper::picture::Mode::Native) { return; }
         if state.locked || state.asleep {
+            // A picture shown by oneMK's player is left as it is: once shown
+            // it costs nothing (it waits without a timer), the lock screen
+            // covers it, and stopping it would mean decoding the picture
+            // again on every unlock, after a moment of the person's own
+            // wallpaper. A video is stopped, which frees its decoder.
+            if state.player.is_some() && state.status.plan.as_ref().is_some_and(|plan| plan.picture) { return; }
             state.stop();
             let computer = state.computer.clone();
             let playback = Playback::Paused(HELD_MESSAGE.into());
@@ -1742,7 +1748,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn lock_sleep_and_last_owner_drop_reap_the_player() {
+    fn lock_sleep_and_last_owner_drop_reap_a_video_player_but_keep_a_shown_picture() {
         for (picture, reason) in [false, true].into_iter().flat_map(|picture| ["lock", "sleep", "drop"].map(|reason| (picture, reason))) {
             let runtime = Runtime::default();
             let child = std::process::Command::new("sleep").arg("60").stdin(Stdio::piped()).spawn().unwrap();
@@ -1752,12 +1758,22 @@ mod tests {
                 let mut plan = plan(); plan.picture = picture;
                 state.status.plan = Some(plan);
                 state.picture_mode = one_mk_wallpaper::picture::Mode::Overlay;
+                state.computer = "host".into();
                 state.player = Some(child);
             }
             match reason {
                 "lock" => runtime.hold(Path::new("/tmp"), Some(true), None),
                 "sleep" => runtime.hold(Path::new("/tmp"), None, Some(true)),
-                _ => drop(runtime),
+                _ => { drop(runtime); assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1, "{reason}"); continue; }
+            }
+            if picture {
+                // A shown picture stays through a lock or sleep (nothing to
+                // decode again on unlock); unlocking tells it to go on.
+                assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0, "{reason}");
+                assert!(runtime.state.lock().unwrap().player.is_some());
+                runtime.hold(Path::new("/tmp"), Some(false), Some(false));
+                assert!(runtime.state.lock().unwrap().player.is_some(), "{reason}");
+                drop(runtime);
             }
             assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1, "{reason}");
         }
