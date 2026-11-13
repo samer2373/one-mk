@@ -37,7 +37,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "io-std", "io-util", "net", "process", "fs"] }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tracing-subscriber = "0.3.23"
 unicode-normalization = "0.1.26"
 zeroize = "1.9.1"
 ring = "0.17.14"

@@ -49,6 +49,7 @@ mod integrate;
 mod invite;
 mod learn;
 mod link;
+mod log_filter;
 mod manage;
 mod netwatch;
 mod notify;
@@ -575,18 +576,19 @@ fn main() -> ExitCode {
         1 => "debug,mdns_sd=warn,zbus=info,quinn=info,quinn_proto=info,rustls=info,arboard=warn",
         _ => "trace",
     };
-    let log = tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| level.into()),
-        )
-        .with_target(false);
-    // Plain lines unless the user asked for details.
-    if verbose == 0 {
-        log.without_time().init();
-    } else {
-        log.init();
+    {
+        use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
+        let log = tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+            .with_target(false);
+        let filter = log_filter::from_env(level);
+        // Plain lines unless the user asked for details.
+        if verbose == 0 {
+            tracing_subscriber::registry().with(log.without_time().with_filter(filter)).init();
+        } else {
+            tracing_subscriber::registry().with(log.with_filter(filter)).init();
+        }
     }
 
     #[cfg(target_os = "macos")]
