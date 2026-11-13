@@ -9,7 +9,7 @@ use super::pages::{GROUP_LABEL, group_card};
 use super::settings_controls::{HOOK_ROW, SHORTCUT_ROW};
 use super::*;
 
-const ANALYTICS_NOTE: &str = "Optional, off by default. Shares feature outcomes and categorized errors with a random installation ID. No input, clipboard, files, paths, peer identity or recordings. Off deletes the ID; sent data cannot be recalled.";
+const ANALYTICS_NOTE: &str = "Optional, off by default. Shares feature outcomes and redacted error/panic diagnostics with a random installation ID. App source locations may be included, never panic messages, input, clipboard, user files/paths or peer identity. Private retry/crash records expire after 24 hours. Off removes pending records and the ID; sent data cannot be recalled.";
 
 const MODS: [(&str, &str); 4] = [("none", "None"), ("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
 const TYPING: [(&str, &str); 3] = [("physical", "Keys"), ("characters", "Letters"), ("auto", "Auto")];

@@ -71,10 +71,10 @@ GUI completion events. Their origin is `cli`; app-open/settings events are
 **Not yet covered:** invitation refusal/expiry error taxonomy, incoming transfer
 outcomes, transfer byte/file counts, individual feature/page funnels beyond
 Settings, automatic profile switches, clipboard functionality, update-download
-milestones, crashes, raw exceptions and stacks. Successful apply means the
+milestones, native signal/OS crashes and raw exceptions/stacks. Rust panics are separately covered as below. Successful apply means the
 installer returned, not that the updated process subsequently started.
 
-No keyboard/mouse activity, clipboard contents, filenames, paths, peer names,
+No keyboard/mouse activity, clipboard contents, user filenames/paths, peer names,
 fingerprints, IP addresses, SSIDs, window titles, screenshots, recordings or
 logs are included. There is no autocapture, replay or person profile creation.
 GeoIP enrichment is disabled; PostHog still receives the network source IP at
@@ -82,27 +82,53 @@ the transport layer. Previously ingested data must be deleted in PostHog.
 
 ## Delivery and withdrawal
 
-Delivery runs off the UI/input/runtime thread, without retries or a disk queue.
-Each process has a queue of at most 32 events and a single sender; full queues
-drop events. Limit: 60 events/minute/process and at most one of the same event
-per second. These are sampled counts, not an exact activity/audit log. Multiple
-short-lived CLI processes each have their own budget.
+Delivery uses a maintained `ureq` HTTPS client off the UI/input/runtime thread.
+US/EU cloud hosts only; redirects disabled; three-second request budget and
+16 KiB response limit. Status/body validation distinguishes accepted, rejected,
+quota-limited, throttled and transient failure. Acceptance is not evidence that
+an event or grouped issue is visible in PostHog.
 
-Consent and the queued identity are rechecked before dispatch and again after
-connecting, immediately before HTTP writing. Withdrawal invalidates pending
-events even if consent is subsequently re-enabled. Already-writing/in-flight
-HTTPS cannot be retracted or reliably cancelled across processes. A sender
-already blocked in DNS/TLS is not forcibly killed. Socket operations have
-one-second timeouts; OS DNS resolution may take longer without blocking the app.
-CLI exit waits at most 300 ms; the process may exit before delivery completes.
-No ingestion acknowledgment or live delivery guarantee is provided.
+The in-memory queue is 32 items, with 60 events/minute/process and one of each
+event/outcome class per second (a success does not suppress the first failure). A private atomic spool retains up to 256 events / 512 KiB,
+24-hour TTL, at most five attempts with jittered backoff. UUID and original
+timestamp stay fixed across retries. Records bind to the consent generation
+and hashed destination; changing project or revoking/re-enabling consent cannot
+resurrect old data. Permanent rejections and quota-limited events are dropped.
+No key is stored in the spool. Opt-out removes retry and panic records.
+Requests already in flight cannot be recalled. Exit waits at most 300 ms for
+persistence; abrupt termination, disk/permission failure or capacity limits can
+still lose telemetry. This is not an exact audit log.
+
+## Redacted errors and Rust panics
+
+Failed typed operations emit both their outcome and an official `$exception`
+event with a constant redacted description, category, operation, build/platform,
+mechanism and stable safe fingerprint. No error string, cause chain, stack dump,
+input or content is serialized. Diagnostic consent is v2: old v1 consent does
+not silently authorize this expanded scope.
+
+The Rust panic hook writes a fixed-size marker to a pre-opened private file,
+with no payload inspection, heap formatting, blocking mutex or network. It can
+retain a numeric source-site ID, line/column and crash timestamp; only a small
+compiled allowlist of app-source filenames can become a frame. Unknown sites
+have no frame. The original panic hook/abort behavior is preserved. On a later
+configured launch, matching-consent/destination markers become redacted exception
+events. Crash-time version and timestamp are retained. A changed app build or
+source-map manifest rejects the marker rather than attributing it to new code. Markers are bounded (32 armed processes) and expire; clean CLI/window
+exit removes its marker. A competing startup may prune a marker armed more than
+24 hours earlier, so very long-lived processes are not guaranteed coverage.
+
+This does NOT capture SIGKILL, power loss, native faults/minidumps, every OOM or
+all crashes. Disk writes can fail or stall; panic hooks are best effort. No raw
+crash report is collected. Windows/Linux runtime and native crash behavior need
+separate platform validation. No universal-crash claim is made.
 
 ## Verification
 
 Tests use temporary homes and synthetic credentials, with no real event traffic:
 
 ```sh
-cargo test --locked -p one-mk-ctl analytics::tests
+cargo test --locked -p one-mk-ctl analytics
 cargo test --locked -p one-mk analytics
 cargo clippy --locked -p one-mk -p one-mk-app -p one-mk-ctl --all-targets -- -D warnings
 python3 scripts/third-party-notices.py --check
@@ -111,3 +137,20 @@ python3 scripts/third-party-notices.py --check
 Validate real UI layouts and end-to-end ingestion with an explicitly opted-in
 test installation and test PostHog project before release. Nothing in this PR
 creates a project, activates production, deploys or merges the change.
+
+## Synthetic end-to-end verification (not yet run)
+
+After an explicitly approved project is selected, set its public ingest key and
+US/EU host in the environment, then run:
+
+```sh
+cargo run --locked -p one-mk-ctl --example verify_posthog -- --confirm-synthetic
+```
+
+This creates a throwaway home/identity, uses the actual adapter for one synthetic
+success and one safe exception (both marked `synthetic_verification=true`),
+prints UUIDs/transport results, and clears local
+consent afterward. It never reads the user's normal oneMK home. Query both UUIDs
+and the grouped exception in that exact project and retain the query evidence.
+No live verification has been performed; this command is not run by unit tests.
+Symbol/source uploads require a separate explicit decision.

@@ -564,6 +564,7 @@ fn main() -> ExitCode {
     }
     let cli = Cli::parse();
     let analytics_home = cli.home.clone().or_else(|| one_mk_ctl::default_home().ok());
+    if let Some(home) = &analytics_home { analytics::initialize(home, analytics::Origin::Cli); }
     let analytics_event = analytics_command_event(cli.cmd.as_ref());
     let verbose = cli.verbose;
     let level = match verbose {

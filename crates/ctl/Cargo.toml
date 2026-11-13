@@ -12,8 +12,9 @@ description = "oneMK logic shared by the window, the tray and the service"
 
 [dependencies]
 rand = "0.10.3"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-webpki-roots = "1.0.10"
+ureq = { version = "=3.3.0", default-features = false, features = ["rustls"] }
+blake3 = "1.8.7"
+time = { version = "0.3.55", features = ["formatting"] }
 anyhow = "1.0.104"
 directories = "6.0.0"
 if-addrs = "0.15.0"
@@ -47,3 +48,6 @@ futures-util = { version = "0.3.34", default-features = false }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[build-dependencies]
+blake3 = "1.8.7"

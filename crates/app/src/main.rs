@@ -105,6 +105,7 @@ fn main() {
         options,
         Box::new(move |cc| Ok(Box::new(app::App::new(cc, home, size).map_err(|e| e.to_string())?))),
     );
+    one_mk_ctl::analytics::flush();
     if let Err(e) = result {
         eprintln!("one-mk-app: {e}");
         std::process::exit(1);
