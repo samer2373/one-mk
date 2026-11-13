@@ -1070,6 +1070,18 @@ mod tests {
 mod analytics_wiring_tests {
     use super::*;
     #[test]
+    fn analytics_command_is_in_the_portable_reference() {
+        use clap::CommandFactory;
+        let command = Cli::command();
+        let analytics = command.find_subcommand("analytics").unwrap();
+        let about = analytics.get_about().unwrap().to_string();
+        let head: String = about.split(". ").next().unwrap().trim_end_matches('.').chars().take(40).collect();
+        let reference = include_str!("../../../docs/COMMANDS.md");
+        assert!(reference.contains("## one-mk analytics"));
+        assert!(reference.contains(&head));
+        assert!(reference.contains("[possible values: status, on, off, reset]"));
+    }
+    #[test]
     fn tracks_mutations_not_content_queries_or_consent() {
         for args in [vec!["one-mk", "analytics", "on"], vec!["one-mk", "devices"],
             vec!["one-mk", "layout", "private-peer"], vec!["one-mk", "profile", "list"]] {
