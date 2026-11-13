@@ -69,6 +69,7 @@ struct State {
     checking: bool,
     extension_changing: bool,
     /// When watching GNOME for changes was last started.
+    #[cfg(all(unix, not(target_os = "macos")))]
     watch_started: Option<std::time::Instant>,
 }
 
@@ -172,6 +173,7 @@ fn ask_desktop() -> Can { Can { video: one_mk_wallpaper::availability(), picture
 
 /// Something changed (or may have): the kept answer is asked again before
 /// it is trusted.
+#[cfg(all(unix, not(target_os = "macos")))]
 fn invalidate() { let mut kept = kept(); kept.epoch += 1; kept.dirty = true; }
 
 /// Keeps `can`, asked when the epoch was `epoch`: an answer asked before a
@@ -214,6 +216,7 @@ async fn can_checked(fresh: bool) -> Can {
     can
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
 const GNOME_UNAVAILABLE: Can = Can { video: Err(one_mk_wallpaper::GNOME_PLAYBACK_UNAVAILABLE), picture: true };
 
 async fn check() -> Can {
