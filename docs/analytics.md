@@ -243,3 +243,23 @@ probe remains negative evidence, not a successful issue. During parallel local
 tests the retry-pump contract encountered one transient `WouldBlock`; the test
 now follows the worker's bounded retry behavior for that specific lock result,
 without swallowing transport or other I/O errors.
+
+Provider processing of the second panic candidate
+`4029d04b-f614-4617-8c36-63f878863eb1` required a `function` field as well as
+`platform` and `lang`. That candidate also persisted without a grouped issue.
+The corrected source-only frame supplies the fixed explicit placeholder
+`[function omitted]`, not an invented function name or raw panic text. These
+negative probes demonstrate why HTTP acceptance is not successful issue parsing.
+
+Final provider validation succeeded for the real panic event/run
+`be01d54b-666e-40cd-8697-1104d5eb4175`: grouped issue
+`01a1d566-ca02-7f63-8c4e-7414b7a3b068`, language `rust`, owned source
+`crates/ctl/examples/verify_posthog.rs`, line 11 / column 9, and explicit
+`[function omitted]` were preserved. The frame is `resolved=false`; this is
+**not full symbolication**. The six-event operation/reset run also produced
+exactly six provider rows across two isolated identities and grouped issue
+`01a1d554-b59a-7603-af5f-c1143e8fd3a1`.
+
+Final follow-up validation: all 117 ctl library tests and affected all-target
+Clippy pass after the `function` correction. The corrected provider frame,
+not the two rejected raw candidates, is the successful panic evidence.

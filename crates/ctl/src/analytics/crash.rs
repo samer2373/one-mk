@@ -92,7 +92,7 @@ pub(super) fn manifest() -> String { SOURCE_MANIFEST.to_owned() }
 pub(super) fn frame(site: [u32; 3]) -> Option<serde_json::Value> {
     if site[1] == 0 || site[1] > 1_000_000 || site[2] > 100_000 { return None; }
     let source = SOURCES.get(site[0].checked_sub(1)? as usize)?;
-    Some(serde_json::json!({"platform": "custom", "lang": "rust", "filename": source, "lineno": site[1], "colno": site[2], "in_app": true}))
+    Some(serde_json::json!({"platform": "custom", "lang": "rust", "function": "[function omitted]", "filename": source, "lineno": site[1], "colno": site[2], "in_app": true}))
 }
 
 #[cfg(test)]
@@ -147,5 +147,6 @@ mod tests {
         assert_eq!(frame([1, 10, 2]).unwrap()["filename"], "crates/one-mk/src/main.rs");
         assert_eq!(frame([1, 10, 2]).unwrap()["platform"], "custom");
         assert_eq!(frame([1, 10, 2]).unwrap()["lang"], "rust");
+        assert_eq!(frame([1, 10, 2]).unwrap()["function"], "[function omitted]");
     }
 }
