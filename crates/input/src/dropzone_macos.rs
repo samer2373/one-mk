@@ -92,6 +92,8 @@ struct Ui {
     state: Drag,
     held: bool,
     generation: u64,
+    /// Which `start` made this target.
+    instance: u64,
 }
 
 fn with_ui(action: impl FnOnce(&mut Ui)) {
@@ -99,7 +101,7 @@ fn with_ui(action: impl FnOnce(&mut Ui)) {
 }
 
 impl Ui {
-    fn new(mtm: MainThreadMarker, dropped: mpsc::Sender<Drop>) -> Result<Self> {
+    fn new(mtm: MainThreadMarker, dropped: mpsc::Sender<Drop>, instance: u64) -> Result<Self> {
         let frame = NSRect::new(NSPoint::new(0., 0.), NSSize::new(1., 1.));
         let view = FileView::alloc(mtm).set_ivars(ViewState { zone: RefCell::new(None), dropped });
         let view: Retained<FileView> = unsafe { msg_send![super(view), initWithFrame: frame] };
@@ -121,7 +123,7 @@ impl Ui {
         let local = unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &local) };
         let mut monitors = vec![global];
         monitors.extend(local);
-        Ok(Self { window, view, monitors, zones: vec![], state: Drag::default(), held: false, generation: 0 })
+        Ok(Self { window, view, monitors, zones: vec![], state: Drag::default(), held: false, generation: 0, instance })
     }
 
     fn cancel(&mut self) {
@@ -184,12 +186,26 @@ impl std::ops::Drop for Ui {
     }
 }
 
-pub(super) fn start(mut zones: watch::Receiver<Vec<Zone>>, dropped: mpsc::Sender<Drop>) -> Result<()> {
+/// Whether a target can be started at all (the AppKit loop runs).
+pub(super) fn check() -> Result<()> {
     if !RUNNING.load(Ordering::Acquire) { bail!("AppKit main-thread loop is not running"); }
+    Ok(())
+}
+
+/// The target `instance` is, if it is the one in place: a target that was
+/// stopped and started again quickly must not take (or be fed) its successor.
+fn with_instance(instance: u64, action: impl FnOnce(&mut Ui)) {
+    with_ui(|ui| if ui.instance == instance { action(ui) });
+}
+
+pub(super) fn start(mut zones: watch::Receiver<Vec<Zone>>, dropped: mpsc::Sender<Drop>) -> Result<()> {
+    check()?;
+    static INSTANCES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let instance = INSTANCES.fetch_add(1, Ordering::Relaxed);
     let (ready, initialized) = std::sync::mpsc::sync_channel(1);
     DispatchQueue::main().exec_async(move || {
         let result = MainThreadMarker::new().ok_or_else(|| anyhow::anyhow!("AppKit requires the main thread"))
-            .and_then(|mtm| Ui::new(mtm, dropped));
+            .and_then(|mtm| Ui::new(mtm, dropped, instance));
         match result {
             Ok(ui) => { UI.with(|slot| slot.replace(Some(ui))); let _ = ready.send(Ok(())); }
             Err(error) => { let _ = ready.send(Err(error.to_string())); }
@@ -197,13 +213,16 @@ pub(super) fn start(mut zones: watch::Receiver<Vec<Zone>>, dropped: mpsc::Sender
     });
     initialized.recv()?.map_err(anyhow::Error::msg)?;
     let initial = zones.borrow_and_update().clone();
-    DispatchQueue::main().exec_async(move || with_ui(|ui| ui.zones = initial));
+    DispatchQueue::main().exec_async(move || with_instance(instance, |ui| ui.zones = initial));
     tokio::spawn(async move {
         while zones.changed().await.is_ok() {
             let zones = zones.borrow_and_update().clone();
-            DispatchQueue::main().exec_async(move || with_ui(|ui| { ui.cancel(); ui.zones = zones; }));
+            DispatchQueue::main().exec_async(move || with_instance(instance, |ui| { ui.cancel(); ui.zones = zones; }));
         }
-        DispatchQueue::main().exec_async(|| UI.with(|slot| { slot.take(); }));
+        DispatchQueue::main().exec_async(move || UI.with(|slot| {
+            let mine = slot.borrow().as_ref().is_some_and(|ui| ui.instance == instance);
+            if mine { slot.take(); }
+        }));
     });
     Ok(())
 }
