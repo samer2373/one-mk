@@ -277,6 +277,13 @@ struct X {
     grab: Option<Grab>,
     /// The XInput event mask selected on the root window.
     selected: u32,
+    /// The slaves that local raw input is selected on while a peer controls
+    /// this machine: every real one, never XTest, so what one-mk injects
+    /// does not echo back as raw events only to be dropped.
+    raw_slaves: Vec<u16>,
+    /// The server refused a per-slave selection: local raw input is selected
+    /// on the master devices, as before, until the devices change.
+    raw_on_masters: bool,
     devices: HashMap<u16, Axes>,
     pressed: Pressed,
     /// A barrier hit sequence whose capture failed: not tried again until
@@ -337,6 +344,8 @@ impl X {
             edges: if barriers { Edges::Barriers(Vec::new()) } else { Edges::Windows { windows: Vec::new(), ignore: None } },
             grab: None,
             selected: u32::MAX,
+            raw_slaves: Vec::new(),
+            raw_on_masters: false,
             devices: HashMap::new(),
             pressed: Pressed::default(),
             failed_hit: None,
@@ -410,8 +419,12 @@ impl X {
             self.known.list.iter().filter(|d| !now.list.contains(d)).filter_map(|d| u16::try_from(d.id.0).ok()).collect();
         self.pressed.retain(|key| !gone.contains(&((key >> 16) as u16)));
         self.devices.clear();
+        // The server forgets the selections of a device that went away.
+        self.raw_slaves.retain(|id| now.list.iter().any(|d| d.id == DeviceRef(u32::from(*id))));
+        self.raw_on_masters = false;
         self.known = now;
         st.report_devices(&self.known);
+        self.select(st.controlled, !st.held.is_empty());
         Ok(())
     }
 
@@ -434,12 +447,18 @@ impl X {
     /// Selects the XInput events needed now on the root window.
     fn select(&mut self, controlled: bool, held: bool) {
         let mut mask = if self.barriers { BARRIER_HIT | BARRIER_LEAVE } else { 0 };
+        let local = self.grab.is_none() && controlled;
         if self.grab.is_some() {
             mask |= RAW_CAPTURE;
-        } else if controlled {
+        } else if local && self.raw_on_masters {
             mask |= RAW_LOCAL;
         }
         if held { mask |= 1 << 16; }
+        let slaves = if local && !self.raw_on_masters { raw_sources(&self.known) } else { Vec::new() };
+        if slaves != self.raw_slaves {
+            self.select_slaves(mask, slaves);
+            return;
+        }
         if mask == self.selected {
             return;
         }
@@ -451,6 +470,47 @@ impl X {
         ];
         if let Err(e) = self.conn.xinput_xi_select_events(self.root, &m) {
             tracing::debug!("selecting XInput events: {e}");
+        }
+    }
+
+    /// Selects `mask` on the masters and local raw input on `slaves` (and no
+    /// longer on the ones before), waiting for the answer: this happens when
+    /// control starts or ends and when devices change, not per event. If the
+    /// server refuses (a device went away meanwhile), every slave selection is
+    /// cleared one by one and local raw input goes back on the masters.
+    fn select_slaves(&mut self, mask: u32, slaves: Vec<u16>) {
+        let mut m = vec![
+            xinput::EventMask { deviceid: ALL_MASTER_DEVICES, mask: vec![mask.into()] },
+            xinput::EventMask { deviceid: ALL_DEVICES, mask: vec![HIERARCHY.into()] },
+        ];
+        let gone = self.raw_slaves.iter().filter(|id| !slaves.contains(id));
+        m.extend(gone.map(|&deviceid| xinput::EventMask { deviceid, mask: vec![0u32.into()] }));
+        m.extend(slaves.iter().map(|&deviceid| xinput::EventMask { deviceid, mask: vec![RAW_LOCAL.into()] }));
+        let result = self.conn.xinput_xi_select_events(self.root, &m).map_err(anyhow::Error::from)
+            .and_then(|cookie| cookie.check().map_err(anyhow::Error::from));
+        match result {
+            Ok(()) => {
+                self.selected = mask;
+                self.raw_slaves = slaves;
+            }
+            Err(e) => {
+                tracing::debug!("selecting raw input per device: {e:#}; selecting it on the master devices");
+                for &deviceid in self.raw_slaves.iter().chain(&slaves) {
+                    let clear = [xinput::EventMask { deviceid, mask: vec![0u32.into()] }];
+                    let _ = self.conn.xinput_xi_select_events(self.root, &clear).map(|cookie| cookie.check());
+                }
+                self.raw_slaves.clear();
+                self.raw_on_masters = true;
+                let mask = if slaves.is_empty() { mask } else { mask | RAW_LOCAL };
+                self.selected = mask;
+                let m = [
+                    xinput::EventMask { deviceid: ALL_MASTER_DEVICES, mask: vec![mask.into()] },
+                    xinput::EventMask { deviceid: ALL_DEVICES, mask: vec![HIERARCHY.into()] },
+                ];
+                if let Err(e) = self.conn.xinput_xi_select_events(self.root, &m) {
+                    tracing::debug!("selecting XInput events: {e}");
+                }
+            }
         }
     }
 
@@ -947,6 +1007,12 @@ impl X {
 /// is two presses (the daemon's mapper tells them apart).
 fn per_source(source: u16, code: u32) -> u32 {
     (u32::from(source) << 16) | code
+}
+
+/// The slaves local input comes from: every keyboard and pointer but the
+/// XTest ones one-mk injects through.
+fn raw_sources(known: &XDevices) -> Vec<u16> {
+    known.list.iter().filter_map(|d| u16::try_from(d.id.0).ok()).filter(|id| !known.xtest.contains(id)).collect()
 }
 
 /// For tests: the backend against the X server at `display`.
