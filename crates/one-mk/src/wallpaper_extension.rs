@@ -5,7 +5,7 @@ use one_mk_wallpaper::{ExtensionAction, GnomeSetup, GnomeStage};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-const UUID: &str = "one-mk-wallpaper@one-mk.org";
+pub(crate) const UUID: &str = "one-mk-wallpaper@one-mk.org";
 const MARKER: &str = ".one-mk-install.json";
 const FILES: &[(&str, &str)] = &[
     ("metadata.json", include_str!("../../../extensions/gnome/one-mk-wallpaper@one-mk.org/metadata.json")),
@@ -461,16 +461,55 @@ async fn shell_state() -> Result<(String, bool)> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
+static SHELL_BUS: std::sync::Mutex<Option<zbus::Connection>> = std::sync::Mutex::new(None);
+
+/// The one session-bus connection this process uses to look at GNOME
+/// Shell (the extension's state and the wallpaper bridge), made on first
+/// use and kept: a check is then a few messages, not a new connection and
+/// handshake each time. [`forget_shell_bus`] drops it after a failure, so
+/// the next check starts afresh.
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) async fn shell_bus() -> Result<zbus::Connection> {
+    if let Some(connection) = SHELL_BUS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() { return Ok(connection); }
+    let connection = session_bus()?.method_timeout(std::time::Duration::from_secs(2)).build().await?;
+    Ok(SHELL_BUS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert(connection).clone())
+}
+
+/// A session-bus connection of its own, for a check made away from the
+/// service's runtime (which drives the kept one).
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) async fn own_session_bus() -> Result<zbus::Connection> {
+    Ok(session_bus()?.method_timeout(std::time::Duration::from_secs(2)).build().await?)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) fn forget_shell_bus() { SHELL_BUS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take(); }
+
+#[cfg(all(unix, not(target_os = "macos")))]
 async fn observe_shell() -> Result<ShellState> {
-    let connection = session_bus()?.method_timeout(std::time::Duration::from_secs(1)).build().await?;
-    let extensions = zbus::Proxy::new(&connection, "org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions", "org.gnome.Shell.Extensions").await?;
+    // A kept connection can be gone (the session bus restarted): asked once
+    // more on a new one before the answer is "no GNOME".
+    match observe_shell_on(&shell_bus().await?).await {
+        Ok(state) => Ok(state),
+        Err(_) => { forget_shell_bus(); observe_shell_on(&shell_bus().await?).await }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+async fn observe_shell_on(connection: &zbus::Connection) -> Result<ShellState> {
+    let extensions: zbus::Proxy<'_> = zbus::proxy::Builder::new(connection).destination("org.gnome.Shell.Extensions")?.path("/org/gnome/Shell/Extensions")?
+        .interface("org.gnome.Shell.Extensions")?.cache_properties(zbus::proxy::CacheProperties::No).build().await?;
     let version: String = extensions.get_property("ShellVersion").await?;
     let info: std::collections::HashMap<String, zbus::zvariant::OwnedValue> = extensions.call("GetExtensionInfo", &(UUID,)).await?;
     let state = info.get("state").and_then(|state| f64::try_from(state).ok())
         .filter(|value| value.is_finite() && value.fract() == 0.0 && (0.0..=99.0).contains(value)).map(|value| value as u32);
     let path = info.get("path").and_then(|value| <&str>::try_from(value).ok()).map(str::to_owned);
     let user_extensions: bool = extensions.get_property("UserExtensionsEnabled").await?;
-    let listed = gsettings(&["get", "org.gnome.shell", "enabled-extensions"]).await.is_ok_and(|text| list_entries(&text).iter().any(|entry| entry == UUID));
+    // The login list only matters while GNOME has not loaded the extension
+    // (it says whether a log-out is all that is left): read only then, as
+    // reading it starts a `gsettings` process.
+    let listed = (state.is_none() || state == Some(99))
+        && gsettings(&["get", "org.gnome.shell", "enabled-extensions"]).await.is_ok_and(|text| list_entries(&text).iter().any(|entry| entry == UUID));
     Ok(ShellState { version, state, path, user_extensions, listed })
 }
 

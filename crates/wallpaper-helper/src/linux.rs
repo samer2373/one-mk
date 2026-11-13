@@ -187,6 +187,11 @@ impl Pipeline<'_> {
     fn segment(&self, millis: u64, duration: u64, flush: bool) {
         unsafe { (self.gst.seek)(self.raw, 1.0, 3, 12 | u32::from(flush), 1, millis.saturating_mul(1_000_000) as i64, 1, duration.saturating_mul(1_000_000) as i64); }
     }
+    /// A flushing seek to the exact frame at `millis` (ACCURATE, not
+    /// KEY_UNIT, which lands on the keyframe before it, up to a GOP away).
+    fn seek_exact(&self, millis: u64, duration: u64) {
+        unsafe { (self.gst.seek)(self.raw, 1.0, 3, 1 | 2 | 8, 1, millis.saturating_mul(1_000_000) as i64, 1, duration.saturating_mul(1_000_000) as i64); }
+    }
 }
 
 fn quoted(text: &str) -> String { format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\"")) }

@@ -22,9 +22,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "THIRD-PARTY-NOTICES")
 # The packages whose programs ship, and the features the release builds them
-# with (release.yml: `-p one-mk-wall --features gnome-bridge` on Linux).
-SHIPPED = ["one-mk", "one-mk-app", "one-mk-tray", "one-mk-wallpaper-helper", "one-mk-wall"]
-FEATURES = "one-mk-wall/gnome-bridge"
+# with (release.yml: default features).
+SHIPPED = ["one-mk", "one-mk-app", "one-mk-tray", "one-mk-wallpaper-helper"]
 LICENCE_FILE = re.compile(r"^(licen[cs]e|copying|copyright|notice|unlicense)([-_.].*)?$", re.IGNORECASE)
 BOOST = """Boost Software License - Version 1.0 - August 17th, 2003
 
@@ -53,7 +52,7 @@ CODE = (".rs", ".toml", ".json", ".py", ".sh", ".html", ".c", ".h")
 
 
 def metadata():
-    command = ["cargo", "metadata", "--locked", "--format-version", "1", "--features", FEATURES]
+    command = ["cargo", "metadata", "--locked", "--format-version", "1"]
     result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
     if result.returncode != 0:
         sys.exit(f"third-party-notices: `{' '.join(command)}` failed:\n{result.stderr}")

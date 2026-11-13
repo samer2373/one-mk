@@ -48,7 +48,11 @@ struct Wallpaper {
     size: (u32, u32),
     scale: i32,
     buffers: Vec<Buffer>,
+    /// Where an output's pixels are made before they go to a buffer. A
+    /// video keeps it from frame to frame; a picture lets it go once painted.
     pixels: Vec<u8>,
+    /// The output size in pixels `mapping` was made for.
+    target: (u32, u32),
     mapping: PixelMapping,
     generation: u64,
 }
@@ -200,6 +204,32 @@ delegate_noop!(Desktop: ignore wl_surface::WlSurface);
 delegate_noop!(Desktop: ignore zxdg_output_manager_v1::ZxdgOutputManagerV1);
 delegate_noop!(Desktop: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 
+/// How far a new clock offset may move playback before it seeks rather than
+/// letting the rate catch up (at 2%, a second takes 50 s).
+const OFFSET_SEEK_MS: i64 = 1000;
+
+/// The size a video is decoded to: as large as this computer's screens show
+/// it (`wanted`, in pixels), never larger than the file, keeping its shape.
+fn frame_size(media: (u32, u32), wanted: Option<(f64, f64)>) -> (u32, u32) {
+    let Some((width, height)) = wanted.filter(|(width, height)| width.is_finite() && height.is_finite() && *width > 0.0 && *height > 0.0) else { return media };
+    let factor = (width / f64::from(media.0)).max(height / f64::from(media.1));
+    if factor >= 1.0 { return media; }
+    // Even sizes: the decoders' 4:2:0 formats halve the colour planes.
+    let side = |length: u32| (((f64::from(length) * factor).ceil() as u32 + 1) & !1).clamp(2, length.max(2));
+    (side(media.0), side(media.1))
+}
+
+/// The picture's pixels ready for a Wayland buffer (premultiplied over black,
+/// BGRx), decoded from its file for this paint only.
+fn picture_pixels(config: &PlayerConfig) -> Result<Vec<u8>> {
+    let mut pixels = crate::picture::player_source(config)?.into_raw();
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        for channel in 0..3 { pixel[channel] = ((u16::from(pixel[channel]) * u16::from(pixel[3]) + 127) / 255) as u8; }
+        pixel.swap(0, 2); pixel[3] = 255;
+    }
+    Ok(pixels)
+}
+
 fn pixel_size(size: (u32, u32), scale: i32) -> Result<(u32, u32)> {
     let width = size.0.checked_mul(scale as u32).context("Wallpaper output is too wide")?;
     let height = size.1.checked_mul(scale as u32).context("Wallpaper output is too tall")?;
@@ -298,7 +328,7 @@ impl Desktop {
                 let region = compositor.create_region(handle, ()); surface.set_input_region(Some(&region)); region.destroy();
                 surface.commit();
                 output.wallpaper = Some(Wallpaper { surface, role, rect: output.rect, title, presented: self.secret.is_none(), configured: false,
-                    size: (output.rect.width as u32, output.rect.height as u32), scale: output.scale, buffers: Vec::new(), pixels: Vec::new(), mapping: PixelMapping::default(), generation: 0 });
+                    size: (output.rect.width as u32, output.rect.height as u32), scale: output.scale, buffers: Vec::new(), pixels: Vec::new(), target: (0, 0), mapping: PixelMapping::default(), generation: 0 });
             }
             let wallpaper = output.wallpaper.as_mut().unwrap();
             if !wallpaper.configured || wallpaper.size.0 == 0 || wallpaper.size.1 == 0 { continue; }
@@ -307,10 +337,10 @@ impl Desktop {
                 eprintln!("oneMK wallpaper: skipping output {id}, {}x{} at scale {} is too large", wallpaper.size.0, wallpaper.size.1, output.scale);
                 output.wallpaper.take(); output.closed = true; continue;
             };
-            if wallpaper.scale != output.scale || wallpaper.pixels.len() != size.0 as usize * size.1 as usize * 4 || wallpaper.generation == 0 {
+            if wallpaper.scale != output.scale || wallpaper.target != size || wallpaper.generation == 0 {
                 wallpaper.scale = output.scale; wallpaper.surface.set_buffer_scale(output.scale);
                 wallpaper.mapping = mapping(config, monitor, size, source)?;
-                wallpaper.pixels.resize(size.0 as usize * size.1 as usize * 4, 0);
+                wallpaper.target = size;
                 wallpaper.buffers.retain(|buffer| buffer.size == size);
                 wallpaper.generation = 0;
             }
@@ -318,7 +348,15 @@ impl Desktop {
         Ok(())
     }
 
-    fn paint(&mut self, frame: &[u8], source: (u32, u32), generation: u64, handle: &QueueHandle<Self>) -> Result<()> {
+    /// Whether an output still waits for the frame of `generation`.
+    fn unpainted(&self, generation: u64) -> bool {
+        self.outputs.values().any(|output| output.wallpaper.as_ref().is_some_and(|wallpaper| !wallpaper.mapping.is_empty() && wallpaper.generation != generation))
+    }
+
+    /// Paints `frame` on every output that hasn't shown `generation` yet.
+    /// `keep_scratch` keeps each output's working pixels for the next frame
+    /// (a video); a picture paints once, so they are let go.
+    fn paint(&mut self, frame: &[u8], source: (u32, u32), generation: u64, handle: &QueueHandle<Self>, keep_scratch: bool) -> Result<()> {
         let shm = self.shm.as_ref().context("The Wayland compositor has no shared-memory wallpaper interface")?;
         for output in self.outputs.values_mut() {
             let Some(wallpaper) = &mut output.wallpaper else { continue };
@@ -329,6 +367,7 @@ impl Desktop {
             }
             let Some(buffer) = wallpaper.buffers.iter().find(|buffer| buffer.free.load(Ordering::Acquire)) else { continue };
             let width = source.0 as usize;
+            wallpaper.pixels.resize(size.0 as usize * size.1 as usize * 4, 0);
             for (row, down) in wallpaper.pixels.chunks_exact_mut(size.0 as usize * 4).zip(&wallpaper.mapping.rows) {
                 for (pixel, across) in row.as_chunks_mut::<4>().0.iter_mut().zip(&wallpaper.mapping.columns) {
                     let Some((across, down)) = across.zip(*down) else { pixel.copy_from_slice(&[0, 0, 0, 255]); continue };
@@ -345,6 +384,7 @@ impl Desktop {
                 }
             }
             buffer.file.write_all_at(&wallpaper.pixels, 0)?;
+            if !keep_scratch { wallpaper.pixels = Vec::new(); }
             buffer.free.store(false, Ordering::Release);
             wallpaper.surface.attach(Some(&buffer.proxy), 0, 0);
             if wallpaper.surface.version() >= 4 { wallpaper.surface.damage_buffer(0, 0, size.0 as i32, size.1 as i32); }
@@ -380,9 +420,12 @@ impl Samples {
         }
     }
 
-    fn frame(&self, gst: &Gst, sink: Object, preroll: bool, size: (u32, u32)) -> Result<Option<Vec<u8>>> {
+    /// Copies the next frame (or the preroll frame) into `pixels`, reused
+    /// from frame to frame: a 4K frame is 33 MB, too much to allocate and
+    /// fault in anew 30 times a second. False when none is waiting.
+    fn frame(&self, gst: &Gst, sink: Object, preroll: bool, size: (u32, u32), pixels: &mut Vec<u8>) -> Result<bool> {
         let sample = unsafe { (if preroll { self.preroll } else { self.pull })(sink, 0) };
-        if sample.is_null() { return Ok(None); }
+        if sample.is_null() { return Ok(false); }
         let result = (|| {
             let caps = unsafe { (self.caps)(sample) };
             ensure!(!caps.is_null(), "GStreamer returned a frame without dimensions");
@@ -392,9 +435,9 @@ impl Samples {
             ensure!((width as u32, height as u32) == size, "The video dimensions changed during playback");
             let buffer = unsafe { (self.buffer)(sample) };
             ensure!(!buffer.is_null(), "GStreamer returned an empty wallpaper frame");
-            let mut pixels = vec![0; size.0 as usize * size.1 as usize * 4];
+            pixels.resize(size.0 as usize * size.1 as usize * 4, 0);
             ensure!(unsafe { (self.extract)(buffer, 0, pixels.as_mut_ptr().cast(), pixels.len()) } == pixels.len(), "GStreamer returned an incomplete wallpaper frame");
-            Ok(Some(pixels))
+            Ok(true)
         })();
         unsafe { (gst.mini_unref)(sample); }
         result
@@ -412,22 +455,17 @@ pub(super) fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result
     let bridge = if one_mk_wallpaper::gnome_wayland() { Some(super::gnome::Bridge::start()?) } else { None };
     desktop.secret = bridge.as_ref().map(|bridge| bridge.secret.clone());
     one_mk_wallpaper::wayland::capabilities(desktop.shell.is_some() || (bridge.is_some() && desktop.windows.is_some()), desktop.outputs.len()).map_err(anyhow::Error::msg)?;
-    let source = (config.plan.media.width, config.plan.media.height);
-    pixel_size(source, 1)?;
+    let media = (config.plan.media.width, config.plan.media.height);
+    pixel_size(media, 1)?;
+    // A video is decoded no larger than this computer's screens need, and
+    // shrunk before it is converted, so conversion, copy and painting work
+    // on the frame that is shown, not on the file's.
+    let source = if config.plan.picture { media } else { frame_size(media, config.plan.largest_image(&config.computer)) };
     let mut generation = 1u64;
-    let picture = if config.plan.picture {
-        let image = crate::picture::player_source(&config)?;
-        let mut pixels = image.into_raw();
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            for channel in 0..3 { pixel[channel] = ((u16::from(pixel[channel]) * u16::from(pixel[3]) + 127) / 255) as u8; }
-            pixel.swap(0, 2); pixel[3] = 255;
-        }
-        Some(pixels)
-    } else { None };
-    let gst = if picture.is_none() { Some(Gst::load()?) } else { None };
+    let gst = if config.plan.picture { None } else { Some(Gst::load()?) };
     let samples = gst.as_ref().map(Samples::load).transpose()?;
     let pipeline = gst.as_ref().map(|gst| gst.pipeline(&format!(
-        "uridecodebin uri={} caps=video/x-raw name=source source. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 ! videoconvert ! video/x-raw,format=BGRx,width={},height={},pixel-aspect-ratio=1/1 ! appsink name=frames sync=true emit-signals=true max-buffers=1 drop=true enable-last-sample=false",
+        "uridecodebin uri={} caps=video/x-raw name=source source. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 ! videoscale add-borders=false ! video/x-raw,width={},height={},pixel-aspect-ratio=1/1 ! videoconvert ! video/x-raw,format=BGRx ! appsink name=frames sync=true emit-signals=true max-buffers=1 drop=true enable-last-sample=false",
         quoted(&uri(&config.path)?), source.0, source.1))).transpose()?;
     let mut sink = ptr::null_mut(); let mut bus = ptr::null_mut();
     let mut bus_descriptor = PollDescriptor { fd: -1, events: 0, revents: 0 };
@@ -445,8 +483,13 @@ pub(super) fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result
         pipeline.preroll()?;
     }
     let result = (|| -> Result<()> {
-        let mut frame = picture;
-        if let (Some(gst), Some(samples)) = (&gst, &samples) { frame = samples.frame(gst, sink, true, source)?; }
+        // The latest video frame, its memory reused from frame to frame. A
+        // picture is never kept: it is decoded only while an output needs
+        // painting (at start, or when a screen changes), each output keeps
+        // only its own pixels, and the picture is let go.
+        let mut frame = Vec::new();
+        let mut have_frame = false;
+        if let (Some(gst), Some(samples)) = (&gst, &samples) { have_frame = samples.frame(gst, sink, true, source, &mut frame)?; }
         let mut holds = Holds::default(); holds.set(Hold::User, config.plan.paused);
         let power = power_events();
         let mut power_changed = true;
@@ -470,22 +513,33 @@ pub(super) fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result
             if power_changed { holds.set(Hold::Battery, config.plan.pause_on_battery && on_battery()); power_changed = false; }
             let should_play = !config.plan.picture && holds.playing() && active;
             if let (Some(gst), Some(pipeline)) = (&gst, &pipeline) {
-                if playing != should_play || (resync && should_play) {
+                if playing != should_play {
                     if should_play { pipeline.segment(position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms), config.plan.media.duration_ms, true); }
                     ensure!(unsafe { (gst.state)(pipeline.raw, if should_play { 4 } else { 3 }) } != 0, "GStreamer could not change wallpaper playback state");
                     playing = should_play;
                 }
-                if playing && last_sync.elapsed() >= Duration::from_secs(2) {
+                // A new clock offset (the service refines it every half
+                // minute) is checked at once but mostly absorbed by the rate,
+                // as small drift is: a flushing seek would jump to a keyframe
+                // and show a hitch. Only a large jump (another computer now
+                // keeps time) seeks, to the exact frame.
+                if playing && (resync || last_sync.elapsed() >= Duration::from_secs(2)) {
                     let mut actual = 0;
                     let expected = position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms);
+                    let duration = config.plan.media.duration_ms;
                     if unsafe { (gst.position)(pipeline.raw, 3, &mut actual) } != 0 {
-                        match correction(actual.max(0) as u64 / 1_000_000, expected, config.plan.media.duration_ms) {
+                        let actual = actual.max(0) as u64 / 1_000_000;
+                        if resync && one_mk_wallpaper::drift(actual, expected, duration).abs() >= OFFSET_SEEK_MS {
+                            if let Some(clock) = &clock { clock.rate(1.0); }
+                            rate = 1.0;
+                            pipeline.seek_exact(expected, duration);
+                        } else { match correction(actual, expected, duration) {
                             Correction::Seek(position) => { if let Some(clock) = &clock { clock.rate(1.0); } rate = 1.0; pipeline.segment(position, config.plan.media.duration_ms, true); }
                             adjustment => {
                                 let target = if let Correction::Rate(rate) = adjustment { rate } else { 1.0 };
                                 if target != rate { if let Some(clock) = &clock { clock.rate(target); } rate = target; }
                             }
-                        }
+                        } }
                     }
                     last_sync = Instant::now();
                 }
@@ -500,13 +554,17 @@ pub(super) fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result
                 }
             }
             if let (Some(gst), Some(samples)) = (&gst, &samples) {
-                if let Some(pixels) = samples.frame(gst, sink, false, source)? {
-                    frame = Some(pixels); generation += 1;
-                } else if frame.is_none() && let Some(pixels) = samples.frame(gst, sink, true, source)? {
-                    frame = Some(pixels); generation += 1;
+                if samples.frame(gst, sink, false, source, &mut frame)? || (!have_frame && samples.frame(gst, sink, true, source, &mut frame)?) {
+                    have_frame = true; generation += 1;
                 }
+                if have_frame { desktop.paint(&frame, source, generation, &handle, true)?; }
+            } else if config.plan.picture && desktop.unpainted(generation) {
+                let picture = picture_pixels(&config)?;
+                desktop.paint(&picture, source, generation, &handle, false)?;
+                // The compositor's five seconds start once there is
+                // something to present, not while a large picture decodes.
+                pending_since = None;
             }
-            if let Some(frame) = &frame { desktop.paint(frame, source, generation, &handle)?; }
             if let Some(bridge) = &bridge && desktop.outputs.values().any(|output| output.wallpaper.as_ref().is_some_and(|wallpaper| wallpaper.generation > 0 && !wallpaper.presented)) {
                 let titles = bridge.presented()?;
                 for output in desktop.outputs.values_mut() {
@@ -581,6 +639,21 @@ mod tests {
         assert_eq!(pixel_size((800, 600), 2).unwrap(), (1600, 1200));
         assert!(pixel_size((32768, 32768), 1).is_err());
         assert!(pixel_size((u32::MAX, 1), 2).is_err());
+    }
+    #[test]
+    fn video_is_decoded_no_larger_than_shown_keeping_its_shape() {
+        // A 4K file on a 1080p span: decoded at 1080p.
+        assert_eq!(frame_size((3840, 2160), Some((1920.0, 1080.0))), (1920, 1080));
+        // Never enlarged, and the file's size when nothing is known.
+        assert_eq!(frame_size((1280, 720), Some((3840.0, 2160.0))), (1280, 720));
+        assert_eq!(frame_size((1280, 720), None), (1280, 720));
+        assert_eq!(frame_size((1280, 720), Some((f64::NAN, 1.0))), (1280, 720));
+        // The larger need wins, so the shown part is never short of pixels,
+        // and sizes stay even.
+        let (width, height) = frame_size((3840, 2160), Some((1536.0, 600.0)));
+        assert!(width >= 1536 && height >= 864 && width % 2 == 0 && height % 2 == 0, "{width}x{height}");
+        assert!((f64::from(width) / f64::from(height) - 16.0 / 9.0).abs() < 0.01);
+        assert_eq!(frame_size((3841, 2161), Some((1.0, 1.0))), (2, 2));
     }
     fn config(fit: one_mk_wallpaper::Fit) -> PlayerConfig {
         let monitors = (0..2).map(|index| Monitor { computer: "pc".into(), name: format!("DP-{index}"),

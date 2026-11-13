@@ -395,8 +395,9 @@ fn picture_desktop(config: &PlayerConfig, image: &image::RgbaImage) -> Result<Pi
 }
 
 fn run_picture(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
-    let image = crate::picture::player_source(&config)?;
-    let mut picture = picture_desktop(&config, &image)?;
+    // Only each screen's own pixels are kept: the full picture (179 MB for
+    // an 8K one) is decoded again from its file when the screens change.
+    let mut picture = picture_desktop(&config, &crate::picture::player_source(&config)?)?;
     let _notifications = unsafe { Notifications::new()? };
     let mut visible = false;
     let mut last = None;
@@ -407,7 +408,7 @@ fn run_picture(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()
             while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() { DispatchMessageW(&message); }
             if DISPLAYS_CHANGED.swap(false, Ordering::Relaxed) {
                 refresh_displays(&mut config)?;
-                let replacement = picture_desktop(&config, &image)?;
+                let replacement = picture_desktop(&config, &crate::picture::player_source(&config)?)?;
                 picture = replacement;
                 visible = false;
             }
