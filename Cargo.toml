@@ -14,6 +14,14 @@ readme = "README.md"
 # Shipped as programs, never published to crates.io.
 publish = false
 
+# Dev and test builds keep file/line tables (backtraces, panic locations) but not full
+# DWARF, which made every test executable hundreds of MB. Release builds are unchanged.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
