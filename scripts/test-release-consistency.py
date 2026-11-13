@@ -59,6 +59,11 @@ class Consistency(unittest.TestCase):
             (self.copy / relative).write_text(text, encoding="utf-8")
         self.saved.clear()
 
+    def floor(self):
+        """install.sh's MIN_SEQUENCE as it is in the copy under test (it changes with every release)."""
+        import re
+        return int(re.search(r"^MIN_SEQUENCE=([0-9]+)$", (self.copy / "install.sh").read_text(encoding="utf-8"), re.M).group(1))
+
     def mutate(self, relative, old, new, count=1):
         path = self.copy / relative
         text = path.read_text(encoding="utf-8")
@@ -270,7 +275,7 @@ class Consistency(unittest.TestCase):
         self.fails("metadata", "installer: removes the same startup entry")
 
     def test_an_install_script_without_a_replay_floor_fails(self):
-        self.mutate("install.sh", "MIN_SEQUENCE=48\n", "MIN_SEQUENCE=soon\n")
+        self.mutate("install.sh", f"MIN_SEQUENCE={self.floor()}\n", "MIN_SEQUENCE=soon\n")
         self.fails("metadata", "install.sh: one MIN_SEQUENCE")
 
     def test_an_install_script_without_a_stale_age_fails(self):
@@ -283,9 +288,10 @@ class Consistency(unittest.TestCase):
 
     def test_a_replay_floor_above_the_release_being_published_fails(self):
         import os
-        os.environ.update(GITHUB_WORKFLOW="release", GITHUB_RUN_NUMBER="47")
+        floor = self.floor()
+        os.environ.update(GITHUB_WORKFLOW="release", GITHUB_RUN_NUMBER=str(floor - 1))
         self.addCleanup(lambda: [os.environ.pop(name) for name in ("GITHUB_WORKFLOW", "GITHUB_RUN_NUMBER")])
-        self.fails("metadata", "MIN_SEQUENCE 48 is not above this release's sequence 47")
+        self.fails("metadata", f"MIN_SEQUENCE {floor} is not above this release's sequence {floor - 1}")
 
     def test_a_release_that_does_not_number_its_update_list_by_the_run_fails(self):
         self.mutate(".github/workflows/release.yml", 'make-update-manifest.sh release-files "$GITHUB_RUN_NUMBER"', 'make-update-manifest.sh release-files 1')

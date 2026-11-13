@@ -42,7 +42,7 @@ pub(super) fn arm(home: &Path, config: &Config, id: &str, origin: Origin) {
                 let mut marker = [0u8; 20];
                 marker[12..].copy_from_slice(&now().to_le_bytes());
                 if let Some(location) = info.location()
-                    && let Some(index) = SOURCES.iter().position(|source| location.file().ends_with(source)) {
+                    && let Some(index) = SOURCES.iter().position(|source| ends_with_source(location.file(), source)) {
                         marker[..4].copy_from_slice(&((index + 1) as u32).to_le_bytes());
                         marker[4..8].copy_from_slice(&location.line().to_le_bytes());
                         marker[8..12].copy_from_slice(&location.column().to_le_bytes());
@@ -52,6 +52,12 @@ pub(super) fn arm(home: &Path, config: &Config, id: &str, origin: Origin) {
             previous(info);
         }));
     });
+}
+/// Whether the panic location `file` ends with the source path `source` (written with `/`). On Windows
+/// `Location::file()` uses `\`, so a separator matches either way. No allocation: this runs in the panic hook.
+fn ends_with_source(file: &str, source: &str) -> bool {
+    let (file, source) = (file.as_bytes(), source.as_bytes());
+    file.len() >= source.len() && file[file.len() - source.len()..].iter().zip(source).all(|(f, s)| f == s || (*f == b'\\' && *s == b'/'))
 }
 pub(super) fn recover(home: &Path, config: &Config) {
     let dir = home.join(DIR);
@@ -137,6 +143,15 @@ mod tests {
         set_enabled(home.path(), false).unwrap();
         assert!(!home.path().join(DIR).exists());
         assert!(!home.path().join("analytics-spool-v2.json").exists());
+    }
+    #[test]
+    fn a_windows_panic_location_matches_its_source() {
+        assert!(ends_with_source("crates/ctl/src/analytics/crash.rs", "crates/ctl/src/analytics/crash.rs"));
+        assert!(ends_with_source(r"crates\ctl\src\analytics\crash.rs", "crates/ctl/src/analytics/crash.rs"));
+        assert!(ends_with_source(r"C:\runner\one-mk\crates\one-mk\src\main.rs", "crates/one-mk/src/main.rs"));
+        assert!(!ends_with_source(r"crates\one-mk\src\other.rs", "crates/one-mk/src/main.rs"));
+        assert!(!ends_with_source("main.rs", "crates/one-mk/src/main.rs"));
+        assert!(!ends_with_source(r"crates\one-mk\src\main.rs.bak", "crates/one-mk/src/main.rs"));
     }
     #[test]
     fn frame_mapping_never_exports_arbitrary_paths() {
