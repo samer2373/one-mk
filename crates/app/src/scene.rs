@@ -250,6 +250,13 @@ fn panels<'a>(screens: &'a [Monitor], pl: &Plane, by: f32) -> impl Iterator<Item
     })
 }
 
+/// A text size on a half-point grid. A size that follows the camera is a
+/// new number nearly every frame of a move, and egui rasterises every glyph
+/// again for each: on a grid the atlas holds a handful of sizes, not hundreds.
+fn snap_size(size: f32) -> f32 {
+    (size * 2.0).round() / 2.0
+}
+
 /// How `panels` fits a group of monitors to `pl`: its top left in pixels,
 /// then the fraction of the screen per pixel across and down, and where
 /// the group starts on it.
@@ -1435,11 +1442,11 @@ impl Scene {
         // A small window makes a small slot: the title gets smaller (down
         // to 10 pt) before it is shortened, and the line below only shows
         // when it fits inside the outline.
-        let mut size = (h * 0.11).clamp(12.0, 16.0);
+        let mut size = snap_size((h * 0.11).clamp(12.0, 16.0));
         while size > 10.0 && painter.layout_no_wrap("Add a computer".into(), semibold(size), col).size().x > w * 0.9 { size -= 0.5; }
         let title = semibold(size);
         painter.text(c - vec2(0.0, 2.0), egui::Align2::CENTER_BOTTOM, fit(painter, "Add a computer", &title, w * 0.9), title, col);
-        let sub = regular((h * 0.07).clamp(10.0, 13.0));
+        let sub = regular(snap_size((h * 0.07).clamp(10.0, 13.0)));
         let mut job = egui::text::LayoutJob::simple("Pair another computer to share this mouse and keyboard".into(), sub, fade(pal().ink2, k), w * 0.84);
         job.halign = egui::Align::Center;
         let g = painter.layout_job(job);
@@ -1683,9 +1690,9 @@ impl Scene {
             // The label only where it fits above the digits.
             let digits_w = if h > 90.0 { 0.62 } else { 0.5 };
             if h > 90.0 {
-                painter.text(at(0.5, 0.38), egui::Align2::CENTER_CENTER, "Pairing code", regular((h * 0.07).clamp(11.0, 14.0)), fade(style::SCREEN_INK2, a));
+                painter.text(at(0.5, 0.38), egui::Align2::CENTER_CENTER, "Pairing code", regular(snap_size((h * 0.07).clamp(11.0, 14.0))), fade(style::SCREEN_INK2, a));
             }
-            let font = mono_medium((h * 0.15).clamp(12.0, 26.0));
+            let font = mono_medium(snap_size((h * 0.15).clamp(12.0, 26.0)));
             let adv = painter.layout_no_wrap("0".into(), font.clone(), pal().ink).size().x + font.size * 0.1;
             let gap = font.size * 0.4;
             let total = adv * code.len() as f32 + gap;
@@ -1716,12 +1723,12 @@ impl Scene {
         // glass, and a point smaller type if need be.
         let room = width * if wall { 0.96 } else { 0.9 };
         // The name a point or two smaller before it is ever shortened.
-        let mut name_size = (h * 0.11).clamp(if wall { 11.0 } else { 12.0 }, 22.0);
+        let mut name_size = snap_size((h * 0.11).clamp(if wall { 11.0 } else { 12.0 }, 22.0));
         while name_size > 10.0 && painter.layout_no_wrap(d.name.clone(), semibold(name_size), pal().ink).size().x > room {
             name_size -= 0.5;
         }
         let name_font = semibold(name_size);
-        let sub_font = regular((h * 0.07).clamp(11.0, 14.0).min(name_size));
+        let sub_font = regular(snap_size((h * 0.07).clamp(11.0, 14.0)).min(name_size));
         if named {
             // A soft dark bloom behind the words, as the system draws under
             // desktop labels: they stay readable on any wallpaper.
@@ -1837,6 +1844,17 @@ impl Scene {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn label_sizes_move_in_half_point_steps() {
+        use super::snap_size;
+        assert_eq!(snap_size(14.0), 14.0);
+        assert_eq!(snap_size(14.2), 14.0);
+        assert_eq!(snap_size(14.3), 14.5);
+        assert_eq!(snap_size(14.74), 14.5);
+        let distinct: std::collections::BTreeSet<u32> = (0..1000).map(|i| snap_size(12.0 + i as f32 * 0.01).to_bits()).collect();
+        assert!(distinct.len() <= 21, "a ten point move is at most 21 sizes: {}", distinct.len());
+    }
+
     use super::*;
 
     fn settle(s: &mut Scene, from: f64) -> f64 {
