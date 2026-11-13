@@ -277,3 +277,15 @@ valid configuration; withdrawal still works without configuration. No raw key
 is stored in consent. Local restart/configuration tests cover both key and
 region changes, unchanged identity, explicit re-consent and old-format denial.
 No additional live events were sent for this correction.
+
+### Additional desktop readiness checks
+
+The destination-consent change is covered by rendered desktop checkbox clicks
+in isolated subprocesses: configured opt-in/withdrawal and unconfigured failure
+without creating an identity. The complete macOS desktop test binary passed
+390 tests, including frame interactions, settings persistence, pairing/transfer
+UI states and isolated service-adapter failures; the CLI analytics wiring tests
+passed both checks. Desktop all-target clippy passed with warnings denied.
+These are headless UI/test-adapter checks, not real paired-device transfers or
+a launched desktop/service end-to-end ingestion claim. Linux and Windows runtime
+validation, native faults/OS kills, and full symbolication remain unverified.
