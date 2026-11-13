@@ -401,6 +401,30 @@ mod tests {
     }
 
     #[test]
+    fn typing_compose_table_is_parsed_once_and_shared_across_threads() {
+        let Some(german) = layout("de") else { return };
+        let first = LayoutComposer::new(c"C.UTF-8").expect("system compose tables");
+        let started = std::time::Instant::now();
+        let composers: Vec<_> = (0..16).map(|_| LayoutComposer::new(c"C.UTF-8").expect("cached table")).collect();
+        assert!(started.elapsed() < std::time::Duration::from_millis(50), "16 composers reuse one parsed table");
+        drop(first);
+        let workers: Vec<_> = composers.into_iter().map(|mut compose| {
+            std::thread::spawn(move || {
+                let german = layout("de").unwrap();
+                let masks = LayoutState::default();
+                for _ in 0..50 {
+                    assert_eq!(compose.feed(&german, 13, masks), Composition::Pending);
+                    assert_eq!(compose.feed(&german, 18, masks), Composition::Text("é".into()));
+                    drop(LayoutComposer::new(c"C.UTF-8"));
+                }
+            })
+        }).collect();
+        for worker in workers { worker.join().unwrap(); }
+        let mut compose = LayoutComposer::new(c"C.UTF-8").expect("the table outlives every composer");
+        assert_eq!(compose.feed(&german, 13, LayoutState::default()), Composition::Pending);
+    }
+
+    #[test]
     fn typing_compose_dead_keys_reset_and_reject_controls() {
         let Some(german) = layout("de") else { return };
         let mut compose = LayoutComposer::new(c"C.UTF-8").expect("system compose tables");
