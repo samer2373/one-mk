@@ -637,6 +637,8 @@ pub struct Engine {
     actions_running: Arc<AtomicUsize>,
     /// When each key action's command last ran (see [`Engine::run_action`]).
     actions: HashMap<String, Instant>,
+    /// The hooks the queues were last configured with.
+    configured: Option<Hooks>,
 }
 
 impl Drop for Engine {
@@ -655,7 +657,7 @@ impl Engine {
         cfg: &Hooks,
         away: Option<Fingerprint>,
         owner: Option<Fingerprint>,
-        peers: impl Iterator<Item = (Fingerprint, &'a str, Side)>,
+        peers: impl Iterator<Item = (Fingerprint, &'a str, Side)> + Clone,
     ) {
         if !cfg.any() {
             if self.primed {
@@ -667,12 +669,43 @@ impl Engine {
             }
             return;
         }
-        for queue in [&self.queue, &self.peer_queue] {
-            queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).configure(cfg);
+        // The daemon calls this after every event it handles, a run of
+        // mouse motion included: when nothing a hook looks at changed, it
+        // only compares, without locking the queues or building the diff.
+        if self.unchanged(cfg, away, owner, peers.clone()) {
+            return;
+        }
+        if self.configured.as_ref() != Some(cfg) {
+            for queue in [&self.queue, &self.peer_queue] {
+                queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).configure(cfg);
+            }
+            self.configured = Some(cfg.clone());
         }
         for (ev, info) in self.diff(away, owner, peers) {
             self.fire(cfg, ev, &info);
         }
+    }
+
+    /// Whether `sync` with these would change nothing: the same hooks,
+    /// pointer, owner and peers (by name and side) as last time.
+    fn unchanged<'a>(
+        &self,
+        cfg: &Hooks,
+        away: Option<Fingerprint>,
+        owner: Option<Fingerprint>,
+        peers: impl Iterator<Item = (Fingerprint, &'a str, Side)>,
+    ) -> bool {
+        if !self.primed || self.away != away || self.owner != owner || self.configured.as_ref() != Some(cfg) {
+            return false;
+        }
+        let mut count = 0;
+        for (fp, name, side) in peers {
+            count += 1;
+            if !self.known.get(&fp).is_some_and(|k| k.info.side == side && k.info.name == name) {
+                return false;
+            }
+        }
+        count == self.known.len()
     }
 
     /// The events since the last call. The first call after hooks were set
