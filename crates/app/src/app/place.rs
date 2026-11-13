@@ -427,7 +427,7 @@ impl App {
     }
 
     pub(super) fn arrange_page(&mut self, ui: &mut Ui, area: Rect) {
-        let Some(status) = self.running().cloned() else { return };
+        let Some(status) = self.running_shared() else { return };
         // The computer whose side and place are edited: the chosen one, or
         // the first (this computer has none to place).
         let selected = self.selected_id();
