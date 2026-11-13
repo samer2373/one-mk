@@ -62,6 +62,9 @@ struct State {
     still_fallback: bool,
     picture_mode: one_mk_wallpaper::picture::Mode,
     extension_check: Option<std::time::Instant>,
+    /// Counts the times the kept setup answer was thrown away, so a check that
+    /// was already running when that happened does not keep its older answer.
+    setup_epoch: u64,
     /// A background check of what this desktop can show is running.
     checking: bool,
     extension_changing: bool,
@@ -254,12 +257,15 @@ fn gnome_answered(error: &anyhow::Error) -> bool {
 fn check_gnome_now() -> Can {
     std::thread::spawn(|| {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
-        runtime.block_on(tokio::time::timeout(Duration::from_secs(4), async {
-            let connection = crate::wallpaper::extension::own_session_bus().await.ok()?;
-            let can = check_gnome(&connection).await.ok();
-            let _ = connection.close().await;
-            can
-        })).ok().flatten()
+        // The timer is made inside the runtime: outside it, it panics.
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(4), async {
+                let connection = crate::wallpaper::extension::own_session_bus().await.ok()?;
+                let can = check_gnome(&connection).await.ok();
+                let _ = connection.close().await;
+                can
+            }).await
+        }).ok().flatten()
     }).join().ok().flatten().unwrap_or(GNOME_UNAVAILABLE)
 }
 #[cfg(not(all(unix, not(target_os = "macos"))))]
@@ -279,6 +285,7 @@ fn refresh(shared: &Arc<Mutex<State>>) {
     let stale_setup = gnome && !state.extension_changing && state.extension_check.is_none_or(|at| at.elapsed() >= RECHECK);
     if state.checking || !(stale_can || stale_setup) { return; }
     state.checking = true;
+    let setup_epoch = state.setup_epoch;
     let shared = Arc::downgrade(shared);
     handle.spawn(async move {
         if stale_can { let epoch = kept().epoch; keep(check().await, epoch); }
@@ -293,7 +300,8 @@ fn refresh(shared: &Arc<Mutex<State>>) {
         let again = {
             let mut state = shared.lock().unwrap();
             state.checking = false;
-            if let Some(setup) = setup {
+            // An answer asked for before the setup changed is not kept: the next check asks again.
+            if let Some(setup) = setup.filter(|_| state.setup_epoch == setup_epoch) {
                 state.extension_check = Some(std::time::Instant::now());
                 if !state.extension_changing { state.status.gnome = Some(setup); }
             }
@@ -331,7 +339,7 @@ fn watch(state: &mut State, shared: &Arc<Mutex<State>>, handle: &tokio::runtime:
                 if event.is_none() { break; }
                 invalidate();
                 let Some(shared) = shared.upgrade() else { break };
-                shared.lock().unwrap().extension_check = None;
+                { let mut state = shared.lock().unwrap(); state.extension_check = None; state.setup_epoch += 1; }
                 refresh(&shared);
             }
             anyhow::Ok(())
@@ -882,6 +890,7 @@ impl Runtime {
                     let mut state = shared.lock().unwrap();
                     state.extension_changing = false;
                     state.extension_check = None;
+                    state.setup_epoch += 1;
                     if let Err(error) = &result {
                         state.status.gnome = Some(one_mk_wallpaper::GnomeSetup { stage: one_mk_wallpaper::GnomeStage::Failed,
                             message: format!("GNOME extension setup: {error:#}"), can_install: false, can_enable: false });

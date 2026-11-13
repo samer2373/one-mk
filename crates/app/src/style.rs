@@ -961,14 +961,20 @@ impl Fallbacks {
     ) -> bool {
         self.tried.extend(missing.iter().copied());
         let mut added = false;
+        let mut budget_spent = true;
         for _ in 0..LOOKUPS_PER_BATCH {
             if missing.is_empty() {
+                budget_spent = false;
                 break;
             }
-            let Some(found) = lookup(&missing) else { break };
+            let Some(found) = lookup(&missing) else {
+                budget_spent = false;
+                break;
+            };
             let covered = missing.iter().filter(|c| found.covers(**c)).count();
             if covered == 0 {
                 // The best the system has covers none of what is left.
+                budget_spent = false;
                 break;
             }
             missing.retain(|c| !found.covers(*c));
@@ -980,6 +986,12 @@ impl Fallbacks {
                 data.index = found.index;
                 self.loaded.push((name, Arc::new(data)));
                 added = true;
+            }
+        }
+        if budget_spent {
+            // The lookups ran out before these were asked about: a later batch may still find them.
+            for c in &missing {
+                self.tried.remove(c);
             }
         }
         added
@@ -1157,6 +1169,27 @@ mod tests {
         );
         assert!(added);
         assert_eq!((lookups, fallbacks.loaded.len()), (2, 2));
+    }
+
+    #[test]
+    fn letters_left_when_the_lookup_budget_ran_out_are_asked_about_in_a_later_batch() {
+        let mut fallbacks = Fallbacks::default();
+        // Six scripts, one font each: the lookups of one batch run out after four.
+        let scripts: Vec<(char, Found)> = (0..6u32)
+            .map(|i| {
+                let c = char::from_u32(0x4e00 + i * 0x1000).unwrap();
+                (c, Found { path: format!("/fonts/{i}.ttf"), index: 0, covers: Some(vec![(c as u32, c as u32)]) })
+            })
+            .collect();
+        let missing: Vec<char> = scripts.iter().map(|(c, _)| *c).collect();
+        let lookup = |left: &[char]| scripts.iter().find(|(c, _)| left.contains(c)).map(|(_, f)| f.clone());
+        assert!(fallbacks.cover_letters(missing, lookup, |_| Some(vec![0; 8])));
+        assert_eq!(fallbacks.loaded.len(), 4);
+        // The two the budget left are not marked as tried, so the next batch finds them.
+        let left: Vec<char> = scripts[4..].iter().map(|(c, _)| *c).collect();
+        assert!(left.iter().all(|c| !fallbacks.tried.contains(c)));
+        assert!(fallbacks.cover_letters(left, lookup, |_| Some(vec![0; 8])));
+        assert_eq!(fallbacks.loaded.len(), 6);
     }
 
     fn contrast(first: Color32, second: Color32) -> f64 {
