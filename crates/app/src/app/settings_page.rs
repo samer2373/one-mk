@@ -9,6 +9,8 @@ use super::pages::{GROUP_LABEL, group_card};
 use super::settings_controls::{HOOK_ROW, SHORTCUT_ROW};
 use super::*;
 
+const ANALYTICS_NOTE: &str = "Optional, off by default. After enabling/resetting, restart the app and daemon to begin collection. Withdrawal stops new sends immediately. Shares feature outcomes and redacted error/panic diagnostics with a random installation ID. App source locations may be included, never panic messages, input, clipboard, user files/paths or peer identity. Private retry/crash records expire after 24 hours. Off removes pending records and the ID; sent data cannot be recalled.";
+
 const MODS: [(&str, &str); 4] = [("none", "None"), ("shift", "Shift"), ("ctrl", "Ctrl"), ("alt", "Alt")];
 const TYPING: [(&str, &str); 3] = [("physical", "Keys"), ("characters", "Letters"), ("auto", "Auto")];
 const WRAP: [(&str, &str); 3] = [("off", "Off"), ("on", "Left / right"), ("all", "All edges")];
@@ -102,6 +104,7 @@ pub(super) fn groups(cat: Cat) -> &'static [Group] {
         Cat::General => &[
             Group { title: "General", rows: &["appearance", "autostart", "service"] },
             Group { title: "Updates", rows: &["update-check", "update-auto", "update-now", "update-more"] },
+            Group { title: "Privacy", rows: &["analytics", "analytics-note"] },
             Group { title: "About", rows: &["about"] },
         ],
         Cat::Edges => &[Group { title: "Crossing edges", rows: &["edge-scope", "edge-corner", "edge-dwell", "edge-mod", "edge-fullscreen", "edge-reset", "edge-learn"] }],
@@ -120,6 +123,7 @@ pub(super) fn groups(cat: Cat) -> &'static [Group] {
 
 /// What the palette finds in Settings: its title there, and where it is.
 pub(super) const JUMPS: &[(&str, Cat, &str)] = &[
+    ("Privacy · Anonymous analytics", Cat::General, "analytics"),
     ("About oneMK", Cat::General, "about"),
     ("Updates · Look for updates", Cat::General, "update-check"),
     ("Updates · Install them without asking", Cat::General, "update-auto"),
@@ -195,6 +199,15 @@ impl App {
         // One column, centred: the pills over it and the card as wide as they are.
         let (x0, full_w) = page_ui::frame_x(rect.left(), rect.width(), PAGE_MAX);
         let cat = self.settings_cat;
+        let entered = ui.ctx().data_mut(|data| {
+            let key = Id::unique("analytics-settings-opened");
+            if data.get_temp::<bool>(key).unwrap_or(false) { false }
+            else { data.insert_temp(key, true); true }
+        });
+        if entered {
+            one_mk_ctl::analytics::record(&self.link.dir, one_mk_ctl::analytics::Event::SettingsOpened,
+                one_mk_ctl::analytics::Origin::Desktop, one_mk_ctl::analytics::Outcome::Success, one_mk_ctl::analytics::ErrorCode::None);
+        }
         // A shortcut being changed stops listening when its page goes.
         if cat != Cat::Shortcuts {
             ui.ctx().data_mut(|data| data.remove::<usize>(Id::unique("shortcut-recorder")));
@@ -378,6 +391,7 @@ impl App {
             }
             k if k.starts_with("hotkey-") => k["hotkey-".len()..].parse::<usize>().ok().filter(|i| *i < self.prefs.hotkeys.len()).map_or(0.0, |_| SHORTCUT_ROW),
             k if k.starts_with("hook-") && k != "hook-shell" => HOOK_ROW,
+            "analytics-note" => para_h(ui, ANALYTICS_NOTE, regular(T_BODY), (w - 16.0).max(1.0)) + 70.0,
             _ => ROW,
         }
     }
@@ -394,6 +408,19 @@ impl App {
     /// Draws row `key` in `r`.
     fn setting_row(&mut self, ui: &mut Ui, key: &str, r: Rect) {
         match key {
+            "analytics" => {
+                let mut enabled = one_mk_ctl::analytics::identity(&self.link.dir).is_some();
+                let mut child = ui.new_child(UiBuilder::new().max_rect(r.shrink(8.0)));
+                if child.checkbox(&mut enabled, "Share anonymous product analytics with PostHog").changed()
+                    && let Err(error) = one_mk_ctl::analytics::set_enabled(&self.link.dir, enabled) {
+                    self.toast_error("Couldn't save analytics consent.", Some(error.to_string()), ui.input(|i| i.time));
+                }
+            }
+            "analytics-note" => {
+                let mut child = ui.new_child(UiBuilder::new().max_rect(r.shrink(8.0)));
+                child.label(ANALYTICS_NOTE);
+                if !one_mk_ctl::analytics::configured() { child.label("PostHog is not configured: no events are sent."); }
+            }
             "appearance" => self.appearance_row(ui, r),
             "autostart" => {
                 let on = self.autostart.unwrap_or(false);

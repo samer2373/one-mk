@@ -33,6 +33,7 @@ const CLOSE_WAIT: Duration = Duration::from_millis(500);
 /// (for the file manager's "Send to" entries, which have no terminal).
 pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>, notify_errors: bool) -> Result<()> {
     let result = send(dir, paths, to, connect).await.map(|_| ());
+    transfer_result(dir, crate::analytics::Origin::Cli, &result);
     if let Err(e) = &result
         && notify_errors
     {
@@ -42,7 +43,14 @@ pub async fn run(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: V
 }
 
 pub async fn dropped(dir: &Path, paths: Vec<PathBuf>, peer: String) -> Result<()> {
-    let (count, name) = send(dir, paths, Some(peer), vec![]).await?;
+    let sent = send(dir, paths, Some(peer), vec![]).await;
+    let (outcome, error) = match &sent {
+        Ok(_) => (crate::analytics::Outcome::Success, crate::analytics::ErrorCode::None),
+        Err(error) if error.is::<TransferCancelled>() => (crate::analytics::Outcome::Cancelled, crate::analytics::ErrorCode::None),
+        Err(error) => (crate::analytics::Outcome::Failed, crate::analytics::error_code(error)),
+    };
+    crate::analytics::record(dir, crate::analytics::Event::TransferFinished, crate::analytics::Origin::Desktop, outcome, error);
+    let (count, name) = sent?;
     // "notify off" silences this toast like the one for received files.
     crate::notify::sent(count, &name, crate::settings::Settings::load_or_default(dir).notify_files).await;
     Ok(())
@@ -203,7 +211,7 @@ impl Attempt<'_> {
                 conn.close(0u32.into(), b"the sender cancelled");
                 node.shutdown(CLOSE_WAIT).await;
                 if std::io::IsTerminal::is_terminal(&std::io::stderr()) { eprint!("\r\x1b[2K"); }
-                bail!("cancelled; what arrived is kept, send again to resume");
+                return Err(TransferCancelled.into());
             }
         };
         ticker.abort();
@@ -554,4 +562,20 @@ mod tests {
         let why = format!("{:#}", send(&home, vec![empty], None, vec![]).await.unwrap_err());
         assert!(why.contains("the folders are empty"), "{why}");
     }
+}
+
+#[derive(Debug)]
+struct TransferCancelled;
+impl std::fmt::Display for TransferCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("cancelled; what arrived is kept, send again to resume")
+    }
+}
+impl std::error::Error for TransferCancelled {}
+
+fn transfer_result(home: &Path, origin: crate::analytics::Origin, result: &Result<()>) {
+    if result.as_ref().is_err_and(|error| error.is::<TransferCancelled>()) {
+        crate::analytics::record(home, crate::analytics::Event::TransferFinished, origin,
+            crate::analytics::Outcome::Cancelled, crate::analytics::ErrorCode::None);
+    } else { crate::analytics::result(home, crate::analytics::Event::TransferFinished, origin, result); }
 }

@@ -873,6 +873,8 @@ pub async fn serve(
         broadcast: None,
         discovery: opts.discovery,
     };
+    crate::analytics::record(&app.dir, crate::analytics::Event::DaemonReady, crate::analytics::Origin::Daemon,
+        crate::analytics::Outcome::Success, crate::analytics::ErrorCode::None);
     crate::hooks::warn_if_unsafe(&app.dir, &app.settings.hooks);
     if app.settings.shortcut_upgrade {
         let marker = app.dir.join(".wave5-shortcuts-noticed");
@@ -2115,6 +2117,10 @@ impl App {
                 self.dial_missing(screens);
             }
             AppEvent::DialDone(addr, failure) => {
+                if failure.is_some() {
+                    crate::analytics::record(&self.dir, crate::analytics::Event::ConnectionAttemptFinished, crate::analytics::Origin::Daemon,
+                        crate::analytics::Outcome::Failed, crate::analytics::ErrorCode::Connection);
+                }
                 self.dialing.remove(&addr);
                 match failure {
                     // Said once, then every ten minutes: a computer that is
@@ -2219,6 +2225,8 @@ impl App {
         let (side, offset) = self.trust.get(&fp).map_or((Side::Right, None), |d| (d.side(), d.offset));
         // A better duplicate connection replaces the first one quietly.
         if !self.peers.contains_key(&fp) {
+            crate::analytics::record(&self.dir, crate::analytics::Event::ConnectionEstablished, crate::analytics::Origin::Daemon,
+                crate::analytics::Outcome::Success, crate::analytics::ErrorCode::None);
             println!("Connected to {} ({}).", link.name, on_your(side));
         }
         tracing::debug!(peer = %link.name, %addr, os = link.os, "connected");
@@ -2263,6 +2271,8 @@ impl App {
             LinkEvent::Closed => {
                 self.wallpaper.disconnected(fp);
                 let peer = self.peers.remove(&fp).expect("present");
+                crate::analytics::record(&self.dir, crate::analytics::Event::ConnectionClosed, crate::analytics::Origin::Daemon,
+                    crate::analytics::Outcome::Success, crate::analytics::ErrorCode::None);
                 self.refresh_fetch_shortcut();
                 if self.owner.as_ref().is_some_and(|o| o.peer == fp) {
                     self.end_owner(false);

@@ -245,3 +245,43 @@ fn a_settings_file_the_window_cannot_read_is_said_and_changes_wait() {
     assert!(win.app.prefs.unreadable);
     assert!(win.has_text("Preferences couldn't be read. Changes are paused"), "{}", win.texts_joined());
 }
+
+#[test]
+fn analytics_consent_is_explicit_and_withdrawal_deletes_identity() {
+    // Separate processes keep test configuration out of concurrent UI tests.
+    const CHILD: &str = "ONE_MK_CONSENT_UI_TEST";
+    let mode = match std::env::var(CHILD) {
+        Ok(mode) => mode,
+        Err(_) => {
+            for mode in ["configured", "unconfigured"] {
+                let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                command.args(["--exact", "app::frame_tests::qa_settings::analytics_consent_is_explicit_and_withdrawal_deletes_identity"])
+                    .env(CHILD, mode).env("ONE_MK_POSTHOG_ENVIRONMENT", "verification")
+                    .env_remove("ONE_MK_POSTHOG_KEY").env_remove("ONE_MK_POSTHOG_HOST");
+                if mode == "configured" {
+                    command.env("ONE_MK_POSTHOG_KEY", "phc_synthetic_ui_only")
+                        .env("ONE_MK_POSTHOG_HOST", "https://eu.i.posthog.com");
+                }
+                let output = command.output().unwrap();
+                assert!(output.status.success(), "{mode}: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            }
+            return;
+        }
+    };
+    let mut win = Win::light(1200.0, 1400.0);
+    win.status(Some(two()));
+    win.go(Tab::Settings);
+    let label = "Share anonymous product analytics with PostHog";
+    assert!(one_mk_ctl::analytics::identity(&win.dir).is_none());
+    win.click(label);
+    win.quiet();
+    if mode == "unconfigured" {
+        assert!(one_mk_ctl::analytics::identity(&win.dir).is_none());
+        assert!(win.has_text("Couldn't save analytics consent."), "{}", win.texts_joined());
+        return;
+    }
+    assert!(one_mk_ctl::analytics::identity(&win.dir).is_some());
+    win.click(label);
+    win.quiet();
+    assert!(one_mk_ctl::analytics::identity(&win.dir).is_none());
+}

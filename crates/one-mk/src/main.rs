@@ -18,6 +18,7 @@ macro_rules! println {
     ($($args:tt)*) => { print!("{}\n", format_args!($($args)*)) };
 }
 
+mod analytics;
 mod app;
 mod bench;
 mod clip;
@@ -180,6 +181,11 @@ impl Action {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Optional anonymous PostHog analytics. Off/reset removes the local ID.
+    Analytics {
+        #[arg(default_value = "status", value_parser = ["status", "on", "off", "reset"])]
+        action: String,
+    },
     /// Run the sharing service (the default).
     Run(RunArgs),
     /// Check for or explicitly install a signed release; never updates in the background.
@@ -527,6 +533,18 @@ impl From<Backend> for one_mk_input::Kind {
     }
 }
 
+fn analytics_command_event(cmd: Option<&Cmd>) -> Option<analytics::Event> {
+    match cmd {
+        None | Some(Cmd::Run(_)) => Some(analytics::Event::DaemonFinished),
+        Some(Cmd::Layout { side, offset, swap_ctrl_cmd, .. }) if side.is_some() || offset.is_some() || swap_ctrl_cmd.is_some()
+            => Some(analytics::Event::LayoutFinished),
+        Some(Cmd::Profile { cmd }) if !matches!(cmd, profiles::ProfileCmd::List) => Some(analytics::Event::ProfileFinished),
+        Some(Cmd::Gaming { mode: Some(_) } | Cmd::Appearance { .. } | Cmd::LockSync { state: Some(_) }
+            | Cmd::Edge(_) | Cmd::PointerOverlay { .. }) => Some(analytics::Event::FeatureSettingFinished),
+        _ => None,
+    }
+}
+
 fn main() -> ExitCode {
     // The macOS pointer window runs in a helper: this program, started by
     // the daemon with this argument (see one_mk_input::cursoroverlay).
@@ -545,6 +563,9 @@ fn main() -> ExitCode {
         return wallpaper_import::run(&raw[1..]);
     }
     let cli = Cli::parse();
+    let analytics_home = cli.home.clone().or_else(|| one_mk_ctl::default_home().ok());
+    if let Some(home) = &analytics_home { analytics::initialize(home, analytics::Origin::Cli); }
+    let analytics_event = analytics_command_event(cli.cmd.as_ref());
     let verbose = cli.verbose;
     let level = match verbose {
         // What happened to the wallpaper is worth keeping in the usual log.
@@ -577,6 +598,10 @@ fn main() -> ExitCode {
     } else { run(cli) };
     #[cfg(not(target_os = "macos"))]
     let result = run(cli);
+    if let (Some(home), Some(event)) = (&analytics_home, analytics_event) {
+        analytics::result(home, event, analytics::Origin::Cli, &result);
+    }
+    analytics::flush();
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -639,6 +664,7 @@ fn run(cli: Cli) -> Result<()> {
             Action::Other(cmd) => cmd,
         };
         match cmd {
+            Cmd::Analytics { action } => analytics::command(&dir, &action),
             Cmd::Update(options) => update::run(&dir, options),
             Cmd::Stop => update::stop(&dir).await,
             Cmd::Drag { on, off, zone } => drag::configure(&dir, on, off, zone).await,
@@ -1037,5 +1063,34 @@ mod tests {
         assert!(parse(&["one-mk", "--no-discovery", "status"]).is_err());
         assert!(parse(&["one-mk", "--home", "/tmp/x", "-v", "devices"]).is_ok(), "global options are fine");
         assert!(parse(&["one-mk", "send", "--connect", "127.0.0.1:1", "f"]).is_ok(), "send has its own --connect");
+    }
+}
+
+#[cfg(test)]
+mod analytics_wiring_tests {
+    use super::*;
+    #[test]
+    fn analytics_command_is_in_the_portable_reference() {
+        use clap::CommandFactory;
+        let command = Cli::command();
+        let analytics = command.find_subcommand("analytics").unwrap();
+        let about = analytics.get_about().unwrap().to_string();
+        let head: String = about.split(". ").next().unwrap().trim_end_matches('.').chars().take(40).collect();
+        let reference = include_str!("../../../docs/COMMANDS.md");
+        assert!(reference.contains("## one-mk analytics"));
+        assert!(reference.contains(&head));
+        assert!(reference.contains("[possible values: status, on, off, reset]"));
+    }
+    #[test]
+    fn tracks_mutations_not_content_queries_or_consent() {
+        for args in [vec!["one-mk", "analytics", "on"], vec!["one-mk", "devices"],
+            vec!["one-mk", "layout", "private-peer"], vec!["one-mk", "profile", "list"]] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            assert!(analytics_command_event(cli.cmd.as_ref()).is_none());
+        }
+        let cli = Cli::try_parse_from(["one-mk", "layout", "private-peer", "left"]).unwrap();
+        assert_eq!(analytics_command_event(cli.cmd.as_ref()), Some(analytics::Event::LayoutFinished));
+        let cli = Cli::try_parse_from(["one-mk", "profile", "save", "private-profile"]).unwrap();
+        assert_eq!(analytics_command_event(cli.cmd.as_ref()), Some(analytics::Event::ProfileFinished));
     }
 }

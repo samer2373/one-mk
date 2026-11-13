@@ -889,7 +889,15 @@ fn rollback(target: &Path) -> Result<()> {
 }
 
 pub fn run(home: &Path, options: Options) -> Result<()> {
-    run_inner(home, options).map_err(|error| {
+    let event = if options.status_json || options.move_to_applications || options.install_deb.is_some()
+        || options.started_version.is_some() || options.check_on_start.is_some()
+        || options.install_automatically.is_some() { None }
+        else if options.check || options.startup_check { Some(crate::analytics::Event::UpdateCheckFinished) }
+        else if options.rollback { Some(crate::analytics::Event::UpdateRollbackFinished) }
+        else { Some(crate::analytics::Event::UpdateRequestFinished) };
+    let result = run_inner(home, options);
+    if let Some(event) = event { crate::analytics::result(home, event, crate::analytics::Origin::Cli, &result); }
+    result.map_err(|error| {
         tracing::debug!(error = ?error, "explicit update failed");
         let message = if error.chain().count() == 1 && error.is::<std::io::Error>() {
             format!("cannot access update files or the update server ({error}); check directory permissions, free disk space and your connection, then retry")
@@ -1008,7 +1016,7 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
     if options.check || options.startup_check { return Ok(()); }
     if kind == InstallKind::Deb {
         #[cfg(unix)]
-        return apply_deb(&signed, &manifest, &release, &origin, home, &target);
+        return installation_result(home, apply_deb(&signed, &manifest, &release, &origin, home, &target));
         #[cfg(not(unix))]
         { let _ = signed; bail!("{}", kind.advice()); }
     }
@@ -1016,8 +1024,8 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
         bail!("{}. Choose Download to open the release page: {NOTES}", kind.advice());
     }
     #[cfg(target_os = "macos")]
-    if kind == InstallKind::MacApp { return bundle::apply_bundle(&manifest, &release, &origin, &target, home); }
-    apply(&manifest, &release, &origin, &target, kind)?;
+    if kind == InstallKind::MacApp { return installation_result(home, bundle::apply_bundle(&manifest, &release, &origin, &target, home)); }
+    installation_result(home, apply(&manifest, &release, &origin, &target, kind))?;
     restarting(&format!("oneMK {} installed", manifest.version), "Quit oneMK and open it again to use it");
     Ok(())
 }
@@ -1050,7 +1058,9 @@ pub fn startup(home: PathBuf) {
             let mut state = load_state(&home)?;
             let time = now()?;
             if !policy::startup_due(state.last_attempt, time) { return Ok(()); }
-            check_release(&home, settings.url.as_deref().unwrap_or(LATEST), &mut state)?;
+            let checked = check_release(&home, settings.url.as_deref().unwrap_or(LATEST), &mut state).map(|_| ());
+            crate::analytics::result(&home, crate::analytics::Event::UpdateCheckFinished, crate::analytics::Origin::Daemon, &checked);
+            checked?;
             Ok(())
         })();
         if let Err(error) = result { tracing::debug!(%error, "startup update check failed"); }
@@ -1081,3 +1091,8 @@ pub fn doctor(home: &Path) -> (bool, String) {
 #[cfg(all(test, unix))]
 #[path = "update_tests.rs"]
 mod tests;
+
+fn installation_result(home: &Path, result: Result<()>) -> Result<()> {
+    crate::analytics::result(home, crate::analytics::Event::UpdateInstallFinished, crate::analytics::Origin::Cli, &result);
+    result
+}

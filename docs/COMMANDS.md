@@ -17,6 +17,7 @@ Guides: [README](../README.md), [ARRANGING.md](ARRANGING.md), [INPUT.md](INPUT.m
 
 | Command | What it does |
 |---|---|
+| [`analytics`](#one-mk-analytics) | Optional anonymous PostHog analytics. Off/reset removes the local ID |
 | [`run`](#one-mk-run) | Run the sharing service (the default) |
 | [`update`](#one-mk-update) | Check for or explicitly install a signed release; never updates in the background |
 | [`stop`](#one-mk-stop) | Stop the sharing service for this settings folder before restarting it |
@@ -105,6 +106,27 @@ Options:
   -V, --version
           Print version
 ```
+
+## one-mk analytics
+
+```text
+Optional anonymous PostHog analytics. Off/reset removes the local ID
+
+Usage: one-mk analytics [OPTIONS] [ACTION]
+
+Arguments:
+  [ACTION]
+          [default: status]
+          [possible values: status, on, off, reset]
+
+Options:
+```
+
+Analytics are off by default. `status` reports consent and configuration;
+`on` explicitly opts this settings home in; `off` and `reset` withdraw consent,
+remove the anonymous ID and purge pending diagnostics. Configuration alone never
+enables collection. See [analytics.md](analytics.md) for the exact event/error
+scope, privacy, configuration, delivery limits and verification requirements.
 
 ## one-mk run
 

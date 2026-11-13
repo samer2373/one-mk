@@ -276,6 +276,8 @@ async fn approve_and_save_within(dir: &Path, peer: &Peer, mut session: InviteSes
     if !ok { bail!("device refused; invitation consumed; nothing saved here"); }
     let placed = save_marked(dir, peer, &name, port, true, saved).await?;
     acknowledge(session).await?;
+    crate::analytics::record(dir, crate::analytics::Event::PairingFinished, crate::analytics::Origin::Cli,
+        crate::analytics::Outcome::Success, crate::analytics::ErrorCode::None);
     println!("Trusted {name} ({}).", peer.fingerprint);
     if machine { println!("paired\t{}\t{}\t{}", peer.fingerprint, sanitize_name(&name), placed_word(&placed)); }
     Ok(())
@@ -374,6 +376,8 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
     ensure!(agreed, "{} did not accept this computer; nothing saved here", sanitize_name(&name));
     let placed = save(dir, &peer, &name, port, false).await?;
     acknowledge(session).await?;
+    crate::analytics::record(dir, crate::analytics::Event::PairingFinished, crate::analytics::Origin::Cli,
+        crate::analytics::Outcome::Success, crate::analytics::ErrorCode::None);
     println!("Trusted {name} ({}). Next: run `one-mk run` on this computer if it is not already running.", peer.fingerprint);
     if machine { println!("paired\t{}\t{}\t{}", peer.fingerprint, sanitize_name(&name), placed_word(&placed)); }
     Ok(())
