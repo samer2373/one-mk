@@ -686,8 +686,8 @@ impl State {
     }
 
     fn move_to(&mut self, p: Pos) {
-        let Some(d) = self.desktop.clone() else { return };
-        let (x, y, w, h) = absolute_motion(&d, p);
+        // Computed before `vpointer` borrows self: no copy of the desktop per move.
+        let Some((x, y, w, h)) = self.desktop.as_ref().map(|d| absolute_motion(d, p)) else { return };
         let t = self.time();
         let v = self.vpointer();
         v.motion_absolute(t, x, y, w, h);
