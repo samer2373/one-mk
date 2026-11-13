@@ -17,7 +17,7 @@ one-mk analytics reset
 
 `off` and `reset` both withdraw consent and delete the random ID. Enabling again
 creates a new one. Repeated `on` preserves the existing ID. Consent is local to
-this settings home **and environment**, shared between its desktop window, daemon and CLI. Reads
+this settings home **and exact app/environment/project/host destination**, shared between its desktop window, daemon and CLI. Reads
 never generate an ID. A missing, incomplete or unreadable consent file fails
 closed. Saving a failed preference reports an error; check status and retry.
 
@@ -55,8 +55,8 @@ those launch environments is separate and was not performed here.
 `ONE_MK_POSTHOG_ENVIRONMENT` (or generic `POSTHOG_ENVIRONMENT`) accepts only
 `development`, `staging`, `production`, or `verification`. Invalid values fail
 closed. Unset values default to `development` in debug builds and `production`
-in release builds. Set it explicitly for services. Consent v3 has separate files
-per environment; prior v1/v2 consent does not enable this schema. Changing the
+in release builds. Set it explicitly for services. Consent v4 has separate files
+per environment; prior v1/v2/v3 consent does not enable this schema. Changing the
 environment requires its own opt-in and restart. Destinations, retry records and
 panic markers bind to that environment as well as the project. Withdrawal
 clears retry/panic storage conservatively for the settings home.
@@ -138,7 +138,7 @@ still lose telemetry. This is not an exact audit log.
 Failed typed operations emit both their outcome and an official `$exception`
 event with a constant redacted description, category, operation, build/platform,
 mechanism and stable safe fingerprint. No error string, cause chain, stack dump,
-input or content is serialized. Diagnostic consent is v3 and environment-scoped: older consent does
+input or content is serialized. Diagnostic consent is v4 and destination-bound: older consent does
 not silently authorize this expanded schema.
 
 The Rust panic hook writes a fixed-size marker to a pre-opened private file,
@@ -263,3 +263,17 @@ exactly six provider rows across two isolated identities and grouped issue
 Final follow-up validation: all 117 ctl library tests and affected all-target
 Clippy pass after the `function` correction. The corrected provider frame,
 not the two rejected raw candidates, is the successful panic evidence.
+
+
+### Pre-merge destination consent correction
+
+Persisted v4 consent includes only a random installation ID and a BLAKE3 digest
+of app ID, environment, canonical capture host and public project key. Startup
+validates that digest before adopting the ID. A changed project key or region
+therefore requires explicit new consent even after a process restart; repeated
+opt-in for the unchanged destination preserves the identity. Legacy v3 and
+malformed records fail closed, without automatic migration. Enabling requires
+valid configuration; withdrawal still works without configuration. No raw key
+is stored in consent. Local restart/configuration tests cover both key and
+region changes, unchanged identity, explicit re-consent and old-format denial.
+No additional live events were sent for this correction.

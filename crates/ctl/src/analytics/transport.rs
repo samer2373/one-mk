@@ -61,11 +61,11 @@ mod tests {
     fn loopback_contract_and_no_redirect_following() {
         use std::net::TcpListener;
         let home = tempfile::tempdir().unwrap();
-        set_enabled(home.path(), true).unwrap();
         for (status, body, expected) in [(200, "{\"status\":1}", Delivery::Accepted), (429, "{}", Delivery::Retry(7)), (302, "{}", Delivery::Rejected)] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let config = Config { key: "phc_synthetic_only".into(), host: format!("http://{}", listener.local_addr().unwrap()), environment: "development".into() };
-            let id = identity(home.path()).unwrap();
+            set_enabled_for(home.path(), true, &config.environment, Some(&config)).unwrap();
+            let id = identity_for(home.path(), &config).unwrap();
             let item = spool::Stored::new(&config, &id, Event::TransferFinished, Origin::Cli, Outcome::Failed, ErrorCode::Io, true);
             let expected_id = item.uuid.clone();
             let server = std::thread::spawn(move || {

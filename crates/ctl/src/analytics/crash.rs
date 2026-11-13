@@ -98,6 +98,7 @@ pub(super) fn frame(site: [u32; 3]) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::consent_test::{set_enabled};
     const CHILD: &str = "ONE_MK_SYNTHETIC_PANIC_CHILD";
     #[test]
     fn isolated_panic_child() {

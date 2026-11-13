@@ -17,7 +17,11 @@ pub fn initialize(home: &Path, origin: Origin) {
 
 struct Session { home: PathBuf, identity: Option<String>, config: Option<Config> }
 impl Session {
-    fn snapshot(home: &Path) -> Self { Self { home: home.into(), identity: identity(home), config: Config::from_env() } }
+    fn snapshot(home: &Path) -> Self { Self::snapshot_for(home, Config::from_env()) }
+    fn snapshot_for(home: &Path, config: Option<Config>) -> Self {
+        let identity = config.as_ref().and_then(|config| identity_for(home, config));
+        Self { home: home.into(), identity, config }
+    }
     fn current(&self, home: &Path) -> Option<(Config, String)> {
         self.for_generation(home, Config::from_env().as_ref(), process_revoked())
     }
@@ -25,7 +29,7 @@ impl Session {
         if revoked || home != self.home { return None; }
         let id = self.identity.as_ref()?;
         let config = self.config.as_ref()?;
-        if identity(home).as_ref() != Some(id) || current?.destination() != config.destination() { return None; }
+        if identity_for(home, config).as_ref() != Some(id) || current?.destination() != config.destination() { return None; }
         Some((config.clone(), id.clone()))
     }
 }
@@ -33,7 +37,7 @@ static SESSION: OnceLock<Session> = OnceLock::new();
 fn process_revoked() -> bool { REVOKED.load(std::sync::atomic::Ordering::SeqCst) }
 static REVOKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-const CONSENT: &str = "analytics-consent-v3";
+const CONSENT: &str = "analytics-consent-v4";
 const APP_ID: &str = "one_mk";
 fn environment(value: &str) -> Option<&str> {
     matches!(value, "development" | "staging" | "production" | "verification").then_some(value)
@@ -53,23 +57,29 @@ fn environment_from_env() -> Option<String> {
 fn consent_path(home: &Path, scope: &str) -> PathBuf { home.join(format!("{CONSENT}-{scope}")) }
 const QUEUE: usize = 32;
 
-/// The consent file itself is the random installation ID. Missing, malformed or
-/// unreadable consent fails closed. Never generates an ID on a read.
-pub fn identity(home: &Path) -> Option<String> { identity_for(home, &environment_from_env()?) }
-fn identity_for(home: &Path, scope: &str) -> Option<String> {
-    environment(scope)?;
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Consent { id: String, destination: String }
+
+/// Consent is bound to the exact app/environment/project/host digest. Legacy,
+/// missing, malformed or unreadable records fail closed; reads never mint IDs.
+pub fn identity(home: &Path) -> Option<String> { identity_for(home, &Config::from_env()?) }
+fn identity_for(home: &Path, config: &Config) -> Option<String> {
     let mut data = String::new();
-    std::fs::File::open(consent_path(home, scope)).ok()?.take(33).read_to_string(&mut data).ok()?;
-    (data.len() == 32 && data.bytes().all(|b| b.is_ascii_hexdigit())).then_some(data)
+    std::fs::File::open(consent_path(home, &config.environment)).ok()?.take(1025).read_to_string(&mut data).ok()?;
+    if data.len() > 1024 { return None; }
+    let record: Consent = serde_json::from_str(&data).ok()?;
+    (record.destination == config.destination() && record.id.len() == 32
+        && record.id.bytes().all(|b| b.is_ascii_hexdigit())).then_some(record.id)
 }
 
 /// Explicit local consent per environment; configuration alone never grants it.
 /// Repeated enable preserves identity. Off/reset removes it; re-enable starts anew.
 pub fn set_enabled(home: &Path, enabled: bool) -> std::io::Result<()> {
     let scope = environment_from_env().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid analytics environment"))?;
-    set_enabled_for(home, enabled, &scope)
+    set_enabled_for(home, enabled, &scope, Config::from_env().as_ref())
 }
-fn set_enabled_for(home: &Path, enabled: bool, scope: &str) -> std::io::Result<()> {
+fn set_enabled_for(home: &Path, enabled: bool, scope: &str, config: Option<&Config>) -> std::io::Result<()> {
     if !enabled && SESSION.get().is_some_and(|s| s.home == home) { REVOKED.store(true, std::sync::atomic::Ordering::SeqCst); crash::disarm(); }
     crate::private::create_dir_all(home)?;
     let lock = crate::private::lock_file(&home.join("analytics-consent.lock"))?;
@@ -85,12 +95,14 @@ fn set_enabled_for(home: &Path, enabled: bool, scope: &str) -> std::io::Result<(
         crash::disarm();
         return removed.and(purged);
     }
-    if identity_for(home, scope).is_some() { return Ok(()); }
+    let config = config.filter(|config| config.environment == scope).ok_or_else(||
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "valid analytics destination required before consent"))?;
+    if identity_for(home, config).is_some() { return Ok(()); }
     crate::private::create_dir_all(home)?;
-    // Replace incomplete consent fail-closed; no live consent is overwritten.
+    // Explicit opt-in replaces invalid or other-destination consent with a new generation.
     if path.exists() { std::fs::remove_file(&path)?; }
     match crate::private::create_new(&path) {
-        Ok(mut file) => { file.write_all(format!("{:032x}", rand::random::<u128>()).as_bytes())?; file.sync_all() },
+        Ok(mut file) => { file.write_all(&serde_json::to_vec(&Consent { id: format!("{:032x}", rand::random::<u128>()), destination: config.destination() })?)?; file.sync_all() },
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(e),
     }
@@ -152,7 +164,7 @@ struct Pending {
     origin: Origin, outcome: Outcome, error: ErrorCode,
 }
 impl Pending {
-    fn permitted(&self) -> bool { !process_revoked() && identity(&self.home).as_deref() == Some(&self.id) }
+    fn permitted(&self) -> bool { !process_revoked() && identity_for(&self.home, &self.config).as_deref() == Some(&self.id) }
 }
 
 /// Protect the daemon from reconnection storms: 60 events/minute/process,
@@ -305,8 +317,21 @@ pub fn verify_synthetic_panic(home: &Path) -> anyhow::Result<(String, String)> {
 }
 
 #[cfg(test)]
+mod consent_test {
+    use super::*;
+    pub(super) fn config(scope: &str) -> Config { Config::scoped("phc_test_only", "https://eu.i.posthog.com", scope).unwrap() }
+    pub(super) fn identity(home: &Path) -> Option<String> { super::identity_for(home, &config("development")) }
+    pub(super) fn set_enabled(home: &Path, enabled: bool) -> std::io::Result<()> { set_enabled_for(home, enabled, "development") }
+    pub(super) fn set_enabled_for(home: &Path, enabled: bool, scope: &str) -> std::io::Result<()> {
+        super::set_enabled_for(home, enabled, scope, Some(&config(scope)))
+    }
+    pub(super) fn identity_for(home: &Path, scope: &str) -> Option<String> { super::identity_for(home, &config(scope)) }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use super::consent_test::{identity, identity_for, set_enabled, set_enabled_for};
     #[test]
     fn consent_and_configuration_are_environment_scoped() {
         let home = tempfile::tempdir().unwrap();
@@ -329,7 +354,7 @@ mod tests {
     #[test]
     fn process_generation_never_adopts_later_consent_or_destination() {
         let home = tempfile::tempdir().unwrap();
-        let config = Config::new("phc_test", "https://eu.i.posthog.com").unwrap();
+        let config = consent_test::config("development");
         let disabled = Session { home: home.path().into(), identity: None, config: Some(config.clone()) };
         set_enabled(home.path(), true).unwrap();
         assert!(disabled.for_generation(home.path(), Some(&config), false).is_none());
@@ -343,6 +368,40 @@ mod tests {
         assert!(active.for_generation(home.path(), Some(&config), false).is_none());
         set_enabled(home.path(), true).unwrap();
         assert!(active.for_generation(home.path(), Some(&config), false).is_none());
+    }
+    #[test]
+    fn restart_requires_consent_for_exact_destination_and_legacy_fails_closed() {
+        let home = tempfile::tempdir().unwrap();
+        let a = consent_test::config("development");
+        let b = Config::new("phc_other", "https://eu.i.posthog.com").unwrap();
+        let region = Config::new("phc_test_only", "https://us.i.posthog.com").unwrap();
+        // Unbound v3 and malformed v4 files never grant a new destination consent.
+        crate::private::write(&home.path().join("analytics-consent-v3-development"), "a".repeat(32)).unwrap();
+        assert!(Session::snapshot_for(home.path(), Some(a.clone())).identity.is_none());
+        crate::private::write(&consent_path(home.path(), "development"), "a".repeat(32)).unwrap();
+        assert!(Session::snapshot_for(home.path(), Some(a.clone())).identity.is_none());
+        assert!(super::set_enabled_for(home.path(), true, "development", None).is_err());
+        super::set_enabled_for(home.path(), true, "development", Some(&a)).unwrap();
+        let original = Session::snapshot_for(home.path(), Some(a.clone()));
+        assert!(original.for_generation(home.path(), Some(&a), false).is_some());
+        for changed in [&b, &region] {
+            let restarted = Session::snapshot_for(home.path(), Some(changed.clone()));
+            assert!(restarted.identity.is_none());
+            assert!(restarted.for_generation(home.path(), Some(changed), false).is_none());
+        }
+        let restarted = Session::snapshot_for(home.path(), Some(a.clone()));
+        assert_eq!(restarted.identity, original.identity);
+        super::set_enabled_for(home.path(), true, "development", Some(&a)).unwrap();
+        assert_eq!(Session::snapshot_for(home.path(), Some(a.clone())).identity, original.identity);
+        // Explicit new-destination opt-in mints a new generation and revokes A.
+        super::set_enabled_for(home.path(), true, "development", Some(&b)).unwrap();
+        let consent_b = Session::snapshot_for(home.path(), Some(b.clone()));
+        assert!(consent_b.for_generation(home.path(), Some(&b), false).is_some());
+        assert_ne!(consent_b.identity, original.identity);
+        assert!(Session::snapshot_for(home.path(), Some(a)).identity.is_none());
+        // Withdrawal still works when configuration is absent.
+        super::set_enabled_for(home.path(), false, "development", None).unwrap();
+        assert!(Session::snapshot_for(home.path(), Some(b)).identity.is_none());
     }
     #[test]
     fn configuration_is_explicit_and_cloud_only() {

@@ -47,7 +47,7 @@ impl Stored {
     }
     pub(super) fn occurred_at(&mut self, stamp: u64) { self.created = stamp; }
     pub(super) fn permitted(&self, home: &Path, config: &Config) -> bool {
-        self.valid() && identity_for(home, &config.environment).as_deref() == Some(&self.id) && self.destination == config.destination()
+        self.valid() && identity_for(home, config).as_deref() == Some(&self.id) && self.destination == config.destination()
             && self.created <= now().saturating_add(60) && now().saturating_sub(self.created) <= TTL
     }
     fn valid(&self) -> bool {
@@ -168,14 +168,15 @@ pub(super) fn pump(home: &Path, config: &Config) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::consent_test::{identity, identity_for, set_enabled, set_enabled_for};
     fn config() -> Config { Config::new("phc_test_only", "https://eu.i.posthog.com").unwrap() }
     #[test]
     fn all_payloads_and_fingerprints_are_app_and_environment_scoped() {
         let home = tempfile::tempdir().unwrap();
         set_enabled_for(home.path(), true, "production").unwrap();
         let id = identity_for(home.path(), "production").unwrap();
-        let production = Config::scoped("phc_test", "https://eu.i.posthog.com", "production").unwrap();
-        let verification = Config::scoped("phc_test", "https://eu.i.posthog.com", "verification").unwrap();
+        let production = Config::scoped("phc_test_only", "https://eu.i.posthog.com", "production").unwrap();
+        let verification = Config::scoped("phc_test_only", "https://eu.i.posthog.com", "verification").unwrap();
         for exception in [false, true] {
             let item = Stored::new(&production, &id, Event::TransferFinished, Origin::Cli, Outcome::Failed, ErrorCode::Io, exception);
             assert!(item.permitted(home.path(), &production));
@@ -268,7 +269,8 @@ mod tests {
                 write!(stream, "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
             }
         });
-        let id = identity(home.path()).unwrap();
+        super::super::set_enabled_for(home.path(), true, &config.environment, Some(&config)).unwrap();
+        let id = super::super::identity_for(home.path(), &config).unwrap();
         append(home.path(), &config, &id, Event::AppOpened, Origin::Desktop, Outcome::Success, ErrorCode::None).unwrap();
         let before = read(home.path())[0].clone();
         pump_after_transient_lock(home.path(), &config);
