@@ -8,10 +8,12 @@
 //! is missing has a stamp too, so a computer with nothing paired does not
 //! keep looking either.
 //!
-//! A file changed in the last moments is always read again: a rewrite of the
-//! same length within one tick of the file system's clock leaves the same
-//! stamp (on Windows there is no inode to tell it apart), so a stamp is only
-//! trusted once the file is a little older than the clock's grain.
+//! A rewrite of the same length within one tick of the file system's clock
+//! leaves the same stamp (on Windows there is no inode to tell it apart). So
+//! a stamp taken while the file was only just modified is not trusted: the
+//! file is read again on every look until a read happens when the file has
+//! settled (is a little older than the clock's grain), and only that read's
+//! stamp is trusted.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -65,11 +67,13 @@ impl Stamp {
 #[derive(Debug)]
 pub struct Cached<T> {
     stamp: Option<Stamp>,
+    /// Whether `stamp` was taken when the file had settled.
+    trusted: bool,
     value: Option<T>,
 }
 
 impl<T> Default for Cached<T> {
-    fn default() -> Self { Self { stamp: None, value: None } }
+    fn default() -> Self { Self { stamp: None, trusted: false, value: None } }
 }
 
 impl<T> Cached<T> {
@@ -78,28 +82,37 @@ impl<T> Cached<T> {
     pub fn get(&mut self, path: &Path, load: impl FnOnce() -> T) -> &T {
         // Looked at before reading: a change while it is read shows next time.
         let now = Stamp::of(path);
-        if now.is_none() || now != self.stamp || self.value.is_none() || now.is_some_and(|s| s.racy()) {
+        if now.is_none() || now != self.stamp || self.value.is_none() || !self.trusted {
             self.value = Some(load());
             self.stamp = now;
+            self.trusted = settled(now);
         }
         self.value.as_ref().expect("just set")
     }
 
     /// Whether `path` is the same as when [`Cached::remember`] last noted it.
     pub fn unchanged(&self, path: &Path) -> bool {
-        let now = Stamp::of(path);
-        self.stamp.is_some() && now == self.stamp && !now.is_some_and(|s| s.racy())
+        self.stamp.is_some() && self.trusted && Stamp::of(path) == self.stamp
     }
 
     /// Notes the file as it is now, with no value (for a caller that keeps
     /// what it read elsewhere). Take the stamp *before* reading.
-    pub fn remember(&mut self, stamp: Option<Stamp>) { self.stamp = stamp; }
+    pub fn remember(&mut self, stamp: Option<Stamp>) {
+        self.stamp = stamp;
+        self.trusted = settled(stamp);
+    }
 
     /// Forgets the stamp: the next look reads the file.
     pub fn invalidate(&mut self) {
         self.stamp = None;
+        self.trusted = false;
         self.value = None;
     }
+}
+
+/// Whether a stamp taken now can be trusted to tell the file's next change.
+fn settled(stamp: Option<Stamp>) -> bool {
+    stamp.is_some_and(|s| !s.racy())
 }
 
 #[cfg(test)]
@@ -171,6 +184,29 @@ mod tests {
         age(&path, 1);
         cache.remember(Stamp::of(&path));
         assert!(cache.unchanged(&path));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_stamp_taken_while_the_file_was_fresh_is_not_trusted_once_it_ages() {
+        let dir = crate::testdir::scratch_path("stamp-settle");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("devices.toml");
+        let mut cache = Cached::default();
+        let mut reads = 0;
+        let mut read = |cache: &mut Cached<String>| {
+            cache.get(&path, || { reads += 1; std::fs::read_to_string(&path).unwrap_or_default() }).clone()
+        };
+        std::fs::write(&path, "aaa").unwrap();
+        assert_eq!(read(&mut cache), "aaa");
+        assert!(!cache.trusted, "read while fresh");
+        // The file now looks old but nothing was read since: the next look reads, and only then trusts.
+        age(&path, 1);
+        assert_eq!(read(&mut cache), "aaa");
+        assert!(cache.trusted, "read after it settled");
+        assert_eq!(read(&mut cache), "aaa");
+        drop(read);
+        assert_eq!(reads, 2, "the settled read happened once, then it was kept");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
