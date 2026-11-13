@@ -38,13 +38,14 @@ use objc2_core_foundation::{
     CFRunLoopSourceContext, CFRunLoopTimer, CFRunLoopTimerContext, CFString, CFType, CGPoint,
     kCFPreferencesAnyApplication, kCFRunLoopCommonModes,
 };
+#[allow(deprecated)] // CGSetLocalEventsSuppressionInterval: still the only way to drop the post-warp pause
 use objc2_core_graphics::{
     CGAssociateMouseAndMouseCursorPosition, CGDirectDisplayID, CGDisplayBounds, CGDisplayChangeSummaryFlags,
     CGDisplayHideCursor, CGDisplayMoveCursorToPoint, CGGetDisplaysWithPoint, CGDisplayRegisterReconfigurationCallback, CGDisplayShowCursor, CGError, CGEvent,
     CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGEventTapOptions,
     CGEventTapPlacement, CGEventTapProxy, CGEventType, CGGetActiveDisplayList, CGMouseButton,
     CGPreflightListenEventAccess, CGRequestListenEventAccess, CGScrollEventUnit, CGSessionCopyCurrentDictionary,
-    CGWarpMouseCursorPosition, kCGNullDirectDisplay,
+    CGSetLocalEventsSuppressionInterval, CGWarpMouseCursorPosition, kCGNullDirectDisplay,
 };
 use one_mk_proto::{Desktop, Edge, Mods, Pos, Rect, Side, mediakeys};
 use std::cell::RefCell;
@@ -347,6 +348,13 @@ impl State {
 
     fn deactivate(&mut self, pos: Option<Pos>) {
         if let Some(p) = pos {
+            // macOS drops the mouse for 0.25 s after the cursor is moved by code, which
+            // showed as a pointer stuck at the edge on coming home. Measured on the Mac
+            // (hand-driven crossings, with the shipped build): the cursor first followed the
+            // hand after a median of 254 ms; with the interval at 0 after 14 ms. This is
+            // the call `macos.rs` already makes; this file (the default build) lacked it.
+            #[allow(deprecated)]
+            let _ = CGSetLocalEventsSuppressionInterval(0.0);
             move_cursor(p);
         }
         // Re-associating also ends the short input freeze that follows a warp.
