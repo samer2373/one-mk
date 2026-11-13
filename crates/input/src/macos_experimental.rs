@@ -294,6 +294,10 @@ struct State {
     quitting: bool,
     restore_ticket: Option<u64>,
     pending_rules: Option<CaptureCmd>,
+    /// TEST PROBE: when the pointer last came home, and how many mouse events
+    /// after it were logged.
+    released_at: Option<std::time::Instant>,
+    probe_logged: u32,
 }
 
 impl State {
@@ -323,6 +327,8 @@ impl State {
             quitting: false,
             restore_ticket: None,
             pending_rules: None,
+            released_at: None,
+            probe_logged: 0,
         }
     }
 
@@ -346,11 +352,26 @@ impl State {
     }
 
     fn deactivate(&mut self, pos: Option<Pos>) {
+        // TEST PROBE: ONE_MK_RETURN_TEST_FILE = path of a file holding "none" | "assoc-first" | "post-move" | "both" | (unset: today's behaviour).
+        let variant = std::env::var("ONE_MK_RETURN_TEST_FILE").ok().and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default().trim().to_owned();
+        let assoc_first = variant == "assoc-first" || variant == "both";
+        let post_move = variant == "post-move" || variant == "both";
+        if assoc_first {
+            let _ = CGAssociateMouseAndMouseCursorPosition(true);
+        }
         if let Some(p) = pos {
             move_cursor(p);
         }
         // Re-associating also ends the short input freeze that follows a warp.
         let _ = CGAssociateMouseAndMouseCursorPosition(true);
+        if post_move && let Some(p) = pos
+            && let Some(ev) = CGEvent::new_mouse_event(None, CGEventType::MouseMoved, CGPoint::new(p.x, p.y), CGMouseButton(0)) {
+            CGEvent::set_integer_value_field(Some(&ev), CGEventField::EventSourceUserData, OUR_EVENTS);
+            CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&ev));
+        }
+        self.released_at = Some(std::time::Instant::now());
+        self.probe_logged = 0;
+        tracing::debug!(variant = %variant, "probe: pointer released");
         if self.cursor_hidden {
             let _ = CGDisplayShowCursor(kCGNullDirectDisplay);
             self.cursor_hidden = false;
@@ -975,6 +996,21 @@ impl Ctx {
             return true;
         }
         let Ok(mut st) = self.st.try_borrow_mut() else { return true };
+        // TEST PROBE: what the tap sees in the 3 s after the pointer came home.
+        if !st.active && st.probe_logged < 120 && let Some(t) = st.released_at {
+            if t.elapsed() < std::time::Duration::from_secs(3) {
+                if matches!(ty, CGEventType::MouseMoved | CGEventType::LeftMouseDragged | CGEventType::ScrollWheel | CGEventType::LeftMouseDown | CGEventType::KeyDown) {
+                    let loc = CGEvent::location(Some(ev));
+                    let (dx, dy) = mouse_delta(ev);
+                    let src = CGEvent::integer_value_field(Some(ev), CGEventField::EventSourceStateID);
+                    st.probe_logged += 1;
+                    tracing::debug!(ms = t.elapsed().as_millis() as u64, ty = ty.0, x = loc.x, y = loc.y, dx, dy, src, n = st.probe_logged, "probe: event after release");
+                }
+            } else {
+                tracing::debug!(events = st.probe_logged, "probe: 3 s window over");
+                st.released_at = None;
+            }
+        }
         // Real input (from the HID system, not posted by software) while a
         // peer is in control here.
         if !st.active && CGEvent::integer_value_field(e, CGEventField::EventSourceStateID)
