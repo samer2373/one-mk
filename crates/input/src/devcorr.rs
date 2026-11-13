@@ -84,6 +84,11 @@ pub(crate) struct Correlator {
 }
 
 impl Correlator {
+    /// Whether per-device attribution is on.
+    pub(crate) fn enabled(&self) -> bool {
+        self.enabled
+    }
+
     pub(crate) fn configure(&mut self, enabled: bool, out: &mut Vec<Correlated>) {
         if self.enabled == enabled { return; }
         self.finish(out);

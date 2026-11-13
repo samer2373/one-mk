@@ -54,6 +54,9 @@ struct Inner {
     next: u32,
     corr: Correlator,
     capturing: bool,
+    /// Whether the devices' input-value callbacks are registered: only while
+    /// capturing and something reads them (per-device rules or local rules).
+    reading: bool,
     timer: Option<CFRetained<CFRunLoopTimer>>,
     run_loop: Option<CFRetained<CFRunLoop>>,
     info: usize,
@@ -75,6 +78,25 @@ impl Hid {
         inner.corr.configure(enabled, &mut out);
         for event in out { self.deliver(&mut inner, event); }
         inner.arm();
+        self.sync_reading(&mut inner);
+    }
+
+    /// Registers or removes the devices' value callbacks to match what is
+    /// needed. Without per-device or local rules nothing reads them, so a
+    /// crossing makes no IOKit call at all (it used to make one per device on
+    /// the event tap's own thread, right as the pointer came home, while macOS
+    /// held every mouse event for that thread).
+    fn sync_reading(&self, inner: &mut Inner) {
+        let want = inner.capturing && (inner.corr.enabled() || inner.local.is_some());
+        if inner.reading == want {
+            return;
+        }
+        inner.reading = want;
+        let info = self as *const Hid as *mut c_void;
+        for (dev, _) in &inner.table {
+            // SAFETY: a device the manager handed us and hasn't removed.
+            unsafe { IOHIDDeviceRegisterInputValueCallback(*dev as Ref, if want { Some(on_value) } else { None }, info) };
+        }
     }
 
     pub(crate) fn local(&self, dispatch: Option<crate::macos_localmap::Dispatch>) {
@@ -148,11 +170,7 @@ impl Hid {
             return;
         }
         inner.capturing = on;
-        let info = self as *const Hid as *mut c_void;
-        for (dev, _) in &inner.table {
-            // SAFETY: a device the manager handed us and hasn't removed.
-            unsafe { IOHIDDeviceRegisterInputValueCallback(*dev as Ref, if on { Some(on_value) } else { None }, info) };
-        }
+        self.sync_reading(&mut inner);
         if !on {
             let mut out = Vec::new();
             inner.corr.finish(&mut out);
@@ -265,8 +283,8 @@ unsafe extern "C-unwind" fn on_added(context: *mut c_void, _result: i32, _sender
         let kinds = Kinds { keyboard, pointer };
         let id = DeviceRef(inner.next);
         inner.table.push((device as usize, InputDevice { id, fingerprint: identity(device, kinds), kinds }));
-        if inner.capturing {
-            // SAFETY: as in `capture`.
+        if inner.reading {
+            // SAFETY: as in `sync_reading`.
             unsafe { IOHIDDeviceRegisterInputValueCallback(device, Some(on_value), context) };
         }
         hid.devices(&inner);

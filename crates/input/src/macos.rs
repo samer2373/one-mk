@@ -603,9 +603,13 @@ impl Ctx {
             Msg::Cmd(CaptureCmd::Release { id, pos }) => {
                 // A release for an earlier activation is stale.
                 if st.active && st.id == id {
+                    let began = std::time::Instant::now();
                     st.deactivate(pos);
+                    let shown = began.elapsed();
                     self.hid.capture(false);
                     self.update_timer(&mut st);
+                    // The tap can't pass mouse events while this thread is busy here.
+                    tracing::debug!(pointer_ms = shown.as_millis() as u64, total_ms = began.elapsed().as_millis() as u64, "pointer released on this Mac");
                 }
             }
             Msg::Displays => st.refresh_desktop(&self.tx),
