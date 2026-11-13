@@ -252,6 +252,9 @@ struct State {
     elevated_cache: Option<(usize, bool)>,
     /// Raw Input: the devices, and the matching of events to them.
     raw: crate::windows_devices::RawDevices,
+    /// Whether the device-matching timer may be armed: with nothing waiting
+    /// (always, without device rules) it is not killed again on every event.
+    devices_timer: bool,
     local_rules: Option<Local>,
     local_recovery: Option<crate::windows_localmap::Recovery>,
     session_active: bool,
@@ -482,6 +485,7 @@ fn capture_thread(
             self_elevated,
             elevated_cache: None,
             raw: Default::default(),
+            devices_timer: false,
             local_rules: None,
             pending_rules: None,
             restore_ticket: None,
@@ -739,6 +743,16 @@ impl State {
 
     /// Sends to the daemon; if it is gone while captured, gives the pointer back.
     fn send(&mut self, ev: Event) -> Effect {
+        // Without device or local rules (the default) the matching lets every
+        // event straight through and nothing waits (`devcorr` tests): what
+        // `hook` and `send_all` would do comes down to this, without the
+        // Vec and the timer call inside the low-level hook.
+        if self.captured.is_some() && !self.raw.corr.enabled() && self.local_rules.is_none() && !self.devices_timer {
+            if self.tx.send(ev).is_err() {
+                return self.release(None);
+            }
+            return Effect::None;
+        }
         if self.captured.is_some() {
             // In order, once Raw Input has said (or not) which device it was.
             let mut out = Vec::new();
@@ -766,7 +780,8 @@ impl State {
         unsafe {
             if self.raw.corr.deadline().is_some() {
                 SetTimer(self.hwnd, TIMER_DEVICES, wait, None);
-            } else {
+                self.devices_timer = true;
+            } else if std::mem::take(&mut self.devices_timer) {
                 KillTimer(self.hwnd, TIMER_DEVICES);
             }
         }
@@ -806,6 +821,7 @@ impl State {
                 }
                 // SAFETY: our own window and timer.
                 unsafe { KillTimer(self.hwnd, TIMER_DEVICES) };
+                self.devices_timer = false;
                 self.fwd.clear();
                 if let Some(local) = self.local_rules.as_mut() { local.gate.close(); }
                 if self.local_rules.as_ref().is_some_and(|local| local.enabled && !local.paused) {

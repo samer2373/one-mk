@@ -92,6 +92,11 @@ impl Correlator {
         self.local_held.clear();
     }
 
+    /// Whether events are matched to devices (a per-device rule exists).
+    /// When not, `hook` hands each event straight back and nothing waits.
+    #[cfg_attr(not(all(any(windows, target_os = "macos"), feature = "native-local-remap")), allow(dead_code))]
+    pub(crate) fn enabled(&self) -> bool { self.enabled }
+
     #[cfg(any(feature = "native-local-remap", test))]
     pub(crate) fn local_key(&mut self, key: crate::localmap_runtime::Key, now: u64, out: &mut Vec<Correlated>) {
         let event = if one_mk_proto::keynames::is_button(key.code) {
@@ -297,6 +302,43 @@ mod tests {
     }
     fn press(code: u32, down: bool) -> Token {
         Token::Press { code, down }
+    }
+
+    /// What the Windows and macOS hooks rely on to skip the matching when it
+    /// is off: each event comes straight back, alone, and nothing waits (so
+    /// no timer is needed), also after it was on with events waiting.
+    #[test]
+    fn disabled_matching_is_a_pass_through_with_nothing_waiting() {
+        let mut c = Correlator::default();
+        let mut rng = Rng(0x0dd5_eed7);
+        let check = |c: &mut Correlator, rng: &mut Rng| {
+            assert!(!c.enabled());
+            for now in 0..500u64 {
+                let ev = match rng.below(4) {
+                    0 => Event::Motion { dx: 1.0, dy: -2.0, device: None },
+                    1 => key(rng.below(120) as u32, rng.below(2) == 0),
+                    2 => Event::Button { button: 272, down: true, device: None },
+                    _ => Event::Scroll { dx: 0.0, dy: 1.0, device: None },
+                };
+                c.device_motion(A, now);
+                c.device_event(press(30, true), B, now, &mut Vec::new());
+                let mut out = Vec::new();
+                c.hook(ev.clone(), now * 3, &mut out);
+                assert_eq!(out.len(), 1);
+                assert_eq!((&out[0].event, out[0].local), (&ev, None));
+                assert_eq!(c.deadline(), None);
+            }
+        };
+        check(&mut c, &mut rng);
+        let mut out = Vec::new();
+        c.configure(true, &mut out);
+        assert!(c.enabled());
+        c.hook(key(30, true), 1, &mut out);
+        c.hook(Event::Motion { dx: 1.0, dy: 0.0, device: None }, 2, &mut out);
+        assert!(c.deadline().is_some());
+        c.configure(false, &mut out);
+        assert_eq!(c.deadline(), None, "switching it off lets out what waited");
+        check(&mut c, &mut rng);
     }
     fn devices(out: &[Correlated]) -> Vec<Option<DeviceRef>> {
         out.iter()

@@ -160,8 +160,11 @@ pub struct Clipboard {
     history: Arc<Mutex<history::History>>,
     history_status: Arc<history::Status>,
     history_apps: Arc<Mutex<Vec<String>>>,
+    /// The X11 copy watcher's stop handle, shared by every clone, while it
+    /// runs (see [`Clipboard::refresh_history_watch`]). `None` for a memory
+    /// clipboard. Dropping the last clone stops it.
     #[cfg(target_os = "linux")]
-    _watch: Option<Arc<std::os::unix::net::UnixStream>>,
+    watch: Option<Arc<Mutex<Option<std::os::unix::net::UnixStream>>>>,
     /// The system clipboard (not [`Clipboard::memory`]).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     system: bool,
@@ -184,8 +187,10 @@ impl Clipboard {
         #[allow(unused_mut)]
         let mut clipboard = Self::spawn(Backend::System(None));
         clipboard.history.lock().unwrap_or_else(|error| error.into_inner()).configure(0, history::DEFAULT_BYTES, DEFAULT_MAX_BYTES, None);
+        // History starts off and no app is skipped: the copy watcher (a
+        // thread and an X11 connection) waits until settings want it.
         #[cfg(target_os = "linux")]
-        { clipboard._watch = history_watch::start(clipboard.tx.clone(), clipboard.history.clone(), clipboard.history_apps.clone()); }
+        { clipboard.watch = Some(Arc::default()); }
         clipboard
     }
 
@@ -215,7 +220,7 @@ impl Clipboard {
             .expect("spawn clipboard thread");
         Self { tx, filter, history, history_status, history_apps,
             #[cfg(target_os = "linux")]
-            _watch: None,
+            watch: None,
             system: matches!(backend_kind, Kind::System),
             test_limit: None,
         }
@@ -293,6 +298,34 @@ impl Clipboard {
 
     pub fn history_skip_apps(&self, apps: Vec<String>) {
         *self.history_apps.lock().unwrap_or_else(|error| error.into_inner()) = apps;
+    }
+
+    /// Starts the system clipboard's copy watcher (Linux/X11) if history is
+    /// on or an app's copies are to be skipped, and stops it when neither:
+    /// it only serves those two. Call after changing either.
+    pub fn refresh_history_watch(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some(slot) = &self.watch {
+            let wanted = !self.history.lock().unwrap_or_else(|error| error.into_inner()).disabled()
+                || !self.history_apps.lock().unwrap_or_else(|error| error.into_inner()).is_empty();
+            let mut slot = slot.lock().unwrap_or_else(|error| error.into_inner());
+            if wanted && slot.is_none() {
+                *slot = history_watch::start(self.tx.clone(), self.history.clone(), self.history_apps.clone());
+            } else if !wanted && let Some(stop) = slot.take() {
+                drop(stop); // the watcher sees its end close and returns
+                self.history_status.monitoring_unavailable.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Whether the copy watcher runs, for tests.
+    #[doc(hidden)]
+    pub fn history_watch_running(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if let Some(slot) = &self.watch {
+            return slot.lock().unwrap_or_else(|error| error.into_inner()).is_some();
+        }
+        false
     }
 
     pub async fn write_from(&self, data: ClipData, origin: String, record: bool) -> Result<Digest> {
@@ -951,6 +984,38 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    #[test]
+    fn copy_watcher_runs_only_while_history_or_skipped_apps_need_it() {
+        let (memory, _) = Clipboard::memory();
+        memory.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        memory.refresh_history_watch();
+        assert!(!memory.history_watch_running(), "a memory clipboard never watches the desktop");
+        if std::env::var("ONE_MK_PRIVATE_X11").as_deref() != Ok("1") { return; } // the rest connects to $DISPLAY
+        let watchers = || std::fs::read_dir("/proc/self/task").unwrap().filter(|task| {
+            std::fs::read_to_string(task.as_ref().unwrap().path().join("comm")).is_ok_and(|name| name.starts_with("one-mk-history"))
+        }).count();
+        let settle = |want: usize| {
+            for _ in 0..100 { if watchers() == want { return true; } std::thread::sleep(std::time::Duration::from_millis(20)); }
+            false
+        };
+        let clipboard = Clipboard::system();
+        assert!(!clipboard.history_watch_running());
+        assert!(settle(0), "history off and no skipped app: no watcher thread");
+        clipboard.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        clipboard.refresh_history_watch();
+        clipboard.clone().refresh_history_watch(); // a clone shares it: still one
+        assert!(clipboard.history_watch_running() && settle(1), "history on starts it");
+        clipboard.history().lock().unwrap().configure(0, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        clipboard.refresh_history_watch();
+        assert!(!clipboard.history_watch_running() && settle(0), "history off stops it");
+        clipboard.history_skip_apps(vec!["KeePassXC".into()]);
+        clipboard.refresh_history_watch();
+        assert!(clipboard.history_watch_running() && settle(1), "an app to skip starts it, history off");
+        drop(clipboard);
+        assert!(settle(0), "the last handle dropped stops it");
+    }
+
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     #[ignore = "requires an explicitly private X11 display"]
     async fn real_x11_restore_does_not_duplicate_after_selection_notifications() {
@@ -958,6 +1023,7 @@ mod tests {
         assert!(std::env::var_os("WAYLAND_DISPLAY").is_none());
         let clipboard = Clipboard::system();
         clipboard.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        clipboard.refresh_history_watch();
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let first = ClipData { text: Some("real X11 original".into()), ..Default::default() };
         clipboard.write_from(first.clone(), "peer".into(), true).await.unwrap();

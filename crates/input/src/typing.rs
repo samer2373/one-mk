@@ -118,6 +118,24 @@ impl DeadKeys {
     }
 }
 
+/// The messages one `NativeText::input` produces, in order: a single one
+/// held inline, or the expansion of typed text (`Vec::new` does not allocate).
+#[cfg(any(windows, target_os = "macos", test))]
+pub(crate) struct NativeOutput(Option<crate::Inject>, std::vec::IntoIter<crate::Inject>);
+
+#[cfg(any(windows, target_os = "macos", test))]
+impl NativeOutput {
+    fn none() -> Self { Self(None, Vec::new().into_iter()) }
+    fn one(input: crate::Inject) -> Self { Self(Some(input), Vec::new().into_iter()) }
+    fn many(inputs: Vec<crate::Inject>) -> Self { Self(None, inputs.into_iter()) }
+}
+
+#[cfg(any(windows, target_os = "macos", test))]
+impl Iterator for NativeOutput {
+    type Item = crate::Inject;
+    fn next(&mut self) -> Option<crate::Inject> { self.0.take().or_else(|| self.1.next()) }
+}
+
 #[cfg(any(windows, target_os = "macos", test))]
 #[derive(Default)]
 pub(crate) struct NativeText {
@@ -138,25 +156,30 @@ impl NativeText {
         output
     }
 
-    pub(crate) fn input(&mut self, input: crate::Inject) -> Vec<crate::Inject> {
+    /// What to inject for `input`. Moves, buttons and scrolls (nearly every
+    /// message) pass through as one value with no allocation; only typed
+    /// text can expand into several.
+    pub(crate) fn input(&mut self, input: crate::Inject) -> NativeOutput {
         match input {
-            crate::Inject::Controlled(false) => { self.clear(); vec![input] }
+            crate::Inject::Controlled(false) => { self.clear(); NativeOutput::one(input) }
             crate::Inject::CharacterKey { code, down: true, character } => {
-                if !one_mk_proto::typing::character_key_code(code) || !one_mk_proto::typing::printable(character) { return Vec::new(); }
+                if !one_mk_proto::typing::character_key_code(code) || !one_mk_proto::typing::printable(character) {
+                    return NativeOutput::none();
+                }
                 self.held.entry(code).or_insert(character);
-                self.repeat(code).unwrap_or_default()
+                NativeOutput::many(self.repeat(code).unwrap_or_default())
             }
             crate::Inject::CharacterKey { code, down: false, character } => {
                 if self.held.get(&code) == Some(&character) { self.held.remove(&code); }
-                Vec::new()
+                NativeOutput::none()
             }
             crate::Inject::Key { code, down } if self.held.contains_key(&code) => {
                 if !down { self.held.remove(&code); }
-                Vec::new()
+                NativeOutput::none()
             }
-            crate::Inject::Key { code, down } => { self.mods.update(code, down); vec![input] }
-            crate::Inject::Text { text } => self.text(text),
-            _ => vec![input],
+            crate::Inject::Key { code, down } => { self.mods.update(code, down); NativeOutput::one(input) }
+            crate::Inject::Text { text } => NativeOutput::many(self.text(text)),
+            _ => NativeOutput::one(input),
         }
     }
 
@@ -431,11 +454,11 @@ mod tests {
         let mut native = NativeText::default();
         let press = Inject::CharacterKey { code: 40, down: true, character: 'ä' };
         let text = Inject::Text { text: "ä".into() };
-        assert_eq!(native.input(press), vec![text]);
+        assert_eq!(native.input(press).collect::<Vec<_>>(), vec![text]);
         assert_eq!(native.repeat(40), Some(vec![text]));
         for modifier in [42, 100] {
             let key = Inject::Key { code: modifier, down: true };
-            assert_eq!(native.input(key), vec![key]);
+            assert_eq!(native.input(key).collect::<Vec<_>>(), vec![key]);
         }
         assert_eq!(native.repeat(40), Some(vec![
             Inject::Key { code: 42, down: false }, Inject::Key { code: 100, down: false }, text,
@@ -443,15 +466,15 @@ mod tests {
         ]));
         native.input(Inject::Key { code: 29, down: true });
         assert_eq!(native.repeat(40), Some(Vec::new()));
-        assert!(native.input(Inject::Text { text: "x".into() }).is_empty());
+        assert_eq!(native.input(Inject::Text { text: "x".into() }).count(), 0);
         native.input(Inject::Key { code: 29, down: false });
         assert!(!native.repeat(40).unwrap().is_empty());
-        assert!(native.input(Inject::Key { code: 40, down: false }).is_empty());
+        assert_eq!(native.input(Inject::Key { code: 40, down: false }).count(), 0);
         assert_eq!(native.repeat(40), None);
         native.input(press);
         native.clear();
         assert_eq!(native.repeat(40), None);
-        assert_eq!(native.input(Inject::Text { text: "x".into() }), vec![Inject::Text { text: "x".into() }]);
+        assert_eq!(native.input(Inject::Text { text: "x".into() }).collect::<Vec<_>>(), vec![Inject::Text { text: "x".into() }]);
     }
 
     #[test]
@@ -475,8 +498,22 @@ mod tests {
         native.input(Inject::Controlled(false));
         assert_eq!(native.repeat(26), None);
         for (code, character) in [(29, 'x'), (30, '\n'), (767, 'x')] {
-            assert!(native.input(Inject::CharacterKey { code, down: true, character }).is_empty());
+            assert_eq!(native.input(Inject::CharacterKey { code, down: true, character }).count(), 0);
             assert_eq!(native.repeat(code), None);
+        }
+    }
+
+    #[test]
+    fn native_text_passes_pointer_messages_through_unchanged() {
+        let mut native = NativeText::default();
+        native.input(Inject::Key { code: 42, down: true });
+        for message in [
+            Inject::MoveTo(one_mk_proto::Pos::new(3., 4.)), Inject::MoveBy { dx: -2, dy: 7 },
+            Inject::Button { button: 1, down: true }, Inject::Scroll { dx: 0., dy: 1.5 },
+            Inject::ScrollDiscrete { dx: 1, dy: 0 }, Inject::ScrollStop, Inject::Controlled(true),
+            Inject::Key { code: 30, down: true },
+        ] {
+            assert_eq!(native.input(message).collect::<Vec<_>>(), vec![message], "{message:?}");
         }
     }
 

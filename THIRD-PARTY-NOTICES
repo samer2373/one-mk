@@ -39,7 +39,7 @@ Bigfoot Technology logo (embedded in one-mk-app, Settings > General > About)
   see docs/brand/bigfoot/README.md.
 
 ==============================================================================
-RUST CRATES (571)
+RUST CRATES (567)
 ==============================================================================
 
 accesskit 0.25.2
@@ -72,9 +72,6 @@ adler2 2.0.1
 ahash 0.8.12
   Licence: MIT OR Apache-2.0
   Source:  https://github.com/tkaitchuck/ahash
-aho-corasick 1.1.5
-  Licence: Unlicense OR MIT
-  Source:  https://github.com/BurntSushi/aho-corasick
 android-activity 0.6.1
   Licence: MIT OR Apache-2.0
   Source:  https://github.com/rust-mobile/android-activity
@@ -747,9 +744,6 @@ log 0.4.34
 lru-slab 0.1.3
   Licence: MIT OR Apache-2.0 OR Zlib
   Source:  https://github.com/Ralith/lru-slab
-matchers 0.2.0
-  Licence: MIT
-  Source:  https://github.com/hawkw/matchers
 mdns-sd 0.21.6
   Licence: Apache-2.0 OR MIT
   Source:  https://github.com/keepsimple1/mdns-sd
@@ -1134,12 +1128,6 @@ redox_syscall 0.9.5
 redox_users 0.5.3
   Licence: MIT
   Source:  https://gitlab.redox-os.org/redox-os/users
-regex-automata 0.4.18
-  Licence: MIT OR Apache-2.0
-  Source:  https://github.com/rust-lang/regex
-regex-syntax 0.8.11
-  Licence: MIT OR Apache-2.0
-  Source:  https://github.com/rust-lang/regex
 reis 0.7.1
   Licence: MIT
   Source:  https://github.com/ids1024/reis
@@ -2186,8 +2174,6 @@ Applies to:
   png 0.18.1 (LICENSE-APACHE)
   polling 3.11.0 (LICENSE-APACHE)
   pollster 0.4.0 (LICENSE-APACHE)
-  regex-automata 0.4.18 (LICENSE-APACHE)
-  regex-syntax 0.8.11 (LICENSE-APACHE)
   renderdoc-sys 1.1.0 (LICENSE-APACHE)
   rustc-hash 1.1.0 (LICENSE-APACHE)
   rusticata-macros 4.1.0 (LICENSE-APACHE)
@@ -2462,78 +2448,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-
-------------------------------------------------------------------------------
-Applies to:
-  aho-corasick 1.1.5 (COPYING)
-  memchr 2.8.3 (COPYING)
-------------------------------------------------------------------------------
-
-This project is dual-licensed under the Unlicense and MIT licenses.
-
-You may use this code under the terms of either license.
-
-------------------------------------------------------------------------------
-Applies to:
-  aho-corasick 1.1.5 (LICENSE-MIT)
-  byteorder-lite 0.1.0 (LICENSE-MIT)
-  memchr 2.8.3 (LICENSE-MIT)
-------------------------------------------------------------------------------
-
-The MIT License (MIT)
-
-Copyright (c) 2015 Andrew Gallant
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-THE SOFTWARE.
-
-------------------------------------------------------------------------------
-Applies to:
-  aho-corasick 1.1.5 (UNLICENSE)
-  byteorder-lite 0.1.0 (UNLICENSE)
-  ksni 0.3.7 (UNLICENSE)
-  memchr 2.8.3 (UNLICENSE)
-------------------------------------------------------------------------------
-
-This is free and unencumbered software released into the public domain.
-
-Anyone is free to copy, modify, publish, use, compile, sell, or
-distribute this software, either in source code form or as a compiled
-binary, for any purpose, commercial or non-commercial, and by any
-means.
-
-In jurisdictions that recognize copyright laws, the author or authors
-of this software dedicate any and all copyright interest in the
-software to the public domain. We make this dedication for the benefit
-of the public at large and to the detriment of our heirs and
-successors. We intend this dedication to be an overt act of
-relinquishment in perpetuity of all present and future rights to this
-software under copyright law.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
-OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.
-
-For more information, please refer to <http://unlicense.org/>
 
 ------------------------------------------------------------------------------
 Applies to:
@@ -4648,8 +4562,6 @@ Applies to:
   num-bigint 0.4.8 (LICENSE-MIT)
   num-integer 0.1.47 (LICENSE-MIT)
   num-traits 0.2.19 (LICENSE-MIT)
-  regex-automata 0.4.18 (LICENSE-MIT)
-  regex-syntax 0.8.11 (LICENSE-MIT)
 ------------------------------------------------------------------------------
 
 Copyright (c) 2014 The Rust Project Developers
@@ -5615,6 +5527,66 @@ Permission is granted to anyone to use this software for any purpose, including 
 2. Altered source versions must be plainly marked as such, and must not be misrepresented as being the original software.
 
 3. This notice may not be removed or altered from any source distribution.
+
+------------------------------------------------------------------------------
+Applies to:
+  byteorder-lite 0.1.0 (LICENSE-MIT)
+  memchr 2.8.3 (LICENSE-MIT)
+------------------------------------------------------------------------------
+
+The MIT License (MIT)
+
+Copyright (c) 2015 Andrew Gallant
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+------------------------------------------------------------------------------
+Applies to:
+  byteorder-lite 0.1.0 (UNLICENSE)
+  ksni 0.3.7 (UNLICENSE)
+  memchr 2.8.3 (UNLICENSE)
+------------------------------------------------------------------------------
+
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <http://unlicense.org/>
 
 ------------------------------------------------------------------------------
 Applies to:
@@ -11743,31 +11715,6 @@ the following restrictions:
 
 ------------------------------------------------------------------------------
 Applies to:
-  matchers 0.2.0 (LICENSE)
-------------------------------------------------------------------------------
-
-Copyright (c) 2019 Eliza Weisman
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-------------------------------------------------------------------------------
-Applies to:
   mdns-sd 0.21.6 (LICENSE-APACHE)
 ------------------------------------------------------------------------------
 
@@ -11999,6 +11946,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+------------------------------------------------------------------------------
+Applies to:
+  memchr 2.8.3 (COPYING)
+------------------------------------------------------------------------------
+
+This project is dual-licensed under the Unlicense and MIT licenses.
+
+You may use this code under the terms of either license.
 
 ------------------------------------------------------------------------------
 Applies to:

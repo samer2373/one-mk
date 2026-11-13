@@ -1,10 +1,9 @@
 use super::{LayoutResolver, LayoutState, lib};
-use std::ffi::{CStr, c_char, c_int, c_void};
-use std::sync::OnceLock;
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::sync::{Mutex, OnceLock};
 
 library! { ComposeLib, load_compose, {
     table_new = c"xkb_compose_table_new_from_locale": fn(*mut c_void, *const c_char, c_int) -> *mut c_void;
-    table_unref = c"xkb_compose_table_unref": fn(*mut c_void);
     state_new = c"xkb_compose_state_new": fn(*mut c_void, c_int) -> *mut c_void;
     state_unref = c"xkb_compose_state_unref": fn(*mut c_void);
     state_feed = c"xkb_compose_state_feed": fn(*mut c_void, u32) -> c_int;
@@ -38,17 +37,33 @@ impl LayoutComposer {
     pub fn new(locale: &CStr) -> Option<Self> {
         static COMPOSE: OnceLock<Option<ComposeLib>> = OnceLock::new();
         let library = COMPOSE.get_or_init(|| unsafe { load_compose() }).as_ref()?;
+        // xkbcommon reference counts are plain integers: the table's count is
+        // only changed under this lock (state_new takes a reference, state_unref
+        // in `drop` gives it back), never from two threads at once.
+        let mut tables = TABLES.lock().ok()?;
+        let table = match tables.iter().find(|(known, _)| known.as_c_str() == locale) {
+            Some((_, table)) => *table,
+            None => {
+                let table = unsafe { Self::parse(library, locale) };
+                tables.push((locale.to_owned(), table));
+                table
+            }
+        }?;
+        let state = unsafe { (library.state_new)(table.0, 0) };
+        if state.is_null() { return None; }
+        Some(Self { library, state })
+    }
+
+    /// The compose table for `locale`, with a reference that is never given
+    /// back: it lives as long as the process (see `TABLES`).
+    unsafe fn parse(library: &ComposeLib, locale: &CStr) -> Option<Table> {
         let core = lib()?;
         unsafe {
             let context = (core.context_new)(0);
             if context.is_null() { return None; }
             let table = (library.table_new)(context, locale.as_ptr(), 0);
             (core.context_unref)(context);
-            if table.is_null() { return None; }
-            let state = (library.state_new)(table, 0);
-            (library.table_unref)(table);
-            if state.is_null() { return None; }
-            Some(Self { library, state })
+            (!table.is_null()).then_some(Table(table))
         }
     }
 
@@ -90,6 +105,18 @@ impl LayoutComposer {
 
 impl Drop for LayoutComposer {
     fn drop(&mut self) {
+        let _tables = TABLES.lock();
         unsafe { (self.library.state_unref)(self.state) };
     }
 }
+
+/// A parsed compose table: about 140 KB, and 2 to 5 ms to parse. Every
+/// keyboard a desktop reports and every typing visit builds a composer, and
+/// each used to parse the locale's Compose file again; now each locale's
+/// table is parsed once and kept (a locale without one is remembered too).
+#[derive(Clone, Copy)]
+struct Table(*mut c_void);
+
+unsafe impl Send for Table {}
+
+static TABLES: Mutex<Vec<(CString, Option<Table>)>> = Mutex::new(Vec::new());

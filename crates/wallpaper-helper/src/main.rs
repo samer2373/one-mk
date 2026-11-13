@@ -50,6 +50,15 @@ fn wake() {
 }
 
 fn main() -> Result<()> {
+    // zbus' blocking API (the GNOME bridge) drives its calls on a Tokio
+    // runtime that starts one worker per CPU and keeps them all for the life
+    // of the process; one is all a few D-Bus calls need. Set before any
+    // thread exists, so nothing reads the environment meanwhile.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("TOKIO_WORKER_THREADS").is_none() {
+        // SAFETY: the first statement of `main`; no other thread runs yet.
+        unsafe { std::env::set_var("TOKIO_WORKER_THREADS", "1") };
+    }
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
     if arguments.first().is_some_and(|argument| argument.to_string_lossy().starts_with("--picture-")) {
         return picture::command(&arguments);

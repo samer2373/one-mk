@@ -166,7 +166,7 @@ impl Profile {
     }
 }
 
-fn path(dir: &Path) -> PathBuf {
+pub fn path(dir: &Path) -> PathBuf {
     dir.join(FILE)
 }
 

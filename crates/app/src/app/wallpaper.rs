@@ -9,6 +9,15 @@ pub(super) struct WallpaperUi {
     poster: Option<egui::TextureHandle>,
 }
 
+impl WallpaperUi {
+    /// The poster (up to 1600x900, 5.8 MB on the GPU) is only drawn on this
+    /// page: let go on leaving it; the next visit decodes it again.
+    pub(super) fn release(&mut self) {
+        self.poster = None;
+        self.poster_path = None;
+    }
+}
+
 impl App {
     pub(super) fn wallpaper_command(&mut self, command: Command) {
         self.link.wallpaper(command);
@@ -32,13 +41,15 @@ impl App {
             self.wallpaper_ui.picker = None;
             if let Some(path) = result { self.wallpaper_command(Command::Set { path }); }
         }
-        let status = self.running().cloned();
-        let wallpaper = status.as_ref().and_then(|status| status.wallpaper.clone()).unwrap_or_default();
+        let status = self.running_shared();
+        // Borrowed from the shared status: the page is drawn every frame it moves.
+        let no_wallpaper = Default::default();
+        let wallpaper = status.as_ref().and_then(|status| status.wallpaper.as_ref()).unwrap_or(&no_wallpaper);
         // A drop is a choice like Choose…: only while choosing is possible.
         let dropped = ui.input(|input| input.raw.dropped_files.first().map(|file| file.path().to_path_buf()));
         if let Some(path) = dropped && accepts_drop(status.is_some(), wallpaper.available) { self.wallpaper_command(Command::Set { path }); }
         let plan = wallpaper.plan.as_ref();
-        let canvas = plan.map(|plan| plan.canvas.clone()).unwrap_or_else(|| status.as_ref().map(one_mk_ctl::wallpaper::canvas).unwrap_or_default());
+        let canvas = plan.map(|plan| plan.canvas.clone()).unwrap_or_else(|| status.as_deref().map(one_mk_ctl::wallpaper::canvas).unwrap_or_default());
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         let poster_path = std::env::var_os("ONE_MK_APP_WALLPAPER").map(Into::into).or_else(|| wallpaper.poster.clone());
         #[cfg(not(any(debug_assertions, feature = "design-evidence")))]

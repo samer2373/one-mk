@@ -851,7 +851,7 @@ pub fn apply_visuals(ctx: &egui::Context) {
     });
 }
 
-fn fonts(extra: &[(String, Vec<u8>)]) -> FontDefinitions {
+fn fonts(extra: &[(String, Arc<FontData>)]) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     for (name, bytes) in [
         ("inter", &include_bytes!("../fonts/Inter-Regular.ttf")[..]),
@@ -877,8 +877,9 @@ fn fonts(extra: &[(String, Vec<u8>)]) -> FontDefinitions {
         fonts.families.entry(FontFamily::Proportional).or_default().push("mac-symbols".into());
         fonts.families.entry(FontFamily::Monospace).or_default().push("mac-symbols".into());
     }
-    for (name, bytes) in extra {
-        fonts.font_data.insert(name.clone(), Arc::new(FontData::from_owned(bytes.clone())));
+    for (name, data) in extra {
+        // The same allocation every time the fonts are rebuilt, not a copy.
+        fonts.font_data.insert(name.clone(), Arc::clone(data));
         fonts.families.entry(FontFamily::Proportional).or_default().push(name.clone());
     }
     let fallback = fonts.families[&FontFamily::Proportional].clone();
@@ -905,33 +906,95 @@ fn mac_symbols() -> Option<&'static [u8]> {
 /// are only read when such a name shows up, so most people never pay.
 #[derive(Default)]
 pub struct Fallbacks {
-    loaded: Vec<(String, Vec<u8>)>,
+    /// Each font once, shared with the window's font set (a CJK file is
+    /// 20 MB: it must not be held twice).
+    loaded: Vec<(String, Arc<FontData>)>,
+    /// Letters whose lookup is done, found or not: never asked again.
     tried: std::collections::HashSet<char>,
 }
 
+/// The system's answer for some letters: a font file, which face of it, and
+/// the letters it covers (`None`: not known, taken to be all of them).
+#[derive(Clone)]
+struct Found {
+    path: String,
+    index: u32,
+    covers: Option<Vec<(u32, u32)>>,
+}
+
+impl Found {
+    fn covers(&self, c: char) -> bool {
+        self.covers.as_ref().is_none_or(|ranges| ranges.iter().any(|&(from, to)| (from..=to).contains(&(c as u32))))
+    }
+
+    /// The name the font set knows it by (a collection holds several faces).
+    fn name(&self) -> String {
+        if self.index == 0 { self.path.clone() } else { format!("{}#{}", self.path, self.index) }
+    }
+}
+
+/// Most system lookups one batch of letters may cost (each is a process on
+/// Linux): a font per script is all a name needs.
+const LOOKUPS_PER_BATCH: usize = 4;
+
 impl Fallbacks {
     pub fn cover<'a>(&mut self, ctx: &egui::Context, names: impl Iterator<Item = &'a str>) {
-        let missing: Vec<char> = names
+        let missing: std::collections::BTreeSet<char> = names
             .flat_map(str::chars)
             .filter(|c| !c.is_control() && !self.tried.contains(c))
             .filter(|c| !ctx.fonts_mut(|f| f.has_glyph(&regular(T_BODY), *c)))
             .collect();
+        if self.cover_letters(missing.into_iter().collect(), system_fonts_for, |path| std::fs::read(path).ok()) {
+            ctx.set_fonts(fonts(&self.loaded));
+        }
+    }
+
+    /// Finds fonts for `missing`: one lookup says which letters its font
+    /// covers, so a whole page of one script costs one lookup, not one per
+    /// letter. A letter no font covers is not asked about again. `true`
+    /// when a font was added.
+    fn cover_letters(
+        &mut self,
+        mut missing: Vec<char>,
+        mut lookup: impl FnMut(&[char]) -> Option<Found>,
+        mut read: impl FnMut(&str) -> Option<Vec<u8>>,
+    ) -> bool {
+        self.tried.extend(missing.iter().copied());
         let mut added = false;
-        for c in missing {
-            if !self.tried.insert(c) {
-                continue;
+        let mut budget_spent = true;
+        for _ in 0..LOOKUPS_PER_BATCH {
+            if missing.is_empty() {
+                budget_spent = false;
+                break;
             }
-            if let Some(path) = system_font_for(c)
-                && !self.loaded.iter().any(|(n, _)| n == &path)
-                && let Ok(bytes) = std::fs::read(&path)
+            let Some(found) = lookup(&missing) else {
+                budget_spent = false;
+                break;
+            };
+            let covered = missing.iter().filter(|c| found.covers(**c)).count();
+            if covered == 0 {
+                // The best the system has covers none of what is left.
+                budget_spent = false;
+                break;
+            }
+            missing.retain(|c| !found.covers(*c));
+            let name = found.name();
+            if !self.loaded.iter().any(|(n, _)| *n == name)
+                && let Some(bytes) = read(&found.path)
             {
-                self.loaded.push((path, bytes));
+                let mut data = FontData::from_owned(bytes);
+                data.index = found.index;
+                self.loaded.push((name, Arc::new(data)));
                 added = true;
             }
         }
-        if added {
-            ctx.set_fonts(fonts(&self.loaded));
+        if budget_spent {
+            // The lookups ran out before these were asked about: a later batch may still find them.
+            for c in &missing {
+                self.tried.remove(c);
+            }
         }
+        added
     }
 }
 
@@ -1007,24 +1070,127 @@ pub fn preview_look() -> PreviewLook {
     }
 }
 
-fn system_font_for(c: char) -> Option<String> {
+/// A system font for the letters in `missing`, and which of them it covers.
+fn system_fonts_for(missing: &[char]) -> Option<Found> {
     if cfg!(target_os = "linux") {
-        let out = std::process::Command::new("fc-match").args(["-f", "%{file}", &format!(":charset={:x}", c as u32)]).output().ok()?;
-        let path = String::from_utf8(out.stdout).ok()?;
-        // Collections (.ttc) hold several faces; egui reads the first.
-        return (out.status.success() && !path.is_empty()).then_some(path);
+        // fontconfig picks the font covering most of the letters and says
+        // which ones it covers, in the same answer.
+        let charset: Vec<String> = missing.iter().take(256).map(|c| format!("{:x}", *c as u32)).collect();
+        let out = std::process::Command::new("fc-match")
+            .args(["-f", "%{file}\n%{index}\n%{charset}", &format!(":charset={}", charset.join(" "))])
+            .output()
+            .ok()?;
+        return out.status.success().then(|| parse_match(&String::from_utf8(out.stdout).ok()?)).flatten();
     }
     let candidates: &[&str] = if cfg!(target_os = "macos") {
         &["/System/Library/Fonts/Supplemental/Arial Unicode.ttf", "/System/Library/Fonts/PingFang.ttc", "/System/Library/Fonts/AppleSDGothicNeo.ttc"]
     } else {
         &["C:\\Windows\\Fonts\\seguisym.ttf", "C:\\Windows\\Fonts\\msyh.ttc", "C:\\Windows\\Fonts\\malgun.ttf", "C:\\Windows\\Fonts\\Nirmala.ttc"]
     };
-    candidates.iter().find(|p| std::path::Path::new(p).exists()).map(|p| (*p).to_owned())
+    candidates.iter().find(|p| std::path::Path::new(p).exists()).map(|p| Found { path: (*p).to_owned(), index: 0, covers: None })
+}
+
+/// `fc-match -f '%{file}\n%{index}\n%{charset}'`: the file, the face in it
+/// (egui reads the one asked for) and the letters it covers as hex ranges
+/// (`20-7e a0 4e00-9fff`).
+fn parse_match(text: &str) -> Option<Found> {
+    let mut lines = text.lines();
+    let path = lines.next().filter(|path| !path.is_empty())?.to_owned();
+    let index = lines.next().and_then(|index| index.trim().parse().ok()).unwrap_or(0);
+    let hex = |text: &str| u32::from_str_radix(text, 16).ok();
+    let ranges: Vec<(u32, u32)> = lines
+        .flat_map(str::split_whitespace)
+        .filter_map(|range| match range.split_once('-') {
+            Some((from, to)) => Some((hex(from)?, hex(to)?)),
+            None => hex(range).map(|one| (one, one)),
+        })
+        .collect();
+    Some(Found { path, index, covers: (!ranges.is_empty()).then_some(ranges) })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cjk() -> Found {
+        Found { path: "/fonts/cjk.ttc".into(), index: 2, covers: Some(vec![(0x20, 0x7e), (0x4e00, 0x9fff)]) }
+    }
+
+    #[test]
+    fn fc_match_answers_are_read_with_their_coverage() {
+        let found = parse_match("/usr/share/fonts/Noto.ttc\n1\n20-7e a0 4e00-9fff\n").unwrap();
+        assert_eq!((found.path.as_str(), found.index, found.name().as_str()), ("/usr/share/fonts/Noto.ttc", 1, "/usr/share/fonts/Noto.ttc#1"));
+        assert!(found.covers('中') && found.covers('\u{a0}') && !found.covers('한'));
+        // No coverage given: all of it is assumed.
+        assert!(parse_match("/a.ttf\n0\n").unwrap().covers('한'));
+        assert!(parse_match("").is_none());
+        assert_eq!(parse_match("/a.ttf\n0\n").unwrap().name(), "/a.ttf");
+    }
+
+    #[test]
+    fn a_page_of_one_script_costs_one_lookup_and_one_copy_of_the_font() {
+        let mut fallbacks = Fallbacks::default();
+        let (mut lookups, mut reads) = (0, 0);
+        let letters: Vec<char> = ('\u{4e00}'..).take(300).collect();
+        let added = fallbacks.cover_letters(letters, |_| { lookups += 1; Some(cjk()) }, |_| { reads += 1; Some(vec![0; 16]) });
+        assert!(added);
+        assert_eq!((lookups, reads), (1, 1), "not a lookup per letter");
+        assert_eq!(fallbacks.loaded.len(), 1);
+        assert_eq!(fallbacks.loaded[0].1.index, 2, "the face fontconfig chose");
+        // Rebuilding the font set shares the file's bytes, it does not copy them.
+        let definitions = fonts(&fallbacks.loaded);
+        assert!(Arc::ptr_eq(&definitions.font_data[&fallbacks.loaded[0].0], &fallbacks.loaded[0].1));
+        // The same font again for more letters: nothing read, nothing added.
+        assert!(!fallbacks.cover_letters(vec!['\u{5000}'], |_| Some(cjk()), |_| panic!("read twice")));
+        assert_eq!(fallbacks.loaded.len(), 1);
+    }
+
+    #[test]
+    fn letters_no_font_covers_are_asked_about_once_and_load_nothing() {
+        let mut fallbacks = Fallbacks::default();
+        let mut lookups = 0;
+        // A font that exists but covers none of them (fc-match always answers).
+        let added = fallbacks.cover_letters(vec!['\u{1f600}', '\u{1f601}'], |_| { lookups += 1; Some(cjk()) }, |_| panic!("not worth reading"));
+        assert!(!added);
+        assert_eq!(lookups, 1);
+        assert!(fallbacks.tried.contains(&'\u{1f600}') && fallbacks.tried.contains(&'\u{1f601}'));
+        assert!(!fallbacks.cover_letters(Vec::new(), |_| panic!("nothing missing"), |_| None));
+    }
+
+    #[test]
+    fn two_scripts_in_one_batch_take_two_lookups() {
+        let mut fallbacks = Fallbacks::default();
+        let hangul = Found { path: "/fonts/kr.ttf".into(), index: 0, covers: Some(vec![(0xac00, 0xd7a3)]) };
+        let mut lookups = 0;
+        let added = fallbacks.cover_letters(
+            vec!['中', '한', '文', '글'],
+            |missing| { lookups += 1; Some(if missing.contains(&'中') { cjk() } else { hangul.clone() }) },
+            |_| Some(vec![0; 8]),
+        );
+        assert!(added);
+        assert_eq!((lookups, fallbacks.loaded.len()), (2, 2));
+    }
+
+    #[test]
+    fn letters_left_when_the_lookup_budget_ran_out_are_asked_about_in_a_later_batch() {
+        let mut fallbacks = Fallbacks::default();
+        // Six scripts, one font each: the lookups of one batch run out after four.
+        let scripts: Vec<(char, Found)> = (0..6u32)
+            .map(|i| {
+                let c = char::from_u32(0x4e00 + i * 0x1000).unwrap();
+                (c, Found { path: format!("/fonts/{i}.ttf"), index: 0, covers: Some(vec![(c as u32, c as u32)]) })
+            })
+            .collect();
+        let missing: Vec<char> = scripts.iter().map(|(c, _)| *c).collect();
+        let lookup = |left: &[char]| scripts.iter().find(|(c, _)| left.contains(c)).map(|(_, f)| f.clone());
+        assert!(fallbacks.cover_letters(missing, lookup, |_| Some(vec![0; 8])));
+        assert_eq!(fallbacks.loaded.len(), 4);
+        // The two the budget left are not marked as tried, so the next batch finds them.
+        let left: Vec<char> = scripts[4..].iter().map(|(c, _)| *c).collect();
+        assert!(left.iter().all(|c| !fallbacks.tried.contains(c)));
+        assert!(fallbacks.cover_letters(left, lookup, |_| Some(vec![0; 8])));
+        assert_eq!(fallbacks.loaded.len(), 6);
+    }
 
     fn contrast(first: Color32, second: Color32) -> f64 {
         let luminance = |color: Color32| {

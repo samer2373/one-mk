@@ -929,3 +929,50 @@ async fn devices_are_listed_and_input_says_which_one() {
     }
     assert_eq!(rest.last(), Some(&(false, Some(keyboard.id))), "{rest:?}");
 }
+
+/// While a peer controls this machine, local raw input is selected on each
+/// real slave and never on XTest: injected motion does not come back as raw
+/// events. A refused selection falls back to the master devices.
+#[test]
+fn controlled_raw_input_is_selected_per_real_slave() {
+    let Some(server) = Xvfb::start() else { return };
+    let o = server.observer();
+    let mut x = X::connect(&Target { display: Some(server.display.clone()), barriers: true }).unwrap();
+    let selected = |x: &X| -> HashMap<u16, u32> {
+        let reply = x.conn.xinput_xi_get_selected_events(x.root).unwrap().reply().unwrap();
+        reply.masks.into_iter().map(|m| (m.deviceid, m.mask.first().copied().map_or(0, u32::from))).collect()
+    };
+    let real = [o.xi_id("Xvfb mouse"), o.xi_id("Xvfb keyboard")];
+    let xtest = [o.xi_id("Virtual core XTEST pointer"), o.xi_id("Virtual core XTEST keyboard")];
+
+    x.select(true, false);
+    let masks = selected(&x);
+    assert_eq!(masks.get(&ALL_MASTER_DEVICES).copied().unwrap_or(0) & RAW_LOCAL, 0, "{masks:?}");
+    for id in real { assert_eq!(masks.get(&id), Some(&RAW_LOCAL), "{masks:?}"); }
+    for id in xtest { assert!(!masks.contains_key(&id), "{masks:?}"); }
+    let echoes = |x: &X| {
+        for i in 0..100 { o.move_by(if i % 2 == 0 { 1 } else { -1 }, 0); }
+        x.conn.sync().unwrap();
+        std::iter::from_fn(|| x.conn.poll_for_event().unwrap()).filter(|e| matches!(e, x11rb::protocol::Event::XinputRawMotion(_))).count()
+    };
+    assert_eq!(echoes(&x), 0, "100 injected moves, no raw motion read back");
+
+    x.select(true, true);
+    assert_eq!(selected(&x).get(&real[0]), Some(&RAW_LOCAL), "the held bit changes only the masters");
+
+    x.select(false, false);
+    let masks = selected(&x);
+    for id in real { assert_eq!(masks.get(&id).copied().unwrap_or(0), 0, "{masks:?}"); }
+
+    // A slave that went away before the server saw the request: refused,
+    // and local raw input goes back on the masters with no slave left selected.
+    x.raw_slaves = vec![real[0], 250];
+    x.select(true, false);
+    let masks = selected(&x);
+    assert_eq!(masks.get(&ALL_MASTER_DEVICES).copied().unwrap_or(0) & RAW_LOCAL, RAW_LOCAL, "{masks:?}");
+    for id in real { assert_eq!(masks.get(&id).copied().unwrap_or(0), 0, "{masks:?}"); }
+    assert!(x.raw_on_masters && x.raw_slaves.is_empty());
+    assert_eq!(echoes(&x), 100, "on the masters (as before this change) every injected move echoes");
+    x.select(false, false);
+    assert_eq!(selected(&x).get(&ALL_MASTER_DEVICES).copied().unwrap_or(0) & RAW_LOCAL, 0);
+}

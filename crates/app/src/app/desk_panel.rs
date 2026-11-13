@@ -271,7 +271,7 @@ impl App {
     /// and down a column in a narrow window. Returns where its last button
     /// ends.
     pub(super) fn desk_toolbar(&mut self, ui: &mut Ui, row: Rect, narrow_window: bool) -> f32 {
-        let Some(status) = self.running().cloned() else { return row.left() };
+        let Some(status) = self.running_shared() else { return row.left() };
         let online = status.peers.iter().any(|p| p.online);
         let on = self.broadcasting();
         let menu = status.peers.len() + 1 >= 5;

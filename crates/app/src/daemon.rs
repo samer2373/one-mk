@@ -18,12 +18,24 @@ use std::time::{Duration, Instant};
 /// How often the window looks at the daemon while it is in use. A status
 /// request is one small message over a local socket.
 const POLL: Duration = Duration::from_millis(250);
+/// ... while it has the focus but nobody has touched it for [`IDLE_AFTER`]
+/// (open and watched, not used): a change still shows within a second, and
+/// the first key or pointer move wakes the watcher at once.
+const POLL_IDLE: Duration = Duration::from_secs(1);
+/// How long the focused window may go without input before it looks less often.
+const IDLE_AFTER: Duration = Duration::from_secs(30);
 /// ... while it is open but another window has the focus: a change still
-/// shows within half a second.
-const POLL_UNFOCUSED: Duration = Duration::from_millis(500);
-/// ... while it is minimised or hidden and nobody can see a change. The
-/// first frame after it comes back wakes the watcher at once.
-const POLL_HIDDEN: Duration = Duration::from_secs(3);
+/// shows within two seconds. Kept under the graph's line break (a sample
+/// further from the one before is not joined to it), so the line stays whole.
+const POLL_UNFOCUSED: Duration = Duration::from_secs(2);
+/// ... while it is minimised, covered or hidden and nobody can see a change.
+/// Coming back wakes the watcher at once; this only bounds how soon the
+/// tray's "Quit oneMK" or a daemon that stopped is noticed.
+const POLL_HIDDEN: Duration = Duration::from_secs(10);
+/// After a command the window ran finishes, the watcher looks at the pace of a
+/// focused window for this long, so what the command changed shows at once
+/// even when the window is in the background.
+const AFTER_COMMAND: Duration = Duration::from_secs(4);
 /// While a graph shows, the window is redrawn at least this often (the
 /// graph scrolls a little with time) even when no reading changed.
 pub const GRAPH_IDLE_REDRAW: Duration = Duration::from_secs(10);
@@ -49,9 +61,10 @@ pub enum Attention {
 }
 
 impl Attention {
-    /// From what the windowing system reports about the window.
-    pub fn of(minimized: Option<bool>, focused: Option<bool>) -> Self {
-        if minimized == Some(true) {
+    /// From what the windowing system reports about the window: minimised, or
+    /// completely covered by another window (not every system says so).
+    pub fn of(minimized: Option<bool>, occluded: Option<bool>, focused: Option<bool>) -> Self {
+        if minimized == Some(true) || occluded == Some(true) {
             Attention::Hidden
         } else if focused == Some(false) {
             Attention::Background
@@ -80,7 +93,37 @@ pub struct Showing {
     stamp: Arc<AtomicU64>,
     epoch: Instant,
     /// What the window last said about itself; a change wakes the watcher.
-    attention: Arc<(std::sync::Mutex<Attention>, std::sync::Condvar)>,
+    attention: Arc<(std::sync::Mutex<Wake>, std::sync::Condvar)>,
+}
+
+/// What the window tells the watcher, under one lock.
+struct Wake {
+    attention: Attention,
+    /// The last key, click or pointer move.
+    input: Instant,
+    /// Until when the watcher looks at the pace of a focused window.
+    boost: Option<Instant>,
+    /// Counts everything that should end the watcher's pause early.
+    changes: u64,
+}
+
+impl Default for Wake {
+    fn default() -> Self {
+        Self { attention: Attention::Active, input: Instant::now(), boost: None, changes: 0 }
+    }
+}
+
+impl Wake {
+    /// A focused window nobody has used for a while.
+    fn idle(&self) -> bool {
+        self.attention == Attention::Active && self.input.elapsed() >= IDLE_AFTER
+    }
+
+    /// The pause before the next look.
+    fn pause(&self) -> Duration {
+        let pause = if self.idle() { POLL_IDLE } else { self.attention.poll() };
+        if self.boost.is_some_and(|until| Instant::now() < until) { pause.min(POLL) } else { pause }
+    }
 }
 
 /// A stamp older than this says the graph is no longer on screen. A window
@@ -95,24 +138,54 @@ impl Showing {
         Self { stamp: Arc::default(), epoch: Instant::now(), attention: Arc::default() }
     }
 
-    /// The window's state, said on every frame; the watcher is woken the
-    /// moment it changes (the window came back: look now).
+    fn lock(&self) -> std::sync::MutexGuard<'_, Wake> {
+        self.attention.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The window's state, said on every pass (also while it is minimised or
+    /// covered, when only its logic runs); the watcher is woken the moment it
+    /// changes (the window came back: look now).
     pub fn attend(&self, attention: Attention) {
-        let (state, wake) = &*self.attention;
-        let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-        if *state != attention {
-            *state = attention;
-            wake.notify_all();
+        let mut wake = self.lock();
+        if wake.attention != attention {
+            wake.attention = attention;
+            wake.changes += 1;
+            self.attention.1.notify_all();
         }
+    }
+
+    /// Someone used the window (a key, a click, the pointer): from a focused
+    /// window that had been left alone this wakes the watcher at once.
+    pub fn touch(&self) {
+        let mut wake = self.lock();
+        let was_idle = wake.idle();
+        wake.input = Instant::now();
+        if was_idle {
+            wake.changes += 1;
+            self.attention.1.notify_all();
+        }
+    }
+
+    /// A command finished: look at the daemon now, and quickly for a moment,
+    /// whatever the window's state.
+    pub fn commanded(&self) {
+        let mut wake = self.lock();
+        wake.boost = Some(Instant::now() + AFTER_COMMAND);
+        wake.changes += 1;
+        self.attention.1.notify_all();
+    }
+
+    /// What the window last said about itself.
+    fn attention(&self) -> Attention {
+        self.lock().attention
     }
 
     /// Waits out the pause between two looks, less when the window's state
     /// changes meanwhile.
     fn nap(&self) {
-        let (state, wake) = &*self.attention;
-        let state = state.lock().unwrap_or_else(|e| e.into_inner());
-        let seen = *state;
-        let _ = wake.wait_timeout_while(state, seen.poll(), |now| *now == seen);
+        let wake = self.lock();
+        let (seen, pause) = (wake.changes, wake.pause());
+        let _ = self.attention.1.wait_timeout_while(wake, pause, |now| now.changes == seen);
     }
 
     fn ms(&self) -> u64 {
@@ -131,7 +204,7 @@ impl Showing {
 
     /// The window says it is minimised or hidden.
     fn hidden(&self) -> bool {
-        *self.attention.0.lock().unwrap_or_else(|e| e.into_inner()) == Attention::Hidden
+        self.attention() == Attention::Hidden
     }
 }
 
@@ -333,6 +406,10 @@ impl Link {
     }
 
     fn send(&self, e: Event) {
+        // What a command changed shows at once, not at the next slow look.
+        if matches!(e, Event::Done { .. }) {
+            self.showing.commanded();
+        }
         let _ = self.tx.send(e);
         self.ctx.request_repaint();
     }
@@ -440,7 +517,11 @@ impl Link {
                     // graph keeps scrolling: a steady line costs nothing.
                     let draw = young < GRAPH_YOUNG_DRAWS || match crate::rtt::change(&drawn, &s.links) {
                         crate::rtt::Change::Urgent => true,
-                        crate::rtt::Change::Value => redrawn.elapsed() >= GRAPH_VALUE_REDRAW,
+                        // A window another has the focus of is not being read.
+                        crate::rtt::Change::Value if link.showing.attention() == Attention::Active => {
+                            redrawn.elapsed() >= GRAPH_VALUE_REDRAW
+                        }
+                        crate::rtt::Change::Value => redrawn.elapsed() >= GRAPH_IDLE_REDRAW,
                         crate::rtt::Change::None => redrawn.elapsed() >= GRAPH_IDLE_REDRAW,
                     };
                     let links = s.links;
@@ -1321,11 +1402,12 @@ mod tests {
 
     #[test]
     fn a_hidden_or_unfocused_window_looks_at_the_daemon_less_often() {
-        assert_eq!(Attention::of(None, None), Attention::Active);
-        assert_eq!(Attention::of(Some(false), Some(true)), Attention::Active);
-        assert_eq!(Attention::of(Some(false), Some(false)), Attention::Background);
-        assert_eq!(Attention::of(Some(true), Some(true)), Attention::Hidden);
-        assert_eq!(Attention::of(Some(true), Some(false)), Attention::Hidden);
+        assert_eq!(Attention::of(None, None, None), Attention::Active);
+        assert_eq!(Attention::of(Some(false), None, Some(true)), Attention::Active);
+        assert_eq!(Attention::of(Some(false), Some(false), Some(false)), Attention::Background);
+        assert_eq!(Attention::of(Some(true), None, Some(true)), Attention::Hidden);
+        assert_eq!(Attention::of(Some(true), None, Some(false)), Attention::Hidden);
+        assert_eq!(Attention::of(Some(false), Some(true), Some(true)), Attention::Hidden, "covered");
         assert!(Attention::Active.poll() <= Duration::from_millis(250));
         assert!(Attention::Background.poll() > Attention::Active.poll());
         assert!(Attention::Hidden.poll() >= Duration::from_secs(2));
@@ -1370,7 +1452,56 @@ mod tests {
         showing.attend(Attention::Background);
         let started = Instant::now();
         showing.nap();
-        assert!(started.elapsed() >= Duration::from_millis(450));
+        assert!(started.elapsed() >= POLL_UNFOCUSED - Duration::from_millis(50));
+    }
+
+    #[test]
+    fn the_slow_pauses_keep_every_state_correct() {
+        // An unfocused graph still joins its samples, a focused idle one is a look a second.
+        assert!(POLL_UNFOCUSED.as_secs_f64() < crate::rtt::EVERY * 2.5);
+        assert!(POLL_IDLE <= Duration::from_secs(1) && POLL_IDLE > POLL);
+        assert!(Attention::Hidden.poll() > Attention::Background.poll());
+    }
+
+    #[test]
+    fn a_focused_window_nobody_uses_looks_a_second_apart_until_touched() {
+        let showing = Showing::new();
+        assert_eq!(showing.lock().pause(), POLL, "just opened: full pace");
+        showing.lock().input = Instant::now() - IDLE_AFTER - Duration::from_secs(1);
+        assert_eq!(showing.lock().pause(), POLL_IDLE);
+        showing.attend(Attention::Background);
+        assert_eq!(showing.lock().pause(), POLL_UNFOCUSED, "idleness is for a focused window only");
+        showing.attend(Attention::Active);
+        let watcher = showing.clone();
+        let napping = std::thread::spawn(move || {
+            let started = Instant::now();
+            watcher.nap();
+            started.elapsed()
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        showing.touch();
+        let slept = napping.join().unwrap();
+        assert!(slept < Duration::from_millis(600), "the touch did not wake the watcher: {slept:?}");
+        assert_eq!(showing.lock().pause(), POLL);
+    }
+
+    #[test]
+    fn a_finished_command_wakes_the_watcher_and_speeds_it_up_for_a_moment() {
+        let showing = Showing::new();
+        showing.attend(Attention::Hidden);
+        assert_eq!(showing.lock().pause(), POLL_HIDDEN);
+        let watcher = showing.clone();
+        let napping = std::thread::spawn(move || {
+            let started = Instant::now();
+            watcher.nap();
+            started.elapsed()
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        showing.commanded();
+        assert!(napping.join().unwrap() < Duration::from_secs(1), "the command did not wake the watcher");
+        assert_eq!(showing.lock().pause(), POLL, "quick looks right after a command");
+        showing.lock().boost = Some(Instant::now() - Duration::from_millis(1));
+        assert_eq!(showing.lock().pause(), POLL_HIDDEN, "and back to the slow pace after");
     }
 
     #[test]

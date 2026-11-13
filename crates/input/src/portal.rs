@@ -805,7 +805,7 @@ async fn run_capture(
     let context = ei::Context::new(UnixStream::from(fd))?;
     let handshake = context.handshake_tokio("one-mk", ei::handshake::ContextType::Receiver);
     let (_conn, mut ei_events) = timeout("libei handshake", handshake).await?;
-    let mut typing: Option<(reis::event::Device, crate::typing::KeyboardLayout)> = None;
+    let mut typing = Typing::default();
 
     let mut activated = portal.receive_activated().await?;
     let mut deactivated = portal.receive_deactivated().await?;
@@ -961,32 +961,19 @@ async fn run_capture(
                     EiEvent::ScrollDiscrete(s) => Event::ScrollDiscrete { dx: s.discrete_dx, dy: s.discrete_dy, device: None },
                     EiEvent::ScrollStop(_) => Event::ScrollStop,
                     EiEvent::KeyboardKey(k) => {
-                        if typing.as_ref().is_none_or(|(device, _)| *device != k.device) {
-                            typing = portal_keyboard_layout(&k.device).map(|keyboard| {
-                                let _ = st.tx.send(Event::KeyboardLayout(keyboard.clone()));
-                                (k.device.clone(), keyboard)
-                            });
-                            if typing.is_none() { let _ = st.tx.send(Event::KeyboardLayoutUnavailable); }
-                        }
+                        typing.keyboard(&k.device, portal_keyboard_layout, |event| { let _ = st.tx.send(event); });
                         Event::Key { code: k.key, down: k.state == ei::keyboard::KeyState::Press, device: None }
                     }
                     EiEvent::KeyboardModifiers(m) => {
-                        if typing.as_ref().is_none_or(|(device, _)| *device != m.device) {
-                            typing = portal_keyboard_layout(&m.device).map(|keyboard| {
-                                let _ = st.tx.send(Event::KeyboardLayout(keyboard.clone()));
-                                (m.device.clone(), keyboard)
-                            });
-                            if typing.is_none() { let _ = st.tx.send(Event::KeyboardLayoutUnavailable); }
-                        }
-                        if typing.is_some() {
+                        if typing.keyboard(&m.device, portal_keyboard_layout, |event| { let _ = st.tx.send(event); }) {
                             let _ = st.tx.send(Event::KeyboardModifiers { depressed: m.depressed, latched: m.latched, locked: m.locked, group: m.group });
                         }
                         Event::Modifiers(Mods::from_xkb(m.depressed | m.latched))
                     }
                     event @ (EiEvent::DeviceRemoved(_) | EiEvent::DevicePaused(_) | EiEvent::DeviceResumed(_)) => {
-                        if event.device().is_some_and(|changed| typing.as_ref().is_some_and(|(device, _)| device == changed)) {
-                            typing = None;
-                            let _ = st.tx.send(Event::KeyboardLayoutUnavailable);
+                        if let Some(changed) = event.device() {
+                            let removed = matches!(event, EiEvent::DeviceRemoved(_));
+                            typing.changed(changed, removed, |event| { let _ = st.tx.send(event); });
                         }
                         continue;
                     }
@@ -1011,6 +998,60 @@ fn nudge_pointer(warp: mpsc::UnboundedSender<Inject>) {
         tokio::time::sleep(Duration::from_millis(30)).await;
         let _ = warp.send(Inject::MoveBy { dx: -1, dy: 0 });
     });
+}
+
+/// Which keyboard's layout the daemon was last told about, and the layout
+/// built for each libei keyboard. A device's keymap is fixed for its life
+/// (libei sends it once, before the device is done), but mutter pauses and
+/// resumes the capture devices: the layout is announced again then, as it
+/// always was, without reading and compiling the keymap again.
+struct Typing<D> {
+    current: Option<D>,
+    built: Option<(D, crate::typing::KeyboardLayout)>,
+}
+
+impl<D> Default for Typing<D> {
+    fn default() -> Self { Self { current: None, built: None } }
+}
+
+impl<D: PartialEq + Clone> Typing<D> {
+    /// Before a key or modifiers event from `device`: announces its layout
+    /// if the daemon has none for it. Whether there is one.
+    fn keyboard(&mut self, device: &D, build: impl FnOnce(&D) -> Option<crate::typing::KeyboardLayout>,
+        mut send: impl FnMut(Event)) -> bool {
+        if self.current.as_ref() == Some(device) { return true; }
+        if let Some((built, layout)) = &self.built && built == device {
+            send(Event::KeyboardLayout(layout.clone()));
+            // A layout fresh from the keymap starts with no modifiers; the
+            // reused one has whatever the daemon last applied to it, so the
+            // daemon is told, in order, to start from none again.
+            send(Event::KeyboardModifiers { depressed: 0, latched: 0, locked: 0, group: 0 });
+            self.current = Some(device.clone());
+            return true;
+        }
+        match build(device) {
+            Some(layout) => {
+                send(Event::KeyboardLayout(layout.clone()));
+                self.built = Some((device.clone(), layout));
+                self.current = Some(device.clone());
+                true
+            }
+            None => {
+                self.current = None;
+                send(Event::KeyboardLayoutUnavailable);
+                false
+            }
+        }
+    }
+
+    /// `device` was paused, resumed or removed.
+    fn changed(&mut self, device: &D, removed: bool, mut send: impl FnMut(Event)) {
+        if self.current.as_ref() == Some(device) {
+            self.current = None;
+            send(Event::KeyboardLayoutUnavailable);
+        }
+        if removed && self.built.as_ref().is_some_and(|(built, _)| built == device) { self.built = None; }
+    }
 }
 
 fn portal_keyboard_layout(device: &reis::event::Device) -> Option<crate::typing::KeyboardLayout> {

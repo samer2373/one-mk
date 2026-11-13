@@ -167,6 +167,13 @@ impl Hid {
     /// known (or not), in order.
     pub(crate) fn send(&self, ev: Event) {
         match self.inner.try_borrow_mut() {
+            // Without device or local rules (the default) the matching hands
+            // each event straight back and nothing waits (`devcorr` tests), so
+            // `hook`, `arm` and `deliver` come down to this, without the Vec.
+            Ok(inner) if inner.capturing && !inner.corr.enabled() && inner.local.is_none() && inner.timer.is_none() => {
+                drop(inner);
+                let _ = self.tx.send(ev);
+            }
             Ok(mut inner) if inner.capturing => {
                 let mut out = Vec::new();
                 inner.corr.hook(ev, now_ms(), &mut out);

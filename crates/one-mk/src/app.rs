@@ -668,6 +668,13 @@ struct App {
     /// When each computer was paired, as far as this daemon saw it happen
     /// (see [`RECENTLY_PAIRED`]); only the lately paired are kept.
     paired_at: HashMap<Fingerprint, Instant>,
+    /// `devices.toml` as it was when `trust` was last read from it: a
+    /// request (the window asks for `status` up to four times a second)
+    /// reads it again only if it changed.
+    trust_file: crate::stamp::Cached<()>,
+    /// The profile names and the active one, for `status`, until
+    /// `profiles.toml` changes.
+    profiles_file: std::cell::RefCell<crate::stamp::Cached<(Vec<String>, Option<String>)>>,
     /// Computers this one doesn't trust that it refused lately: where from,
     /// how often, when last (see [`App::unrecognised_notes`]). Never trusted
     /// because of this; at most [`UNRECOGNISED_KEPT`] of them.
@@ -838,6 +845,8 @@ pub async fn serve(
         dial_logged: HashMap::new(),
         removed: HashMap::new(),
         paired_at: HashMap::new(),
+        trust_file: Default::default(),
+        profiles_file: Default::default(),
         unrecognised: HashMap::new(),
         services,
         announced: HashSet::new(),
@@ -1203,6 +1212,21 @@ struct Coalesced {
     next: Option<Event>,
 }
 
+/// Whether the keyboard layout is looked at again before `ev` is handled
+/// (with characters typing on; see `App::refresh_keyboard`): when capture
+/// starts, and (except on macOS, which reports changes itself) before a key
+/// press that may be typed as a character. On X11 each look grabs the
+/// server and downloads and compiles the whole keymap, so a key release, a
+/// modifier and Caps Lock skip it: they type nothing, and a layout switch
+/// or lock they make is seen at the next press, before it is translated.
+fn refreshes_layout(ev: &Event) -> bool {
+    match ev {
+        Event::Activated { .. } => true,
+        Event::Key { code, down: true, .. } => cfg!(not(target_os = "macos")) && !Mods::is_modifier(*code) && !matches!(code, 58 | 69 | 70),
+        _ => false,
+    }
+}
+
 /// Applies a motion and every motion already queued behind it, in order
 /// (the cursor clamps at edges, so deltas can't simply be summed). Stops at
 /// the first other event or when the pointer leaves.
@@ -1301,7 +1325,7 @@ impl App {
     // ------------------------------------------------------------ local input
 
     fn on_input(&mut self, ev: Event, events: &mut mpsc::UnboundedReceiver<Event>) {
-        if matches!(ev, Event::Activated { .. }) || cfg!(not(target_os = "macos")) && matches!(ev, Event::Key { .. }) { self.refresh_keyboard(); }
+        if refreshes_layout(&ev) { self.refresh_keyboard(); }
         match ev {
             Event::KeyboardModifiers { depressed, latched, locked, group } => {
                 #[cfg(target_os = "linux")]
@@ -2438,8 +2462,19 @@ impl App {
     /// once: its input link, and any clipboard or file connection it holds
     /// (they follow `Services::trusted`).
     fn reload_trust(&mut self) {
+        let stamp = crate::stamp::Stamp::of(&self.dir.join("devices.toml"));
         let Ok(new) = TrustStore::load(&self.dir) else { return };
         self.set_trust(new);
+        self.trust_file.remember(stamp);
+    }
+
+    /// [`App::reload_trust`], unless `devices.toml` is as it was when last
+    /// read (one `stat` instead of reading and parsing it, and telling
+    /// everything that follows the paired computers).
+    fn reload_trust_if_changed(&mut self) {
+        if !self.trust_file.unchanged(&self.dir.join("devices.toml")) {
+            self.reload_trust();
+        }
     }
 
     /// Changes `devices.toml` as [`TrustStore::update`] does: on what is on
@@ -2462,6 +2497,7 @@ impl App {
     }
 
     fn set_trust(&mut self, new: TrustStore) {
+        self.trust_file.invalidate();
         let now = Instant::now();
         self.paired_at.retain(|_, at| now.duration_since(*at) < RECENTLY_PAIRED);
         for fp in new.devices().iter().filter_map(|d| d.fingerprint()).filter(|fp| !self.trust.is_trusted(fp)) {
@@ -2766,7 +2802,7 @@ impl App {
 
     /// Answers a control request; true when it asked the daemon to stop.
     fn on_request(&mut self, req: Request, reply: tokio::sync::oneshot::Sender<String>) -> bool {
-        self.reload_trust();
+        self.reload_trust_if_changed();
         let stop = req == Request::Stop;
         let text = match req {
             Request::LocalRulesOff => {
@@ -2928,7 +2964,10 @@ impl App {
 
     fn status(&self) -> Status {
         let id = self.node.identity();
-        let profiles = Profiles::load(&self.dir).unwrap_or_default();
+        let (profile_names, profile) = self.profiles_file.borrow_mut().get(&crate::profiles::path(&self.dir), || {
+            let profiles = Profiles::load(&self.dir).unwrap_or_default();
+            (profiles.names(), profiles.active)
+        }).clone();
         let name_of = |fp: &Fingerprint| self.name_for(*fp);
         let peers = self.trust.devices().iter().filter_map(|d| {
             let live = self.peers.get(&d.fingerprint()?);
@@ -2998,8 +3037,8 @@ impl App {
                 })
             }),
             layout: Box::new(LayoutStatus {
-                profiles: profiles.names(),
-                profile: profiles.active,
+                profiles: profile_names,
+                profile,
                 warnings: self.conflicts.clone(),
             }),
             input: self.input_problems.values().cloned().collect(),
@@ -4219,6 +4258,19 @@ mod tests {
 
     /// Queued motion is applied in order through the cursor, which clamps
     /// at edges, and only the final position is sent.
+    #[test]
+    fn layout_is_looked_at_before_presses_that_may_type_only() {
+        let key = |code, down| Event::Key { code, down, device: None };
+        assert!(refreshes_layout(&Event::Activated { id: 1, side: Side::Left, pos: Pos { x: 0.0, y: 0.0 } }));
+        let letter = cfg!(not(target_os = "macos"));
+        assert_eq!(refreshes_layout(&key(30, true)), letter, "A pressed");
+        assert!(!refreshes_layout(&key(30, false)), "A released");
+        for modifier in [29, 42, 54, 56, 97, 100, 125, 126, 58, 69, 70] {
+            assert!(!refreshes_layout(&key(modifier, true)), "modifier or lock {modifier}");
+        }
+        assert!(!refreshes_layout(&Event::Motion { dx: 1.0, dy: 0.0, device: None }));
+    }
+
     #[test]
     fn coalesces_queued_motion() {
         let desk = Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]);

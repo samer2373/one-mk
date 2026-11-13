@@ -298,6 +298,49 @@ async fn keysym_hung_press_is_interrupted_by_input_cleanup() {
 }
 
 #[test]
+fn keyboard_layout_is_announced_per_pause_but_built_once_per_device() {
+    fn names(events: &[Event]) -> Vec<&'static str> {
+        events.iter().map(|event| match event {
+            Event::KeyboardLayout(_) => "layout",
+            Event::KeyboardLayoutUnavailable => "unavailable",
+            Event::KeyboardModifiers { depressed: 0, latched: 0, locked: 0, group: 0 } => "no modifiers",
+            other => panic!("unexpected {other:?}"),
+        }).collect()
+    }
+    let builds = std::cell::Cell::new(0);
+    let build = |device: &u32| { builds.set(builds.get() + 1); (*device != 9).then(|| crate::typing::KeyboardLayout::fake("de")) };
+    let mut typing = Typing::<u32>::default();
+    let mut sent = Vec::new();
+    assert!(typing.keyboard(&1, build, |event| sent.push(event)));
+    assert!(typing.keyboard(&1, build, |event| sent.push(event)), "the same device announces nothing new");
+    assert_eq!(names(&sent), ["layout"]);
+    sent.clear();
+    // Paused, then resumed: the daemon hears exactly what it always did,
+    // and the reused layout is told to start from no modifiers, like a new one.
+    typing.changed(&1, false, |event| sent.push(event));
+    typing.changed(&1, false, |event| sent.push(event));
+    assert!(typing.keyboard(&1, build, |event| sent.push(event)));
+    assert_eq!(names(&sent), ["unavailable", "layout", "no modifiers"]);
+    assert_eq!(builds.get(), 1, "the keymap is compiled once for the device");
+    sent.clear();
+    // Another device is built; a device without a layout is unavailable each time.
+    assert!(typing.keyboard(&2, build, |event| sent.push(event)));
+    assert!(!typing.keyboard(&9, build, |event| sent.push(event)));
+    assert!(!typing.keyboard(&9, build, |event| sent.push(event)));
+    assert_eq!(names(&sent), ["layout", "unavailable", "unavailable"]);
+    assert_eq!(builds.get(), 4);
+    sent.clear();
+    // A removed device that comes back (a new keymap) is built again; a
+    // change to a device that is not the current one says nothing.
+    assert!(typing.keyboard(&2, build, |event| sent.push(event)));
+    typing.changed(&7, true, |event| sent.push(event));
+    typing.changed(&2, true, |event| sent.push(event));
+    assert!(typing.keyboard(&2, build, |event| sent.push(event)));
+    assert_eq!(names(&sent), ["layout", "no modifiers", "unavailable", "layout"]);
+    assert_eq!(builds.get(), 5);
+}
+
+#[test]
 fn held_keys_and_buttons_are_let_go_last_first() {
     let mut h = Held::default();
     for m in [
