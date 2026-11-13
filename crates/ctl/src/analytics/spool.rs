@@ -16,7 +16,7 @@ pub(super) struct Stored {
     destination: String,
     created: u64,
     version: String,
-    event: Event,
+    pub(super) event: Event,
     origin: Origin,
     outcome: Outcome,
     error: ErrorCode,
@@ -29,6 +29,8 @@ pub(super) struct Stored {
     panic_aborts: bool,
     #[serde(default)]
     pub(super) verification: bool,
+    #[serde(default)]
+    pub(super) verification_run: Option<String>,
     attempts: u8,
     next: u64,
 }
@@ -41,15 +43,16 @@ impl Stored {
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         Self { uuid: format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..]),
             id: id.into(), destination: config.destination(), created: now(), version: env!("CARGO_PKG_VERSION").into(),
-            event, origin, outcome, error, exception, site: None, verification: false, panic_aborts: cfg!(panic = "abort"), site_manifest: matches!(event, Event::PanicObserved).then(crash::manifest), attempts: 0, next: 0 }
+            event, origin, outcome, error, exception, site: None, verification: false, verification_run: None, panic_aborts: cfg!(panic = "abort"), site_manifest: matches!(event, Event::PanicObserved).then(crash::manifest), attempts: 0, next: 0 }
     }
     pub(super) fn occurred_at(&mut self, stamp: u64) { self.created = stamp; }
     pub(super) fn permitted(&self, home: &Path, config: &Config) -> bool {
-        self.valid() && identity(home).as_deref() == Some(&self.id) && self.destination == config.destination()
+        self.valid() && identity_for(home, &config.environment).as_deref() == Some(&self.id) && self.destination == config.destination()
             && self.created <= now().saturating_add(60) && now().saturating_sub(self.created) <= TTL
     }
     fn valid(&self) -> bool {
         (!matches!(self.event, Event::PanicObserved) || (self.version == env!("CARGO_PKG_VERSION") && self.site_manifest.as_deref() == Some(crash::manifest().as_str())))
+            && self.verification_run.as_ref().is_none_or(|v| v.len() == 36 && v.bytes().enumerate().all(|(i, b)| if [8, 13, 18, 23].contains(&i) { b == b'-' } else { b.is_ascii_hexdigit() }))
             && self.id.len() == 32 && self.id.bytes().all(|b| b.is_ascii_hexdigit())
             && self.destination.len() == 64 && self.destination.bytes().all(|b| b.is_ascii_hexdigit())
             && self.uuid.len() == 36 && self.uuid.bytes().enumerate().all(|(i, b)| if [8, 13, 18, 23].contains(&i) { b == b'-' } else { b.is_ascii_hexdigit() })
@@ -59,10 +62,11 @@ impl Stored {
         let stamp = time::OffsetDateTime::from_unix_timestamp(self.created as i64)
             .ok().and_then(|t| t.format(&time::format_description::well_known::Rfc3339).ok());
         let mut properties = serde_json::json!({"$process_person_profile": false, "$geoip_disable": true,
-            "app": "onemk", "app_version": self.version, "os_family": std::env::consts::OS,
+            "app": "onemk", "app_id": APP_ID, "environment": config.environment, "schema_version": 2, "app_version": self.version, "os_family": std::env::consts::OS,
             "architecture": std::env::consts::ARCH, "origin": self.origin, "operation": self.event,
             "outcome": self.outcome, "error_code": self.error });
         if self.verification { properties["synthetic_verification"] = true.into(); }
+        if let Some(marker) = &self.verification_run { properties["verification_run_id"] = marker.clone().into(); }
         let event = if self.exception {
             let panic = matches!(self.event, Event::PanicObserved);
             let kind = if panic { "RustPanicObserved" } else { "OneMKOperationError" };
@@ -75,13 +79,13 @@ impl Stored {
                 properties["$exception_list"][0]["stacktrace"] = serde_json::json!({"type": "raw", "frames": [frame]});
             }
             // Group only by typed diagnostic fields, never payload/message/paths.
-            properties["$exception_fingerprint"] = format!("onemk:{:?}:{:?}:{}", self.event, self.site,
+            properties["$exception_fingerprint"] = format!("{APP_ID}:{}:{:?}:{:?}:{}", config.environment, self.event, self.site,
                 serde_json::to_string(&self.error).unwrap_or_default()).into();
             properties["$exception_level"] = (if panic && self.panic_aborts { "fatal" } else { "error" }).into();
             "$exception".to_owned()
         } else { serde_json::to_value(self.event).unwrap().as_str().unwrap().to_owned() };
         serde_json::to_vec(&serde_json::json!({"api_key": config.key, "uuid": self.uuid, "timestamp": stamp,
-            "distinct_id": self.id, "event": event, "properties": properties})).expect("typed analytics envelope")
+            "distinct_id": format!("{APP_ID}:{}:{}", config.environment, self.id), "event": event, "properties": properties})).expect("typed analytics envelope")
     }
 }
 
@@ -92,7 +96,7 @@ fn lock(home: &Path) -> std::io::Result<std::fs::File> {
     file.try_lock().map_err(std::io::Error::other)?;
     Ok(file)
 }
-fn read(home: &Path) -> Vec<Stored> {
+pub(super) fn read(home: &Path) -> Vec<Stored> {
     let Ok(file) = std::fs::File::open(home.join(FILE)) else { return vec![]; };
     let mut bytes = Vec::new();
     if file.take(MAX_BYTES + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > MAX_BYTES { return vec![]; }
@@ -166,6 +170,29 @@ mod tests {
     use super::*;
     fn config() -> Config { Config::new("phc_test_only", "https://eu.i.posthog.com").unwrap() }
     #[test]
+    fn all_payloads_and_fingerprints_are_app_and_environment_scoped() {
+        let home = tempfile::tempdir().unwrap();
+        set_enabled_for(home.path(), true, "production").unwrap();
+        let id = identity_for(home.path(), "production").unwrap();
+        let production = Config::scoped("phc_test", "https://eu.i.posthog.com", "production").unwrap();
+        let verification = Config::scoped("phc_test", "https://eu.i.posthog.com", "verification").unwrap();
+        for exception in [false, true] {
+            let item = Stored::new(&production, &id, Event::TransferFinished, Origin::Cli, Outcome::Failed, ErrorCode::Io, exception);
+            assert!(item.permitted(home.path(), &production));
+            assert!(!item.permitted(home.path(), &verification));
+            let value: serde_json::Value = serde_json::from_slice(&item.payload(&production)).unwrap();
+            assert_eq!(value["properties"]["app_id"], "one_mk");
+            assert_eq!(value["properties"]["app"], "onemk");
+            assert_eq!(value["properties"]["environment"], "production");
+            assert_eq!(value["distinct_id"], format!("one_mk:production:{id}"));
+            if exception {
+                let other = Stored::new(&verification, &id, Event::TransferFinished, Origin::Cli, Outcome::Failed, ErrorCode::Io, true);
+                let other: serde_json::Value = serde_json::from_slice(&other.payload(&verification)).unwrap();
+                assert_ne!(value["properties"]["$exception_fingerprint"], other["properties"]["$exception_fingerprint"]);
+            }
+        }
+    }
+    #[test]
     fn retry_identity_timestamp_and_error_contract() {
         let home = tempfile::tempdir().unwrap(); set_enabled(home.path(), true).unwrap();
         let config = config(); let id = identity(home.path()).unwrap();
@@ -202,12 +229,28 @@ mod tests {
         item.site_manifest = Some(crash::manifest()); item.version = "0.0.0".into();
         assert!(!item.permitted(home.path(), &config));
     }
+    // The production worker retries opportunistic lock contention on its next
+    // tick. A parallel test's process spawn can transiently retain a lock FD.
+    // Retry only that explicit WouldBlock case, never a transport/I/O failure.
+    fn pump_after_transient_lock(home: &Path, config: &Config) {
+        let until = Instant::now() + Duration::from_secs(1);
+        loop {
+            match pump(home, config) {
+                Ok(()) => return,
+                Err(error) if Instant::now() < until && error.get_ref().is_some_and(|inner|
+                    matches!(inner.downcast_ref::<std::fs::TryLockError>(), Some(std::fs::TryLockError::WouldBlock))) => {
+                    std::thread::sleep(Duration::from_millis(2));
+                },
+                Err(error) => panic!("pump failed: {error}"),
+            }
+        }
+    }
     #[test]
     fn retry_pump_preserves_identity_and_removes_only_after_ack() {
         use std::net::TcpListener;
         let home = tempfile::tempdir().unwrap(); set_enabled(home.path(), true).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let config = Config { key: "phc_test".into(), host: format!("http://{}", listener.local_addr().unwrap()) };
+        let config = Config { key: "phc_test".into(), host: format!("http://{}", listener.local_addr().unwrap()), environment: "development".into() };
         let server = std::thread::spawn(move || {
             for status in [503, 200] {
                 let (mut stream, _) = listener.accept().unwrap();
@@ -228,11 +271,11 @@ mod tests {
         let id = identity(home.path()).unwrap();
         append(home.path(), &config, &id, Event::AppOpened, Origin::Desktop, Outcome::Success, ErrorCode::None).unwrap();
         let before = read(home.path())[0].clone();
-        pump(home.path(), &config).unwrap();
+        pump_after_transient_lock(home.path(), &config);
         let mut after = read(home.path()); assert_eq!(after.len(), 1); assert_eq!(after[0].attempts, 1);
         assert_eq!(after[0].payload(&config), before.payload(&config)); assert!(after[0].next > now());
         after[0].next = 0; write(home.path(), &after).unwrap();
-        pump(home.path(), &config).unwrap(); assert!(read(home.path()).is_empty());
+        pump_after_transient_lock(home.path(), &config); assert!(read(home.path()).is_empty());
         server.join().unwrap();
     }
     #[test]

@@ -53,7 +53,7 @@ pub(super) fn arm(home: &Path, config: &Config, id: &str, origin: Origin) {
         }));
     });
 }
-fn recover(home: &Path, config: &Config) {
+pub(super) fn recover(home: &Path, config: &Config) {
     let dir = home.join(DIR);
     let Ok(entries) = std::fs::read_dir(&dir) else { return; };
     for entry in entries.take(64).flatten() {
@@ -90,8 +90,9 @@ fn recover(home: &Path, config: &Config) {
 }
 pub(super) fn manifest() -> String { SOURCE_MANIFEST.to_owned() }
 pub(super) fn frame(site: [u32; 3]) -> Option<serde_json::Value> {
+    if site[1] == 0 || site[1] > 1_000_000 || site[2] > 100_000 { return None; }
     let source = SOURCES.get(site[0].checked_sub(1)? as usize)?;
-    Some(serde_json::json!({"filename": source, "lineno": site[1], "colno": site[2], "in_app": true}))
+    Some(serde_json::json!({"platform": "custom", "lang": "rust", "filename": source, "lineno": site[1], "colno": site[2], "in_app": true}))
 }
 
 #[cfg(test)]
@@ -127,6 +128,9 @@ mod tests {
         let records: Vec<spool::Stored> = serde_json::from_slice(&spool).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(serde_json::from_slice::<serde_json::Value>(&records[0].payload(&config)).unwrap()["event"], "$exception");
+        let value: serde_json::Value = serde_json::from_slice(&records[0].payload(&config)).unwrap();
+        assert_eq!(value["properties"]["$exception_list"][0]["stacktrace"]["frames"][0]["platform"], "custom");
+        assert_eq!(value["properties"]["$exception_list"][0]["stacktrace"]["frames"][0]["filename"], "crates/ctl/src/analytics/crash.rs");
         recover(home.path(), &config);
         assert_eq!(std::fs::read(home.path().join("analytics-spool-v2.json")).unwrap(), spool);
         set_enabled(home.path(), false).unwrap();
@@ -137,6 +141,11 @@ mod tests {
     fn frame_mapping_never_exports_arbitrary_paths() {
         assert!(frame([0, 10, 2]).is_none());
         assert!(frame([999, 10, 2]).is_none());
+        assert!(frame([1, 0, 2]).is_none());
+        assert!(frame([1, 1_000_001, 2]).is_none());
+        assert!(frame([1, 10, 100_001]).is_none());
         assert_eq!(frame([1, 10, 2]).unwrap()["filename"], "crates/one-mk/src/main.rs");
+        assert_eq!(frame([1, 10, 2]).unwrap()["platform"], "custom");
+        assert_eq!(frame([1, 10, 2]).unwrap()["lang"], "rust");
     }
 }

@@ -15,7 +15,7 @@ pub(super) fn classify(status: u16, body: &[u8], retry_after: Option<u64>) -> De
         serde_json::Value::Null => false,
         _ => true,
     }) { return Delivery::QuotaLimited; }
-    if value.get("status").is_some_and(|v| v == 1 || v == "success") { Delivery::Accepted }
+    if value.get("status").is_some_and(|v| v == 1 || v == "Ok") { Delivery::Accepted }
     else { Delivery::Rejected }
 }
 
@@ -47,7 +47,9 @@ mod tests {
     #[test]
     fn acceptance_requires_valid_acknowledgment() {
         assert_eq!(classify(200, br#"{"status":1}"#, None), Delivery::Accepted);
-        assert_eq!(classify(200, br#"{"status":"success"}"#, None), Delivery::Accepted);
+        assert_eq!(classify(200, br#"{"status":"Ok"}"#, None), Delivery::Accepted);
+        assert_eq!(classify(200, br#"{"status":"success"}"#, None), Delivery::Rejected);
+        assert_eq!(classify(200, br#"{"status":"ok"}"#, None), Delivery::Rejected);
         assert_eq!(classify(200, b"broken", None), Delivery::Retry(5));
         assert_eq!(classify(200, br#"{"status":0}"#, None), Delivery::Rejected);
         assert_eq!(classify(200, br#"{"status":1,"quota_limited":["events"]}"#, None), Delivery::QuotaLimited);
@@ -62,7 +64,7 @@ mod tests {
         set_enabled(home.path(), true).unwrap();
         for (status, body, expected) in [(200, "{\"status\":1}", Delivery::Accepted), (429, "{}", Delivery::Retry(7)), (302, "{}", Delivery::Rejected)] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let config = Config { key: "phc_synthetic_only".into(), host: format!("http://{}", listener.local_addr().unwrap()) };
+            let config = Config { key: "phc_synthetic_only".into(), host: format!("http://{}", listener.local_addr().unwrap()), environment: "development".into() };
             let id = identity(home.path()).unwrap();
             let item = spool::Stored::new(&config, &id, Event::TransferFinished, Origin::Cli, Outcome::Failed, ErrorCode::Io, true);
             let expected_id = item.uuid.clone();

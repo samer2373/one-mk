@@ -33,25 +33,48 @@ static SESSION: OnceLock<Session> = OnceLock::new();
 fn process_revoked() -> bool { REVOKED.load(std::sync::atomic::Ordering::SeqCst) }
 static REVOKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-const CONSENT: &str = "analytics-consent-v2";
+const CONSENT: &str = "analytics-consent-v3";
+const APP_ID: &str = "one_mk";
+fn environment(value: &str) -> Option<&str> {
+    matches!(value, "development" | "staging" | "production" | "verification").then_some(value)
+}
+fn environment_from_env() -> Option<String> {
+    let value = match std::env::var("ONE_MK_POSTHOG_ENVIRONMENT") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotUnicode(_)) => return None,
+        Err(std::env::VarError::NotPresent) => match std::env::var("POSTHOG_ENVIRONMENT") {
+            Ok(value) => value,
+            Err(std::env::VarError::NotUnicode(_)) => return None,
+            Err(std::env::VarError::NotPresent) => if cfg!(debug_assertions) { "development" } else { "production" }.into(),
+        },
+    };
+    environment(&value).map(str::to_owned)
+}
+fn consent_path(home: &Path, scope: &str) -> PathBuf { home.join(format!("{CONSENT}-{scope}")) }
 const QUEUE: usize = 32;
 
 /// The consent file itself is the random installation ID. Missing, malformed or
 /// unreadable consent fails closed. Never generates an ID on a read.
-pub fn identity(home: &Path) -> Option<String> {
+pub fn identity(home: &Path) -> Option<String> { identity_for(home, &environment_from_env()?) }
+fn identity_for(home: &Path, scope: &str) -> Option<String> {
+    environment(scope)?;
     let mut data = String::new();
-    std::fs::File::open(home.join(CONSENT)).ok()?.take(33).read_to_string(&mut data).ok()?;
+    std::fs::File::open(consent_path(home, scope)).ok()?.take(33).read_to_string(&mut data).ok()?;
     (data.len() == 32 && data.bytes().all(|b| b.is_ascii_hexdigit())).then_some(data)
 }
 
-/// Explicit local consent; independent of environment/other product preferences.
+/// Explicit local consent per environment; configuration alone never grants it.
 /// Repeated enable preserves identity. Off/reset removes it; re-enable starts anew.
 pub fn set_enabled(home: &Path, enabled: bool) -> std::io::Result<()> {
+    let scope = environment_from_env().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid analytics environment"))?;
+    set_enabled_for(home, enabled, &scope)
+}
+fn set_enabled_for(home: &Path, enabled: bool, scope: &str) -> std::io::Result<()> {
     if !enabled && SESSION.get().is_some_and(|s| s.home == home) { REVOKED.store(true, std::sync::atomic::Ordering::SeqCst); crash::disarm(); }
     crate::private::create_dir_all(home)?;
     let lock = crate::private::lock_file(&home.join("analytics-consent.lock"))?;
     lock.lock()?;
-    let path = home.join(CONSENT);
+    let path = consent_path(home, scope);
     if !enabled {
         let removed = match std::fs::remove_file(path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -62,7 +85,7 @@ pub fn set_enabled(home: &Path, enabled: bool) -> std::io::Result<()> {
         crash::disarm();
         return removed.and(purged);
     }
-    if identity(home).is_some() { return Ok(()); }
+    if identity_for(home, scope).is_some() { return Ok(()); }
     crate::private::create_dir_all(home)?;
     // Replace incomplete consent fail-closed; no live consent is overwritten.
     if path.exists() { std::fs::remove_file(&path)?; }
@@ -103,9 +126,12 @@ pub fn error_code(error: &anyhow::Error) -> ErrorCode {
 }
 
 #[derive(Clone)]
-struct Config { key: String, host: String }
+struct Config { key: String, host: String, environment: String }
 impl Config {
-    fn new(key: &str, host: &str) -> Option<Self> {
+    #[cfg(test)]
+    fn new(key: &str, host: &str) -> Option<Self> { Self::scoped(key, host, "development") }
+    fn scoped(key: &str, host: &str, scope: &str) -> Option<Self> {
+        environment(scope)?;
         if !key.starts_with("phc_") || key.len() <= 4 || key.len() > 256
             || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') { return None; }
         let host = match host {
@@ -113,10 +139,10 @@ impl Config {
             "https://eu.i.posthog.com" => "eu.i.posthog.com",
             _ => return None,
         };
-        Some(Self { key: key.into(), host: format!("https://{host}") })
+        Some(Self { key: key.into(), host: format!("https://{host}"), environment: scope.into() })
     }
     fn from_env() -> Option<Self> {
-        Self::new(&std::env::var("ONE_MK_POSTHOG_KEY").ok()?, &std::env::var("ONE_MK_POSTHOG_HOST").ok()?)
+        Self::scoped(&std::env::var("ONE_MK_POSTHOG_KEY").ok()?, &std::env::var("ONE_MK_POSTHOG_HOST").ok()?, &environment_from_env()?)
     }
 }
 pub fn configured() -> bool { Config::from_env().is_some() }
@@ -211,31 +237,95 @@ fn now() -> u64 {
 }
 impl Config {
     fn destination(&self) -> String {
-        blake3::hash(format!("{}\n{}", self.host, self.key).as_bytes()).to_hex().to_string()
+        blake3::hash(format!("{APP_ID}\n{}\n{}\n{}", self.environment, self.host, self.key).as_bytes()).to_hex().to_string()
     }
 }
 
 /// Explicit synthetic verification only. Uses the real capture adapter, never
 /// a production home. Returned UUIDs must be queried in PostHog before claiming
 /// ingestion; HTTP acknowledgment alone cannot establish visibility/grouping.
-pub fn verify_synthetic(home: &Path) -> anyhow::Result<Vec<(String, String)>> {
+pub fn verify_synthetic(home: &Path) -> anyhow::Result<(String, Vec<(String, String)>)> {
     let config = Config::from_env().ok_or_else(|| anyhow::anyhow!("PostHog project key and region required"))?;
-    let id = identity(home).ok_or_else(|| anyhow::anyhow!("explicit test-home consent required"))?;
+    anyhow::ensure!(config.environment == "verification", "synthetic verification requires environment=verification");
     let mut receipts = Vec::new();
-    for exception in [false, true] {
-        let mut item = spool::Stored::new(&config, &id, Event::TransferFinished, Origin::Cli,
-            if exception { Outcome::Failed } else { Outcome::Success },
-            if exception { ErrorCode::Io } else { ErrorCode::None }, exception);
+    let first_id = identity(home).ok_or_else(|| anyhow::anyhow!("explicit test-home consent required"))?;
+    let marker = spool::Stored::new(&config, &first_id, Event::TransferFinished, Origin::Cli,
+        Outcome::Success, ErrorCode::None, false).uuid;
+    for event in [Event::AppOpened, Event::SettingsOpened] {
+        let mut item = spool::Stored::new(&config, &first_id, event, Origin::Desktop,
+            Outcome::Success, ErrorCode::None, false);
         item.verification = true;
+        item.verification_run = Some(marker.clone());
+        eprintln!("verification_run_id={marker} uuid={} event={event:?}", item.uuid);
         let result = transport::send(home, &config, &item);
+        anyhow::ensure!(result == transport::Delivery::Accepted, "synthetic activity transport failed: {result:?}");
         receipts.push((item.uuid, format!("{result:?}")));
     }
-    Ok(receipts)
+    for generation in 0..2 {
+        let id = identity(home).ok_or_else(|| anyhow::anyhow!("test consent required"))?;
+        if generation == 1 { anyhow::ensure!(id != first_id, "reset must rotate identity"); }
+        for (outcome, exception) in [(Outcome::Success, false), (Outcome::Failed, false), (Outcome::Failed, true)] {
+            let mut item = spool::Stored::new(&config, &id, Event::TransferFinished, Origin::Cli,
+                outcome, if matches!(outcome, Outcome::Failed) { ErrorCode::Io } else { ErrorCode::None }, exception);
+            item.verification = true;
+            item.verification_run = Some(marker.clone());
+            eprintln!("verification_run_id={marker} uuid={} exception={exception}", item.uuid);
+            let result = transport::send(home, &config, &item);
+            anyhow::ensure!(result == transport::Delivery::Accepted, "synthetic transport failed: {result:?}");
+            receipts.push((item.uuid.clone(), format!("{result:?}")));
+            if exception {
+                set_enabled(home, false)?;
+                anyhow::ensure!(transport::send(home, &config, &item) == transport::Delivery::Revoked, "withdrawal must block replay");
+                set_enabled(home, true)?;
+                anyhow::ensure!(transport::send(home, &config, &item) == transport::Delivery::Revoked, "reset must block old identity");
+            }
+        }
+    }
+    Ok((marker, receipts))
+}
+
+/// Operator-only recovery of one real panic from the isolated verifier child.
+/// No production home or raw panic payload may be passed to this helper.
+pub fn verify_synthetic_panic(home: &Path) -> anyhow::Result<(String, String)> {
+    let config = Config::from_env().ok_or_else(|| anyhow::anyhow!("PostHog configuration required"))?;
+    anyhow::ensure!(config.environment == "verification", "panic verification requires environment=verification");
+    crash::recover(home, &config);
+    let mut items = spool::read(home);
+    anyhow::ensure!(items.len() == 1, "exactly one isolated panic marker required");
+    let mut item = items.remove(0);
+    anyhow::ensure!(matches!(item.event, Event::PanicObserved), "panic marker required");
+    anyhow::ensure!(item.site.and_then(crash::frame).is_some(), "real owned source site required");
+    item.verification = true;
+    item.verification_run = Some(item.uuid.clone());
+    eprintln!("verification_run_id={} uuid={} real_panic_source_frame=true", item.uuid, item.uuid);
+    let result = transport::send(home, &config, &item);
+    anyhow::ensure!(result == transport::Delivery::Accepted, "panic verification transport failed: {result:?}");
+    spool::purge(home)?;
+    Ok((item.uuid, format!("{result:?}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn consent_and_configuration_are_environment_scoped() {
+        let home = tempfile::tempdir().unwrap();
+        set_enabled_for(home.path(), true, "production").unwrap();
+        let production = identity_for(home.path(), "production").unwrap();
+        assert!(identity_for(home.path(), "verification").is_none());
+        set_enabled_for(home.path(), true, "verification").unwrap();
+        let verification = identity_for(home.path(), "verification").unwrap();
+        assert_ne!(production, verification);
+        set_enabled_for(home.path(), false, "verification").unwrap();
+        assert!(identity_for(home.path(), "verification").is_none());
+        assert_eq!(identity_for(home.path(), "production"), Some(production));
+        for invalid in ["", "Production", "../production", "test", "other"] {
+            assert!(Config::scoped("phc_test", "https://eu.i.posthog.com", invalid).is_none());
+        }
+        let a = Config::scoped("phc_test", "https://eu.i.posthog.com", "production").unwrap();
+        let b = Config::scoped("phc_test", "https://eu.i.posthog.com", "verification").unwrap();
+        assert_ne!(a.destination(), b.destination());
+    }
     #[test]
     fn process_generation_never_adopts_later_consent_or_destination() {
         let home = tempfile::tempdir().unwrap();
@@ -269,7 +359,7 @@ mod tests {
         set_enabled(home.path(), true).unwrap(); let id = identity(home.path()).unwrap();
         set_enabled(home.path(), true).unwrap(); assert_eq!(identity(home.path()).unwrap(), id);
         set_enabled(home.path(), false).unwrap(); set_enabled(home.path(), true).unwrap(); assert_ne!(identity(home.path()).unwrap(), id);
-        crate::private::write(&home.path().join(CONSENT), "SECRET_SENTINEL").unwrap(); assert!(identity(home.path()).is_none());
+        crate::private::write(&consent_path(home.path(), "development"), "SECRET_SENTINEL").unwrap(); assert!(identity(home.path()).is_none());
     }
     #[test]
     fn success_does_not_hide_the_first_failure() {

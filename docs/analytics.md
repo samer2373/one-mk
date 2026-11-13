@@ -17,7 +17,7 @@ one-mk analytics reset
 
 `off` and `reset` both withdraw consent and delete the random ID. Enabling again
 creates a new one. Repeated `on` preserves the existing ID. Consent is local to
-this settings home, shared between its desktop window, daemon and CLI. Reads
+this settings home **and environment**, shared between its desktop window, daemon and CLI. Reads
 never generate an ID. A missing, incomplete or unreadable consent file fails
 closed. Saving a failed preference reports an error; check status and retry.
 
@@ -29,6 +29,7 @@ process, including the desktop app and OS login service:
 ```sh
 export ONE_MK_POSTHOG_KEY=phc_YOUR_PUBLIC_PROJECT_INGEST_KEY
 export ONE_MK_POSTHOG_HOST=https://eu.i.posthog.com
+export ONE_MK_POSTHOG_ENVIRONMENT=production
 ```
 
 Use your existing project's region: `https://eu.i.posthog.com` or
@@ -36,6 +37,37 @@ Use your existing project's region: `https://eu.i.posthog.com` or
 Use a public ingestion key, never a personal API key. No credentials are
 included. Missing/invalid configuration sends nothing, even with consent on.
 Restart existing processes after configuring their environment.
+
+For local development, copy `.env.posthog.example` to the git-ignored
+`.env.posthog.local` and supply the approved public capture key and regional
+host. A development-only local configuration was prepared during verification;
+it contains no synthetic-test flag and does not grant consent. Load it explicitly:
+
+```sh
+. ./.env.posthog.local
+cargo run --locked -p one-mk -- --home /path/to/your/chosen-home analytics status
+```
+
+Do not commit that file or pass the public key through command-line arguments.
+GUI apps/login services do not inherit terminal exports automatically; configuring
+those launch environments is separate and was not performed here.
+
+`ONE_MK_POSTHOG_ENVIRONMENT` (or generic `POSTHOG_ENVIRONMENT`) accepts only
+`development`, `staging`, `production`, or `verification`. Invalid values fail
+closed. Unset values default to `development` in debug builds and `production`
+in release builds. Set it explicitly for services. Consent v3 has separate files
+per environment; prior v1/v2 consent does not enable this schema. Changing the
+environment requires its own opt-in and restart. Destinations, retry records and
+panic markers bind to that environment as well as the project. Withdrawal
+clears retry/panic storage conservatively for the settings home.
+
+Every payload has `app_id=one_mk`, `environment`, and `schema_version=2`;
+legacy `app=onemk` is retained. The wire distinct ID is
+`one_mk:<environment>:<random installation ID>`, never an account or device ID.
+Error fingerprints include the same app/environment scope. A shared project
+provides filtered views, **not independent data-access boundaries**. Production
+queries must filter both `app_id=one_mk` and `environment=production`; exclude
+`synthetic_verification=true`/`verification_run_id` when constructing broader views.
 
 ## Data and coverage
 
@@ -106,8 +138,8 @@ still lose telemetry. This is not an exact audit log.
 Failed typed operations emit both their outcome and an official `$exception`
 event with a constant redacted description, category, operation, build/platform,
 mechanism and stable safe fingerprint. No error string, cause chain, stack dump,
-input or content is serialized. Diagnostic consent is v2: old v1 consent does
-not silently authorize this expanded scope.
+input or content is serialized. Diagnostic consent is v3 and environment-scoped: older consent does
+not silently authorize this expanded schema.
 
 The Rust panic hook writes a fixed-size marker to a pre-opened private file,
 with no payload inspection, heap formatting, blocking mutex or network. It can
@@ -140,19 +172,74 @@ Validate real UI layouts and end-to-end ingestion with an explicitly opted-in
 test installation and test PostHog project before release. Nothing in this PR
 creates a project, activates production, deploys or merges the change.
 
-## Synthetic end-to-end verification (not yet run)
+## Synthetic end-to-end verification
 
 After an explicitly approved project is selected, set its public ingest key and
-US/EU host in the environment, then run:
+US/EU host in the environment, set `ONE_MK_POSTHOG_ENVIRONMENT=verification`, then run:
 
 ```sh
 cargo run --locked -p one-mk-ctl --example verify_posthog -- --confirm-synthetic
 ```
 
-This creates a throwaway home/identity, uses the actual adapter for one synthetic
-success and one safe exception (both marked `synthetic_verification=true`),
-prints UUIDs/transport results, and clears local
-consent afterward. It never reads the user's normal oneMK home. Query both UUIDs
-and the grouped exception in that exact project and retain the query evidence.
-No live verification has been performed; this command is not run by unit tests.
-Symbol/source uploads require a separate explicit decision.
+This creates a throwaway home/identity and uses the actual adapter for eight
+synthetic events: app-open and settings-open, then a successful transfer outcome, failed transfer outcome and
+safe exception, repeated after consent withdrawal/re-enable rotates identity.
+All carry `synthetic_verification=true` and one fresh `verification_run_id` UUID.
+The harness verifies old events cannot send after withdrawal or under renewed
+consent. It prints UUIDs before attempting sends, checks transport acceptance,
+and clears local consent afterward. It never reads the normal oneMK home.
+Query all eight UUIDs and the grouped exception in the chosen project before
+claiming end-to-end visibility. Unit tests do not run this live command.
+
+On 2026-11-13, the approved shared EU project 347782 acknowledged all six events
+for run `31dcfba6-1b42-4008-aacc-eaf084fadec6`. The expanded activity harness also
+acknowledged eight events for run `6596d1c3-567b-421b-b048-b332e9c861b4`, including
+`app_opened` and `settings_opened`. Provider-side visibility/grouping is checked
+separately; acknowledgment alone is not proof. The initial run
+`7150dfc2-b087-40b1-af2c-5728cc09740e` revealed that the current endpoint returns
+`{"status":"Ok"}`: an event was ingested although the old local parser rejected
+its acknowledgment. The parser now accepts exact `"Ok"` or numeric `1`, with
+regression tests; no old event was blindly resent.
+
+This verifies synthetic operation/error transport and reset behavior, not real
+peer transfers, GUI journeys, panic upload, all crash types or symbolication.
+Symbol/source uploads require a separate explicit decision. Production service
+configuration and opt-in remain separate from this temporary verification run.
+
+Local validation for the shared-project patch: 117 ctl library tests, 18 focused
+analytics contracts, CLI analytics wiring tests, affected all-target Clippy,
+notices check, and a real disposable-home CLI status/on/repeated-on/environment
+switch/reset/regrant/off journey passed on macOS arm64. This does not replace
+GUI/peer-transfer/device validation. CI is intentionally not re-triggered by
+this patch's skip-CI commit while the account is at its Actions storage limit;
+prior-head multi-platform CI results are not represented as this head's results.
+
+### Explicit isolated panic/source-frame verification
+
+`--confirm-synthetic-panic` runs a separate disposable child process, deliberately
+aborts that child, recovers its existing panic marker and sends one tagged
+exception using the real adapter. It never aborts the running desktop app or
+reads its home. Child environment is cleared except fixed verification inputs;
+no raw panic text is transmitted. Disable core dumps before this optional test:
+
+```sh
+ulimit -c 0
+export ONE_MK_POSTHOG_ENVIRONMENT=verification
+cargo run --locked -p one-mk-ctl --example verify_posthog -- --confirm-synthetic-panic
+```
+
+On macOS arm64, marker/event `4ab11d52-0178-422a-bb26-062c225bb980` was
+acknowledged after confirmed child SIGABRT and exact-build marker recovery. Its
+initial single owned-source frame used `platform=custom` but provider processing
+rejected it for missing `lang`; its raw event persisted without a grouped issue.
+The corrected frame includes truthful `lang=rust`. This is a safe panic location,
+not a full native backtrace or symbol upload. Provider processing/grouping must
+be checked separately. The earlier no-frame handled-error probe could not
+validate this raw-frame schema. Reference: [manual exception capture schema](https://posthog.com/docs/error-tracking/installation/manual).
+
+The corrected real panic probe `4029d04b-f614-4617-8c36-63f878863eb1` was
+acknowledged with `platform=custom` and `lang=rust`. The initial missing-language
+probe remains negative evidence, not a successful issue. During parallel local
+tests the retry-pump contract encountered one transient `WouldBlock`; the test
+now follows the worker's bounded retry behavior for that specific lock result,
+without swallowing transport or other I/O errors.
