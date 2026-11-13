@@ -8,7 +8,30 @@ use serde::{Serialize, Deserialize};
 mod transport;
 mod spool;
 mod crash;
-pub use crash::initialize;
+/// Pin consent before any work starts. Enabling/resetting requires a new process;
+/// old in-flight operations can never acquire a later consent generation.
+pub fn initialize(home: &Path, origin: Origin) {
+    let session = SESSION.get_or_init(|| Session::snapshot(home));
+    if let Some((config, id)) = session.current(home) { crash::initialize(home, &config, &id, origin); }
+}
+
+struct Session { home: PathBuf, identity: Option<String>, config: Option<Config> }
+impl Session {
+    fn snapshot(home: &Path) -> Self { Self { home: home.into(), identity: identity(home), config: Config::from_env() } }
+    fn current(&self, home: &Path) -> Option<(Config, String)> {
+        self.for_generation(home, Config::from_env().as_ref(), process_revoked())
+    }
+    fn for_generation(&self, home: &Path, current: Option<&Config>, revoked: bool) -> Option<(Config, String)> {
+        if revoked || home != self.home { return None; }
+        let id = self.identity.as_ref()?;
+        let config = self.config.as_ref()?;
+        if identity(home).as_ref() != Some(id) || current?.destination() != config.destination() { return None; }
+        Some((config.clone(), id.clone()))
+    }
+}
+static SESSION: OnceLock<Session> = OnceLock::new();
+fn process_revoked() -> bool { REVOKED.load(std::sync::atomic::Ordering::SeqCst) }
+static REVOKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 const CONSENT: &str = "analytics-consent-v2";
 const QUEUE: usize = 32;
@@ -24,6 +47,7 @@ pub fn identity(home: &Path) -> Option<String> {
 /// Explicit local consent; independent of environment/other product preferences.
 /// Repeated enable preserves identity. Off/reset removes it; re-enable starts anew.
 pub fn set_enabled(home: &Path, enabled: bool) -> std::io::Result<()> {
+    if !enabled && SESSION.get().is_some_and(|s| s.home == home) { REVOKED.store(true, std::sync::atomic::Ordering::SeqCst); crash::disarm(); }
     crate::private::create_dir_all(home)?;
     let lock = crate::private::lock_file(&home.join("analytics-consent.lock"))?;
     lock.lock()?;
@@ -102,7 +126,7 @@ struct Pending {
     origin: Origin, outcome: Outcome, error: ErrorCode,
 }
 impl Pending {
-    fn permitted(&self) -> bool { identity(&self.home).as_deref() == Some(&self.id) }
+    fn permitted(&self) -> bool { !process_revoked() && identity(&self.home).as_deref() == Some(&self.id) }
 }
 
 /// Protect the daemon from reconnection storms: 60 events/minute/process,
@@ -160,7 +184,7 @@ fn enqueue(pending: Pending) {
 }
 
 pub fn record(home: &Path, event: Event, origin: Origin, outcome: Outcome, error: ErrorCode) {
-    let (Some(config), Some(id)) = (Config::from_env(), identity(home)) else { return; };
+    let Some((config, id)) = SESSION.get().and_then(|session| session.current(home)) else { return; };
     crash::arm(home, &config, &id, origin);
     enqueue(Pending { home: home.into(), id, config, event, origin, outcome, error });
 }
@@ -212,6 +236,24 @@ pub fn verify_synthetic(home: &Path) -> anyhow::Result<Vec<(String, String)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn process_generation_never_adopts_later_consent_or_destination() {
+        let home = tempfile::tempdir().unwrap();
+        let config = Config::new("phc_test", "https://eu.i.posthog.com").unwrap();
+        let disabled = Session { home: home.path().into(), identity: None, config: Some(config.clone()) };
+        set_enabled(home.path(), true).unwrap();
+        assert!(disabled.for_generation(home.path(), Some(&config), false).is_none());
+        let active = Session { home: home.path().into(), identity: identity(home.path()), config: Some(config.clone()) };
+        assert!(active.for_generation(home.path(), Some(&config), false).is_some());
+        // A failed local withdrawal is fail-closed even if the file survived.
+        assert!(active.for_generation(home.path(), Some(&config), true).is_none());
+        let other = Config::new("phc_other", "https://eu.i.posthog.com").unwrap();
+        assert!(active.for_generation(home.path(), Some(&other), false).is_none());
+        set_enabled(home.path(), false).unwrap();
+        assert!(active.for_generation(home.path(), Some(&config), false).is_none());
+        set_enabled(home.path(), true).unwrap();
+        assert!(active.for_generation(home.path(), Some(&config), false).is_none());
+    }
     #[test]
     fn configuration_is_explicit_and_cloud_only() {
         for host in ["", "http://eu.i.posthog.com", "https://other.example", "https://eu.i.posthog.com/path"] { assert!(Config::new("phc_test", host).is_none()); }

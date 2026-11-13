@@ -11,10 +11,9 @@ static FILE: Mutex<Option<Armed>> = Mutex::new(None);
 static HOOK: OnceLock<()> = OnceLock::new();
 static WRITING: AtomicBool = AtomicBool::new(false);
 
-pub fn initialize(home: &Path, origin: Origin) {
-    let (Some(config), Some(id)) = (Config::from_env(), identity(home)) else { return; };
-    recover(home, &config);
-    arm(home, &config, &id, origin);
+pub(super) fn initialize(home: &Path, config: &Config, id: &str, origin: Origin) {
+    recover(home, config);
+    arm(home, config, id, origin);
 }
 pub(super) fn disarm() { if let Ok(mut file) = FILE.try_lock() { *file = None; } }
 pub(super) fn purge(home: &Path) -> std::io::Result<()> {
@@ -104,7 +103,7 @@ mod tests {
         let Ok(home) = std::env::var(CHILD) else { return; };
         // A synthetic child only: preserve abort semantics with no user app involved.
         std::panic::set_hook(Box::new(|_| std::process::abort()));
-        initialize(Path::new(&home), Origin::Cli);
+        super::super::initialize(Path::new(&home), Origin::Cli);
         panic!("SECRET_SENTINEL_private_url_and_content");
     }
     #[test]

@@ -28,10 +28,10 @@ pub(super) fn send(home: &Path, config: &Config, item: &spool::Stored) -> Delive
 }
 
 fn send_with(agent: &ureq::Agent, home: &Path, config: &Config, item: &spool::Stored) -> Delivery {
-    if !item.permitted(home, config) { return Delivery::Revoked; }
+    if process_revoked() || !item.permitted(home, config) { return Delivery::Revoked; }
     let body = item.payload(config);
     // Last application-level consent check. In-flight HTTP cannot be recalled.
-    if !item.permitted(home, config) { return Delivery::Revoked; }
+    if process_revoked() || !item.permitted(home, config) { return Delivery::Revoked; }
     let response = agent.post(format!("{}/i/v0/e/", config.host))
         .header("Content-Type", "application/json").send(body.as_slice());
     let Ok(mut response) = response else { return Delivery::Retry(5); };

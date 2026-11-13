@@ -21,6 +21,8 @@ this settings home, shared between its desktop window, daemon and CLI. Reads
 never generate an ID. A missing, incomplete or unreadable consent file fails
 closed. Saving a failed preference reports an error; check status and retry.
 
+Each process pins its consent generation before starting work, including an absent consent. After enabling or resetting, restart the desktop app and daemon to begin collection; subsequent CLI invocations use the new generation. Withdrawal immediately prevents new sends (an already in-flight HTTP request cannot be recalled). Existing processes never adopt later consent, so operations begun before consent or before a reset cannot be reported under the new identity. This deliberately favors privacy over seamless opt-in. A failed local withdrawal also disables collection in that process.
+
 An app operator must separately provide these variables to each launched
 process, including the desktop app and OS login service:
 

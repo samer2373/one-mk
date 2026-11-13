@@ -11,5 +11,6 @@ pub fn command(home: &std::path::Path, action: &str) -> anyhow::Result<()> {
     println!("Anonymous analytics: {}. PostHog configuration: {}.",
         if identity(home).is_some() { "on" } else { "off" },
         if configured() { "available" } else { "not configured; no events sent" });
+    println!("After enabling/resetting, restart the desktop app and daemon. Already-running operations never adopt new consent.");
     Ok(())
 }
