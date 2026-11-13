@@ -434,9 +434,16 @@ fn detect_availability() -> Result<(), &'static str> {
             wayland::available()?;
         }
         else if std::env::var_os("DISPLAY").is_none() { return Err("Video wallpapers need an X11 desktop."); }
-        if unsafe { libloading::Library::new("libgstreamer-1.0.so.0") }.is_err() {
-            return Err("Install GStreamer to play video wallpapers.");
-        }
+    }
+    media_available()
+}
+
+/// Whether this computer has what decodes video (GStreamer on Linux), apart
+/// from whether its desktop can show it.
+pub fn media_available() -> Result<(), &'static str> {
+    #[cfg(target_os = "linux")]
+    if unsafe { libloading::Library::new("libgstreamer-1.0.so.0") }.is_err() {
+        return Err("Install GStreamer to play video wallpapers.");
     }
     Ok(())
 }

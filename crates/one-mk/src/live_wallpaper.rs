@@ -62,8 +62,11 @@ struct State {
     still_fallback: bool,
     picture_mode: one_mk_wallpaper::picture::Mode,
     extension_check: Option<std::time::Instant>,
-    extension_checking: bool,
+    /// A background check of what this desktop can show is running.
+    checking: bool,
     extension_changing: bool,
+    /// When watching GNOME for changes was last started.
+    watch_started: Option<std::time::Instant>,
 }
 
 impl State {
@@ -136,6 +139,208 @@ fn check_source(path: &Path) -> Result<()> {
 /// first frame is shown meanwhile (GNOME before its extension is set up).
 fn with_still_note(error: anyhow::Error, still: bool) -> anyhow::Error {
     if still { anyhow::anyhow!("{error} {}", one_mk_wallpaper::GNOME_STILL_SHOWN) } else { error }
+}
+
+/// What this computer can show: video (its desktop and its decoder), and a
+/// picture through oneMK (its desktop).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Can { video: Result<(), &'static str>, picture: bool }
+
+/// The last answer on a Wayland desktop, where asking costs a compositor
+/// round trip, or on GNOME several D-Bus calls. The window asks for the
+/// status several times a second, so the status only ever reads this; it is
+/// asked again in the background (on GNOME on one kept connection) when
+/// GNOME says something changed, and at most once a minute while the window
+/// keeps asking. Off Wayland asking is free and nothing is kept here.
+struct Kept { can: Option<Can>, at: Option<std::time::Instant>, epoch: u64, dirty: bool, watching: bool }
+static KEPT: Mutex<Kept> = Mutex::new(Kept { can: None, at: None, epoch: 0, dirty: false, watching: false });
+
+/// How old a kept answer may get while nothing watches for changes.
+const RECHECK: Duration = Duration::from_secs(60);
+
+fn kept() -> std::sync::MutexGuard<'static, Kept> { KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner) }
+fn wayland() -> bool { cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some() }
+fn gnome() -> bool { cfg!(all(unix, not(target_os = "macos"))) && one_mk_wallpaper::gnome_wayland() }
+
+/// Asked directly. On GNOME Wayland this would use zbus' blocking API, whose
+/// runtime keeps one idle thread per CPU for the life of the service: GNOME
+/// goes through [`check_gnome`] instead.
+fn ask_desktop() -> Can { Can { video: one_mk_wallpaper::availability(), picture: one_mk_wallpaper::picture::available() } }
+
+/// Something changed (or may have): the kept answer is asked again before
+/// it is trusted.
+fn invalidate() { let mut kept = kept(); kept.epoch += 1; kept.dirty = true; }
+
+/// Keeps `can`, asked when the epoch was `epoch`: an answer asked before a
+/// change is kept, yet still counts as out of date.
+fn keep(can: Can, epoch: u64) {
+    let mut kept = kept();
+    kept.can = Some(can);
+    kept.at = Some(std::time::Instant::now());
+    if kept.epoch == epoch { kept.dirty = false; }
+}
+
+/// The kept answer while it can be trusted: nothing changed since, and
+/// GNOME is watched for changes or it is recent.
+fn current() -> Option<Can> {
+    let kept = kept();
+    if kept.dirty { return None; }
+    kept.can.filter(|_| kept.watching || kept.at.is_some_and(|at| at.elapsed() < RECHECK))
+}
+
+/// For a step that may wait (a start, a still): the kept answer while it
+/// can be trusted, otherwise asked now. On GNOME that is a short thread with
+/// a small runtime and connection of its own, which all end with the check.
+fn can_now() -> Can {
+    if !wayland() { return ask_desktop(); }
+    if let Some(can) = current() { return can; }
+    let epoch = kept().epoch;
+    let can = if gnome() { check_gnome_now() } else { ask_desktop() };
+    keep(can, epoch);
+    can
+}
+
+/// For a step on the service's runtime: as [`can_now`], without blocking it.
+/// `fresh` asks again even when the kept answer could be trusted.
+async fn can_checked(fresh: bool) -> Can {
+    if !wayland() { return ask_desktop(); }
+    if !fresh && let Some(can) = current() { return can; }
+    let epoch = kept().epoch;
+    let can = check().await;
+    keep(can, epoch);
+    can
+}
+
+const GNOME_UNAVAILABLE: Can = Can { video: Err(one_mk_wallpaper::GNOME_PLAYBACK_UNAVAILABLE), picture: true };
+
+async fn check() -> Can {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if gnome() {
+        let ask = async {
+            let connection = crate::wallpaper::extension::shell_bus().await?;
+            check_gnome(&connection).await
+        };
+        return match tokio::time::timeout(Duration::from_secs(4), ask).await {
+            Ok(Ok(can)) => can,
+            _ => { crate::wallpaper::extension::forget_shell_bus(); GNOME_UNAVAILABLE }
+        };
+    }
+    tokio::task::spawn_blocking(ask_desktop).await.unwrap_or(Can { video: Err("Could not check this desktop for video wallpapers."), picture: false })
+}
+
+/// GNOME's answer on `connection`. An error means the connection itself
+/// failed (not that GNOME said no), so a kept connection is then dropped.
+#[cfg(all(unix, not(target_os = "macos")))]
+async fn check_gnome(connection: &zbus::Connection) -> Result<Can> {
+    match one_mk_wallpaper::wayland::gnome_check(connection).await {
+        Ok(()) => Ok(Can { video: one_mk_wallpaper::media_available(), picture: true }),
+        Err(error) if gnome_answered(&error) => Ok(GNOME_UNAVAILABLE),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether `error` is an answer from the bus (the bridge is not there, is
+/// not GNOME's, or is a GNOME this extension does not support) rather than
+/// a failed connection.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn gnome_answered(error: &anyhow::Error) -> bool {
+    match error.downcast_ref::<zbus::Error>() {
+        Some(error) => matches!(error, zbus::Error::MethodError(..) | zbus::Error::FDO(_)),
+        None => true,
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn check_gnome_now() -> Can {
+    std::thread::spawn(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
+        runtime.block_on(tokio::time::timeout(Duration::from_secs(4), async {
+            let connection = crate::wallpaper::extension::own_session_bus().await.ok()?;
+            let can = check_gnome(&connection).await.ok();
+            let _ = connection.close().await;
+            can
+        })).ok().flatten()
+    }).join().ok().flatten().unwrap_or(GNOME_UNAVAILABLE)
+}
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+fn check_gnome_now() -> Can { ask_desktop() }
+
+/// Asks again in the background when the kept answers (what this desktop can
+/// show, and on GNOME how far the extension is set up) are out of date.
+/// Never waits: the status is answered from what is kept meanwhile.
+fn refresh(shared: &Arc<Mutex<State>>) {
+    if !wayland() { return; }
+    let Ok(handle) = tokio::runtime::Handle::try_current() else { return };
+    let gnome = gnome();
+    let mut state = shared.lock().unwrap();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if gnome { watch(&mut state, shared, &handle); }
+    let stale_can = { let kept = kept(); kept.dirty || kept.at.is_none_or(|at| at.elapsed() >= RECHECK) };
+    let stale_setup = gnome && !state.extension_changing && state.extension_check.is_none_or(|at| at.elapsed() >= RECHECK);
+    if state.checking || !(stale_can || stale_setup) { return; }
+    state.checking = true;
+    let shared = Arc::downgrade(shared);
+    handle.spawn(async move {
+        if stale_can { let epoch = kept().epoch; keep(check().await, epoch); }
+        let setup = if stale_setup {
+            Some(match tokio::time::timeout(Duration::from_secs(4), crate::wallpaper::extension::setup()).await {
+                Ok(Ok(setup)) => setup,
+                _ => one_mk_wallpaper::GnomeSetup { stage: one_mk_wallpaper::GnomeStage::Unavailable,
+                    message: "Could not check the GNOME extension. Open oneMK in your GNOME Wayland session and try again.".into(), can_install: false, can_enable: false },
+            })
+        } else { None };
+        let Some(shared) = shared.upgrade() else { return };
+        let again = {
+            let mut state = shared.lock().unwrap();
+            state.checking = false;
+            if let Some(setup) = setup {
+                state.extension_check = Some(std::time::Instant::now());
+                if !state.extension_changing { state.status.gnome = Some(setup); }
+            }
+            // Something changed while this check ran: asked once more.
+            kept().dirty || (gnome && state.extension_check.is_none() && !state.extension_changing)
+        };
+        if again { refresh(&shared); }
+    });
+}
+
+/// Watches GNOME for what changes the answers: the wallpaper bridge coming
+/// or going (the extension switched on or off), and the extension's state.
+/// It waits on the kept connection and costs nothing until GNOME says
+/// something. Started once (again at most once a minute if it ends).
+#[cfg(all(unix, not(target_os = "macos")))]
+fn watch(state: &mut State, shared: &Arc<Mutex<State>>, handle: &tokio::runtime::Handle) {
+    if kept().watching || state.watch_started.is_some_and(|at| at.elapsed() < RECHECK) { return; }
+    state.watch_started = Some(std::time::Instant::now());
+    let shared = Arc::downgrade(shared);
+    handle.spawn(async move {
+        use futures_util::StreamExt;
+        let result = async {
+            let connection = crate::wallpaper::extension::shell_bus().await?;
+            let owner = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).sender("org.freedesktop.DBus")?
+                .interface("org.freedesktop.DBus")?.member("NameOwnerChanged")?.add_arg(one_mk_wallpaper::wayland::GNOME_NAME)?.build();
+            let extension = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).interface("org.gnome.Shell.Extensions")?
+                .member("ExtensionStateChanged")?.add_arg(crate::wallpaper::extension::UUID)?.build();
+            let mut owners = zbus::MessageStream::for_match_rule(owner, &connection, Some(8)).await?;
+            let mut changes = zbus::MessageStream::for_match_rule(extension, &connection, Some(8)).await?;
+            kept().watching = true;
+            // Whatever changed before the watch began.
+            invalidate();
+            loop {
+                let event = tokio::select! { event = owners.next() => event, event = changes.next() => event };
+                if event.is_none() { break; }
+                invalidate();
+                let Some(shared) = shared.upgrade() else { break };
+                shared.lock().unwrap().extension_check = None;
+                refresh(&shared);
+            }
+            anyhow::Ok(())
+        }.await;
+        if let Err(error) = result { tracing::debug!("wallpaper: watching GNOME stopped: {error:#}"); }
+        kept().watching = false;
+        invalidate();
+        crate::wallpaper::extension::forget_shell_bus();
+    });
 }
 
 pub(crate) fn digest(path: &Path) -> Result<String> {
@@ -259,7 +464,7 @@ fn picture_asset(dir: &Path, plan: &Plan, computer: &str) -> Result<String> {
 /// selected, or pictures can't be set either (GNOME before its extension).
 fn can_show_still(plan: &Plan, computer: &str) -> bool {
     !plan.picture && plan.computers.iter().any(|id| id == computer)
-        && one_mk_wallpaper::availability().is_err() && one_mk_wallpaper::picture::available()
+        && { let can = can_now(); can.video.is_err() && can.picture }
 }
 
 /// Cuts and sets the video's first frame for this computer's screens. Returns
@@ -381,6 +586,8 @@ impl Runtime {
             tokio::spawn(async move { if let Err(error) = runtime.commit(&dir, plan, computer, coordinator, generation).await { runtime.state.lock().unwrap().status.message = error.to_string(); } });
         }
         self.listen();
+        // A wallpaper is in use: GNOME is watched for changes from now on.
+        refresh(&self.state);
     }
 
     pub fn needs_reconcile(&self) -> bool { let state = self.state.lock().unwrap(); state.coordinator.is_none() && (state.status.plan.is_some() || state.authority_off) }
@@ -440,7 +647,7 @@ impl Runtime {
     }
 
     pub fn status(&self) -> one_mk_wallpaper::Status {
-        self.refresh_extension();
+        refresh(&self.state);
         let mut state = self.state.lock().unwrap();
         if let Some(child) = &mut state.player && let Ok(Some(code)) = child.try_wait() {
             state.player = None;
@@ -464,36 +671,16 @@ impl Runtime {
             let done = progress.done.load(Relaxed);
             status.message = format!("Copying to {name}… {}%", done.saturating_mul(100).checked_div(total).unwrap_or(0));
         }
-        if let Err(reason) = one_mk_wallpaper::availability() && !status.plan.as_ref().is_some_and(|plan| plan.picture) && !one_mk_wallpaper::picture::available() {
+        // On Wayland, what was last found (asked again in the background);
+        // before the first answer, nothing is said against it.
+        let can = if wayland() { kept().can } else { Some(ask_desktop()) };
+        if let Some(Can { video: Err(reason), picture: false }) = can && !status.plan.as_ref().is_some_and(|plan| plan.picture) {
             status.available = false;
             status.message = reason.into();
         } else { status.available = true; }
         let sharing = status.plan.as_ref().is_some_and(|plan| plan.computers.iter().any(|computer| computer != &state.computer));
         status.experimental = one_mk_wallpaper::experimental_note(sharing);
         status
-    }
-
-    fn refresh_extension(&self) {
-        if !cfg!(target_os = "linux") || !one_mk_wallpaper::gnome_wayland() { return; }
-        let Ok(handle) = tokio::runtime::Handle::try_current() else { return };
-        let mut state = self.state.lock().unwrap();
-        if state.extension_checking || state.extension_changing || state.extension_check.is_some_and(|last| last.elapsed() < Duration::from_secs(2)) { return; }
-        state.extension_checking = true;
-        let shared = Arc::downgrade(&self.state);
-        handle.spawn(async move {
-            let setup = tokio::time::timeout(Duration::from_secs(4), crate::wallpaper::extension::setup()).await;
-            let setup = match setup {
-                Ok(Ok(setup)) => setup,
-                _ => one_mk_wallpaper::GnomeSetup { stage: one_mk_wallpaper::GnomeStage::Unavailable,
-                    message: "Could not check the GNOME extension. Open oneMK in your GNOME Wayland session and try again.".into(), can_install: false, can_enable: false },
-            };
-            if let Some(shared) = shared.upgrade() {
-                let mut state = shared.lock().unwrap();
-                state.extension_checking = false;
-                state.extension_check = Some(std::time::Instant::now());
-                if !state.extension_changing { state.status.gnome = Some(setup); }
-            }
-        });
     }
 
     pub fn shutdown(&self) {
@@ -556,7 +743,7 @@ impl Runtime {
             } else if let Some(plan) = state.status.plan.as_ref() { state.status.message = plan.playing_message(); }
             return Ok(());
         }
-        if !plan.picture { one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?; }
+        if !plan.picture { can_now().video.map_err(anyhow::Error::msg)?; }
         let config = PlayerConfig { plan: plan.clone(), computer: state.computer.clone(), path: cache_path(&cache(dir), if plan.picture { plan.asset_hash.as_ref().unwrap_or(&plan.hash) } else { &plan.hash })?, clock_offset_ms: state.offset };
         let config_path = cache(dir).join("player.json");
         let _ = std::fs::remove_file(cache(dir).join("playback.txt"));
@@ -757,9 +944,10 @@ impl Runtime {
             let picture = one_mk_wallpaper::picture::is_picture(&path);
             // Refuse unsupported video before preparation can launch a decoder,
             // and a picture on a desktop whose wallpaper oneMK can't set.
-            if !picture { one_mk_wallpaper::availability().map_err(anyhow::Error::msg)?; }
+            let can = can_checked(!picture).await;
+            if !picture { can.video.map_err(anyhow::Error::msg)?; }
             #[cfg(target_os = "linux")]
-            ensure!(!picture || one_mk_wallpaper::picture::available(), "{}", one_mk_wallpaper::picture::UNSUPPORTED_DESKTOP);
+            ensure!(!picture || can.picture, "{}", one_mk_wallpaper::picture::UNSUPPORTED_DESKTOP);
             let dir_owned = dir.to_owned();
             let title = path.file_name().context("Choose a video file")?.to_string_lossy().chars().take(64).collect::<String>();
             let mut canvas = one_mk_ctl::wallpaper::canvas(&status);

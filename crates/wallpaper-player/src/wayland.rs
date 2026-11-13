@@ -46,6 +46,19 @@ pub fn gnome_connection() -> anyhow::Result<zbus::blocking::Connection> {
     Ok(connection)
 }
 
+/// [`gnome_connection`]'s check, asked on a connection the caller already
+/// has and drives (the service's own runtime): no connection of its own, and
+/// no blocking runtime (zbus' blocking API starts one worker per CPU).
+pub async fn gnome_check(connection: &zbus::Connection) -> anyhow::Result<()> {
+    let bus = zbus::fdo::DBusProxy::new(connection).await?;
+    anyhow::ensure!(bus.get_name_owner(GNOME_NAME.try_into()?).await? == bus.get_name_owner("org.gnome.Shell".try_into()?).await?, "The wallpaper bridge does not belong to GNOME Shell");
+    let proxy: zbus::Proxy<'_> = zbus::proxy::Builder::new(connection).destination(GNOME_NAME)?.path(GNOME_PATH)?.interface(GNOME_NAME)?
+        .cache_properties(zbus::proxy::CacheProperties::No).build().await?;
+    let version: String = proxy.call("Inspect", &()).await?;
+    anyhow::ensure!(crate::supported_gnome_shell(&version), "{}", crate::unsupported_gnome_shell(&version));
+    Ok(())
+}
+
 pub fn match_monitor<'a>(monitors: &'a [Monitor], computer: &str, names: &[&str], local: Rect) -> Option<&'a Monitor> {
     let candidates: Vec<_> = monitors.iter().filter(|monitor| monitor.computer == computer).collect();
     let named: Vec<_> = candidates.iter().copied().filter(|monitor| !monitor.name.is_empty()

@@ -34,7 +34,9 @@ pub fn gnome_settings_desktop(desktop: &str) -> bool {
 
 pub fn available() -> bool {
     #[cfg(target_os = "linux")]
-    return (std::env::var_os("WAYLAND_DISPLAY").is_some() && crate::wayland::available().is_ok()) || gnome_desktop();
+    // GNOME first: it needs no question to the compositor (on GNOME that
+    // question is a D-Bus round trip, and the window asks several times a second).
+    return gnome_desktop() || (std::env::var_os("WAYLAND_DISPLAY").is_some() && crate::wayland::available().is_ok());
     #[cfg(not(target_os = "linux"))]
     true
 }
