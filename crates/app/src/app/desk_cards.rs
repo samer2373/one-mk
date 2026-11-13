@@ -235,7 +235,7 @@ impl App {
     /// read: each computer as a named chip (where the pointer is, whether it
     /// is connected, where it sits); choosing one shows it in the card below.
     pub(super) fn desk_chips(&mut self, ui: &mut Ui, r: Rect) {
-        let Some(status) = self.running().cloned() else { return };
+        let Some(status) = self.running_shared() else { return };
         let pointer = self.pointer_on();
         let sel = self.selected_id();
         let mut items: Vec<(String, String, String, bool)> = vec![("me".into(), status.name.clone(), "This computer".into(), true)];

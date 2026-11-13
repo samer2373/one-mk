@@ -463,6 +463,14 @@ impl KeysUi {
     pub fn new() -> Self {
         KeysUi { check_due: true, focus_key: 58, keypad: true, ..Default::default() }
     }
+
+    /// The 3D keyboard's and mouse's meshes, which only this page draws: let
+    /// go on leaving it, built again from the same model on the next visit.
+    /// (The model's small file stays, as do the turns the person gave each.)
+    pub fn release_meshes(&mut self) {
+        self.board = None;
+        self.mouse = None;
+    }
 }
 
 fn mac() -> bool {

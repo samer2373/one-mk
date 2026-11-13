@@ -73,7 +73,7 @@ impl App {
                 }
             }
         }
-        let status = self.running().cloned();
+        let status = self.running_shared();
         let dropped: Vec<PathBuf> = ui.input(|input| input.raw.dropped_files.iter().map(|file| file.path().to_path_buf()).collect());
         let pointer = ui.input(|input| input.pointer.hover_pos());
         let hovering = ui.input(|input| !input.raw.hovered_files.is_empty());

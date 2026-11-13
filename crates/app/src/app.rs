@@ -43,6 +43,7 @@ use one_mk_proto::{Desktop, Edge, Side, os};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 
 /// Below this height (plus 22 pt for each other computer) the desk shows
 /// its computers as named chips: monitors any smaller can't carry names.
@@ -227,8 +228,9 @@ pub struct App {
     files_ui: cells::FilesUi,
     link: Link,
     rx: Receiver<Event>,
-    /// `None` until the first look at the daemon.
-    status: Option<Option<Status>>,
+    /// `None` until the first look at the daemon. Shared: a frame hands it
+    /// to every part of the page that wants a copy, which is a count, not a clone.
+    status: Option<Option<Arc<Status>>>,
     clipboard_history: Option<Result<Vec<crate::daemon::HistoryItem>, String>>,
     clipboard_reveal: Option<(u64, String)>,
     clipboard_clear_confirm: bool,
@@ -558,7 +560,12 @@ impl App {
     }
 
     fn running(&self) -> Option<&Status> {
-        self.status.as_ref().and_then(Option::as_ref)
+        self.status.as_ref().and_then(Option::as_ref).map(|status| &**status)
+    }
+
+    /// The running status to keep for a frame: a count, not a copy.
+    fn running_shared(&self) -> Option<Arc<Status>> {
+        self.status.as_ref().and_then(Option::as_ref).map(Arc::clone)
     }
 
     fn off(&self) -> bool {
@@ -668,7 +675,7 @@ impl App {
                     }
                     let changed = self.running().map(|status| (status.clipboard_history, status.clipboard_history_revision)) != s.as_ref().map(|status| (status.clipboard_history, status.clipboard_history_revision));
                     if let Some(st) = &s { self.guide.on_status(&st.input, now); }
-                    self.status = Some(s);
+                    self.status = Some(s.map(Arc::new));
                     if self.tab == Tab::Files && (changed || self.clipboard_history.is_none()) { self.link.history(); }
                     // Names in any script: computers', and saved layouts'.
                     let names: Vec<String> = self.running().map_or(vec![], |st| std::iter::once(st.name.clone()).chain(st.peers.iter().map(|p| p.name.clone())).chain(st.layout.profiles.iter().cloned()).collect());
@@ -967,7 +974,7 @@ impl App {
     /// here but not yet confirmed).
     fn sync_scene(&mut self) {
         let now = self.now;
-        let status = self.running().cloned();
+        let status = self.running_shared();
         let off = self.off();
         let peers: Vec<_> = status.as_ref().map(|s| s.peers.clone()).unwrap_or_default();
         let offset_of = |id: &str| status.as_ref().and_then(|s| s.offset_of(id));
@@ -1082,7 +1089,7 @@ impl App {
         }
 
         // Follow the mouse and keyboard to whichever screen has them.
-        let active = match &status {
+        let active = match status.as_deref() {
             Some(Status { controlling: Some(name), .. }) => peers.iter().find(|p| &p.name == name).map_or("me".to_owned(), |p| p.id.clone()),
             _ => "me".to_owned(),
         };
@@ -1634,6 +1641,13 @@ impl App {
 
     fn set_tab(&mut self, tab: Tab) {
         if tab != self.tab {
+            // What only a page uses is let go when the page is left, and built
+            // again (a few milliseconds) on coming back.
+            match self.tab {
+                Tab::Wallpaper => self.wallpaper_ui.release(),
+                Tab::Keys => self.keys.release_meshes(),
+                _ => {}
+            }
             self.tab = tab;
             if tab == Tab::Files { self.clipboard_history = None; self.link.history(); }
             // "Sure?" on Clear belongs to the visit: coming back later, it asks again.
@@ -2427,6 +2441,21 @@ fn toast_bottom(room: Rect, h: f32, window: Rect, sheet: Option<Rect>) -> f32 {
 }
 
 impl eframe::App for App {
+    /// Runs before every frame, and instead of one while the window is
+    /// minimised or covered (eframe then draws nothing): the one place that
+    /// still hears about a window going away, so the watcher can slow down.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let (attention, used) = ctx.input(|i| {
+            let v = i.viewport();
+            // A frame that follows a key, a click or the pointer: someone is there.
+            (daemon::Attention::of(v.minimized, v.occluded, v.focused), !i.events.is_empty())
+        });
+        self.link.showing.attend(attention);
+        if used {
+            self.link.showing.touch();
+        }
+    }
+
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         crate::chrome::place_buttons(ui.ctx(), frame);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
@@ -2615,10 +2644,9 @@ impl eframe::App for App {
         self.update_notice(ui.ctx());
         // Tell the link whether a graph was drawn: it asks the daemon for
         // round trips only then (a minimised window draws nothing).
-        let (minimized, focused) = ui.input(|i| (i.viewport().minimized, i.viewport().focused));
-        let attention = daemon::Attention::of(minimized, focused);
-        self.link.showing.frame(self.graph_wanted() && attention != daemon::Attention::Hidden);
-        self.link.showing.attend(attention);
+        let hidden = ui.input(|i| daemon::Attention::of(i.viewport().minimized, i.viewport().occluded, None))
+            == daemon::Attention::Hidden;
+        self.link.showing.frame(self.graph_wanted() && !hidden);
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
         if std::env::var_os("ONE_MK_APP_BENCH").is_some() {
             // The UI thread's own work this frame (laying out and painting
