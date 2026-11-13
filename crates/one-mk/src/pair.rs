@@ -80,6 +80,12 @@ pub async fn service_port(dir: &Path) -> Result<u16> {
 }
 
 pub async fn run(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery: bool) -> Result<()> {
+    let result = run_inner(dir, connect, out, discovery).await;
+    if result.is_err() { crate::analytics::result(dir, crate::analytics::Event::PairingFinished, crate::analytics::Origin::Cli, &result); }
+    result
+}
+
+async fn run_inner(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery: bool) -> Result<()> {
     // Asked once before anything starts: a control socket that can't be
     // reached (a settings folder too deep for one) is an error to report,
     // not a reason to retry pairing for ever.
@@ -172,6 +178,8 @@ pub async fn run(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery: b
                 match session(dir, peer, &identity, &mut trust, &mut answers, out).await {
                     Ok(()) => break,
                     Err(e) => {
+                        crate::analytics::record(dir, crate::analytics::Event::PairingFinished, crate::analytics::Origin::Cli,
+                            crate::analytics::Outcome::Failed, crate::analytics::error_code(&e));
                         out.say(
                             || format!("\nPairing with {short} did not complete: {e:#}\nWaiting for another try... (Ctrl+C to stop)"),
                             || format!("retry\t{}", one_line(&format!("{e:#}"))),
@@ -251,6 +259,8 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
     };
     if !ok {
         let _ = tokio::time::timeout(Duration::from_secs(2), pairing.confirm(false)).await;
+        crate::analytics::record(dir, crate::analytics::Event::PairingFinished, crate::analytics::Origin::Cli,
+            crate::analytics::Outcome::Cancelled, crate::analytics::ErrorCode::None);
         out.say(|| "Pairing cancelled.".into(), || "cancelled".into());
         return Ok(());
     }
@@ -260,6 +270,8 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
         .context("the other computer did not answer in time")?
         .context("the other computer went away")?;
     if !confirmed {
+        crate::analytics::record(dir, crate::analytics::Event::PairingFinished, crate::analytics::Origin::Cli,
+            crate::analytics::Outcome::Rejected, crate::analytics::ErrorCode::None);
         out.say(|| "The other computer did not confirm. Nothing was saved.".into(), || "declined".into());
         return Ok(());
     }
@@ -270,6 +282,8 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
         Ok((placement, t.clone()))
     })?;
     *trust = fresh;
+    crate::analytics::record(dir, crate::analytics::Event::PairingFinished, crate::analytics::Origin::Cli,
+        crate::analytics::Outcome::Success, crate::analytics::ErrorCode::None);
     let side = placement.side();
     let _ = crate::control::request(dir, crate::control::Request::Reload).await?;
     let (shown, arg) = trust.get(&fingerprint).map_or_else(|| (name.clone(), format!("{:?}", name)), |d| (trust.display(d), trust.arg(d)));

@@ -305,6 +305,8 @@ impl Link {
             Some(h) => h,
             None => one_mk_ctl::default_home()?,
         };
+        one_mk_ctl::analytics::record(&dir, one_mk_ctl::analytics::Event::AppOpened, one_mk_ctl::analytics::Origin::Desktop,
+            one_mk_ctl::analytics::Outcome::Success, one_mk_ctl::analytics::ErrorCode::None);
         let me = running_executable()?;
         let daemon = install::sibling(&me, "one-mk").unwrap_or_else(|| PathBuf::from("one-mk"));
         let tray = install::sibling(&me, "one-mk-tray");

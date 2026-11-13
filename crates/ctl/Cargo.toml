@@ -11,6 +11,9 @@ publish.workspace = true
 description = "oneMK logic shared by the window, the tray and the service"
 
 [dependencies]
+rand = "0.10.3"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1.0.10"
 anyhow = "1.0.104"
 directories = "6.0.0"
 if-addrs = "0.15.0"

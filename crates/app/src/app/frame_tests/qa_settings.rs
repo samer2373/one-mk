@@ -245,3 +245,18 @@ fn a_settings_file_the_window_cannot_read_is_said_and_changes_wait() {
     assert!(win.app.prefs.unreadable);
     assert!(win.has_text("Preferences couldn't be read. Changes are paused"), "{}", win.texts_joined());
 }
+
+#[test]
+fn analytics_consent_is_explicit_and_withdrawal_deletes_identity() {
+    let mut win = Win::light(1200.0, 1400.0);
+    win.status(Some(two()));
+    win.go(Tab::Settings);
+    let label = "Share anonymous product analytics with PostHog";
+    assert!(one_mk_ctl::analytics::identity(&win.dir).is_none());
+    win.click(label);
+    win.quiet();
+    assert!(one_mk_ctl::analytics::identity(&win.dir).is_some());
+    win.click(label);
+    win.quiet();
+    assert!(one_mk_ctl::analytics::identity(&win.dir).is_none());
+}
