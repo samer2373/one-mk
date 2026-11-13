@@ -153,8 +153,31 @@ impl Config {
         };
         Some(Self { key: key.into(), host: format!("https://{host}"), environment: scope.into() })
     }
+    fn release_default() -> Option<Self> {
+        #[cfg(not(debug_assertions))]
+        { Self::scoped(include_str!("analytics-public-key.txt").trim(), "https://eu.i.posthog.com", "production") }
+        #[cfg(debug_assertions)]
+        { None }
+    }
     fn from_env() -> Option<Self> {
-        Self::scoped(&std::env::var("ONE_MK_POSTHOG_KEY").ok()?, &std::env::var("ONE_MK_POSTHOG_HOST").ok()?, &environment_from_env()?)
+        Self::resolve(
+            std::env::var_os("ONE_MK_POSTHOG_KEY"),
+            std::env::var_os("ONE_MK_POSTHOG_HOST"),
+            std::env::var_os("ONE_MK_POSTHOG_ENVIRONMENT"),
+            std::env::var_os("POSTHOG_ENVIRONMENT"),
+            Self::release_default(),
+        )
+    }
+    fn resolve(key: Option<std::ffi::OsString>, host: Option<std::ffi::OsString>,
+        scope: Option<std::ffi::OsString>, generic_scope: Option<std::ffi::OsString>,
+        default: Option<Self>) -> Option<Self> {
+        // Any explicit override opts out of the packaged destination. Partial,
+        // empty, malformed and non-Unicode values must never fall back to it.
+        if key.is_none() && host.is_none() && scope.is_none() && generic_scope.is_none() { return default; }
+        let key = key?;
+        let host = host?;
+        let scope = scope.or(generic_scope)?;
+        Self::scoped(key.to_str()?, host.to_str()?, scope.to_str()?)
     }
 }
 pub fn configured() -> bool { Config::from_env().is_some() }
@@ -402,6 +425,50 @@ mod tests {
         // Withdrawal still works when configuration is absent.
         super::set_enabled_for(home.path(), false, "development", None).unwrap();
         assert!(Session::snapshot_for(home.path(), Some(b)).identity.is_none());
+    }
+    #[test]
+    fn release_defaults_never_override_explicit_or_partial_runtime_configuration() {
+        let packaged = Config::scoped("phc_public_test", "https://eu.i.posthog.com", "production").unwrap();
+        let resolve = |key: Option<&str>, host: Option<&str>, scope: Option<&str>, generic: Option<&str>| {
+            Config::resolve(key.map(Into::into), host.map(Into::into), scope.map(Into::into), generic.map(Into::into), Some(packaged.clone()))
+        };
+        assert_eq!(resolve(None, None, None, None).unwrap().destination(), packaged.destination());
+        for (key, host, scope, generic) in [
+            (Some("phc_test"), None, None, None),
+            (None, Some("https://eu.i.posthog.com"), None, None),
+            (None, None, Some("production"), None),
+            (None, None, None, Some("production")),
+            (Some(""), Some("https://eu.i.posthog.com"), Some("production"), None),
+            (Some("phc_test"), Some("https://eu.i.posthog.com"), None, None),
+            (Some("phc_test"), Some("https://bad.example"), Some("production"), None),
+            (Some("phc_test"), Some("https://eu.i.posthog.com"), Some("invalid"), Some("production")),
+        ] { assert!(resolve(key, host, scope, generic).is_none()); }
+        let custom = resolve(Some("phc_custom"), Some("https://us.i.posthog.com"), Some("staging"), None).unwrap();
+        assert_eq!(custom.environment, "staging");
+        assert_ne!(custom.destination(), packaged.destination());
+        assert!(Config::resolve(None, None, None, None, None).is_none());
+        assert_eq!(resolve(Some("phc_custom"), Some("https://us.i.posthog.com"), None, Some("verification")).unwrap().environment, "verification");
+        let home = tempfile::tempdir().unwrap();
+        assert!(Session::snapshot_for(home.path(), Some(packaged)).identity.is_none());
+    }
+    #[test]
+    fn compiled_profile_defaults_match_release_policy() {
+        let default = Config::release_default();
+        if cfg!(debug_assertions) { assert!(default.is_none()); }
+        else {
+            let default = default.expect("release has the approved public destination");
+            assert_eq!(default.environment, "production");
+            assert_eq!(default.host, "https://eu.i.posthog.com");
+            assert!(default.key.starts_with("phc_"));
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn non_unicode_override_never_uses_release_destination() {
+        use std::os::unix::ffi::OsStringExt;
+        let invalid = std::ffi::OsString::from_vec(vec![0xff]);
+        let default = Config::scoped("phc_public_test", "https://eu.i.posthog.com", "production");
+        assert!(Config::resolve(Some(invalid), Some("https://eu.i.posthog.com".into()), Some("production".into()), None, default).is_none());
     }
     #[test]
     fn configuration_is_explicit_and_cloud_only() {

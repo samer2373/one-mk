@@ -120,7 +120,7 @@ mod tests {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "analytics::crash::tests::isolated_panic_child"])
             .env_clear().env("HOME", home.path()).env("TMPDIR", home.path())
-            .env(CHILD, home.path()).env("ONE_MK_POSTHOG_KEY", "phc_test_only")
+            .env(CHILD, home.path()).env("ONE_MK_POSTHOG_ENVIRONMENT", "development").env("ONE_MK_POSTHOG_KEY", "phc_test_only")
             .env("ONE_MK_POSTHOG_HOST", "https://eu.i.posthog.com").output().unwrap();
         assert!(!output.status.success());
         let entries = std::fs::read_dir(home.path().join(DIR)).unwrap();

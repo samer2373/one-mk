@@ -23,8 +23,14 @@ closed. Saving a failed preference reports an error; check status and retry.
 
 Each process pins its consent generation before starting work, including an absent consent. After enabling or resetting, restart the desktop app and daemon to begin collection; subsequent CLI invocations use the new generation. Withdrawal immediately prevents new sends (an already in-flight HTTP request cannot be recalled). Existing processes never adopt later consent, so operations begun before consent or before a reset cannot be reported under the new identity. This deliberately favors privacy over seamless opt-in. A failed local withdrawal also disables collection in that process.
 
-An app operator must separately provide these variables to each launched
-process, including the desktop app and OS login service:
+Release binaries include the owner-approved public EU capture destination in
+the shared analytics crate, with environment fixed to `production`. The CLI,
+desktop app and daemon therefore need no shell variables, launch-agent edits,
+repository variables or repeated setup for future releases. This configures a
+destination only: explicit destination-bound consent is still required.
+
+Debug builds have no default destination. To configure development builds, or
+explicitly override a release destination, supply the complete tuple:
 
 ```sh
 export ONE_MK_POSTHOG_KEY=phc_YOUR_PUBLIC_PROJECT_INGEST_KEY
@@ -34,8 +40,11 @@ export ONE_MK_POSTHOG_ENVIRONMENT=production
 
 Use your existing project's region: `https://eu.i.posthog.com` or
 `https://us.i.posthog.com`. Other hosts, HTTP, paths and redirects are rejected.
-Use a public ingestion key, never a personal API key. No credentials are
-included. Missing/invalid configuration sends nothing, even with consent on.
+Use a public ingestion key, never a personal API key. The checked-in capture
+token is intentionally public, not an administrator credential. Any explicit
+override disables fallback to the packaged destination: partial, empty,
+non-Unicode or invalid overrides send nothing, even with consent on. An explicit
+environment alone is a partial override. Unconfigured debug builds send nothing.
 Restart existing processes after configuring their environment.
 
 For local development, copy `.env.posthog.example` to the git-ignored
@@ -289,3 +298,16 @@ passed both checks. Desktop all-target clippy passed with warnings denied.
 These are headless UI/test-adapter checks, not real paired-device transfers or
 a launched desktop/service end-to-end ingestion claim. Linux and Windows runtime
 validation, native faults/OS kills, and full symbolication remain unverified.
+
+
+### Packaged production configuration
+
+The release build matrix compiles `one-mk` and `one-mk-app` with `--release`;
+both depend on the same `one-mk-ctl` configuration resolver. GUI startup and
+CLI/daemon startup call that shared analytics initialization. The existing
+packaging scripts copy those compiled binaries, so the destination is retained
+when launched outside a terminal. No installer or OS startup settings change is
+required. Debug-assertion builds omit the public-default token entirely.
+Changing the packaged destination requires renewed v4 consent. Existing process
+generation pinning, withdrawal, redaction and synthetic-verification isolation
+are unchanged. This change does not opt anyone in or deploy a release.
