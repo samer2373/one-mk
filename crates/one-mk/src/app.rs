@@ -1212,6 +1212,21 @@ struct Coalesced {
     next: Option<Event>,
 }
 
+/// Whether the keyboard layout is looked at again before `ev` is handled
+/// (with characters typing on; see `App::refresh_keyboard`): when capture
+/// starts, and (except on macOS, which reports changes itself) before a key
+/// press that may be typed as a character. On X11 each look grabs the
+/// server and downloads and compiles the whole keymap, so a key release, a
+/// modifier and Caps Lock skip it: they type nothing, and a layout switch
+/// or lock they make is seen at the next press, before it is translated.
+fn refreshes_layout(ev: &Event) -> bool {
+    match ev {
+        Event::Activated { .. } => true,
+        Event::Key { code, down: true, .. } => cfg!(not(target_os = "macos")) && !Mods::is_modifier(*code) && !matches!(code, 58 | 69 | 70),
+        _ => false,
+    }
+}
+
 /// Applies a motion and every motion already queued behind it, in order
 /// (the cursor clamps at edges, so deltas can't simply be summed). Stops at
 /// the first other event or when the pointer leaves.
@@ -1310,7 +1325,7 @@ impl App {
     // ------------------------------------------------------------ local input
 
     fn on_input(&mut self, ev: Event, events: &mut mpsc::UnboundedReceiver<Event>) {
-        if matches!(ev, Event::Activated { .. }) || cfg!(not(target_os = "macos")) && matches!(ev, Event::Key { .. }) { self.refresh_keyboard(); }
+        if refreshes_layout(&ev) { self.refresh_keyboard(); }
         match ev {
             Event::KeyboardModifiers { depressed, latched, locked, group } => {
                 #[cfg(target_os = "linux")]
@@ -4243,6 +4258,19 @@ mod tests {
 
     /// Queued motion is applied in order through the cursor, which clamps
     /// at edges, and only the final position is sent.
+    #[test]
+    fn layout_is_looked_at_before_presses_that_may_type_only() {
+        let key = |code, down| Event::Key { code, down, device: None };
+        assert!(refreshes_layout(&Event::Activated { id: 1, side: Side::Left, pos: Pos { x: 0.0, y: 0.0 } }));
+        let letter = cfg!(not(target_os = "macos"));
+        assert_eq!(refreshes_layout(&key(30, true)), letter, "A pressed");
+        assert!(!refreshes_layout(&key(30, false)), "A released");
+        for modifier in [29, 42, 54, 56, 97, 100, 125, 126, 58, 69, 70] {
+            assert!(!refreshes_layout(&key(modifier, true)), "modifier or lock {modifier}");
+        }
+        assert!(!refreshes_layout(&Event::Motion { dx: 1.0, dy: 0.0, device: None }));
+    }
+
     #[test]
     fn coalesces_queued_motion() {
         let desk = Desktop::new(vec![Rect::new(0, 0, 1920, 1080)]);
