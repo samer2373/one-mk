@@ -78,35 +78,47 @@ impl Discovery {
     fn spawn_browser(daemon: &ServiceDaemon, me: String) -> Result<mpsc::UnboundedReceiver<Found>> {
         let events = daemon.browse(SERVICE)?;
         let (tx, rx) = mpsc::unbounded_channel();
-        // mdns-sd is runtime-agnostic and blocks; keep it off the async runtime.
-        std::thread::Builder::new().name("one-mk-mdns".into()).spawn(move || {
-            while let Ok(event) = events.recv() {
-                let ServiceEvent::ServiceResolved(info) = event else { continue };
-                let Some(fingerprint) = info.get_property_val_str("id").and_then(|s| s.parse().ok()) else {
-                    continue;
-                };
-                if info.get_property_val_str("id") == Some(me.as_str()) {
-                    continue;
-                }
-                let mut addrs: Vec<SocketAddr> = info
-                    .get_addresses()
-                    .iter()
-                    .map(|ip| ip.to_ip_addr())
-                    .filter(usable)
-                    .map(|ip| SocketAddr::new(ip, info.get_port()))
-                    .collect();
-                if info.get_port() == 0 {
-                    continue;
-                }
-                addrs.sort_by_key(|a| !a.is_ipv4()); // IPv4 first: most reliable on home LANs
-                addrs.truncate(MAX_ADDRS);
-                let name = one_mk_proto::sanitize_name(info.get_property_val_str("name").unwrap_or(""));
-                let pairing = info.get_property_val_str("mode") == Some("pair");
-                if tx.send(Found { fingerprint, name, addrs, pairing }).is_err() {
-                    break;
-                }
+        let forward = move |event: ServiceEvent| -> bool {
+            let ServiceEvent::ServiceResolved(info) = event else { return true };
+            let Some(fingerprint) = info.get_property_val_str("id").and_then(|s| s.parse().ok()) else {
+                return true;
+            };
+            if info.get_property_val_str("id") == Some(me.as_str()) {
+                return true;
             }
-        })?;
+            let mut addrs: Vec<SocketAddr> = info
+                .get_addresses()
+                .iter()
+                .map(|ip| ip.to_ip_addr())
+                .filter(usable)
+                .map(|ip| SocketAddr::new(ip, info.get_port()))
+                .collect();
+            if info.get_port() == 0 {
+                return true;
+            }
+            addrs.sort_by_key(|a| !a.is_ipv4()); // IPv4 first: most reliable on home LANs
+            addrs.truncate(MAX_ADDRS);
+            let name = one_mk_proto::sanitize_name(info.get_property_val_str("name").unwrap_or(""));
+            let pairing = info.get_property_val_str("mode") == Some("pair");
+            tx.send(Found { fingerprint, name, addrs, pairing }).is_ok()
+        };
+        // On the caller's runtime when there is one (the daemon): a task,
+        // not a thread of its own, that wakes only when mdns-sd resolves a
+        // service. It ends with the browse (the daemon stopping) or when
+        // nobody reads `rx` any more.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                while let Ok(event) = events.recv_async().await {
+                    if !forward(event) { break; }
+                }
+            });
+        } else {
+            std::thread::Builder::new().name("one-mk-mdns".into()).spawn(move || {
+                while let Ok(event) = events.recv() {
+                    if !forward(event) { break; }
+                }
+            })?;
+        }
         Ok(rx)
     }
 }
