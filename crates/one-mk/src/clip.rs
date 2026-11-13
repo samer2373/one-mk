@@ -157,6 +157,7 @@ impl ClipSync {
         self.cb.history().lock().unwrap_or_else(|error| error.into_inner()).configure(
             s.history_max, (s.history_max_mb.min(256) as usize) << 20, one_mk_clipboard::CEILING_BYTES, s.history_persist.then_some(path).flatten()
         );
+        self.cb.refresh_history_watch();
         self.allow_pull.store(s.allow_pull, Ordering::Relaxed);
         // What was skipped (too large, sensitive) may be sendable now.
         self.state().known.clear();

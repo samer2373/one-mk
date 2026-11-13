@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use x11rb::connection::Connection;
 use x11rb::protocol::{Event, xfixes::{ConnectionExt as _, SelectionEventMask}, xproto::{ConnectionExt as _, AtomEnum, CreateWindowAux, WindowClass}};
 
-pub(super) fn start(tx: mpsc::Sender<Cmd>, history: Arc<Mutex<History>>, apps: Arc<Mutex<Vec<String>>>) -> Option<Arc<UnixStream>> {
+pub(super) fn start(tx: mpsc::Sender<Cmd>, history: Arc<Mutex<History>>, apps: Arc<Mutex<Vec<String>>>) -> Option<UnixStream> {
     let (stop, wake) = UnixStream::pair().ok()?;
     let report = history.clone();
     let spawned = std::thread::Builder::new().name("one-mk-history-events".into()).spawn(move || {
@@ -31,7 +31,7 @@ pub(super) fn start(tx: mpsc::Sender<Cmd>, history: Arc<Mutex<History>>, apps: A
             wait = (wait * 2).min(std::time::Duration::from_secs(30));
         }
     });
-    spawned.ok().map(|_| Arc::new(stop))
+    spawned.ok().map(|_| stop)
 }
 
 /// Whether the daemon asked to stop (its end of `wake` was written or closed) within `wait`.
@@ -66,6 +66,8 @@ fn watch(wake: &UnixStream, tx: &mpsc::Sender<Cmd>, history: &Arc<Mutex<History>
         }
         if let Some(event) = changed {
             let skip_apps = apps.lock().unwrap_or_else(|error| error.into_inner()).clone();
+            // Nothing to record or skip (settings changed meanwhile): no round trips.
+            if skip_apps.is_empty() && history.lock().unwrap_or_else(|error| error.into_inner()).disabled() { continue; }
             if connection.get_selection_owner(clipboard)?.reply()?.owner != event.owner { continue; }
             let skip = focused_apps(&connection, root, active).iter().any(|name| skip_apps.iter().any(|app| name.eq_ignore_ascii_case(app)));
             if history.lock().unwrap_or_else(|error| error.into_inner()).disabled() && !skip { continue; }
