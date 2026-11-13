@@ -352,22 +352,52 @@ impl State {
     }
 
     fn deactivate(&mut self, pos: Option<Pos>) {
-        // TEST PROBE: ONE_MK_RETURN_TEST_FILE = path of a file holding "none" | "assoc-first" | "post-move" | "both" | (unset: today's behaviour).
+        // TEST PROBE: the first line of the file named by ONE_MK_RETURN_TEST_FILE holds "none" or a
+        // comma list of: interval0, filter, postonly, srcfilter.
         let variant = std::env::var("ONE_MK_RETURN_TEST_FILE").ok().and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default().trim().to_owned();
-        let assoc_first = variant == "assoc-first" || variant == "both";
-        let post_move = variant == "post-move" || variant == "both";
-        if assoc_first {
-            let _ = CGAssociateMouseAndMouseCursorPosition(true);
+        let has = |t: &str| variant.split(',').any(|x| x.trim() == t);
+        #[allow(deprecated)]
+        {
+            if has("interval0") {
+                let _ = objc2_core_graphics::CGSetLocalEventsSuppressionInterval(0.0);
+            }
+            if has("filter") {
+                let _ = objc2_core_graphics::CGSetLocalEventsFilterDuringSuppressionState(
+                    objc2_core_graphics::CGEventFilterMask::PermitLocalMouseEvents
+                        | objc2_core_graphics::CGEventFilterMask::PermitLocalKeyboardEvents
+                        | objc2_core_graphics::CGEventFilterMask::PermitSystemDefinedEvents,
+                    objc2_core_graphics::CGEventSuppressionState::EventSuppressionStateSuppressionInterval,
+                );
+            }
         }
-        if let Some(p) = pos {
+        let post_only = has("postonly");
+        if post_only {
+            // No cursor warp at all: associate first, then land the cursor with a posted mouse move.
+            let _ = CGAssociateMouseAndMouseCursorPosition(true);
+        } else if let Some(p) = pos {
             move_cursor(p);
         }
         // Re-associating also ends the short input freeze that follows a warp.
         let _ = CGAssociateMouseAndMouseCursorPosition(true);
-        if post_move && let Some(p) = pos
-            && let Some(ev) = CGEvent::new_mouse_event(None, CGEventType::MouseMoved, CGPoint::new(p.x, p.y), CGMouseButton(0)) {
-            CGEvent::set_integer_value_field(Some(&ev), CGEventField::EventSourceUserData, OUR_EVENTS);
-            CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&ev));
+        if post_only && let Some(p) = pos {
+            let source = if has("srcfilter") {
+                CGEventSource::new(CGEventSourceStateID::HIDSystemState).inspect(|src| {
+                    CGEventSource::set_local_events_suppression_interval(Some(src), 0.0);
+                    CGEventSource::set_local_events_filter_during_suppression_state(
+                        Some(src),
+                        objc2_core_graphics::CGEventFilterMask::PermitLocalMouseEvents
+                            | objc2_core_graphics::CGEventFilterMask::PermitLocalKeyboardEvents
+                            | objc2_core_graphics::CGEventFilterMask::PermitSystemDefinedEvents,
+                        objc2_core_graphics::CGEventSuppressionState::EventSuppressionStateSuppressionInterval,
+                    );
+                })
+            } else {
+                None
+            };
+            if let Some(ev) = CGEvent::new_mouse_event(source.as_deref(), CGEventType::MouseMoved, CGPoint::new(p.x, p.y), CGMouseButton(0)) {
+                CGEvent::set_integer_value_field(Some(&ev), CGEventField::EventSourceUserData, OUR_EVENTS);
+                CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&ev));
+            }
         }
         self.released_at = Some(std::time::Instant::now());
         self.probe_logged = 0;
