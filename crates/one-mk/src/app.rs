@@ -668,6 +668,13 @@ struct App {
     /// When each computer was paired, as far as this daemon saw it happen
     /// (see [`RECENTLY_PAIRED`]); only the lately paired are kept.
     paired_at: HashMap<Fingerprint, Instant>,
+    /// `devices.toml` as it was when `trust` was last read from it: a
+    /// request (the window asks for `status` up to four times a second)
+    /// reads it again only if it changed.
+    trust_file: crate::stamp::Cached<()>,
+    /// The profile names and the active one, for `status`, until
+    /// `profiles.toml` changes.
+    profiles_file: std::cell::RefCell<crate::stamp::Cached<(Vec<String>, Option<String>)>>,
     /// Computers this one doesn't trust that it refused lately: where from,
     /// how often, when last (see [`App::unrecognised_notes`]). Never trusted
     /// because of this; at most [`UNRECOGNISED_KEPT`] of them.
@@ -838,6 +845,8 @@ pub async fn serve(
         dial_logged: HashMap::new(),
         removed: HashMap::new(),
         paired_at: HashMap::new(),
+        trust_file: Default::default(),
+        profiles_file: Default::default(),
         unrecognised: HashMap::new(),
         services,
         announced: HashSet::new(),
@@ -2438,8 +2447,19 @@ impl App {
     /// once: its input link, and any clipboard or file connection it holds
     /// (they follow `Services::trusted`).
     fn reload_trust(&mut self) {
+        let stamp = crate::stamp::Stamp::of(&self.dir.join("devices.toml"));
         let Ok(new) = TrustStore::load(&self.dir) else { return };
         self.set_trust(new);
+        self.trust_file.remember(stamp);
+    }
+
+    /// [`App::reload_trust`], unless `devices.toml` is as it was when last
+    /// read (one `stat` instead of reading and parsing it, and telling
+    /// everything that follows the paired computers).
+    fn reload_trust_if_changed(&mut self) {
+        if !self.trust_file.unchanged(&self.dir.join("devices.toml")) {
+            self.reload_trust();
+        }
     }
 
     /// Changes `devices.toml` as [`TrustStore::update`] does: on what is on
@@ -2462,6 +2482,7 @@ impl App {
     }
 
     fn set_trust(&mut self, new: TrustStore) {
+        self.trust_file.invalidate();
         let now = Instant::now();
         self.paired_at.retain(|_, at| now.duration_since(*at) < RECENTLY_PAIRED);
         for fp in new.devices().iter().filter_map(|d| d.fingerprint()).filter(|fp| !self.trust.is_trusted(fp)) {
@@ -2766,7 +2787,7 @@ impl App {
 
     /// Answers a control request; true when it asked the daemon to stop.
     fn on_request(&mut self, req: Request, reply: tokio::sync::oneshot::Sender<String>) -> bool {
-        self.reload_trust();
+        self.reload_trust_if_changed();
         let stop = req == Request::Stop;
         let text = match req {
             Request::LocalRulesOff => {
@@ -2928,7 +2949,10 @@ impl App {
 
     fn status(&self) -> Status {
         let id = self.node.identity();
-        let profiles = Profiles::load(&self.dir).unwrap_or_default();
+        let (profile_names, profile) = self.profiles_file.borrow_mut().get(&crate::profiles::path(&self.dir), || {
+            let profiles = Profiles::load(&self.dir).unwrap_or_default();
+            (profiles.names(), profiles.active)
+        }).clone();
         let name_of = |fp: &Fingerprint| self.name_for(*fp);
         let peers = self.trust.devices().iter().filter_map(|d| {
             let live = self.peers.get(&d.fingerprint()?);
@@ -2998,8 +3022,8 @@ impl App {
                 })
             }),
             layout: Box::new(LayoutStatus {
-                profiles: profiles.names(),
-                profile: profiles.active,
+                profiles: profile_names,
+                profile,
                 warnings: self.conflicts.clone(),
             }),
             input: self.input_problems.values().cloned().collect(),

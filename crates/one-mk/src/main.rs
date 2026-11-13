@@ -61,6 +61,7 @@ mod send;
 mod drag;
 mod settings;
 mod settings_tolerant;
+mod stamp;
 mod steer;
 mod track;
 mod transfer;
