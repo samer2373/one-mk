@@ -337,10 +337,17 @@ pub fn position(now: i64, offset: i64, start: i64, duration: u64) -> u64 {
     (i128::from(now) + i128::from(offset) - i128::from(start)).rem_euclid(i128::from(duration)) as u64
 }
 
+/// How far playback at `actual` is behind `expected` (negative: ahead), in
+/// ms, the short way round the loop.
+pub fn drift(actual: u64, expected: u64, duration: u64) -> i64 {
+    if duration == 0 { return 0; }
+    let length = i128::from(duration);
+    ((i128::from(expected) - i128::from(actual) + length / 2).rem_euclid(length) - length / 2) as i64
+}
+
 pub fn correction(actual: u64, expected: u64, duration: u64) -> Correction {
     if duration == 0 { return Correction::None; }
-    let length = i128::from(duration);
-    let drift = (i128::from(expected) - i128::from(actual) + length / 2).rem_euclid(length) - length / 2;
+    let drift = drift(actual, expected, duration);
     if drift.abs() > 40 { Correction::Rate(if drift > 0 { 1.02 } else { 0.98 }) }
     else { Correction::None }
 }
@@ -602,6 +609,11 @@ mod tests {
         assert_eq!(correction(1000, 1501, 10000), Correction::Rate(1.02));
         assert_eq!(correction(1000, 950, 10000), Correction::Rate(0.98));
         assert_eq!(position(25005, 100, 10000, 5000), 105);
+        // The short way round the loop, either side.
+        assert_eq!(drift(9980, 20, 10000), 40);
+        assert_eq!(drift(20, 9980, 10000), -40);
+        assert_eq!(drift(1000, 3500, 10000), 2500);
+        assert_eq!(drift(0, 0, 0), 0);
     }
     #[test]
     fn independent_holds_cannot_resume_each_other() {
