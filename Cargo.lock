@@ -3319,7 +3319,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "one-mk"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3361,7 +3361,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-app"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "directories",
@@ -3380,7 +3380,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-clipboard"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3401,7 +3401,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-ctl"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "blake3",
@@ -3435,7 +3435,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-input"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3474,7 +3474,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-net"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3499,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-proto"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "unicode-general-category",
  "unicode-segmentation",
@@ -3507,7 +3507,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-tray"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "ksni",
@@ -3520,7 +3520,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "blake3",
  "futures-util",
@@ -3538,11 +3538,11 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall-canvas"
-version = "1.2.2"
+version = "1.2.3"
 
 [[package]]
 name = "one-mk-wall-import"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "blake3",
  "image",
@@ -3557,7 +3557,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wall-sync"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "blake3",
  "libc",
@@ -3567,7 +3567,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wallpaper"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "libloading",
@@ -3580,7 +3580,7 @@ dependencies = [
 
 [[package]]
 name = "one-mk-wallpaper-helper"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "block2 0.6.2",

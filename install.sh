@@ -42,7 +42,7 @@ MCowBQYDK2VwAyEAHJamD3QRuJBIp8jnM/Grzzsh1Fn1BwkczvdT8/yIv+s=
 # docs/UPDATES.md). Each release raises it to an earlier release that is still
 # fine to install; scripts/check-release-consistency.py and the release
 # workflow check that it is a plain number and not above the release's own.
-MIN_SEQUENCE=50
+MIN_SEQUENCE=51
 # Past this many days a release only earns a note (see ONE_MK_MAX_AGE_DAYS above).
 STALE_DAYS=180
 

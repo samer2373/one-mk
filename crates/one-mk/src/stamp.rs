@@ -97,8 +97,10 @@ impl<T> Cached<T> {
     }
 
     /// Whether `path` is the same as when [`Cached::remember`] last noted it.
-    pub fn unchanged(&self, path: &Path) -> bool {
-        let now = Stamp::of(path);
+    pub fn unchanged(&self, path: &Path) -> bool { self.unchanged_at(path, SystemTime::now()) }
+
+    fn unchanged_at(&self, path: &Path, clock: SystemTime) -> bool {
+        let now = Stamp::of_at(path, clock);
         now.is_some() && now == self.stamp && now.is_some_and(|s| s.trusted())
     }
 
@@ -123,6 +125,8 @@ fn settled(modified: Option<SystemTime>, now: SystemTime) -> bool {
 mod tests {
     use super::*;
 
+    fn mtime(path: &Path) -> Option<SystemTime> { std::fs::metadata(path).unwrap().modified().ok() }
+
     /// A clock far enough after the files written in a test for them to count as settled.
     fn later() -> SystemTime { SystemTime::now() + Duration::from_secs(60) }
 
@@ -141,14 +145,26 @@ mod tests {
         std::fs::write(&path, "one").unwrap();
         assert_eq!(read(&mut cache), "one");
         assert_eq!(read(&mut cache), "one");
-        // Same length, written by renaming a new file over it (as every save does).
+        // Same length, written by renaming a new file over it (as every save does). The new file is
+        // written until the file system's clock says it is a different moment from the old one: on a
+        // coarse clock (Windows) two writes can otherwise share a timestamp, which is what stamps
+        // cannot tell apart and what the unsettled-stamp rule exists for (tested below).
         let tmp = dir.join("profiles.toml.tmp");
-        std::fs::write(&tmp, "two").unwrap();
+        let before = mtime(&path);
+        while {
+            std::thread::sleep(Duration::from_millis(20));
+            std::fs::write(&tmp, "two").unwrap();
+            mtime(&tmp) == before
+        } {}
         std::fs::rename(&tmp, &path).unwrap();
         assert_eq!(read(&mut cache), "two");
         // Same length, rewritten in place (an editor), a clock tick later.
-        std::thread::sleep(Duration::from_millis(30));
-        std::fs::write(&path, "six").unwrap();
+        let before = mtime(&path);
+        while {
+            std::thread::sleep(Duration::from_millis(20));
+            std::fs::write(&path, "six").unwrap();
+            mtime(&path) == before
+        } {}
         assert_eq!(read(&mut cache), "six");
         std::fs::remove_file(&path).unwrap();
         assert_eq!(read(&mut cache), "");
@@ -156,8 +172,12 @@ mod tests {
         assert_eq!(reads, 5);
         cache.invalidate();
         assert!(!cache.unchanged(&path));
+        std::fs::write(&path, "kept").unwrap();
         cache.remember(Stamp::of_at(&path, later()));
         assert!(cache.stamp.is_some_and(|s| s.trusted()));
+        assert!(cache.unchanged_at(&path, later()), "the same file at a settled time is the same");
+        std::fs::write(&path, "kept!").unwrap();
+        assert!(!cache.unchanged_at(&path, later()), "a longer file is a change");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

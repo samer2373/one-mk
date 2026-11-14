@@ -209,8 +209,21 @@ mod tests {
 
     fn zones(peer: &str) -> Vec<Zone> { vec![Zone { rect: Rect::new(0, 0, 8, 100), peer: peer.into() }] }
 
-    /// Lets the supervisor task run what was just sent.
+    /// Lets the supervisor task run what was just sent (for what must NOT happen: a slow machine only makes
+    /// such a check weaker, never a false failure).
     async fn settle() { tokio::time::sleep(Duration::from_millis(30)).await; }
+
+    /// Waits (up to 5 s) until `read()` is `want`, then asserts it: for what must happen, however slow the
+    /// machine running the test is.
+    async fn until<T: PartialEq + std::fmt::Debug>(read: impl Fn() -> T, want: T) {
+        for _ in 0..500 {
+            if read() == want {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(read(), want);
+    }
 
     fn started(targets: &Targets) -> usize { targets.lock().unwrap().len() }
 
@@ -223,7 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn target_runs_only_while_there_are_zones() {
-        const IDLE: Duration = Duration::from_millis(300);
+        const IDLE: Duration = Duration::from_millis(1000);
         let (zones_tx, wanted) = watch::channel(Vec::new());
         let handle = Handle { zones: zones_tx };
         let (dropped, _events) = mpsc::channel(4);
@@ -234,28 +247,23 @@ mod tests {
         assert_eq!(started(&STARTED), 0);
         // Switched on: started once, and fed every change.
         handle.set_zones(zones("a"));
-        settle().await;
-        assert_eq!((started(&STARTED), last(&STARTED)), (1, Some(zones("a"))));
+        until(|| (started(&STARTED), last(&STARTED)), (1, Some(zones("a")))).await;
         handle.set_zones(zones("b"));
-        settle().await;
-        assert_eq!((started(&STARTED), last(&STARTED)), (1, Some(zones("b"))));
+        until(|| (started(&STARTED), last(&STARTED)), (1, Some(zones("b")))).await;
         // A short time without zones (a visit to a peer) keeps it running.
         handle.set_zones(Vec::new());
-        settle().await;
-        assert_eq!(last(&STARTED), Some(Vec::new()), "the target hears its zones went away");
+        until(|| last(&STARTED), Some(Vec::new())).await;
         handle.set_zones(zones("a"));
-        settle().await;
-        assert_eq!((started(&STARTED), last(&STARTED)), (1, Some(zones("a"))));
+        until(|| (started(&STARTED), last(&STARTED)), (1, Some(zones("a")))).await;
         // Switched off: stopped once the zones have stayed away for IDLE...
         handle.set_zones(Vec::new());
         tokio::time::sleep(IDLE / 2).await;
         assert_eq!(last(&STARTED), Some(Vec::new()));
-        tokio::time::sleep(IDLE).await;
-        assert_eq!(last(&STARTED), None, "stopped: everything it installed is let go");
+        // (stopped: everything it installed is let go)
+        until(|| last(&STARTED), None).await;
         // ...and switched on again: a new one.
         handle.set_zones(zones("c"));
-        settle().await;
-        assert_eq!((started(&STARTED), last(&STARTED)), (2, Some(zones("c"))));
+        until(|| (started(&STARTED), last(&STARTED)), (2, Some(zones("c")))).await;
         // A target that stopped on its own is not restarted until the zones
         // go away and come back.
         STARTED.lock().unwrap().pop();
@@ -263,10 +271,11 @@ mod tests {
         settle().await;
         assert_eq!(started(&STARTED), 1);
         handle.set_zones(Vec::new());
-        settle().await;
+        // (no target is left to tell that the supervisor saw the empty list, and the two changes must not
+        // merge into one: a long pause)
+        tokio::time::sleep(Duration::from_millis(250)).await;
         handle.set_zones(zones("e"));
-        settle().await;
-        assert_eq!((started(&STARTED), last(&STARTED)), (2, Some(zones("e"))));
+        until(|| (started(&STARTED), last(&STARTED)), (2, Some(zones("e")))).await;
         // The daemon going away stops it.
         drop(handle);
         supervisor.await.unwrap();
@@ -280,15 +289,14 @@ mod tests {
         let (dropped, _events) = mpsc::channel(4);
         let supervisor = tokio::spawn(supervise(wanted, dropped, refusing, Duration::from_millis(50)));
         handle.set_zones(zones("a"));
-        settle().await;
+        until(|| started(&REFUSED), 1).await;
         handle.set_zones(zones("b"));
         settle().await;
         assert_eq!(started(&REFUSED), 1, "not tried again on every edge change");
         handle.set_zones(Vec::new());
         settle().await;
         handle.set_zones(zones("a"));
-        settle().await;
-        assert_eq!(started(&REFUSED), 2);
+        until(|| started(&REFUSED), 2).await;
         drop(handle);
         supervisor.await.unwrap();
     }
