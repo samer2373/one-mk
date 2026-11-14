@@ -5,7 +5,7 @@
 
 mod qa_common;
 use qa_common::*;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn two() -> (Lab, Node, Node) {
     let mut lab = Lab::new();
@@ -243,8 +243,19 @@ fn a_locked_computer_is_never_entered_over_an_edge() {
     lab.kill9(&alpha);
     lab.start_plain(&alpha);
     wait("both ready", 40, || (ready(&lab, &alpha) && ready(&lab, &beta)).then_some(()));
-    Lab::ok(&beta, &["switch", "alpha"]);
-    wait("beta controls the unlocked alpha", 20, || lab.status(&alpha).controlled_by.is_some().then_some(()));
+    // Beta can still be holding the link to the alpha that was killed (it notices after 4 s of silence), and
+    // a request sent into it is lost: ask again every few seconds until the new alpha is controlled.
+    let mut asked: Option<Instant> = None;
+    wait("beta controls the unlocked alpha", 40, || {
+        if lab.status(&alpha).controlled_by.is_some() {
+            return Some(());
+        }
+        if asked.is_none_or(|at| at.elapsed() >= Duration::from_secs(4)) {
+            let _ = Lab::run(&beta, &["switch", "alpha"]);
+            asked = Some(Instant::now());
+        }
+        None
+    });
 }
 
 #[test]
