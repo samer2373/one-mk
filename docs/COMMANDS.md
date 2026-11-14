@@ -1,7 +1,7 @@
 # Command reference
 
 Every `one-mk` command, with its options, exactly as `--help` prints them. This page is
-generated from the built program (`one-mk --help` and each command's `--help`) for 1.2.2 on
+generated from the built program (`one-mk --help` and each command's `--help`) for 1.2.3 on
 Linux, so it cannot drift from the code; run `one-mk <command> --help` on your computer for the
 version you have. Commands that exist only on Windows and macOS builds (for example
 `keymap local` and `keymap add --local`, the experimental local key rules) do not appear in
