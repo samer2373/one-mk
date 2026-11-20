@@ -131,10 +131,12 @@ pub fn run(ctx: Arc<Ctx>, start_daemon: bool) -> anyhow::Result<()> {
             Event::NewEvents(StartCause::Init) => {
                 let first = ctx.snapshot();
                 let menu = build(&model::menu(&first), &mut actions);
-                tray = TrayIconBuilder::new()
-                    .with_menu(Box::new(menu))
-                    .with_icon(icon(first.icon_state()))
-                    .with_tooltip(first.headline())
+                let builder = TrayIconBuilder::new().with_menu(Box::new(menu)).with_icon(icon(first.icon_state()));
+                // macOS: no tooltip. The menu's first line already says it, and a
+                // menu-bar tooltip gets stuck on screen covering content.
+                #[cfg(not(target_os = "macos"))]
+                let builder = builder.with_tooltip(first.headline());
+                tray = builder
                     .build()
                     .map_err(|e| eprintln!("one-mk-tray: cannot create the tray icon: {e}"))
                     .ok();
@@ -179,7 +181,10 @@ pub fn run(ctx: Arc<Ctx>, start_daemon: bool) -> anyhow::Result<()> {
                     actions.clear();
                     t.set_menu(Some(Box::new(build(&model::menu(&s), &mut actions))));
                     set_icon(t, s.icon_state());
-                    let _ = t.set_tooltip(Some(s.headline()));
+                    #[cfg(not(target_os = "macos"))]
+                    if s.headline() != snap.headline() {
+                        let _ = t.set_tooltip(Some(s.headline()));
+                    }
                 }
                 snap = s;
             }
