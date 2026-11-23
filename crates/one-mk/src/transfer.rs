@@ -80,6 +80,9 @@ pub struct Inbox {
     active: Arc<Mutex<HashMap<String, Slot>>>,
     limits: Arc<Mutex<Limits>>,
     partial_cap: u64,
+    /// How long a file stream may wait, holding its admission slot, for the
+    /// sender's next offer.
+    offer_idle: Duration,
     /// Progress of what is arriving, and the "files received" notification.
     transfers: Arc<Transfers>,
     wallpaper: Mutex<WallpaperPolicy>,
@@ -136,6 +139,12 @@ struct Limits {
     reserved_total: u64,
     /// The same, per device.
     reserved: HashMap<Fingerprint, u64>,
+    /// Serializes work in the staging folder (opening a partial file, placing
+    /// a finished one and removing the then-empty folder), which touches the
+    /// disk. The counters above are taken by the daemon's one thread on every
+    /// received chunk and must not wait for a disk, so this lives apart from
+    /// the lock around them; only blocking tasks take it.
+    staging: Arc<Mutex<()>>,
 }
 
 /// Room set aside for the bytes an accepted file still has to write, so
@@ -255,8 +264,12 @@ impl Inbox {
     }
 
     fn build(root: PathBuf, partial_cap: u64, notifier: Arc<dyn Notifier>) -> Arc<Self> {
+        Self::build_idle(root, partial_cap, notifier, IDLE_TIMEOUT)
+    }
+
+    fn build_idle(root: PathBuf, partial_cap: u64, notifier: Arc<dyn Notifier>, offer_idle: Duration) -> Arc<Self> {
         let transfers = Transfers::new(root.clone(), notifier);
-        let inbox = Arc::new(Self { root, active: Arc::default(), limits: Arc::default(), partial_cap, transfers,
+        let inbox = Arc::new(Self { root, active: Arc::default(), limits: Arc::default(), partial_cap, offer_idle, transfers,
             wallpaper: Mutex::default(), wallpaper_transfer: tokio::sync::Mutex::new(()), wallpaper_changed: Notify::new() });
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let weak: Weak<Inbox> = Arc::downgrade(&inbox);
@@ -417,7 +430,13 @@ impl Inbox {
         };
         let _ = send.set_priority(-1);
         loop {
-            let res = match read_file_msg(&mut recv).await {
+            // A stream that never sends its (next) offer holds a slot of the
+            // admission limits for as long as keepalives hold the connection.
+            let offer = match tokio::time::timeout(self.offer_idle, read_file_msg(&mut recv)).await {
+                Ok(offer) => offer,
+                Err(_) => Err(anyhow::anyhow!("no file offer from the sender for {} s", self.offer_idle.as_secs())),
+            };
+            let res = match offer {
                 Ok(Some(FileMsg::Offer { path, size, mtime, batch })) => {
                     self.receive_file(fp, peer, &mut send, &mut recv, &path, (size, mtime, batch)).await
                 }
@@ -584,7 +603,8 @@ impl Inbox {
         let limits = self.limits.clone();
         let active = self.active.clone();
         let placed = tokio::task::spawn_blocking(move || {
-            let _guard = limits.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let staging = limits.lock().unwrap_or_else(std::sync::PoisonError::into_inner).staging.clone();
+            let _guard = staging.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let result = place(&root, &parts, &part).with_context(|| format!("placing received file in {root:?}"));
             // A verified file that cannot be put in place (a name or folder the
             // disk refuses) would be left forever in the staging folder: sending
@@ -601,7 +621,12 @@ impl Inbox {
         }).await?;
         match placed {
             Ok(name) => {
-                println!("Received {name} from {peer} (saved to {}).", self.root.join(&name).display());
+                // Not println!, which panics (and with panic=abort ends the daemon)
+                // when its log cannot be written: the file is already in place.
+                let _ = std::io::Write::write_fmt(
+                    &mut std::io::stdout().lock(),
+                    format_args!("Received {name} from {peer} (saved to {}).\n", self.root.join(&name).display()),
+                );
                 ticket.saved(name.clone());
                 write_file_msg(send, &FileMsg::Saved { name }).await
             }
@@ -959,22 +984,30 @@ fn prepare(
     limits: &Arc<Mutex<Limits>>,
     fp: Fingerprint,
 ) -> Result<(File, PathBuf, u64, Reservation)> {
-    let mut l = limits.lock().expect("poisoned");
+    // The staging lock keeps the checks and the reservation one step even though
+    // the counters are only locked for an instant (reservations are made only
+    // here; everything else only gives some back).
+    let staging = limits.lock().expect("poisoned").staging.clone();
+    let _staging = staging.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (file, part, offset) = open_part(root, id, size)?;
     let need = size - offset;
-    let peer_reserved = l.reserved.get(&fp).copied().unwrap_or(0);
-    if let Err(e) = check_room(root, prefix, id, size, offset, cap, l.reserved_total, peer_reserved) {
-        drop(l);
+    let (reserved_total, peer_reserved) = {
+        let l = limits.lock().expect("poisoned");
+        (l.reserved_total, l.reserved.get(&fp).copied().unwrap_or(0))
+    };
+    if let Err(e) = check_room(root, prefix, id, size, offset, cap, reserved_total, peer_reserved) {
         drop(file);
         if offset == 0 {
             let _ = fs::remove_file(&part);
         }
         return Err(e);
     }
-    l.reserved_total = l.reserved_total.saturating_add(need);
-    let r = l.reserved.entry(fp).or_default();
-    *r = r.saturating_add(need);
-    drop(l);
+    {
+        let mut l = limits.lock().expect("poisoned");
+        l.reserved_total = l.reserved_total.saturating_add(need);
+        let r = l.reserved.entry(fp).or_default();
+        *r = r.saturating_add(need);
+    }
     Ok((file, part, offset, Reservation { limits: limits.clone(), fp, left: need }))
 }
 
@@ -1101,11 +1134,17 @@ fn open_part(root: &Path, id: &str, size: u64) -> Result<(File, PathBuf, u64)> {
 /// that runs out of room.
 trait PartFile: std::io::Read + std::io::Write + Seek + Send + 'static {
     fn truncate(&mut self, len: u64) -> std::io::Result<()>;
+    /// Makes what was written durable (see [`write_part`]).
+    fn sync(&mut self) -> std::io::Result<()>;
 }
 
 impl PartFile for File {
     fn truncate(&mut self, len: u64) -> std::io::Result<()> {
         self.set_len(len)
+    }
+
+    fn sync(&mut self) -> std::io::Result<()> {
+        self.sync_all()
     }
 }
 
@@ -1182,6 +1221,10 @@ mod fault {
         fn truncate(&mut self, len: u64) -> std::io::Result<()> {
             self.file.set_len(len)
         }
+
+        fn sync(&mut self) -> std::io::Result<()> {
+            self.file.sync_all()
+        }
     }
 }
 
@@ -1206,6 +1249,10 @@ fn write_part(mut file: impl PartFile, offset: u64, mut rx: mpsc::Receiver<Vec<u
         hasher.update(&buf);
         file.write_all(&buf)?;
     }
+    // The hash covers what is in the page cache. Saved tells the sender it may
+    // delete its copy, so the bytes must be on disk before the file is linked
+    // into place, not left to a power loss to truncate.
+    file.sync()?;
     Ok(hasher.finalize().into())
 }
 
@@ -1227,16 +1274,29 @@ fn place(root: &Path, parts: &[String], part: &Path) -> Result<String> {
         let dest = long(&dir.join(&candidate));
         let done = match fs::hard_link(long(part), &dest) {
             Ok(()) => {
-                fs::remove_file(long(part))?;
+                // The file is in place now. A partial name that cannot be
+                // unlinked (a scanner has it open on Windows) is not a
+                // failure of the save; the sweep deletes it later.
+                let _ = fs::remove_file(long(part));
                 true
             }
             Err(e) if e.kind() == ErrorKind::AlreadyExists => false,
             // Filesystems without hard links (FAT, some network shares).
-            Err(_) if fs::symlink_metadata(&dest).is_err() => {
-                fs::rename(long(part), &dest)?;
-                true
-            }
-            Err(_) => false,
+            // The name is claimed first (create_new never replaces and never
+            // follows a link), so a file another program creates meanwhile is
+            // not overwritten by the move.
+            Err(_) => match OpenOptions::new().write(true).create_new(true).open(&dest) {
+                Ok(claimed) => {
+                    drop(claimed);
+                    if let Err(e) = fs::rename(long(part), &dest) {
+                        let _ = fs::remove_file(&dest);
+                        return Err(e.into());
+                    }
+                    true
+                }
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => false,
+                Err(e) => return Err(e.into()),
+            },
         };
         if done {
             let mut rel: Vec<&str> = folders.iter().map(String::as_str).collect();
@@ -1362,7 +1422,33 @@ pub fn collect_noted(paths: &[PathBuf]) -> Result<(Vec<Outgoing>, Skipped)> {
             false
         }
     });
+    distinct_partials(&mut out);
     Ok((out, skipped))
+}
+
+/// The receiver names a partial file after the offered name, size and
+/// modification time ([`part_id`]), so two different files of a batch that
+/// agree on all three (same-named copies from two folders, with preserved
+/// times) would be one partial file: their streams would cancel each other or
+/// resume with the other's prefix. The later one is offered as "name (n)",
+/// as the receiver would have numbered it anyway.
+fn distinct_partials(files: &mut [Outgoing]) {
+    let mut taken = std::collections::HashSet::new();
+    for file in files {
+        let key = |rel: &str| (rel.to_owned(), file.size, file.mtime);
+        if taken.insert(key(&file.rel)) {
+            continue;
+        }
+        let (dir, name) = file.rel.rsplit_once('/').map_or(("", file.rel.as_str()), |(dir, name)| (dir, name));
+        for n in 1..10_000 {
+            let numbered = numbered(name, n);
+            let rel = if dir.is_empty() { numbered } else { format!("{dir}/{numbered}") };
+            if taken.insert(key(&rel)) {
+                file.rel = rel;
+                break;
+            }
+        }
+    }
 }
 
 fn walk(dir: &Path, rel: &str, out: &mut Vec<Outgoing>, skipped: &mut Skipped) -> Result<()> {
@@ -1472,28 +1558,57 @@ pub async fn send_files_kind(
     for _ in 0..STREAMS.min(n) {
         let (conn, queue, results, progress, unopened) = (conn.clone(), queue.clone(), results.clone(), progress.clone(), unopened.clone());
         workers.spawn(async move {
-            let (mut send, mut recv) = match open_stream(&conn, kind).await {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::debug!("opening a file stream: {e:#}");
-                    unopened.lock().expect("poisoned").get_or_insert_with(|| format!("{e:#}"));
-                    return;
-                }
-            };
-            let _ = send.set_priority(-1);
-            loop {
-                let Some((i, file)) = queue.lock().expect("poisoned").pop_front() else { break };
-                let res = send_one(&mut send, &mut recv, &file, batch, &progress).await;
-                let broken = res.is_err();
-                let outcome = res.unwrap_or_else(|e| Outcome::Failed(interrupted(&e)));
-                results.lock().expect("poisoned").push((i, file, outcome));
-                if broken {
-                    return;
+            // A stream that a local read error left half way through a file is
+            // replaced; the files behind it are still worth a try.
+            'streams: loop {
+                let (mut send, mut recv) = match open_stream(&conn, kind).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::debug!("opening a file stream: {e:#}");
+                        unopened.lock().expect("poisoned").get_or_insert_with(|| format!("{e:#}"));
+                        return;
+                    }
+                };
+                let _ = send.set_priority(-1);
+                loop {
+                    let Some((i, file)) = queue.lock().expect("poisoned").pop_front() else {
+                        let _ = send.finish();
+                        // Wait until the receiver has seen the end of the stream.
+                        let _ = read_file_msg(&mut recv).await;
+                        return;
+                    };
+                    let res = send_one(&mut send, &mut recv, &file, batch, &progress).await;
+                    let (broken, local) = match &res {
+                        Ok(_) => (false, false),
+                        Err(e) => (true, e.is::<LocalFailure>()),
+                    };
+                    let outcome = match res {
+                        Ok(outcome) => outcome,
+                        // The file could not be read here: the connection is fine and says nothing about the next file.
+                        Err(e) if local => Outcome::Failed(format!("{e:#}")),
+                        Err(e) => {
+                            // Why this stream broke, for the files that now get no stream
+                            // (a receiver at its connection limit closes the connection, and
+                            // every file behind this one is told the same, see `unopened_outcome`).
+                            unopened.lock().expect("poisoned").get_or_insert_with(|| format!("{e:#}"));
+                            Outcome::Failed(interrupted(&e))
+                        }
+                    };
+                    results.lock().expect("poisoned").push((i, file, outcome));
+                    if local {
+                        // Half a file went out: end this stream so the receiver keeps
+                        // what arrived, and carry on with a new one.
+                        let _ = send.reset(1u32.into());
+                        if queue.lock().expect("poisoned").is_empty() {
+                            return;
+                        }
+                        continue 'streams;
+                    }
+                    if broken {
+                        return;
+                    }
                 }
             }
-            let _ = send.finish();
-            // Wait until the receiver has seen the end of the stream.
-            let _ = read_file_msg(&mut recv).await;
         });
     }
     while workers.join_next().await.is_some() {}
@@ -1513,6 +1628,9 @@ pub async fn send_files_kind(
 fn unopened_outcome(why: Option<&str>) -> String {
     match why {
         Some(why) if why.contains("closed by peer: not paired") => NOT_PAIRED.into(),
+        // A receiver at its connection limit: every file behind the one that
+        // met it is asked again with that one (see `is_busy`).
+        Some(why) if is_busy(why) => why.into(),
         _ => "connection lost".into(),
     }
 }
@@ -1543,6 +1661,14 @@ async fn send_one(
     batch: Batch,
     progress: &Progress,
 ) -> Result<Outcome> {
+    // A file that cannot be read now (permissions, a program has it locked, it
+    // changed since it was listed) is refused before anything is offered, so
+    // the stream stays good for the next file.
+    if let Err(e) = open_regular(&file.path, file.size) {
+        add_progress(&progress.done, file.size);
+        add_progress(&progress.skipped, file.size);
+        return Ok(Outcome::Failed(format!("{e:#}")));
+    }
     write_file_msg(send, &FileMsg::Offer { path: file.rel.clone(), size: file.size, mtime: file.mtime, batch }).await?;
     let offset = match read_file_msg(recv).await? {
         Some(FileMsg::Saved { name }) => {
@@ -1581,7 +1707,10 @@ async fn send_one(
         }
         add_progress(&progress.done, n);
     }
-    let hash = reader.await??;
+    // A file that cannot be read any more half way through leaves the stream
+    // in the middle of it (the worker opens another), but it is not the
+    // connection's fault and sending again does not resume anything.
+    let hash = reader.await?.map_err(|e| anyhow::Error::new(LocalFailure(format!("{e:#}"))))?;
     write_file_msg(send, &FileMsg::End { hash }).await?;
     match read_file_msg(recv).await? {
         Some(FileMsg::Saved { name }) => Ok(Outcome::Saved { name, resumed_from: offset }),
@@ -1589,6 +1718,18 @@ async fn send_one(
         other => bail!("unexpected reply {other:?}"),
     }
 }
+
+/// A file that could not be read for sending (see [`send_one`]).
+#[derive(Debug)]
+struct LocalFailure(String);
+
+impl std::fmt::Display for LocalFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for LocalFailure {}
 
 /// Hashes the whole file and sends the part from `offset` on.
 fn read_file(path: &Path, size: u64, offset: u64, tx: mpsc::Sender<bytes::Bytes>) -> Result<[u8; 32]> {
@@ -1630,11 +1771,11 @@ pub(crate) fn open_regular(path: &Path, size: u64) -> Result<File> {
     let file = options.open(path).with_context(|| format!("opening {}", path.display()))?;
     let metadata = file.metadata()?;
     if !metadata.is_file() || metadata.len() != size { bail!("{} changed before sending", path.display()); }
+    // Only a symbolic link or junction is refused. The reparse-point attribute
+    // alone is also set on real files (OneDrive and other cloud placeholders,
+    // deduplicated files); std reads the reparse tag for `is_symlink`.
     #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if metadata.file_attributes() & 0x400 != 0 { bail!("reparse point in outgoing file"); }
-    }
+    if metadata.file_type().is_symlink() { bail!("symbolic link in outgoing file"); }
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
@@ -2471,6 +2612,190 @@ mod tests {
         server.abort();
         let _ = fs::remove_dir_all(&src);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A file nobody may read must not take its stream (and, after four of
+    /// them, the whole batch) with it: the files behind it still arrive.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unreadable_files_do_not_stop_the_files_behind_them() {
+        use std::os::unix::fs::PermissionsExt;
+        let (pa, pb, _a, _b) = linked().await;
+        let (src, root) = (temp("unreadable-src"), temp("unreadable-dst"));
+        for n in 0..10 {
+            fs::write(src.join(format!("f{n:02}.txt")), format!("contents {n}")).unwrap();
+        }
+        let files = collect(&[src.clone()]).unwrap();
+        let mut locked = 0;
+        for n in 0..4 {
+            fs::set_permissions(src.join(format!("f{n:02}.txt")), fs::Permissions::from_mode(0)).unwrap();
+            locked += 1;
+        }
+        // Root reads anything; the test is about the others.
+        if fs::File::open(src.join("f00.txt")).is_ok() {
+            let _ = fs::remove_dir_all(&src);
+            return;
+        }
+        let inbox = Inbox::new(root.clone());
+        let server = serve(&inbox, &pb);
+        let results = send_files(&pa.conn, files, Arc::new(Progress::default())).await;
+        let failed = results.iter().filter(|(_, o)| matches!(o, Outcome::Failed(why) if !why.contains("connection lost"))).count();
+        let saved = results.iter().filter(|(_, o)| matches!(o, Outcome::Saved { .. })).count();
+        assert_eq!((failed, saved), (locked, 6), "{results:?}");
+        server.abort();
+        for n in 0..4 {
+            let _ = fs::set_permissions(src.join(format!("f{n:02}.txt")), fs::Permissions::from_mode(0o600));
+        }
+        let _ = fs::remove_dir_all(&src);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A file that cannot be read once the receiver has accepted it (changed or
+    /// locked in between) leaves its stream half way through, but it is not the
+    /// connection's fault: the stream is replaced, the files behind it are still
+    /// tried, and the failure does not claim that sending again resumes anything.
+    /// The receiver here is played by hand so the files can change after Accept.
+    #[tokio::test]
+    async fn a_file_that_cannot_be_read_after_accept_does_not_stop_the_rest() {
+        let (pa, pb, _a, _b) = linked().await;
+        let src = temp("afteraccept-src");
+        for n in 0..4 {
+            fs::write(src.join(format!("a{n}.txt")), b"will change").unwrap();
+        }
+        for n in 0..6 {
+            fs::write(src.join(format!("b{n}.txt")), b"stays").unwrap();
+        }
+        let files = collect(&[src.clone()]).unwrap();
+        let folder = src.clone();
+        let receiver = tokio::spawn(async move {
+            loop {
+                let Ok((_, mut send, mut recv)) = pb.accept_stream().await else { return };
+                let folder = folder.clone();
+                tokio::spawn(async move {
+                    while let Ok(Some(msg)) = read_file_msg(&mut recv).await {
+                        match msg {
+                            FileMsg::Offer { path, .. } if path.contains("/a") => {
+                                let file = folder.join(path.rsplit('/').next().unwrap());
+                                fs::write(&file, b"changed to another size").unwrap();
+                                if write_file_msg(&mut send, &FileMsg::Accept { offset: 0 }).await.is_err() {
+                                    return;
+                                }
+                            }
+                            FileMsg::Offer { path, .. } => {
+                                if write_file_msg(&mut send, &FileMsg::Saved { name: path }).await.is_err() {
+                                    return;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+        });
+        let results = send_files(&pa.conn, files, Arc::new(Progress::default())).await;
+        let failed: Vec<_> = results.iter().filter_map(|(f, o)| match o { Outcome::Failed(why) => Some((f.rel.clone(), why.clone())), _ => None }).collect();
+        assert_eq!(failed.len(), 4, "{results:?}");
+        assert!(failed.iter().all(|(_, why)| why.contains("changed before sending") && !why.contains("send again")), "{failed:?}");
+        assert_eq!(results.iter().filter(|(_, o)| matches!(o, Outcome::Saved { .. })).count(), 6, "{results:?}");
+        receiver.abort();
+        let _ = fs::remove_dir_all(&src);
+    }
+
+    /// A stream that opens and never offers anything gives its admission slot
+    /// back after the idle time instead of holding it as long as keepalives
+    /// keep the connection up.
+    #[tokio::test]
+    async fn a_stream_that_never_offers_gives_its_slot_back() {
+        let (pa, pb, _a, _b) = linked().await;
+        let root = temp("noffer");
+        let inbox = Inbox::build_idle(root.clone(), PEER_PARTIAL_CAP, Arc::new(Quiet), Duration::from_millis(300));
+        let permit = inbox.admit(pb.fingerprint).unwrap();
+        let (mut quiet, _answer) = open_stream(&pa.conn, StreamKind::File).await.unwrap();
+        quiet.write_all(&[]).await.unwrap();
+        let (_, send, recv) = pb.accept_stream().await.unwrap();
+        let fp = pb.fingerprint;
+        let served = tokio::spawn({
+            let inbox = inbox.clone();
+            async move { inbox.receive_inner(Some(&permit), fp, "t", send, recv).await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), served).await.expect("the idle stream kept its slot").unwrap();
+        assert_eq!(inbox.limits.lock().unwrap().total, 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Two different files of one batch with the same name, size and time must
+    /// not share a partial file: both arrive.
+    #[tokio::test]
+    async fn same_named_twins_in_one_batch_are_both_saved() {
+        let (pa, pb, _a, _b) = linked().await;
+        let (one, two, root) = (temp("twin-one"), temp("twin-two"), temp("twin-dst"));
+        let body_one = vec![1u8; 3 * CHUNK];
+        let body_two = vec![2u8; 3 * CHUNK];
+        fs::write(one.join("x.txt"), &body_one).unwrap();
+        fs::write(two.join("x.txt"), &body_two).unwrap();
+        let when = SystemTime::now() - Duration::from_secs(3600);
+        for dir in [&one, &two] {
+            File::options().write(true).open(dir.join("x.txt")).unwrap().set_modified(when).unwrap();
+        }
+        let files = collect(&[one.join("x.txt"), two.join("x.txt")]).unwrap();
+        assert_eq!(files.len(), 2);
+        assert_ne!(files[0].rel, files[1].rel, "{files:?}");
+        let inbox = Inbox::new(root.clone());
+        let server = serve(&inbox, &pb);
+        let results = send_files(&pa.conn, files, Arc::new(Progress::default())).await;
+        assert!(results.iter().all(|(_, o)| matches!(o, Outcome::Saved { .. })), "{results:?}");
+        let mut got: Vec<Vec<u8>> = ["x.txt", "x (1).txt"].iter().map(|n| fs::read(root.join(n)).unwrap()).collect();
+        got.sort();
+        assert_eq!(got, vec![body_one, body_two]);
+        server.abort();
+        for d in [one, two, root] { let _ = fs::remove_dir_all(d); }
+    }
+
+    /// Once the file is linked into place, a partial name that cannot be
+    /// unlinked is not a failed save (a second copy would follow).
+    #[cfg(unix)]
+    #[test]
+    fn place_succeeds_when_the_partial_cannot_be_unlinked() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, staging) = (temp("place-root"), temp("place-staging"));
+        let part = staging.join("p.part");
+        fs::write(&part, b"data").unwrap();
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o555)).unwrap();
+        let placed = if fs::remove_file(&part).is_ok() { None } else { Some(place(&root, &["a.txt".into()], &part)) };
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o755)).unwrap();
+        if let Some(placed) = placed {
+            assert_eq!(placed.unwrap(), "a.txt");
+            assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"data");
+        }
+        for d in [root, staging] { let _ = fs::remove_dir_all(d); }
+    }
+
+    /// Preparing a partial file waits for the staging folder's own lock, not
+    /// the one around the counters the daemon's thread takes per chunk.
+    #[test]
+    fn staging_work_does_not_hold_the_counters() {
+        let root = temp("staging-lock");
+        let fp = Fingerprint([9; 32]);
+        let limits = Arc::<Mutex<Limits>>::default();
+        let staging = limits.lock().unwrap().staging.clone();
+        let held = staging.lock().unwrap();
+        let worker = {
+            let (root, limits) = (root.clone(), limits.clone());
+            std::thread::spawn(move || prepare(&root, &part_id(fp, "f", 1, 1), &fp_prefix(fp), 1, PEER_PARTIAL_CAP, &limits, fp).map(|_| ()))
+        };
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!worker.is_finished(), "the preparation should be waiting for the staging lock");
+        assert!(limits.try_lock().is_ok(), "the counters must stay free while staging work waits or runs");
+        drop(held);
+        worker.join().unwrap().unwrap();
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn files_that_were_refused_for_a_busy_receiver_stay_busy() {
+        let why = format!("connection lost: closed by peer: {TOO_MANY_CONNS} (code 3)");
+        assert!(is_busy(&unopened_outcome(Some(&why))));
+        assert_eq!(unopened_outcome(Some("connection lost: timed out")), "connection lost");
     }
 
     #[test]
