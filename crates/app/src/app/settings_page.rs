@@ -18,6 +18,18 @@ const LEARN: [(&str, &str); 3] = [("off", "Off"), ("suggest", "Ask me"), ("auto"
 const POINTER: [(&str, &str); 3] = [("auto", "Auto"), ("always", "Always"), ("never", "Never")];
 const SCOPE: [(&str, &str); 5] = [("", "Shared"), ("left", "Left"), ("right", "Right"), ("top", "Top"), ("bottom", "Bottom")];
 
+/// The most `one-mk edge --corner` and `--dwell` take (`one-mk`'s settings
+/// cap the saved values at the same).
+const EDGE_CORNER_MAX: u32 = 500;
+const EDGE_DWELL_MAX: u32 = 5000;
+
+/// The key an edge rule holds, spelled as the choices are: `own` if it is a
+/// key (any case, `control` and `option` too), else the `shared` one, else none.
+fn effective_modifier(own: &str, shared: &str) -> String {
+    use one_mk_proto::Modifier;
+    own.parse::<Modifier>().or_else(|_| shared.parse()).unwrap_or_default().to_string()
+}
+
 /// A row on a page (the handoff's 52).
 const ROW: f32 = 52.0;
 /// The widest a category's cards go.
@@ -356,12 +368,16 @@ impl App {
         ui.ctx().data(|data| data.get_temp::<String>(Id::unique("edge-scope"))).unwrap_or_default()
     }
 
-    /// (corner px, wait ms, key to hold, stay in fullscreen) for `side`.
+    /// (corner px, wait ms, key to hold, stay in fullscreen) for `side`, as
+    /// the daemon applies them: a corner or wait over the most is the most,
+    /// a key spelled another way (`Control`) is the same key, and one edge's
+    /// key that is no key is the shared one.
     fn edge_rules(&self, side: &str) -> (u32, u32, String, bool) {
-        match self.prefs.edge_sides.iter().find(|(name, _)| name == side) {
-            Some((_, rules)) => (rules.corner, rules.dwell, rules.modifier.clone(), rules.fullscreen),
-            None => (self.prefs.edge_corner, self.prefs.edge_dwell_ms, self.prefs.edge_modifier.clone(), self.prefs.edge_fullscreen),
-        }
+        let (corner, dwell, own, fullscreen) = match self.prefs.edge_sides.iter().find(|(name, _)| name == side) {
+            Some((_, rules)) => (rules.corner, rules.dwell, rules.modifier.as_str(), rules.fullscreen),
+            None => (self.prefs.edge_corner, self.prefs.edge_dwell_ms, self.prefs.edge_modifier.as_str(), self.prefs.edge_fullscreen),
+        };
+        (corner.min(EDGE_CORNER_MAX), dwell.min(EDGE_DWELL_MAX), effective_modifier(own, &self.prefs.edge_modifier), fullscreen)
     }
 
     /// Room under "Stay in fullscreen windows" for what this desktop can't do.
@@ -442,6 +458,12 @@ impl App {
                 let mut side = self.edge_side(ui);
                 if let Some(k) = self.seg_row(ui, r, "edge-scope", "Which edges cross", "edge-scope", &SCOPE, &side, None) {
                     side = SCOPE[k].0.to_owned();
+                    // What was typed in a number field is for the side it was typed under:
+                    // the click that changes the side ends it here (settled by what the side had).
+                    for key in ["edge-corner", "edge-dwell"] {
+                        self.drafts.remove(key);
+                        ui.memory_mut(|memory| memory.surrender_focus(Id::unique(("field", key))));
+                    }
                     ui.ctx().data_mut(|data| data.insert_temp(Id::unique("edge-scope"), side));
                 }
             }
@@ -479,7 +501,8 @@ impl App {
                 }
             }
             "pointer-wrap" => {
-                let current = self.prefs.edge_wrap.clone();
+                // The file may spell it `ALL`; the daemon reads any case.
+                let current = self.prefs.edge_wrap.to_ascii_lowercase();
                 if let Some(k) = self.seg_row(ui, r, "pointer-wrap", "Pointer wrap", "edge-wrap", &WRAP, &current, None) {
                     self.settings_command("Pointer wrap", vec!["edge".into(), "--wrap".into(), WRAP[k].0.into()]);
                 }
@@ -589,7 +612,7 @@ impl App {
     fn edge_number_row(&mut self, ui: &mut Ui, key: &str, r: Rect) {
         let side = self.edge_side(ui);
         let (corner, dwell, _, _) = self.edge_rules(&side);
-        let (label, unit, cur, max, flag) = if key == "edge-corner" { ("Don't cross near corners", "px", corner, 500u32, "--corner") } else { ("Wait at the edge", "ms", dwell, 5000, "--dwell") };
+        let (label, unit, cur, max, flag) = if key == "edge-corner" { ("Don't cross near corners", "px", corner, EDGE_CORNER_MAX, "--corner") } else { ("Wait at the edge", "ms", dwell, EDGE_DWELL_MAX, "--dwell") };
         let uw = text_width(ui, "px", mono(T_META)).max(text_width(ui, "ms", mono(T_META))) + 8.0;
         label_help(ui, r, Id::unique(("edge-label", key)), label, key, true, 72.0 + uw + 12.0);
         let fr = Rect::from_min_size(pos2(r.right() - 72.0 - uw, r.center().y - 14.0), vec2(72.0, 28.0));
@@ -638,6 +661,27 @@ impl App {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn edge_keys_show_as_the_daemon_reads_them() {
+        assert_eq!(effective_modifier("Control", "none"), "ctrl");
+        assert_eq!(effective_modifier("OPTION", "none"), "alt");
+        // An edge's own key that is no key is the shared one; that none, none.
+        assert_eq!(effective_modifier("hyper", "Control"), "ctrl");
+        assert_eq!(effective_modifier("hyper", "hyper"), "none");
+        assert_eq!(effective_modifier("shift", "ctrl"), "shift");
+    }
+
+    // The window tests do not build on Windows (frame_tests is not compiled there).
+    #[cfg(not(windows))]
+    #[test]
+    fn edge_rules_are_the_ones_in_force() {
+        let mut win = super::frame_tests::Win::light(900.0, 700.0);
+        win.app.prefs = crate::view::Prefs::read("[edge]\nmodifier = \"Control\"\ndwell_ms = 8000\ncorner = 900\nwrap = \"ALL\"\n[edge.left]\nmodifier = \"hyper\"\n", "");
+        assert_eq!(win.app.edge_rules(""), (500, 5000, "ctrl".to_owned(), false));
+        assert_eq!(win.app.edge_rules("left"), (500, 5000, "ctrl".to_owned(), false));
+        assert_eq!(win.app.prefs.edge_wrap.to_ascii_lowercase(), "all");
+    }
 
     #[test]
     fn eight_categories_in_the_order_of_the_handoff() {
