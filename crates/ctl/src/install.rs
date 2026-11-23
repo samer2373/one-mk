@@ -102,17 +102,31 @@ pub fn install(launch: &Launch) -> Result<String> {
     }
 }
 
-/// Stops starting one-mk (and the tray) at login, and says what was done.
+/// Stops starting one-mk (and the tray) at login, stops the copy the service manager is running,
+/// and says what was done.
 pub fn uninstall() -> Result<String> {
+    remove_login(true)
+}
+
+/// Stops starting one-mk (and the tray) at login and nothing else: a copy that is running (and
+/// sharing) now keeps running until it is stopped. What the window's "Start at login" switch uses.
+pub fn disable_login() -> Result<String> {
+    remove_login(false)
+}
+
+fn remove_login(stop: bool) -> Result<String> {
     let did = if cfg!(target_os = "linux") {
-        uninstall_linux()?
+        uninstall_linux(stop)?
     } else if cfg!(target_os = "macos") {
-        uninstall_macos()?
+        uninstall_macos(stop)?
     } else {
         return uninstall_windows();
     };
     Ok(if did {
-        "one-mk will no longer start when you log in.\n  to turn it back on:  one-mk install".to_owned()
+        format!(
+            "one-mk will no longer start when you log in{}.\n  to turn it back on:  one-mk install",
+            if stop { "" } else { " (the copy running now is left running)" }
+        )
     } else {
         "one-mk was not set to start at login; nothing to remove.".to_owned()
     })
@@ -400,24 +414,35 @@ fn install_linux_in(config: &Path, data: &Path, l: &Launch) -> Result<String> {
     Ok(msg)
 }
 
-fn uninstall_linux() -> Result<bool> {
-    let (config, data) = (crate::xdg::config_home()?, crate::xdg::data_home()?);
-    let unit = unit_path(&config);
+fn uninstall_linux(stop: bool) -> Result<bool> {
+    uninstall_linux_in(&crate::xdg::config_home()?, &crate::xdg::data_home()?, stop)
+}
+
+/// What stops the service from starting at login: `--now` also stops the running one.
+fn systemd_disable_args(stop: bool) -> &'static [&'static str] {
+    if stop { &["--user", "disable", "--now", "one-mk.service"] } else { &["--user", "disable", "one-mk.service"] }
+}
+
+fn uninstall_linux_in(config: &Path, data: &Path, stop: bool) -> Result<bool> {
+    let unit = unit_path(config);
     let mut did = false;
     if unit.exists() {
         // Only the unit systemd reads is the one it would disable.
-        let systemd = systemd_for(&config);
+        let systemd = systemd_for(config);
         if systemd {
-            ok("systemctl", &["--user", "disable", "--now", "one-mk.service"]);
+            ok("systemctl", systemd_disable_args(stop));
         }
         did |= remove(&unit)?;
         if systemd {
             ok("systemctl", &["--user", "daemon-reload"]);
         }
     }
-    did |= remove(&desktop_path(&config))?;
-    did |= remove(&tray_desktop_path(&config))?;
-    did |= remove(&app_entry_path(&data))?;
+    did |= remove(&desktop_path(config))?;
+    did |= remove(&tray_desktop_path(config))?;
+    // The desktop entry the keyboard shortcuts are registered under belongs to the running copy.
+    if stop {
+        did |= remove(&app_entry_path(data))?;
+    }
     Ok(did)
 }
 
@@ -531,14 +556,16 @@ fn install_macos(l: &Launch) -> Result<String> {
     Ok(msg)
 }
 
-fn uninstall_macos() -> Result<bool> {
+/// `stop` also boots the running jobs out of launchd; without it their LaunchAgent files are
+/// removed (so nothing starts at the next login) and the running copy is left alone.
+fn uninstall_macos(stop: bool) -> Result<bool> {
     let home = home_dir()?;
     let owns = launchd_owns(&home, account_home().as_deref());
     let mut did = false;
     for label in [LABEL, TRAY_LABEL] {
         let plist = plist_path(&home, label);
         if plist.exists() {
-            if owns {
+            if owns && stop {
                 ok("launchctl", &["bootout", &format!("{}/{label}", gui_domain())]);
             }
             did |= remove(&plist)?;
@@ -851,6 +878,24 @@ mod tests {
         install_linux_in(&config, &data, &Launch { tray: None, ..with }).unwrap();
         assert!(!tray.exists());
         assert!(desktop_path(&config).exists(), "the daemon's own entry stays");
+    }
+
+    /// Turning off "Start at login" must not end the sharing that is going on: only the full
+    /// uninstall stops the running service, and only that one takes the shortcuts' entry away.
+    #[test]
+    fn disabling_login_does_not_stop_the_running_copy() {
+        assert!(systemd_disable_args(true).contains(&"--now"));
+        assert!(!systemd_disable_args(false).contains(&"--now"));
+        for stop in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let (config, data) = (dir.path().join("config"), dir.path().join("data"));
+            let with = Launch { tray: Some("/opt/x/one-mk-tray".into()), start_now: false, ..launch(None) };
+            install_linux_in(&config, &data, &with).unwrap();
+            assert!(uninstall_linux_in(&config, &data, stop).unwrap());
+            assert!(!desktop_path(&config).exists() && !tray_desktop_path(&config).exists(), "still starts at login");
+            assert_eq!(app_entry_path(&data).exists(), !stop, "stop={stop}");
+            assert!(!uninstall_linux_in(&config, &data, stop).unwrap(), "nothing left to remove");
+        }
     }
 
     #[test]

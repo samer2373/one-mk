@@ -1069,7 +1069,8 @@ impl Link {
             let done = if on {
                 l.login_launch().and_then(|launch| install::install(&launch))
             } else {
-                install::uninstall()
+                // The login entry only: sharing that is going on is stopped by Stop.
+                install::disable_login()
             };
             l.send(Event::Autostart(install::is_installed_for(l.login_home().as_deref())));
             done.map(drop)
