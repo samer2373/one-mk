@@ -217,6 +217,11 @@ pub struct LinkStats {
     pub lost: u64,
     /// Packets sent since it began.
     pub sent: u64,
+    /// Which connection this is: a number the daemon gives each connection it
+    /// takes up, so a replacement for the same computer differs from the one
+    /// before it even when its packet counts have caught up with the old one's.
+    /// 0 from a daemon that does not say (counts are the only hint then).
+    pub generation: u64,
 }
 
 impl LinkStats {
@@ -474,6 +479,11 @@ impl Status {
         for (id, l) in &self.links {
             out += &format!("link\t{id}\t{}\t{}\t{}\n", l.rtt_us, l.lost, l.sent);
         }
+        // Its own line, not a sixth field of `link`: readers from before it
+        // would drop the whole `link` line over a field they do not know.
+        for (id, l) in self.links.iter().filter(|(_, l)| l.generation != 0) {
+            out += &format!("linkgen\t{id}\t{}\n", l.generation);
+        }
         // Lines of their own, which readers from before them skip.
         let l = &self.layout;
         if let Some(p) = &l.profile {
@@ -567,6 +577,8 @@ impl Status {
             return None;
         }
         let mut s = Status::default();
+        // Applied once every `link` line is read, whatever order they came in.
+        let mut generations: Vec<(String, u64)> = Vec::new();
         for line in lines {
             if let Some(json) = line.strip_prefix("wallpaper\t") {
                 s.wallpaper = serde_json::from_str(json).ok();
@@ -650,7 +662,12 @@ impl Status {
                     if let (Ok(rtt_us), Ok(lost), Ok(sent)) = (rtt.parse::<u32>(), lost.parse(), sent.parse())
                         && s.link_of(id).is_none()
                     {
-                        s.links.push((id.into(), LinkStats { rtt_us: rtt_us.min(LinkStats::MAX_RTT_US), lost, sent }));
+                        s.links.push((id.into(), LinkStats { rtt_us: rtt_us.min(LinkStats::MAX_RTT_US), lost, sent, generation: 0 }));
+                    }
+                }
+                ["linkgen", id, generation] => {
+                    if let Ok(generation) = generation.parse::<u64>() {
+                        generations.push(((*id).to_owned(), generation));
                     }
                 }
                 ["offset", id, x, y] => {
@@ -659,6 +676,12 @@ impl Status {
                     }
                 }
                 _ => {}
+            }
+        }
+        // The first line for a computer counts, as for `link`.
+        for (id, generation) in generations {
+            if let Some((_, link)) = s.links.iter_mut().find(|(link_id, link)| *link_id == id && link.generation == 0) {
+                link.generation = generation;
             }
         }
         Some(s)
@@ -1091,7 +1114,7 @@ mod tests {
         let s = Status {
             name: "desk".into(),
             peers: vec![peer("1111-2222", true), peer("3333-4444", false)],
-            links: vec![("1111-2222".into(), LinkStats { rtt_us: 4_200, lost: 3, sent: 90_000 })],
+            links: vec![("1111-2222".into(), LinkStats { rtt_us: 4_200, lost: 3, sent: 90_000, generation: 7 })],
             ..Status::default()
         };
         let encoded = s.encode();
@@ -1115,6 +1138,26 @@ mod tests {
     }
 
     #[test]
+    fn the_connection_generation_has_a_line_of_its_own_that_older_readers_skip() {
+        let s = Status { name: "desk".into(), links: vec![("1111-2222".into(), LinkStats { rtt_us: 900, lost: 1, sent: 5, generation: 31 }), ("3333-4444".into(), LinkStats { sent: 2, ..Default::default() })], ..Status::default() };
+        let encoded = s.encode();
+        // The `link` line keeps the five fields a reader from before the generation requires.
+        for line in encoded.lines().filter(|l| l.starts_with("link\t")) {
+            assert_eq!(line.split('\t').count(), 5, "{line}");
+        }
+        assert!(encoded.contains("linkgen\t1111-2222\t31\n") && !encoded.contains("linkgen\t3333-4444"), "{encoded}");
+        assert_eq!(Status::decode(&encoded), Some(s.clone()));
+        // A daemon from before it says nothing: generation 0, the rest as ever.
+        let old: Vec<&str> = encoded.lines().filter(|l| !l.starts_with("linkgen\t")).collect();
+        let older = Status::decode(&(old.join("\n") + "\n")).unwrap();
+        assert_eq!(older.link_of("1111-2222"), Some(LinkStats { rtt_us: 900, lost: 1, sent: 5, generation: 0 }));
+        // Its place in the text does not matter, a repeated line keeps the first, and nonsense is ignored.
+        let head = "ok\nname\tdesk\n";
+        let early = Status::decode(&format!("{head}linkgen\t1\t9\nlinkgen\t1\t10\nlinkgen\t2\t4\nlinkgen\t1\tx\nlinkgen\t1\t-3\nlinkgen\t1\nlink\t1\t5\t0\t0\n")).unwrap();
+        assert_eq!(early.links, vec![("1".to_owned(), LinkStats { rtt_us: 5, lost: 0, sent: 0, generation: 9 })]);
+    }
+
+    #[test]
     fn hostile_link_lines_cost_only_their_graph() {
         let head = "ok\nname\tdesk\n";
         for bad in [
@@ -1132,7 +1175,7 @@ mod tests {
         }
         // A silly round trip is capped; a repeated id keeps its first line.
         let s = Status::decode(&format!("{head}link\t1\t4000000000\t18446744073709551615\t7\nlink\t1\t5\t0\t0\n")).unwrap();
-        assert_eq!(s.links, vec![("1".to_owned(), LinkStats { rtt_us: LinkStats::MAX_RTT_US, lost: u64::MAX, sent: 7 })]);
+        assert_eq!(s.links, vec![("1".to_owned(), LinkStats { rtt_us: LinkStats::MAX_RTT_US, lost: u64::MAX, sent: 7, generation: 0 })]);
         // Text in an id can't break the line: ids are fields, tabs split them.
         assert!(Status::decode(&format!("{head}link\ta\tb\t1\t2\t3\n")).unwrap().links.is_empty());
     }

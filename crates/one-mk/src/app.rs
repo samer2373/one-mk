@@ -296,10 +296,26 @@ struct Connected {
     /// Where its desktop sits in ours (see `Device::offset`).
     offset: Option<(i32, i32)>,
     conn: quinn::Connection,
+    /// Tells this connection from any other, even a replacement for the same
+    /// computer (see [`next_link_generation`]); the status carries it.
+    generation: u64,
     ctl: ControlWriter,
     desktop: Option<Desktop>,
     /// What it supports besides the basics (bits of [`caps`]); 0 until it says.
     caps: u32,
+}
+
+/// A number no other connection of this daemon, now or after a restart, gets:
+/// the window ends its round-trip history when it changes, so a replacement
+/// connection never inherits the one before it. Counted up from the clock (the
+/// milliseconds, 4096 numbers each) so a restarted daemon does not repeat old ones.
+fn next_link_generation() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let start = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64) << 12;
+    // Never behind the clock, and never 0: that means "not said".
+    NEXT.fetch_max(start, Ordering::Relaxed);
+    NEXT.fetch_add(1, Ordering::Relaxed) + 1
 }
 
 /// We control a peer.
@@ -2379,7 +2395,7 @@ impl App {
             ctl.send(Control::Screens(local.screens.clone()));
         }
         self.wallpaper.disconnected(fp);
-        if let Some(old) = self.peers.insert(fp, Connected { keyboard: None, id, name, os, rank, side, offset, conn, ctl, desktop, caps: 0 }) {
+        if let Some(old) = self.peers.insert(fp, Connected { keyboard: None, id, name, os, rank, side, offset, conn, generation: next_link_generation(), ctl, desktop, caps: 0 }) {
             old.conn.close(2u32.into(), b"duplicate");
         }
         self.push.connected(fp);
@@ -3124,7 +3140,7 @@ impl App {
             let live = self.peers.get(&d.fingerprint()?)?;
             let stats = live.conn.stats().path;
             let us = u32::try_from(stats.rtt.as_micros()).unwrap_or(u32::MAX).min(LinkStats::MAX_RTT_US);
-            Some((d.short_id(), LinkStats { rtt_us: us, lost: stats.lost_packets, sent: stats.sent_packets }))
+            Some((d.short_id(), LinkStats { rtt_us: us, lost: stats.lost_packets, sent: stats.sent_packets, generation: live.generation }))
         });
         Status {
             name: sanitize_name(&id.name),
@@ -4984,6 +5000,11 @@ mod tests {
         // The status text is what carries it: older readers skip the line.
         let text = control::request(&duo.da, Request::Status).await.unwrap().unwrap();
         assert_eq!(text.lines().filter(|l| l.starts_with("link\t")).count(), 1, "{text}");
+        // Which connection it is rides on a line of its own, so a replacement is told from it.
+        assert_ne!(link.generation, 0, "{link:?}");
+        assert_eq!(text.lines().filter(|l| l.starts_with("linkgen\t")).count(), 1, "{text}");
+        let next = next_link_generation();
+        assert!(next > link.generation && next_link_generation() > next);
 
         let mut trust = TrustStore::load(&duo.db).unwrap();
         trust.remove(&duo.fa[..8]).unwrap();
