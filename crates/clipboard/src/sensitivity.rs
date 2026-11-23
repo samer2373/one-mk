@@ -39,6 +39,87 @@ pub(super) fn concealed(apps: &[String]) -> anyhow::Result<bool> {
     }
 }
 
+/// Watches the clipboard from before the sensitivity query until the content has
+/// been read, so that the verdict and the content are of the same copy. They are
+/// separate requests (the types the owner offers, then the data), and a copy made
+/// between them would be read under the verdict of the one before: a password
+/// taken for ordinary text. [`Guard::finish`] says if anything changed.
+///
+/// X11 (and XWayland, which is what GNOME's Wayland session uses) tells of every
+/// change of the CLIPBOARD owner, also one by the same window, through XFixes: the
+/// guard's own connection hears of it. The Wayland data-control protocol has no such
+/// stream here, so the offered types are asked for again afterwards: a copy that
+/// becomes sensitive in between offers the marker type, and shows.
+#[cfg(target_os = "linux")]
+pub(super) enum Guard {
+    X11 { connection: x11rb::rust_connection::RustConnection, clipboard: u32 },
+    Offers(std::collections::HashSet<String>),
+    /// Nothing to watch with (no XFixes; types that can't be asked for).
+    Unwatched,
+}
+
+#[cfg(target_os = "linux")]
+fn offers() -> Option<std::collections::HashSet<String>> {
+    use wl_clipboard_rs::paste::{get_mime_types, ClipboardType, Seat, Error};
+    match get_mime_types(ClipboardType::Regular, Seat::Unspecified) {
+        Ok(types) => Some(types),
+        Err(Error::ClipboardEmpty | Error::NoSeats) => Some(Default::default()),
+        Err(_) => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Guard {
+    pub(super) fn begin() -> anyhow::Result<Guard> {
+        if super::wayland_data_control() {
+            return Ok(offers().map_or(Guard::Unwatched, Guard::Offers));
+        }
+        use x11rb::{connection::Connection, protocol::{xfixes::{ConnectionExt as _, SelectionEventMask}, xproto::{ConnectionExt, CreateWindowAux, WindowClass}}};
+        let (connection, screen) = x11rb::connect(None)?;
+        let setup = || -> anyhow::Result<u32> {
+            connection.xfixes_query_version(5, 0)?.reply()?;
+            let root = connection.setup().roots[screen].root;
+            let clipboard = connection.intern_atom(false, b"CLIPBOARD")?.reply()?.atom;
+            let window = connection.generate_id()?;
+            connection.create_window(0, window, root, 0, 0, 1, 1, 0, WindowClass::INPUT_ONLY, 0, &CreateWindowAux::new())?.check()?;
+            // `check` is a round trip: the server has taken the request before the caller goes on to ask anything.
+            connection.xfixes_select_selection_input(window, clipboard,
+                SelectionEventMask::SET_SELECTION_OWNER | SelectionEventMask::SELECTION_WINDOW_DESTROY | SelectionEventMask::SELECTION_CLIENT_CLOSE)?.check()?;
+            Ok(clipboard)
+        };
+        match setup() {
+            Ok(clipboard) => Ok(Guard::X11 { connection, clipboard }),
+            Err(error) => {
+                tracing::debug!("clipboard change guard unavailable: {error:#}");
+                Ok(Guard::Unwatched)
+            }
+        }
+    }
+
+    /// Fails when the clipboard changed since [`Guard::begin`] (the caller reads again).
+    pub(super) fn finish(self) -> anyhow::Result<()> {
+        match self {
+            Guard::Unwatched => Ok(()),
+            Guard::Offers(before) => match offers() {
+                Some(after) if after != before => anyhow::bail!("clipboard changed during read; retry"),
+                _ => Ok(()),
+            },
+            Guard::X11 { connection, clipboard } => {
+                use x11rb::{connection::Connection as _, protocol::{Event, xproto::ConnectionExt}};
+                // Events come before the reply of a later request on the same connection: once
+                // this returns, every change the server has made so far has been delivered.
+                connection.get_input_focus()?.reply()?;
+                while let Some(event) = connection.poll_for_event()? {
+                    if matches!(event, Event::XfixesSelectionNotify(change) if change.selection == clipboard) {
+                        anyhow::bail!("clipboard changed during read; retry");
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 #[cfg(windows)]
 pub(super) fn generation() -> u64 {
     unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() as u64 }
@@ -86,6 +167,33 @@ pub(super) fn concealed(_: &[String]) -> anyhow::Result<bool> { Ok(false) }
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    /// A copy made after the guard began is reported by `finish`, also by the same owner
+    /// window (the owner id alone would not show it); no copy, no report.
+    #[test]
+    #[ignore = "requires an explicitly private X11 display and xclip"]
+    fn real_x11_guard_reports_a_copy_made_while_it_watched() {
+        use std::io::Write;
+        assert_eq!(std::env::var("ONE_MK_PRIVATE_X11").as_deref(), Ok("1"));
+        assert!(std::env::var_os("WAYLAND_DISPLAY").is_none());
+        struct Owner(std::process::Child);
+        impl Drop for Owner { fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); } }
+        let copy = |text: &[u8]| {
+            let mut owner = Owner(std::process::Command::new("xclip").args(["-selection", "clipboard", "-in", "-quiet"])
+                .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap());
+            owner.0.stdin.take().unwrap().write_all(text).unwrap();
+            owner
+        };
+        let _first = copy(b"ordinary");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let quiet = super::Guard::begin().unwrap();
+        assert!(matches!(quiet, super::Guard::X11 { .. }));
+        quiet.finish().expect("nothing was copied");
+        let watching = super::Guard::begin().unwrap();
+        let _second = copy(b"marked");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(watching.finish().is_err(), "a copy during the read went unnoticed");
+    }
+
     #[test]
     #[ignore = "requires an explicitly private X11 display and xclip"]
     fn real_x11_password_manager_target_is_concealed() {

@@ -929,6 +929,9 @@ impl Worker {
 
     fn read_raw(&mut self, raw: Raw, skip: &[Digest], mode: ReadMode) -> Result<Read> {
         let max = self.filter().max_bytes();
+        // Before the sensitivity query: a copy made between it and the read is caught (see `sensitivity::Guard`).
+        #[cfg(target_os = "linux")]
+        let guard = if matches!(self.backend, Backend::System(_)) { Some(sensitivity::Guard::begin()?) } else { None };
         let skip_concealed = self.filter().skip_concealed;
         if raw.is_empty() {
             return Ok(Read::Empty);
@@ -944,6 +947,8 @@ impl Worker {
         }
         if concealed && (skip_concealed || received) && mode != ReadMode::Explicit {
             return Ok(Read::Concealed(digest));
+        #[cfg(target_os = "linux")]
+        if let Some(guard) = guard && r.is_ok() { guard.finish()?; }
         }
         if let Some((d, data)) = &self.cache
             && *d == digest
