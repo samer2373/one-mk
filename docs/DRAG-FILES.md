@@ -30,7 +30,9 @@ on every desktop.
 ## Things to know
 
 - Only files and folders you can read are sent, at most 10000 files and 1 TiB in
-  one drop. Symbolic links, pipes and empty folders are not sent.
+  one drop. A drop that contains a symbolic link, junction, pipe or socket is
+  refused as a whole, so nothing in it is sent. Empty folders are skipped; a
+  drop of nothing but empty folders is refused as "nothing to send".
 - Any program that can talk to your X server can fake a drop, so on X11 this is
   not a protection boundary against hostile programs running as you. That is one
   reason it is opt-in.
