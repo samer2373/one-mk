@@ -304,6 +304,42 @@ async fn profile_switches_with_the_network() {
     duo.stop().await;
 }
 
+/// A rule added for the network the computer is already on (while another
+/// automatic rule has the network watcher running) puts its profile in place
+/// at once, not at the next change of network. Rules that still match what is
+/// in place leave later layout tweaks alone.
+#[tokio::test]
+async fn a_new_automatic_rule_applies_to_the_network_we_are_on() {
+    use crate::profiles::{NetworkId, ProfileCmd, Profiles};
+    let mut duo = Duo::start("auto-rematch", None).await;
+    let (da, fb) = (duo.da.clone(), duo.fb.clone());
+    crate::manage::set_layout(&da, &fb[..8], Some(Side::Bottom), Some(Some((300, 1080))), None).unwrap();
+    crate::profiles::run(&da, ProfileCmd::Save { name: "desk".into() }).await.unwrap();
+    crate::manage::set_layout(&da, &fb[..8], Some(Side::Right), Some(None), None).unwrap();
+    crate::profiles::run(&da, ProfileCmd::Save { name: "home".into() }).await.unwrap();
+    // Only "home" switches by itself, on another network: the watcher runs.
+    let rule = |name: &str, ssid: &str| ProfileCmd::Auto { name: name.into(), ssid: vec![ssid.into()], network: vec![], off: false, clear: false };
+    let watching = crate::netwatch::fake::watchers();
+    crate::profiles::run(&da, rule("home", "Home WiFi")).await.unwrap();
+    eventually("A to watch the network", || crate::netwatch::fake::watchers() > watching).await;
+    // The computer is at the desk, which no rule knows yet: nothing changes.
+    let desk = NetworkId { ssids: vec!["Desk WiFi".into()], ..NetworkId::default() };
+    crate::netwatch::fake::announce(&desk);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(Profiles::load(&da).unwrap().active.as_deref(), Some("home"));
+    while duo.ha.capture.try_recv().is_ok() {}
+    // Now the desk gets a rule. No new network report follows.
+    crate::profiles::run(&da, rule("desk", "Desk WiFi")).await.unwrap();
+    assert_eq!(next_capture(&mut duo.ha).await, only(edge(Side::Bottom, 1080, 300, 1920)));
+    assert_eq!(Profiles::load(&da).unwrap().active.as_deref(), Some("desk"));
+    // A tweak, then another change to the rules that still match the same profile: it stands.
+    crate::manage::set_layout(&da, &fb[..8], None, Some(Some((100, 1080))), None).unwrap();
+    crate::profiles::run(&da, rule("home", "Home WiFi")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(record(&da, &fb).offset, Some((100, 1080)));
+    duo.stop().await;
+}
+
 /// An offset past the end of the edge (`one-mk layout B right --offset
 /// 1920,5000`): nothing crosses and status says why, but `one-mk switch`
 /// still reaches B, and from there all of B's edge facing A leads home
