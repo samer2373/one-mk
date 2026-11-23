@@ -946,6 +946,13 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image> {
     let mut dec = png::Decoder::new_with_limits(std::io::Cursor::new(bytes), png::Limits { bytes: MAX_RGBA });
     dec.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = dec.read_info()?;
+    // The picture as RGBA, which is what is made of it below (and what the
+    // platforms are given), not as the decoder lays it out (1 byte a pixel
+    // for grey, 3 for RGB).
+    let (width, height) = (reader.info().width as usize, reader.info().height as usize);
+    if width.checked_mul(height).and_then(|pixels| pixels.checked_mul(4)).is_none_or(|rgba| rgba > MAX_RGBA) {
+        bail!("image too large");
+    }
     let size = reader.output_buffer_size().context("image too large")?;
     if size > MAX_RGBA {
         bail!("image too large");
