@@ -8,6 +8,34 @@ use windows::core::{implement, w, Ref};
 use windows::Win32::{Foundation::*, System::{Com::*, Ole::*, SystemServices::MODIFIERKEYS_FLAGS, Threading::GetCurrentThreadId},
     UI::{Shell::{DragQueryFileW, HDROP}, WindowsAndMessaging::*}};
 
+mod scale { include!("dropzone_scale.rs"); }
+
+/// How many physical pixels one pixel of the space the daemon sees is: the primary monitor's DPI
+/// over 96, as `win_logic::Space` does. The hook and the window work in physical pixels.
+fn primary_scale() -> f64 {
+    use windows_sys::Win32::{Foundation::POINT, Graphics::Gdi::{MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint}, UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI}};
+    let (mut x, mut y) = (0u32, 0u32);
+    // SAFETY: plain calls with out-pointers that outlive them.
+    let found = unsafe { GetDpiForMonitor(MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY), MDT_EFFECTIVE_DPI, &mut x, &mut y) } >= 0;
+    if found && x != 0 { f64::from(x) / 96.0 } else { 1.0 }
+}
+
+/// The zones in physical pixels, from the space the daemon sees.
+fn physical(zones: Vec<Zone>) -> Vec<Zone> {
+    let scale = primary_scale();
+    zones.into_iter().map(|zone| Zone { rect: scale::to_physical(zone.rect, scale), ..zone }).collect()
+}
+
+fn set_thread_dpi_awareness() {
+    use windows_sys::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext};
+    // SAFETY: plain calls with predefined contexts (v1 gives the same coordinates before Windows 10 1703).
+    unsafe {
+        if SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).is_null() {
+            SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+        }
+    }
+}
+
 thread_local! { static ACTIVE: RefCell<Option<Rc<RefCell<State>>>> = const { RefCell::new(None) }; }
 
 struct State {
@@ -164,6 +192,7 @@ pub(super) fn start(mut zones: watch::Receiver<Vec<Zone>>, dropped: mpsc::Sender
     let (ready, initialized) = std::sync::mpsc::sync_channel(1);
     std::thread::Builder::new().name("one-mk-drop".into()).spawn(move || {
         let mut run = || -> windows::core::Result<()> {
+            set_thread_dpi_awareness();
             unsafe {
                 OleInitialize(None)?;
                 let mut resources = Resources { hwnd: HWND::default(), mouse: HHOOK::default(), keyboard: HHOOK::default() };
@@ -175,7 +204,7 @@ pub(super) fn start(mut zones: watch::Receiver<Vec<Zone>>, dropped: mpsc::Sender
                 let hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, class.lpszClassName,
                     w!("Drop files to paired computer"), WS_POPUP, 0, 0, 1, 1, None, None, Some(instance), None)?;
                 resources.hwnd = hwnd;
-                let state = Rc::new(RefCell::new(State { hwnd, zones: zones.borrow_and_update().clone(), shown: None,
+                let state = Rc::new(RefCell::new(State { hwnd, zones: physical(zones.borrow_and_update().clone()), shown: None,
                     drag: Drag::default(), held: false, accepts: false, dropped: dropped.clone() }));
                 let target: IDropTarget = OleTarget { state: state.clone() }.into();
                 RegisterDragDrop(hwnd, &target)?;
@@ -189,7 +218,7 @@ pub(super) fn start(mut zones: watch::Receiver<Vec<Zone>>, dropped: mpsc::Sender
                     if message.message == WM_APP {
                         let mut state = state.borrow_mut();
                         state.cancel();
-                        state.zones = zones.borrow_and_update().clone();
+                        state.zones = physical(zones.borrow_and_update().clone());
                     } else { let _ = TranslateMessage(&message); DispatchMessageW(&message); }
                 }
                 ACTIVE.with(|active| *active.borrow_mut() = None);
