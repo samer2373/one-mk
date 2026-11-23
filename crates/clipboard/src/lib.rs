@@ -375,6 +375,26 @@ impl Raw {
         self.text.is_none() && self.html.is_none() && self.image.is_none()
     }
 
+    /// What [`Raw::digest`] of this content is under each combination of
+    /// format switches: a later read with another filter sees the same copy
+    /// by another digest, and has to know it is the same copy.
+    fn digests_under_any_filter(&self) -> Vec<Digest> {
+        let base = self.clone().without_empty_formats();
+        let mut all = Vec::new();
+        for bits in 0..8u8 {
+            let filter = Filter { text: bits & 1 != 0, html: bits & 2 != 0, image: bits & 4 != 0, ..Filter::default() };
+            let seen = base.clone().filtered(&filter).prefer_text();
+            if seen.is_empty() {
+                continue;
+            }
+            let digest = seen.digest();
+            if !all.contains(&digest) {
+                all.push(digest);
+            }
+        }
+        all
+    }
+
     /// Drops the formats that are switched off.
     fn filtered(mut self, f: &Filter) -> Self {
         if !f.text {
@@ -442,6 +462,7 @@ impl Raw {
 pub struct MemoryClipboard {
     raw: Arc<Mutex<Raw>>,
     writes: Arc<AtomicUsize>,
+    fail_reads: Arc<AtomicUsize>,
 }
 
 impl MemoryClipboard {
@@ -461,6 +482,11 @@ impl MemoryClipboard {
     }
     pub fn text(&self) -> Option<String> {
         self.get().text
+    }
+    /// Makes the next `n` reads fail, as a busy platform clipboard does.
+    #[doc(hidden)]
+    pub fn fail_next_reads(&self, n: usize) {
+        self.fail_reads.store(n, Ordering::SeqCst);
     }
     /// How many times [`Clipboard::write`] changed this clipboard.
     pub fn writes(&self) -> usize {
@@ -560,7 +586,14 @@ impl Backend {
     /// not even fetched.
     fn read(&mut self, filter: &Filter) -> Result<Raw> {
         match self {
-            Backend::Memory(m) => Ok(m.get().filtered(filter)),
+            Backend::Memory(m) => {
+                let failing = m.fail_reads.load(Ordering::SeqCst);
+                if failing > 0 {
+                    m.fail_reads.store(failing - 1, Ordering::SeqCst);
+                    bail!("the clipboard is busy");
+                }
+                Ok(m.get().filtered(filter))
+            }
             Backend::System(cb) => {
                 let handle = open(cb)?;
                 let mut broken = false;
@@ -740,14 +773,7 @@ impl Worker {
                     Cmd::Write { data, origin, record, concealed, reply } => {
                         let data = data.without_empty_formats();
                         let saved = (record && !concealed).then(|| Arc::new(data.clone()));
-                        let r = self.write(data);
-                        if concealed && let Ok(digest) = &r {
-                            self.exclude(*digest);
-                            if !self.received_sensitive.contains(digest) {
-                                if self.received_sensitive.len() == 32 { self.received_sensitive.pop_front(); }
-                                self.received_sensitive.push_back(*digest);
-                            }
-                        }
+                        let r = self.write(data, concealed);
                         if r.is_ok() && let Some(saved) = saved {
                             let digest = history::digest(&saved);
                             self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(saved, digest, false, &origin);
@@ -849,18 +875,39 @@ impl Worker {
         Ok(marked(sized(digest, data, max), concealed && explicit))
     }
 
-    fn write(&mut self, data: ClipData) -> Result<Digest> {
+    /// Remembers a copy another computer marked as sensitive: it is kept out
+    /// of the history and never handed out by an automatic read.
+    fn mark_sensitive(&mut self, digest: Digest) {
+        self.exclude(digest);
+        if !self.received_sensitive.contains(&digest) {
+            if self.received_sensitive.len() == 32 { self.received_sensitive.pop_front(); }
+            self.received_sensitive.push_back(digest);
+        }
+    }
+
+    /// Puts `data` on the clipboard; `concealed` when its sender marked it as
+    /// sensitive.
+    fn write(&mut self, data: ClipData, concealed: bool) -> Result<Digest> {
         let saved = Arc::new(data.clone());
         let image = data.png.as_deref().map(decode_png).transpose()?;
         let raw = Raw { text: data.text, html: data.html, image, concealed: false };
+        let sensitive = if concealed { raw.digests_under_any_filter() } else { Vec::new() };
         if let Err(e) = self.backend.write(raw) {
             if let Backend::System(cb) = &mut self.backend {
                 *cb = None;
             }
             return Err(e);
         }
+        // The clipboard holds it now: from here on it is marked, however the
+        // read-back below goes and whichever formats are switched on later.
+        for digest in sensitive {
+            self.mark_sensitive(digest);
+        }
         let back = self.backend_read()?;
         let digest = back.digest();
+        if concealed {
+            self.mark_sensitive(digest);
+        }
         self.cache = Some((digest, saved));
         self.restored = Some(digest);
         #[cfg(target_os = "linux")]
@@ -1084,6 +1131,44 @@ mod tests {
         assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)), "never an ordinary automatic read");
         assert!(matches!(cb.read_explicit(vec![]).await.unwrap(), Read::Sensitive { .. }), "an explicit send still sees it as sensitive");
         assert!(cb.history().lock().unwrap().is_empty(), "never recorded");
+    }
+
+    /// The mark belongs to the copy, not to the formats that happen to be
+    /// switched on: turning HTML off while a marked text-and-HTML copy is on
+    /// the clipboard must not make its text an ordinary one.
+    #[tokio::test]
+    async fn a_marked_arrival_stays_marked_when_a_format_filter_changes() {
+        let (cb, _mem) = Clipboard::memory();
+        cb.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        let both = ClipData { text: Some("TOPSECRET".into()), html: Some("<b>TOPSECRET</b>".into()), ..Default::default() };
+        cb.write_concealed(both).await.unwrap();
+        for filter in [
+            Filter { html: false, ..Filter::default() },
+            Filter { text: false, ..Filter::default() },
+            Filter { html: false, skip_concealed: false, ..Filter::default() },
+            Filter::default(),
+        ] {
+            cb.set_filter(filter);
+            assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)), "{filter:?}");
+            assert!(cb.history().lock().unwrap().is_empty(), "{filter:?}: kept in the history");
+        }
+        // An ordinary copy of the same text is not caught by it.
+        cb.write_from(ClipData { text: Some("plain".into()), ..Default::default() }, "peer".into(), true).await.unwrap();
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }));
+    }
+
+    /// The clipboard is replaced before it is read back; a read-back that
+    /// fails (a busy clipboard) leaves the send looking failed, but the copy
+    /// is on the clipboard and stays marked.
+    #[tokio::test]
+    async fn a_marked_arrival_stays_marked_when_the_read_back_fails() {
+        let (cb, mem) = Clipboard::memory();
+        cb.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        mem.fail_next_reads(1);
+        assert!(cb.write_concealed(ClipData { text: Some("TOPSECRET".into()), ..Default::default() }).await.is_err());
+        assert_eq!(mem.text().as_deref(), Some("TOPSECRET"));
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)));
+        assert!(cb.history().lock().unwrap().is_empty());
     }
 
     #[tokio::test]
