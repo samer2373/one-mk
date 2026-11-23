@@ -109,6 +109,14 @@ fn managed(dir: &Path) -> Result<bool> {
 }
 
 fn write(dir: &Path) -> Result<()> {
+    write_with(dir, false)
+}
+
+/// Puts the extension at `dir`: staged beside it first, then swapped in. With
+/// `replace`, the older managed copy already there is moved aside only once
+/// the new one is complete, and put back if the swap fails, so a failed
+/// update never leaves nothing installed.
+fn write_with(dir: &Path, replace: bool) -> Result<()> {
     let parent = dir.parent().context("missing extensions folder")?;
     one_mk_ctl::private::create_dir_all(parent)?;
     let stage = parent.join(format!(".one-mk-install-{}-{}", std::process::id(), rand::random::<u64>()));
@@ -120,7 +128,17 @@ fn write(dir: &Path) -> Result<()> {
             hashes.insert(name.into(), json!(hash(contents.as_bytes())));
         }
         one_mk_ctl::private::write_readable(&stage.join(MARKER), serde_json::to_vec(&json!({"uuid": UUID, "version": 1, "files": hashes}))?)?;
-        std::fs::rename(&stage, dir)?;
+        if !replace || std::fs::symlink_metadata(dir).is_err() {
+            std::fs::rename(&stage, dir)?;
+            return Ok(());
+        }
+        let old = parent.join(format!(".one-mk-old-{}-{}", std::process::id(), rand::random::<u64>()));
+        std::fs::rename(dir, &old)?;
+        if let Err(error) = std::fs::rename(&stage, dir) {
+            let _ = std::fs::rename(&old, dir);
+            return Err(error.into());
+        }
+        let _ = std::fs::remove_dir_all(&old);
         Ok(())
     })();
     if result.is_err() {
@@ -138,10 +156,7 @@ pub async fn command(action: &Action) -> Result<()> {
         Action::Install => {
             check_shell(shell_version().as_deref(), &qualified_shells())?;
             let upgrade = managed(&dir)?;
-            if upgrade {
-                std::fs::remove_dir_all(&dir)?;
-            }
-            write(&dir)?;
+            write_with(&dir, upgrade)?;
             println!("{} {}.", if upgrade { "Updated" } else { "Installed" }, dir.display());
             if upgrade {
                 println!("GNOME loads an extension's code once per login: log out and back in once to use the new version.");
@@ -168,8 +183,11 @@ pub async fn command(action: &Action) -> Result<()> {
             if !managed(&dir)? {
                 bail!("Not installed. Run `one-mk pointer-extension install` first.");
             }
-            linux::enable().await?;
-            println!("GNOME enabled the extension. The pointer is hidden while the mouse is on another computer.");
+            match linux::enable().await? {
+                Some(1) => println!("GNOME enabled the extension. The pointer is hidden while the mouse is on another computer."),
+                state => println!("GNOME accepted the enable request, but the extension is not active yet ({}). Check `one-mk pointer-extension status` in a moment; if it stays inactive, make sure user extensions are allowed in GNOME Extensions.",
+                    state.map_or_else(|| "state unknown".to_owned(), |state| format!("state {state}"))),
+            }
         }
         Action::Status => {
             let installed = managed(&dir)?;
@@ -210,11 +228,22 @@ mod linux {
         Ok(info.get("state").and_then(|s| f64::try_from(s).ok()).filter(|s| s.is_finite() && (0.0..=99.0).contains(s)).map(|s| s as u32))
     }
 
-    pub async fn enable() -> Result<()> {
+    /// Asks GNOME to enable the extension and returns the state it then reports
+    /// (1 is active): accepting the request is not the same as loading it, so
+    /// it is looked at for a moment before anything is claimed.
+    pub async fn enable() -> Result<Option<u32>> {
         ensure!(state().await?.is_some(), "GNOME doesn't know the extension yet. Log out and back in once, then try again.");
         let enabled: bool = extensions().await?.call("EnableExtension", &(UUID,)).await.map_err(bus)?;
         ensure!(enabled, "GNOME could not enable the extension. Log out and back in once, then try again.");
-        Ok(())
+        let mut now = None;
+        for _ in 0..8 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            now = state().await.ok().flatten();
+            if now == Some(1) {
+                break;
+            }
+        }
+        Ok(now)
     }
 }
 
@@ -223,8 +252,8 @@ mod linux {
     pub async fn state() -> anyhow::Result<Option<u32>> {
         Ok(None)
     }
-    pub async fn enable() -> anyhow::Result<()> {
-        Ok(())
+    pub async fn enable() -> anyhow::Result<Option<u32>> {
+        Ok(None)
     }
 }
 
@@ -276,6 +305,20 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         std::fs::write(other.join("extension.js"), "x").unwrap();
         assert!(managed(&other).unwrap_err().to_string().contains("not installed by one-mk"));
+        // An update puts the new copy in place of the managed one in one swap.
+        let updated = root.join("updated");
+        write(&updated).unwrap();
+        std::fs::write(updated.join("extension.js"), "// older").unwrap();
+        let marker: Value = serde_json::from_slice(&std::fs::read(updated.join(MARKER)).unwrap()).unwrap();
+        let mut older = marker.clone();
+        older["files"]["extension.js"] = json!(hash(b"// older"));
+        std::fs::write(updated.join(MARKER), serde_json::to_vec(&older).unwrap()).unwrap();
+        assert!(managed(&updated).unwrap());
+        assert!(write(&updated).is_err(), "a plain install never replaces what is there");
+        write_with(&updated, true).unwrap();
+        assert_eq!(std::fs::read_to_string(updated.join("extension.js")).unwrap(), FILES[1].1);
+        assert!(managed(&updated).unwrap());
+        assert_eq!(std::fs::read_dir(&root).unwrap().filter_map(Result::ok).filter(|entry| entry.file_name().to_string_lossy().starts_with(".one-mk-")).count(), 0, "nothing is left beside it");
         // An extra file.
         write(&root.join("again")).unwrap();
         std::fs::write(root.join("again/extra.txt"), "x").unwrap();
