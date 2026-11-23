@@ -233,6 +233,7 @@ fn regular(path: &Path) -> Result<std::fs::Metadata> {
     Ok(metadata)
 }
 
+#[cfg(test)]
 fn install(destination: &Path, renderer: &Path) -> Result<()> { install_with(destination, renderer, false) }
 
 /// Installs into `destination`. With `replace`, an older copy oneMK installed

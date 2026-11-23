@@ -1901,6 +1901,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn two_monitor_layout(plan: &Plan, remote_online: bool) -> Layout {
         let monitors = if remote_online { plan.canvas.monitors.clone() } else { vec![plan.canvas.monitors[0].clone()] };
         Layout { computer: "host".into(), canvas: one_mk_wallpaper::Canvas { monitors }, paired: BTreeSet::from(["remote".into()]) }
@@ -2011,6 +2012,7 @@ mod tests {
         assert!(!still_stands(false, Some(cannot), false));
     }
 
+    #[cfg(unix)]
     #[test]
     fn only_the_crops_for_the_current_layout_are_kept() {
         let directory = tempfile::tempdir().unwrap();
@@ -2084,7 +2086,10 @@ mod tests {
         let runtime = Runtime::default();
         let saved = Saved { status: one_mk_wallpaper::Status { plan: Some(plan()), ..Default::default() }, coordinator: None, previous: None, authority_off: false };
         save_selection(directory.path(), &saved).unwrap();
-        let blocked = runtime.picture_work.lock().unwrap();
+        // The restore waits for this lock, held on a thread of its own meanwhile.
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn({ let runtime = runtime.clone(); move || { let _work = runtime.picture_work.lock().unwrap(); let _ = hold.recv(); } });
+        while runtime.picture_work.try_lock().is_ok() { tokio::time::sleep(Duration::from_millis(5)).await; }
         let task = tokio::spawn({ let (runtime, dir) = (runtime.clone(), directory.path().to_owned()); async move { runtime.execute(&dir, Status::default(), Command::Off, Vec::new(), node, 0).await } });
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         let after = loop {
@@ -2094,7 +2099,8 @@ mod tests {
         };
         assert!(!task.is_finished(), "the restore is still waiting");
         assert!(after.authority_off && after.status.plan.is_none(), "off was not saved before the restore");
-        drop(blocked);
+        drop(release);
+        holder.join().unwrap();
         task.await.unwrap().unwrap();
     }
 

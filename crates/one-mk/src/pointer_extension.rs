@@ -108,6 +108,7 @@ fn managed(dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
+#[cfg(test)]
 fn write(dir: &Path) -> Result<()> {
     write_with(dir, false)
 }
