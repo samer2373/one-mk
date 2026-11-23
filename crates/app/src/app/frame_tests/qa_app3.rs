@@ -136,6 +136,31 @@ fn while_a_new_wallpaper_is_prepared_the_other_changes_wait() {
 }
 
 #[test]
+fn no_control_can_end_a_wallpaper_that_is_being_prepared_except_turning_it_off() {
+    let (mut win, daemon) = wallpaper_window(|line| {
+        if !line.starts_with("wallpaper-live ") { return String::new(); }
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        "ok".to_owned()
+    });
+    let path = win.dir.join("loop.mp4");
+    std::fs::write(&path, b"not really a video").unwrap();
+    win.drop_files(std::slice::from_ref(&path));
+    assert!(win.app.busy.iter().any(|job| matches!(job, Job::Wallpaper(Command::Set { .. }))), "{:?}", win.app.busy);
+    // Search's pause, a computer's switch, a second choice: none reach the service.
+    win.app.wallpaper_command(Command::Pause { paused: true });
+    win.app.wallpaper_command(Command::Computer { id: "p1".into(), enabled: false });
+    win.app.wallpaper_command(Command::Set { path: path.clone() });
+    assert!(win.toast_text().contains("still being prepared"), "{}", win.toast_text());
+    // Turning it off is the way to cancel.
+    win.app.wallpaper_command(Command::Off);
+    win.wait("both requests to be answered", |_| sent_wallpaper(&daemon) >= 2);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let seen = daemon.seen_with("wallpaper-live ");
+    assert_eq!(seen.len(), 2, "only the choice and the cancelling reached the service: {seen:?}");
+    assert!(seen[1].contains("off"), "{seen:?}");
+}
+
+#[test]
 fn a_wallpaper_change_the_service_dropped_says_so() {
     // The service answers a change it dropped for a newer one with nothing at all.
     let (mut win, _daemon) = wallpaper_window(|_| String::new());

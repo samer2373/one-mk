@@ -24,6 +24,14 @@ impl WallpaperUi {
 
 impl App {
     pub(super) fn wallpaper_command(&mut self, command: Command) {
+        // Whichever control asked (this page, Search, a computer's panel), a
+        // change while a choice is prepared would end it: only turning the
+        // wallpaper off (which cancels it) and the GNOME setup (which the
+        // service keeps apart from the wallpaper) go through.
+        if self.wallpaper_preparing() && !matches!(command, Command::Off | Command::GnomeExtension { .. }) {
+            self.toast("The new wallpaper is still being prepared. Wait for it, or turn the wallpaper off.", self.now);
+            return;
+        }
         // A new picture or video is prepared for as long as it takes; until it
         // is done (or fails) the window keeps the other changes waiting, as each
         // one the service gets ends the one before it.
