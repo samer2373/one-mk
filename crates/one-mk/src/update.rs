@@ -900,10 +900,10 @@ fn rollback(target: &Path) -> Result<()> {
 pub fn run(home: &Path, options: Options) -> Result<()> {
     let event = if options.status_json || options.move_to_applications || options.install_deb.is_some()
         || options.started_version.is_some() || options.check_on_start.is_some()
-        || options.install_automatically.is_some() { None }
+        || options.install_automatically.is_some()
         // A check is recorded where it runs, in `run_inner`: a startup check that finds checks
         // off or not yet due runs none.
-        else if options.check || options.startup_check { None }
+        || options.check || options.startup_check { None }
         else if options.rollback { Some(crate::analytics::Event::UpdateRollbackFinished) }
         else { Some(crate::analytics::Event::UpdateRequestFinished) };
     let result = run_inner(home, options);

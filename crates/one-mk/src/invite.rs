@@ -799,11 +799,13 @@ mod tests {
         let (outgoing, incoming) = (outgoing.unwrap(), incoming.unwrap().unwrap());
         let (hosted, joined) = tokio::join!(
             async {
-                let exchange = Ok::<_, tokio::time::error::Elapsed>(InviteSession::accept_with_admission(&incoming, host.identity().fingerprint, "Host", 24900, &state,
-                    || -> Result<()> { Err(anyhow::Error::new(Busy)) }).await);
+                let session = InviteSession::accept_with_admission(&incoming, host.identity().fingerprint, "Host", 24900, &state,
+                    || -> Result<()> { Err(anyhow::Error::new(Busy)) }).await;
+                let failed = session.is_err();
+                let exchange = Ok::<_, tokio::time::error::Elapsed>(session);
                 let (code, reason) = rejection(&exchange);
                 incoming.conn.close(code.into(), reason);
-                (code, exchange.unwrap().is_err())
+                (code, failed)
             },
             InviteSession::join(&outgoing, joiner.identity().fingerprint, "Joiner", 24901, &invitation)
         );
@@ -857,8 +859,8 @@ mod tests {
         host.close(); joiner.close();
     }
 
-    /// Descriptor 0 may be a socket: it is read as it is, not reopened through /dev/stdin.
-    #[cfg(unix)]
+    /// What was typed before a question is asked is not its answer (openpty's signature differs by system).
+    #[cfg(target_os = "linux")]
     #[test]
     fn typed_ahead_input_on_a_terminal_is_thrown_away() {
         use std::os::fd::{FromRawFd, OwnedFd};

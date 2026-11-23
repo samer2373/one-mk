@@ -168,10 +168,8 @@ fn install(files: &impl BundleFiles, stop: impl FnOnce() -> Result<()>, candidat
     let had_previous = files.exists(previous)?;
     if had_previous { files.rename(previous, older)?; }
     let result = stop().and_then(|()| swap(files, candidate, target, previous));
-    if result.is_err() && had_previous && !files.exists(previous).unwrap_or(true) {
-        if let Err(error) = files.rename(older, previous) {
-            tracing::warn!("update: couldn't put the previous version back for Go back: {error:#}");
-        }
+    if result.is_err() && had_previous && !files.exists(previous).unwrap_or(true) && let Err(error) = files.rename(older, previous) {
+        tracing::warn!("update: couldn't put the previous version back for Go back: {error:#}");
     }
     result
 }

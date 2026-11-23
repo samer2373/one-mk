@@ -444,6 +444,7 @@ fn ufw_allows(rules: &str, port: u16) -> bool {
     })
 }
 
+#[cfg(test)]
 pub fn firewall_check(os: Os, f: &Firewall, port: u16) -> Check {
     firewall_check_for(os, f, port, true)
 }
@@ -1019,6 +1020,7 @@ pub fn unrecognised_check(d: &Daemon) -> Option<Check> {
 }
 
 /// Private IPv4 ranges (RFC 1918): what a home or office LAN uses.
+#[cfg(test)]
 pub fn network_check(addrs: &[Addr]) -> Check {
     network_check_with(addrs, &[])
 }
