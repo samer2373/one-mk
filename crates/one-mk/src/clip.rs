@@ -282,8 +282,9 @@ impl ClipSync {
     async fn push_once(&self, fp: Fingerprint, name: &str, addr: SocketAddr, also_skip: Option<Digest>) {
         let skip: Vec<Digest> = self.state().known.get(&fp).copied().into_iter().chain(also_skip).collect();
         // With sensitive content shared (`--skip-sensitive off`) a plain read does not
-        // say that a copy was marked; the explicit read does, and the mark must travel.
-        let read = if self.cb.filter().skip_concealed { self.cb.read(skip).await } else { self.cb.read_explicit(skip).await };
+        // say that a copy was marked; the background read does, and the mark must travel.
+        // A copy a peer sent as sensitive is never returned by it: that stays where it arrived.
+        let read = self.cb.read_background(skip).await;
         match read {
             Ok(Read::Changed { digest, data }) => self.push_data(fp, name, addr, digest, &data, false).await,
             Ok(Read::Sensitive { digest, data }) => {
@@ -556,7 +557,7 @@ impl ClipSync {
             send.reset(FETCH_DISABLED.into())?;
             return Ok(());
         }
-        let read = if self.cb.filter().skip_concealed { self.cb.read(Vec::new()).await? } else { self.cb.read_explicit(Vec::new()).await? };
+        let read = self.cb.read_background(Vec::new()).await?;
         // The read may have taken a while (a slow clipboard owner): fetching may
         // have been switched off meanwhile, and then nothing is sent.
         if !self.allow_pull.load(Ordering::Relaxed) {

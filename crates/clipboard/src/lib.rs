@@ -172,8 +172,17 @@ pub struct Clipboard {
     test_limit: Option<usize>,
 }
 
+/// What a read may hand out (see [`Clipboard::read`], [`Clipboard::read_background`],
+/// [`Clipboard::read_explicit`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadMode {
+    Automatic,
+    Marked,
+    Explicit,
+}
+
 enum Cmd {
-    Read { skip: Vec<Digest>, explicit: bool, reply: oneshot::Sender<Result<Read>> },
+    Read { skip: Vec<Digest>, mode: ReadMode, reply: oneshot::Sender<Result<Read>> },
     Digest { reply: oneshot::Sender<Result<Option<Digest>>> },
     #[cfg(target_os = "linux")]
     Capture { skip_history: bool, owner: u32, timestamp: u32 },
@@ -268,14 +277,23 @@ impl Clipboard {
     /// Reads the clipboard. Content whose digest is in `skip` is not
     /// encoded or copied, so asking "has it changed?" is cheap.
     pub async fn read(&self, skip: Vec<Digest>) -> Result<Read> {
-        self.call(|reply| Cmd::Read { skip, explicit: false, reply }).await
+        self.call(|reply| Cmd::Read { skip, mode: ReadMode::Automatic, reply }).await
     }
 
     /// Like [`read`](Self::read), for when the user asked for this copy to
     /// be sent: sensitive content is carried too. The formats and size
     /// limit still apply.
     pub async fn read_explicit(&self, skip: Vec<Digest>) -> Result<Read> {
-        self.call(|reply| Cmd::Read { skip, explicit: true, reply }).await
+        self.call(|reply| Cmd::Read { skip, mode: ReadMode::Explicit, reply }).await
+    }
+
+    /// Like [`read`](Self::read), for what is sent without the user asking
+    /// (the push when the pointer crosses, a fetch by a peer): a copy made
+    /// here that was marked as sensitive is returned as
+    /// [`Read::Sensitive`] when the filter lets it go, so it travels marked;
+    /// one a peer sent as sensitive is never returned, whatever the filter.
+    pub async fn read_background(&self, skip: Vec<Digest>) -> Result<Read> {
+        self.call(|reply| Cmd::Read { skip, mode: ReadMode::Marked, reply }).await
     }
 
     /// The digest of the current content, or `None` if empty.
@@ -779,11 +797,11 @@ impl Worker {
                             if matches!(self.backend, Backend::System(_)) && sensitivity::owner().ok() != Some(owner) { continue; }
                             let digest = raw.digest();
                             if self.restored != Some(digest) && skip_history { self.exclude(digest); }
-                            let _ = self.read_raw(raw, &[], false);
+                            let _ = self.read_raw(raw, &[], ReadMode::Automatic);
                         }
                     }
-                    Cmd::Read { skip, explicit, reply } => {
-                        let r = self.read(&skip, explicit);
+                    Cmd::Read { skip, mode, reply } => {
+                        let r = self.read(&skip, mode);
                         let _ = reply.send(r);
                     }
                     Cmd::Digest { reply } => {
@@ -840,9 +858,9 @@ impl Worker {
         r
     }
 
-    fn read(&mut self, skip: &[Digest], explicit: bool) -> Result<Read> {
+    fn read(&mut self, skip: &[Digest], mode: ReadMode) -> Result<Read> {
         let raw = self.backend_read()?;
-        self.read_raw(raw, skip, explicit)
+        self.read_raw(raw, skip, mode)
     }
 
     fn exclude(&mut self, digest: Digest) {
@@ -857,7 +875,7 @@ impl Worker {
         }
     }
 
-    fn read_raw(&mut self, raw: Raw, skip: &[Digest], explicit: bool) -> Result<Read> {
+    fn read_raw(&mut self, raw: Raw, skip: &[Digest], mode: ReadMode) -> Result<Read> {
         let max = self.filter().max_bytes();
         let skip_concealed = self.filter().skip_concealed;
         if raw.is_empty() {
@@ -872,13 +890,13 @@ impl Worker {
         if skip.contains(&digest) {
             return Ok(Read::Unchanged(digest));
         }
-        if concealed && (skip_concealed || received) && !explicit {
+        if concealed && (skip_concealed || received) && mode != ReadMode::Explicit {
             return Ok(Read::Concealed(digest));
         }
         if let Some((d, data)) = &self.cache
             && *d == digest
         {
-            return Ok(marked(sized(digest, data.clone(), max), concealed && explicit));
+            return Ok(marked(sized(digest, data.clone(), max), concealed && mode != ReadMode::Automatic));
         }
         let text_len = raw.text.as_ref().map_or(0, String::len) + raw.html.as_ref().map_or(0, String::len);
         if text_len > max || raw.image.as_ref().is_some_and(|i| i.rgba.len() > MAX_RGBA) {
@@ -892,7 +910,7 @@ impl Worker {
             self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(data.clone(), history_digest, concealed, "this computer");
         }
         self.cache = Some((digest, data.clone()));
-        Ok(marked(sized(digest, data, max), concealed && explicit))
+        Ok(marked(sized(digest, data, max), concealed && mode != ReadMode::Automatic))
     }
 
     /// Remembers a copy another computer marked as sensitive: it is kept out
@@ -947,7 +965,7 @@ impl Worker {
 }
 
 /// A readable copy that the source marked as sensitive is returned as such
-/// (only explicit reads get this far: the others stop at `Concealed`).
+/// (only reads that carry the mark get this far: the others stop at `Concealed`).
 fn marked(read: Read, concealed: bool) -> Read {
     match read {
         Read::Changed { digest, data } if concealed => Read::Sensitive { digest, data },
@@ -1195,7 +1213,15 @@ mod tests {
         cb.write_concealed(ClipData { text: Some("TOPSECRET".into()), ..Default::default() }).await.unwrap();
         assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)), "never an ordinary automatic read");
         assert!(matches!(cb.read_explicit(vec![]).await.unwrap(), Read::Sensitive { .. }), "an explicit send still sees it as sensitive");
+        assert!(matches!(cb.read_background(vec![]).await.unwrap(), Read::Concealed(_)), "the pointer-follow push and a fetch never carry it on");
         assert!(cb.history().lock().unwrap().is_empty(), "never recorded");
+
+        // A copy made on this computer goes out marked when the filter is off.
+        let (cb, mem) = Clipboard::memory();
+        cb.set_filter(Filter { skip_concealed: false, ..Filter::default() });
+        mem.set_text("mine");
+        mem.set_concealed(true);
+        assert!(matches!(cb.read_background(vec![]).await.unwrap(), Read::Sensitive { .. }));
     }
 
     /// The mark belongs to the copy, not to the formats that happen to be
