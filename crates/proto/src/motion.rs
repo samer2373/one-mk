@@ -233,6 +233,19 @@ pub struct MotionReceiver {
     /// next sum is the new baseline, not a distance from the old one (what
     /// the old one missed is already in that position).
     rebase: bool,
+    /// The relative datagram that was taken as the baseline for want of one
+    /// (see `rebase`), kept until the reliable message that holds the real
+    /// baseline arrives or is no longer due.
+    fallback: Option<Fallback>,
+}
+
+/// A relative datagram taken as the baseline: its `seq`, the `seq` applied
+/// before it and its sum.
+#[derive(Clone, Copy, Debug)]
+struct Fallback {
+    seq: u32,
+    prev_seq: u32,
+    sum: (i32, i32),
 }
 
 /// Turns the sender's running sums into whole-pixel moves. What has been
@@ -250,16 +263,22 @@ struct RelativeSum {
 
 impl RelativeSum {
     fn apply(&mut self, sum: (i32, i32)) -> (i32, i32) {
-        let step = |last: &mut i32, total: &mut i64, moved: &mut i64, now: i32| {
-            *total += i64::from(now.wrapping_sub(*last));
-            *last = now;
+        let by = (sum.0.wrapping_sub(self.last.0), sum.1.wrapping_sub(self.last.1));
+        self.last = sum;
+        self.advance(by)
+    }
+
+    /// Counts `by` (1/256 px) more movement, without a new wire sum.
+    fn advance(&mut self, by: (i32, i32)) -> (i32, i32) {
+        let step = |total: &mut i64, moved: &mut i64, by: i32| {
+            *total += i64::from(by);
             let target = (*total + 128).div_euclid(256);
             let d = target - *moved;
             *moved = target;
             i32::try_from(d).unwrap_or(if d < 0 { i32::MIN } else { i32::MAX })
         };
-        let dx = step(&mut self.last.0, &mut self.total.0, &mut self.moved.0, sum.0);
-        let dy = step(&mut self.last.1, &mut self.total.1, &mut self.moved.1, sum.1);
+        let dx = step(&mut self.total.0, &mut self.moved.0, by.0);
+        let dy = step(&mut self.total.1, &mut self.moved.1, by.1);
         (dx, dy)
     }
 }
@@ -270,6 +289,7 @@ impl MotionReceiver {
         self.last_seq = 0;
         self.rel = RelativeSum::default();
         self.rebase = false;
+        self.fallback = None;
     }
 
     pub fn leave(&mut self) {
@@ -286,6 +306,7 @@ impl MotionReceiver {
         } else if newer(seq, self.last_seq) {
             self.last_seq = seq;
             self.rebase = true;
+            self.fallback = None;
             Received::Move(pos)
         } else if seq == self.last_seq {
             Received::Repeat
@@ -299,9 +320,11 @@ impl MotionReceiver {
         if self.epoch != Some(epoch) {
             RelReceived::Stale
         } else if newer(seq, self.last_seq) {
+            let prev_seq = self.last_seq;
             self.last_seq = seq;
             if std::mem::take(&mut self.rebase) {
                 self.rel.last = sum;
+                self.fallback = Some(Fallback { seq, prev_seq, sum });
             }
             let (dx, dy) = self.rel.apply(sum);
             RelReceived::MoveBy { dx, dy }
@@ -318,13 +341,30 @@ impl MotionReceiver {
     /// switch arrived: without this the first one that does would be taken
     /// as the baseline, and the movement it carries lost.
     ///
-    /// Ignored once that datagram, or anything newer, has been applied: the
-    /// reliable message can also arrive after them.
-    pub fn relative_from(&mut self, epoch: u16, base: RelativeBase) {
-        if self.epoch == Some(epoch) && newer(base.seq, self.last_seq) {
+    /// When it arrives after a later datagram was already taken as the
+    /// baseline (and moved nothing), what that datagram carried since `base`
+    /// is returned as the move still to make. Otherwise nothing is: the
+    /// reliable message can also arrive after the datagram that announced the
+    /// switch, or anything newer.
+    pub fn relative_from(&mut self, epoch: u16, base: RelativeBase) -> (i32, i32) {
+        if self.epoch != Some(epoch) {
+            return (0, 0);
+        }
+        if newer(base.seq, self.last_seq) {
             self.last_seq = base.seq;
             self.rel.last = base.sum;
             self.rebase = false;
+            self.fallback = None;
+            return (0, 0);
+        }
+        match self.fallback.take() {
+            Some(f) if newer(base.seq, f.prev_seq) && !newer(base.seq, f.seq) => {
+                self.rel.advance((f.sum.0.wrapping_sub(base.sum.0), f.sum.1.wrapping_sub(base.sum.1)))
+            }
+            other => {
+                self.fallback = other;
+                (0, 0)
+            }
         }
     }
 
@@ -706,7 +746,8 @@ mod tests {
             }
             assert_eq!(rel(&mut c, &mut r, 4.0, 2.0), first, "{name}");
             if after {
-                r.relative_from(1, base);
+                // What the first datagram carried comes with the baseline.
+                assert_eq!(r.relative_from(1, base), (4, 2), "{name}");
             }
             assert_eq!(rel(&mut c, &mut r, 1.0, 1.0), second, "{name}");
         }
