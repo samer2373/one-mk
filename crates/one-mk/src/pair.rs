@@ -245,6 +245,8 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
     // disguise it.
     let twin = trust.devices().iter().any(|d| d.label().trim().eq_ignore_ascii_case(name.trim()));
     let twin_note = if twin { "  (A computer you already paired is called the same; once paired they are told apart by id, and `one-mk rename` gives either a name of your own.)\n" } else { "" };
+    // Anything typed before this code was shown is not an answer to it.
+    answers.clear();
     out.say(
         || format!("  The other computer says its name is: {name}\n{twin_note}  Check that it shows this same code:\n\n      {}\n", pairing.sas),
         || format!("code\t{name}\t{}", pairing.sas),
@@ -285,7 +287,11 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
     crate::analytics::record(dir, crate::analytics::Event::PairingFinished, crate::analytics::Origin::Cli,
         crate::analytics::Outcome::Success, crate::analytics::ErrorCode::None);
     let side = placement.side();
-    let _ = crate::control::request(dir, crate::control::Request::Reload).await?;
+    // Trust is saved and the other computer was told: a running one-mk that is busy only picks the
+    // change up late (or when it next starts), which is no reason to report the pairing as failed.
+    if let Err(e) = crate::control::request(dir, crate::control::Request::Reload).await {
+        tracing::warn!("paired, but the running one-mk did not take the change yet: {e:#}");
+    }
     let (shown, arg) = trust.get(&fingerprint).map_or_else(|| (name.clone(), format!("{:?}", name)), |d| (trust.display(d), trust.arg(d)));
     if placement.placed_by == one_mk_net::PlacedBy::Pending {
         let warning = crate::pairing_layout::warning(&shown, &arg);
@@ -453,6 +459,18 @@ impl Answers {
 mod tests {
     use super::*;
     use one_mk_proto::Side;
+
+    /// A "y" typed while pairing still said it was searching must not approve the first code shown.
+    #[tokio::test]
+    async fn input_typed_before_a_code_is_shown_is_not_its_answer() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut answers = Answers { rx, out: Out::new(true) };
+        tx.send("yes\n".into()).unwrap();
+        answers.clear();
+        assert_eq!(answers.ask("", Duration::from_millis(50)).await, None);
+        tx.send("yes\n".into()).unwrap();
+        assert_eq!(answers.ask("", Duration::from_millis(50)).await, Some(true), "typed after the prompt it counts");
+    }
 
     #[test]
     fn the_times_in_the_messages_are_what_was_waited_for() {
