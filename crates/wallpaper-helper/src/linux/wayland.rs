@@ -551,7 +551,12 @@ pub(super) fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result
                 match input {
                     Input::End => return Ok(()),
                     Input::Offset(offset) => { config.clock_offset_ms = offset; resync = true; }
-                    Input::Pause(paused) => { config.plan.paused = paused; holds.set(Hold::User, paused); }
+                    Input::Pause(paused) => {
+                        config.plan.paused = paused; holds.set(Hold::User, paused);
+                        // Answered even when a pause and a play cancel out: the
+                        // service has already shown "Paused" for the pause.
+                        last_report.clear();
+                    }
                 }
             }
             queue.dispatch_pending(&mut desktop)?;

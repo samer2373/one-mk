@@ -352,6 +352,8 @@ fn run_in_pool(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()
     let mut playing = false;
     let mut last_sync = Instant::now() - Duration::from_secs(5);
     let mut last_message = "";
+    // A pause or play was read since the last pass; answered even when they cancel out.
+    let mut acknowledge = false;
     let mut ready = false;
     let mut preparing_since = Instant::now();
     loop {
@@ -363,7 +365,7 @@ fn run_in_pool(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()
                 match input { Input::End => {
                     unsafe { player.pause(); looper.disableLooping(); center.removeObserver(&observer); workspace.removeObserver(&observer); distributed.removeObserver(&observer); }
                     return Ok(None);
-                }, Input::Offset(offset) => config.clock_offset_ms = offset, Input::Pause(paused) => config.plan.paused = paused }
+                }, Input::Offset(offset) => config.clock_offset_ms = offset, Input::Pause(paused) => { config.plan.paused = paused; acknowledge = true; } }
             }
             let flags = notification_flags(&observer);
             if flags & 4 != 0 {
@@ -382,14 +384,17 @@ fn run_in_pool(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()
             holds.set(Hold::Asleep, flags & 2 != 0);
             holds.set(Hold::User, config.plan.paused);
             holds.set(Hold::Occluded, outputs.is_empty() || ready && outputs.iter().all(|output| !output.window.occlusionState().contains(NSWindowOcclusionState::Visible)));
-            if holds.message() != last_message { one_mk_wallpaper::report(&config, &holds); last_message = holds.message(); }
+            let mut said = false;
+            if holds.message() != last_message { one_mk_wallpaper::report(&config, &holds); last_message = holds.message(); said = true; }
             if playing != holds.playing() {
                 playing = holds.playing();
                 unsafe {
                     if playing { preparing_since = Instant::now(); player.seekToTime(time(position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms))); player.setRate(1.0); if ready { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Ready); } }
                     else { player.pause(); }
                 }
+                said = true;
             }
+            if std::mem::take(&mut acknowledge) && !said && (!playing || ready) { one_mk_wallpaper::acknowledge(&config, &holds); }
             ensure!(unsafe { player.error().is_none() && item.error().is_none() }, "macOS could not keep playing this video. Try an H.264 MP4 video.");
             ensure!(ready || !playing || preparing_since.elapsed() < Duration::from_secs(40), "macOS could not show the first video frame. Try another video.");
             if playing && last_sync.elapsed() >= Duration::from_secs(2) {

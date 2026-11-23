@@ -329,40 +329,64 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     let mut playing = false;
     let mut last_sync = Instant::now();
     let mut last_message = "";
+    // A pause or play was read since the last pass; answered even when they cancel out.
+    let mut acknowledge = false;
     let mut ready = false;
+    // Whether the windows sit in a live desktop window; false while Explorer is restarting.
+    let mut hosted = true;
     let mut retiring = None;
     let frame_interval = Duration::from_secs_f64(1.0 / frame_rate(&config.path).unwrap_or(60.0).clamp(1.0, 60.0));
     let mut next_frame = Instant::now();
     let mut latency_ready = vec![false; desktop.chains.len()];
     loop {
         while let Ok(input) = receiver.try_recv() {
-            match input { Input::End => return Ok(()), Input::Offset(offset) => config.clock_offset_ms = offset, Input::Pause(paused) => config.plan.paused = paused }
+            match input { Input::End => return Ok(()), Input::Offset(offset) => config.clock_offset_ms = offset, Input::Pause(paused) => { config.plan.paused = paused; acknowledge = true; } }
         }
         unsafe {
             ensure!(engine.events.load(Ordering::Relaxed) != MF_MEDIA_ENGINE_EVENT_ERROR.0 as u32, "Windows could not keep playing this video. Try an H.264 MP4 video.");
             let mut message = MSG::default();
             while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() { DispatchMessageW(&message); }
-            if DISPLAYS_CHANGED.swap(false, Ordering::Relaxed) {
-                refresh_displays(&mut config)?;
-                retiring = Some(std::mem::replace(&mut desktop, Desktop::new(Some(&engine.device), &config)?));
-                latency_ready = vec![false; desktop.chains.len()];
-                ready = false;
-                preparing_since = Instant::now();
-                HOLDS_CHANGED.store(true, Ordering::Relaxed);
+            let changed = DISPLAYS_CHANGED.swap(false, Ordering::Relaxed);
+            // Explorer restarting takes the windows with it, with no display change to say so.
+            let lost = SHELL_RESTARTED.swap(false, Ordering::Relaxed) | !hosted | !desktop.alive();
+            if changed || lost {
+                if changed { refresh_displays(&mut config)?; }
+                match Desktop::new(Some(&engine.device), &config) {
+                    Ok(replacement) => {
+                        retiring = Some(std::mem::replace(&mut desktop, replacement));
+                        latency_ready = vec![false; desktop.chains.len()];
+                        ready = false;
+                        hosted = true;
+                        preparing_since = Instant::now();
+                        HOLDS_CHANGED.store(true, Ordering::Relaxed);
+                    }
+                    // No desktop window to sit in yet (Explorer is starting): report that, and look again.
+                    Err(_) if lost && !changed => {
+                        if hosted { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Paused("Waiting for the Windows desktop to come back".into())); }
+                        hosted = false;
+                        ready = false;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
+            // The first frame is waited for from the moment a desktop exists again, not while it is missing.
+            if !hosted { preparing_since = Instant::now(); }
             if POWER_CHANGED.swap(false, Ordering::Relaxed) {
                 holds.set(Hold::Battery, config.plan.pause_on_battery && ON_BATTERY.load(Ordering::Relaxed));
                 holds.set(Hold::LowPower, ENERGY_SAVER.load(Ordering::Relaxed));
             }
             if HOLDS_CHANGED.swap(false, Ordering::Relaxed) { holds.set(Hold::Occluded, covered(&desktop)); }
             holds.set(Hold::User, config.plan.paused);
-            if holds.message() != last_message { one_mk_wallpaper::report(&config, &holds); last_message = holds.message(); }
+            let mut said = false;
+            if holds.message() != last_message { one_mk_wallpaper::report(&config, &holds); last_message = holds.message(); said = true; }
             if playing != holds.playing() {
                 playing = holds.playing();
                 if playing { preparing_since = Instant::now(); engine.media.SetCurrentTime(position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms) as f64 / 1000.0)?; engine.media.Play()?; }
                 else { engine.media.Pause()?; }
                 if playing && ready { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Ready); }
+                said = true;
             }
+            if std::mem::take(&mut acknowledge) && !said && (!playing || ready) { one_mk_wallpaper::acknowledge(&config, &holds); }
             ensure!(ready || !playing || preparing_since.elapsed() < Duration::from_secs(40), "Windows could not show the first video frame. Try another video.");
             if playing && last_sync.elapsed() >= Duration::from_secs(2) {
                 let expected = position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms);
@@ -373,7 +397,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
                 }
                 last_sync = Instant::now();
             }
-            if playing && Instant::now() >= next_frame && latency_ready.iter().all(|ready| *ready) {
+            if hosted && playing && Instant::now() >= next_frame && latency_ready.iter().all(|ready| *ready) {
                 next_frame = Instant::now() + frame_interval;
                 if frame_ready(&engine.media)? {
                 for (index, chain) in desktop.chains.iter().enumerate() {
@@ -395,7 +419,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
             let pending: Vec<_> = desktop.chains.iter().enumerate().filter(|(index, _)| !latency_ready[*index]).collect();
             let mut handles = vec![input_event()];
             let mut unwaited = false;
-            if playing {
+            if playing && hosted {
                 for (index, chain) in &pending {
                     // The wait takes a bounded number of handles (up to 64 screens are allowed): the rest
                     // are looked at without waiting, and the wait is short while there are any.
@@ -406,7 +430,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
                     }
                 }
             }
-            let mut timeout = if playing && latency_ready.iter().all(|ready| *ready) { next_frame.saturating_duration_since(Instant::now()).as_millis().max(1) as u32 } else { INFINITE };
+            let mut timeout = if !hosted { 1000 } else if playing && latency_ready.iter().all(|ready| *ready) { next_frame.saturating_duration_since(Instant::now()).as_millis().max(1) as u32 } else { INFINITE };
             if unwaited { timeout = timeout.min(2); }
             let result = MsgWaitForMultipleObjectsEx(Some(&handles), timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE).0;
             ensure!(result != WAIT_FAILED.0, "Windows could not wait for the next video frame: {}", std::io::Error::last_os_error());
