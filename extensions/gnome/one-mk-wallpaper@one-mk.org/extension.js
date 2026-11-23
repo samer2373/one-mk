@@ -19,25 +19,42 @@ export default class WallpaperVideo extends Extension {
         this._client = null;
         this._windows = new Map();
         this._candidates = new Map();
-        this._layer = new Clutter.Actor({reactive: false});
-        Main.layoutManager._backgroundGroup.add_child(this._layer);
-        const xml = new TextDecoder().decode(this.dir.get_child('bridge.xml').load_contents(null)[1]);
-        this._object = new Gio.DBusExportedObject({g_interface_info: Gio.DBusInterfaceInfo.new_for_xml(xml)});
-        this._object.connect('handle-method-call', (_object, method, invocation, parameters) => {
-            this._method(method, invocation, parameters).catch(error => {
-                invocation.return_dbus_error(`${NAME}.Refused`, error.message);
+        this._layer = null;
+        this._object = null;
+        this._owner = 0;
+        this._created = 0;
+        this._layout = 0;
+        this._watch = 0;
+        let exported = false;
+        try {
+            // Everything that can fail comes before anything is attached.
+            const xml = new TextDecoder().decode(this.dir.get_child('bridge.xml').load_contents(null)[1]);
+            this._object = new Gio.DBusExportedObject({g_interface_info: Gio.DBusInterfaceInfo.new_for_xml(xml)});
+            this._object.connect('handle-method-call', (_object, method, invocation, parameters) => {
+                this._method(method, invocation, parameters).catch(error => {
+                    invocation.return_dbus_error(`${NAME}.Refused`, error.message);
+                });
             });
-        });
-        this._object.export(Gio.DBus.session, PATH);
-        this._owner = Gio.bus_own_name_on_connection(Gio.DBus.session, NAME, Gio.BusNameOwnerFlags.NONE, null, () => this._stop());
-        this._created = global.display.connect('window-created', (_display, window) => this._candidate(window));
-        this._layout = Main.layoutManager.connect('monitors-changed', () => this._rebuild());
-        this._watch = Gio.DBus.session.signal_subscribe('org.freedesktop.DBus', 'org.freedesktop.DBus', 'NameOwnerChanged',
-            '/org/freedesktop/DBus', null, Gio.DBusSignalFlags.NONE, (_bus, _sender, _path, _interface, _signal, parameters) => {
-                const [name, , owner] = parameters.deep_unpack();
-                if (name === this._client?.sender && !owner)
-                    this._stop();
-            });
+            this._layer = new Clutter.Actor({reactive: false});
+            Main.layoutManager._backgroundGroup.add_child(this._layer);
+            this._object.export(Gio.DBus.session, PATH);
+            exported = true;
+            this._owner = Gio.bus_own_name_on_connection(Gio.DBus.session, NAME, Gio.BusNameOwnerFlags.NONE, null, () => this._stop());
+            this._created = global.display.connect('window-created', (_display, window) => this._candidate(window));
+            this._layout = Main.layoutManager.connect('monitors-changed', () => this._rebuild());
+            this._watch = Gio.DBus.session.signal_subscribe('org.freedesktop.DBus', 'org.freedesktop.DBus', 'NameOwnerChanged',
+                '/org/freedesktop/DBus', null, Gio.DBusSignalFlags.NONE, (_bus, _sender, _path, _interface, _signal, parameters) => {
+                    const [name, , owner] = parameters.deep_unpack();
+                    if (name === this._client?.sender && !owner)
+                        this._stop();
+                });
+        } catch (error) {
+            // A failed enable leaves nothing attached: undone as far as it got.
+            if (!exported)
+                this._object = null;
+            this.disable();
+            throw error;
+        }
     }
 
     _credential(sender, method, type = '(u)') {
@@ -145,6 +162,8 @@ export default class WallpaperVideo extends Extension {
     }
 
     _rebuild() {
+        if (!this._layer)
+            return;
         this._layer.destroy_all_children();
         for (const entry of this._windows.values()) {
             entry.box = null;
@@ -181,17 +200,28 @@ export default class WallpaperVideo extends Extension {
         this._windows.clear();
     }
 
+    // Safe at any stage of `enable()`: only what was set up is taken down.
     disable() {
         this._stop();
         for (const window of this._candidates.keys())
             window.disconnectObject(this);
         this._candidates.clear();
-        global.display.disconnect(this._created);
-        Main.layoutManager.disconnect(this._layout);
-        Gio.DBus.session.signal_unsubscribe(this._watch);
-        Gio.bus_unown_name(this._owner);
-        this._object.unexport();
+        if (this._created)
+            global.display.disconnect(this._created);
+        this._created = 0;
+        if (this._layout)
+            Main.layoutManager.disconnect(this._layout);
+        this._layout = 0;
+        if (this._watch)
+            Gio.DBus.session.signal_unsubscribe(this._watch);
+        this._watch = 0;
+        if (this._owner)
+            Gio.bus_unown_name(this._owner);
+        this._owner = 0;
+        if (this._object)
+            this._object.unexport();
         this._object = null;
-        this._layer.destroy();
+        this._layer?.destroy();
+        this._layer = null;
     }
 }
