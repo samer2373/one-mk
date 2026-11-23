@@ -6,6 +6,7 @@
 //! the file whole (a new file renamed over it), as the daemon does.
 
 use anyhow::{Context, Result, bail};
+use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -41,7 +42,11 @@ fn update(dir: &Path, wait: Duration, change: impl FnOnce(&mut toml::Table) -> R
     let mut table = match std::fs::metadata(&path) {
         Ok(meta) if meta.len() > crate::MAX_SETTINGS_BYTES => bail!("{} is too large to be settings; fix or remove it, then choose again", path.display()),
         Ok(_) => {
-            let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            // Bounded by what is read, not only by the size seen a moment ago.
+            let mut text = String::new();
+            let file = std::fs::File::open(&path).with_context(|| format!("reading {}", path.display()))?;
+            file.take(crate::MAX_SETTINGS_BYTES + 1).read_to_string(&mut text).with_context(|| format!("reading {}", path.display()))?;
+            if text.len() as u64 > crate::MAX_SETTINGS_BYTES { bail!("{} is too large to be settings; fix or remove it, then choose again", path.display()) }
             toml::from_str::<toml::Table>(&text).with_context(|| format!("{} can't be read; fix or remove it, then choose again", path.display()))?
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
@@ -49,6 +54,10 @@ fn update(dir: &Path, wait: Duration, change: impl FnOnce(&mut toml::Table) -> R
     };
     change(&mut table)?;
     let text = toml::to_string_pretty(&table)?;
+    // What is saved must be loadable: pretty printing and the new key can grow a file that was just under the cap.
+    if text.len() as u64 > crate::MAX_SETTINGS_BYTES {
+        bail!("{} would be too large to load as settings with this change; fix or remove it, then choose again", path.display());
+    }
     static N: AtomicU32 = AtomicU32::new(0);
     let tmp = dir.join(format!("{FILE}.{}.{}.window.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
     let write = || -> Result<()> {
@@ -129,6 +138,21 @@ mod tests {
         let mut want: toml::Table = toml::from_str(text).unwrap();
         want["window"].as_table_mut().unwrap().insert("appearance".into(), "dark".into());
         assert_eq!(after, want);
+        let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        assert!(left.iter().all(|n| n == FILE || n == LOCK_FILE), "stray files: {left:?}");
+    }
+
+    #[test]
+    fn a_change_that_would_push_the_file_over_the_reader_s_cap_is_refused() {
+        let d = dir();
+        // Compact and just under the cap, but one entry per line once pretty printed.
+        let mut text = String::from("x = [");
+        while (text.len() as u64) < crate::MAX_SETTINGS_BYTES - 16 { text.push_str("\"a\","); }
+        text.push_str("]\n");
+        assert!((text.len() as u64) < crate::MAX_SETTINGS_BYTES);
+        std::fs::write(d.path().join(FILE), &text).unwrap();
+        assert!(set_window_appearance(d.path(), "dark").is_err());
+        assert_eq!(std::fs::read_to_string(d.path().join(FILE)).unwrap(), text);
         let left: Vec<_> = std::fs::read_dir(d.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         assert!(left.iter().all(|n| n == FILE || n == LOCK_FILE), "stray files: {left:?}");
     }

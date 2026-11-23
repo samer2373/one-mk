@@ -15,18 +15,22 @@ pub fn initialize(home: &Path, origin: Origin) {
     if let Some((config, id)) = session.current(home) { crash::initialize(home, &config, &id, origin); }
 }
 
+/// One spelling of a settings folder: `--home settings` and the absolute path the rest of the
+/// program works with are the same home, so consent pinned for one is found for the other.
+fn normal(home: &Path) -> PathBuf { std::path::absolute(home).unwrap_or_else(|_| home.into()) }
+
 struct Session { home: PathBuf, identity: Option<String>, config: Option<Config> }
 impl Session {
     fn snapshot(home: &Path) -> Self { Self::snapshot_for(home, Config::from_env()) }
     fn snapshot_for(home: &Path, config: Option<Config>) -> Self {
         let identity = config.as_ref().and_then(|config| identity_for(home, config));
-        Self { home: home.into(), identity, config }
+        Self { home: normal(home), identity, config }
     }
     fn current(&self, home: &Path) -> Option<(Config, String)> {
         self.for_generation(home, Config::from_env().as_ref(), process_revoked())
     }
     fn for_generation(&self, home: &Path, current: Option<&Config>, revoked: bool) -> Option<(Config, String)> {
-        if revoked || home != self.home { return None; }
+        if revoked || normal(home) != self.home { return None; }
         let id = self.identity.as_ref()?;
         let config = self.config.as_ref()?;
         if identity_for(home, config).as_ref() != Some(id) || current?.destination() != config.destination() { return None; }
@@ -80,7 +84,7 @@ pub fn set_enabled(home: &Path, enabled: bool) -> std::io::Result<()> {
     set_enabled_for(home, enabled, &scope, Config::from_env().as_ref())
 }
 fn set_enabled_for(home: &Path, enabled: bool, scope: &str, config: Option<&Config>) -> std::io::Result<()> {
-    if !enabled && SESSION.get().is_some_and(|s| s.home == home) { REVOKED.store(true, std::sync::atomic::Ordering::SeqCst); crash::disarm(); }
+    if !enabled && SESSION.get().is_some_and(|s| s.home == normal(home)) { REVOKED.store(true, std::sync::atomic::Ordering::SeqCst); crash::disarm(); }
     crate::private::create_dir_all(home)?;
     let lock = crate::private::lock_file(&home.join("analytics-consent.lock"))?;
     lock.lock()?;
@@ -207,6 +211,8 @@ fn enqueue(pending: Pending) {
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {},
                 }
+                // A home whose consent was withdrawn has nothing left to pump.
+                homes.retain(|home, config| !process_revoked() && identity_for(home, config).is_some());
                 for (home, config) in &homes {
                     let _ = spool::pump(home, config);
                 }
@@ -419,6 +425,20 @@ mod tests {
         set_enabled(home.path(), true).unwrap(); assert_eq!(identity(home.path()).unwrap(), id);
         set_enabled(home.path(), false).unwrap(); set_enabled(home.path(), true).unwrap(); assert_ne!(identity(home.path()).unwrap(), id);
         crate::private::write(&consent_path(home.path(), "development"), "SECRET_SENTINEL").unwrap(); assert!(identity(home.path()).is_none());
+    }
+    #[test]
+    fn a_relative_home_spelling_finds_the_pinned_consent() {
+        // The same folder spelled relative to the working directory, as `--home settings` is.
+        let cwd = std::env::current_dir().unwrap();
+        let home = tempfile::tempdir_in(&cwd).unwrap();
+        let config = consent_test::config("development");
+        set_enabled(home.path(), true).unwrap();
+        let relative = PathBuf::from(home.path().file_name().unwrap());
+        assert!(relative.is_relative());
+        let session = Session::snapshot_for(&relative, Some(config.clone()));
+        assert!(session.identity.is_some());
+        assert!(session.for_generation(home.path(), Some(&config), false).is_some());
+        assert!(session.for_generation(&relative, Some(&config), false).is_some());
     }
     #[test]
     fn success_does_not_hide_the_first_failure() {
