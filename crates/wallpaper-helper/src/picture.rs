@@ -111,6 +111,36 @@ pub(super) fn unrestored<Entry>(saved: Vec<Entry>, mut restore: impl FnMut(&Entr
     saved.into_iter().filter(|entry| !restore(entry)).collect()
 }
 
+/// What turning wallpaper off does with one monitor's saved original picture.
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Restore {
+    /// The picture on the monitor is one oneMK put there: put the original back.
+    Now,
+    /// The monitor was not changed by oneMK, or the user has picked another
+    /// picture since: that choice stays, and nothing is left to restore.
+    Leave,
+    /// oneMK's picture may still be there but the monitor can't be asked now
+    /// (disconnected): try again when it is back.
+    Later,
+}
+
+/// `applied` and `previous_applied` are the pictures oneMK set on each monitor
+/// (the latest, and the one before when that had replaced a oneMK picture);
+/// `current` is what the monitor shows now, `None` when it is not connected. A
+/// journal from before this was recorded has neither map and is restored as it
+/// always was, since ownership cannot be told.
+#[cfg(any(windows, test))]
+pub(super) fn restore_step(applied: &std::collections::BTreeMap<String, String>, previous_applied: &std::collections::BTreeMap<String, String>,
+    monitor: &str, current: Option<&str>) -> Restore {
+    let legacy = applied.is_empty() && previous_applied.is_empty();
+    if !legacy && !applied.contains_key(monitor) && !previous_applied.contains_key(monitor) { return Restore::Leave; }
+    let Some(current) = current else { return Restore::Later };
+    // Windows paths do not care about case.
+    let ours = [applied, previous_applied].iter().any(|owned| owned.get(monitor).is_some_and(|path| path.eq_ignore_ascii_case(current)));
+    if legacy || ours { Restore::Now } else { Restore::Leave }
+}
+
 #[cfg(any(target_os = "macos", windows, test))]
 pub(super) fn native_or_overlay<Prepared>(prepared: Result<Prepared>, apply: impl FnOnce(Prepared) -> Result<()>) -> Result<one_mk_wallpaper::picture::Mode> {
     use one_mk_wallpaper::picture::Mode;
@@ -777,5 +807,26 @@ mod tests {
         assert!(!overlay_picture(true, false, || false));
         // X11 never uses it.
         assert!(!overlay_picture(false, false, || panic!("not asked without Wayland")));
+    }
+    #[test]
+    fn turning_off_restores_only_pictures_one_mk_still_owns() {
+        use std::collections::BTreeMap;
+        let map = |entries: &[(&str, &str)]| entries.iter().map(|(monitor, path)| ((*monitor).to_owned(), (*path).to_owned())).collect::<BTreeMap<_, _>>();
+        let applied = map(&[("A", "C:\\cache\\a.png")]);
+        let earlier = map(&[("A", "C:\\cache\\old.png"), ("B", "C:\\cache\\b-old.png")]);
+        // Still the picture oneMK set (or the one before it): the original goes back.
+        assert_eq!(restore_step(&applied, &earlier, "A", Some("C:\\cache\\a.png")), Restore::Now);
+        assert_eq!(restore_step(&applied, &earlier, "A", Some("c:\\CACHE\\a.png")), Restore::Now);
+        assert_eq!(restore_step(&applied, &earlier, "A", Some("C:\\cache\\old.png")), Restore::Now);
+        // The user picked another picture afterwards: it stays.
+        assert_eq!(restore_step(&applied, &earlier, "A", Some("C:\\Users\\me\\new.jpg")), Restore::Leave);
+        // A monitor oneMK never changed keeps whatever it shows, connected or not.
+        assert_eq!(restore_step(&applied, &BTreeMap::new(), "C", Some("C:\\x.jpg")), Restore::Leave);
+        assert_eq!(restore_step(&applied, &BTreeMap::new(), "C", None), Restore::Leave);
+        // A disconnected monitor oneMK did change is retried when it returns.
+        assert_eq!(restore_step(&applied, &earlier, "A", None), Restore::Later);
+        // A journal without ownership records is restored as it always was.
+        assert_eq!(restore_step(&BTreeMap::new(), &BTreeMap::new(), "A", Some("C:\\anything.png")), Restore::Now);
+        assert_eq!(restore_step(&BTreeMap::new(), &BTreeMap::new(), "A", None), Restore::Later);
     }
 }
