@@ -218,3 +218,52 @@ fn turning_off_automatic_updates_is_not_raced_by_the_install() {
     win.quiet();
     assert!(!fake.calls_with(&["update"]).is_empty(), "{:?}", fake.calls());
 }
+
+#[test]
+fn a_stopped_onemk_does_not_say_no_computer_is_paired() {
+    let mut win = Win::light(1200.0, 1400.0);
+    win.status(None);
+    win.go(Tab::Settings);
+    win.app.settings_cat = settings_page::Cat::Typing;
+    win.settle();
+    assert!(win.has_text("Start oneMK to choose how Ctrl and Cmd work"), "{}", win.texts_joined());
+    assert!(!win.has_text("Pair a computer to choose how Ctrl and Cmd work"));
+    win.status(Some(alone()));
+    assert!(win.has_text("Pair a computer to choose how Ctrl and Cmd work"), "{}", win.texts_joined());
+}
+
+#[test]
+fn keys_for_a_computer_with_a_shown_id_name_it_by_its_id() {
+    let mut win = Win::light(1200.0, 780.0);
+    win.status(Some(with(vec![
+        peer("ab12-cd34", "Studio (ab12-cd34)", Side::Right, os::WINDOWS, true),
+        peer("ee00-ff11", "Studio (ee00-ff11)", Side::Left, os::LINUX, true),
+    ])));
+    let tile = win.find_containing("Studio (ab12-cd34), Windows").unwrap_or_else(|| panic!("{:#?}", win.names()));
+    win.click_at(tile.rect.center());
+    win.settle();
+    let keys = win.find_containing("Keys for this PC").unwrap_or_else(|| panic!("{:#?}", win.names()));
+    win.click_at(keys.rect.center());
+    assert_eq!(win.app.tab, Tab::Keys);
+    assert_eq!(win.app.keys.scope, crate::tune::Scope::Peer("ab12-cd34".into()));
+}
+
+#[test]
+fn health_names_what_its_update_button_does_where_it_cannot_install() {
+    let check = crate::view::Check {
+        id: "updates".into(),
+        title: "Updates".into(),
+        verdict: crate::view::Verdict::Warn,
+        detail: "A new version is out.".into(),
+        fix: Some("update-now".into()),
+        action: None,
+    };
+    for (can, move_first, label) in [(true, false, "Update now"), (false, false, "Download"), (false, true, "Open Settings")] {
+        let (mut win, _fake) = updates_window(UpdateStatus { can_update: can, move_to_applications: move_first, ..can_update() });
+        win.go(Tab::Health);
+        win.health_check_ends();
+        win.send(Event::Doctor(Ok(vec![check.clone()])));
+        assert!(win.find(label).is_some(), "can_update {can}, move first {move_first}: {:#?}", win.names());
+        assert!(win.find("Update now").is_some() == (label == "Update now"));
+    }
+}

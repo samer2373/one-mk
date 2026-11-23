@@ -652,7 +652,7 @@ impl App {
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
                 self.link.set(&what, &args);
             }
-            Job::Wallpaper(command) => self.link.wallpaper(command),
+            Job::Wallpaper(command) => self.wallpaper_command(command),
             Job::Open => {
                 self.busy.push(job);
                 self.link.open_downloads();
@@ -1852,12 +1852,22 @@ impl App {
         }
     }
 
+    /// What stands where Ctrl and Cmd's rows would: computers are listed only
+    /// while oneMK runs, so a stopped oneMK does not say none are paired.
+    pub(super) fn swaps_empty_text(&self) -> &'static str {
+        if self.off() {
+            "Start oneMK to choose how Ctrl and Cmd work on the computers you paired."
+        } else {
+            "Pair a computer to choose how Ctrl and Cmd work when you type on it."
+        }
+    }
+
     /// Ctrl and Cmd for every paired computer, a row each, from the top of
     /// `c` (the Settings card sizes itself to fit them).
     pub(super) fn swaps(&mut self, ui: &mut Ui, c: Rect) {
         let peers: Vec<_> = self.running().map(|s| s.peers.clone()).unwrap_or_default();
         if peers.is_empty() {
-            para(ui, c.left_top(), c.width(), "Pair a computer to choose how Ctrl and Cmd work when you type on it.", regular(T_BODY), pal().ink2);
+            para(ui, c.left_top(), c.width(), self.swaps_empty_text(), regular(T_BODY), pal().ink2);
             return;
         }
         let arrowed = self.arrowed;
