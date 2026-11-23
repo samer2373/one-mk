@@ -43,6 +43,11 @@ struct Output {
 /// one configuration of the output, before it is left without one.
 const CLOSED_RETRIES: u32 = 3;
 
+/// A surface that stayed painted this long before the compositor closed it
+/// was a good one: its closing starts the count again. A surface closed
+/// sooner, e.g. right after its first buffer, is the compositor refusing it.
+const STABLE: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The part of an output a surface depends on: where, how many pixels, at what scale.
 type Configuration = (Rect, (i32, i32), i32);
 
@@ -58,6 +63,11 @@ impl Refusal {
     fn add(previous: Option<Self>, configuration: Configuration, weight: u32) -> Self {
         let times = match previous { Some(previous) if previous.configuration == configuration => previous.times.saturating_add(weight), _ => weight };
         Self { configuration, times }
+    }
+    /// The compositor closed a surface that had been painted for `painted_for` (`None`: never).
+    fn closed(previous: Option<Self>, configuration: Configuration, painted_for: Option<std::time::Duration>) -> Self {
+        let stable = painted_for.is_some_and(|lived| lived >= STABLE);
+        Self::add(if stable { None } else { previous }, configuration, 1)
     }
     fn blocks(&self, configuration: Configuration) -> bool { self.configuration == configuration && self.times >= CLOSED_RETRIES }
 }
@@ -79,6 +89,8 @@ struct Wallpaper {
     target: (u32, u32),
     mapping: PixelMapping,
     generation: u64,
+    /// When the compositor first got a painted buffer for this surface.
+    painted_at: Option<std::time::Instant>,
 }
 
 enum Role { Layer(zwlr_layer_surface_v1::ZwlrLayerSurfaceV1), Window(xdg_surface::XdgSurface, xdg_toplevel::XdgToplevel) }
@@ -138,6 +150,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Desktop {
 impl Output {
     fn configuration(&self) -> Configuration { (self.rect, self.mode, self.scale) }
     fn refuse(&mut self, weight: u32) { self.refused = Some(Refusal::add(self.refused, self.configuration(), weight)); }
+    /// The compositor closed the wallpaper surface.
+    fn closed(&mut self) {
+        let painted_for = self.wallpaper.as_ref().and_then(|wallpaper| wallpaper.painted_at).map(|at| at.elapsed());
+        self.refused = Some(Refusal::closed(self.refused, self.configuration(), painted_for));
+        self.wallpaper.take();
+    }
     fn update_rect(&mut self) {
         let (width, height) = if self.rotated { (self.mode.1, self.mode.0) } else { self.mode };
         let (width, height) = self.logical_size.unwrap_or((width / self.scale, height / self.scale));
@@ -187,7 +205,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, u32> for Desktop {
                     wallpaper.configured = true;
                 }
             }
-            zwlr_layer_surface_v1::Event::Closed => { output.wallpaper.take(); output.refuse(1); }
+            zwlr_layer_surface_v1::Event::Closed => output.closed(),
             _ => {}
         }
         state.changed = true;
@@ -213,7 +231,7 @@ impl Dispatch<xdg_surface::XdgSurface, u32> for Desktop {
 impl Dispatch<xdg_toplevel::XdgToplevel, u32> for Desktop {
     fn event(state: &mut Self, _: &xdg_toplevel::XdgToplevel, event: xdg_toplevel::Event, id: &u32, _: &Connection, _: &QueueHandle<Self>) {
         if let xdg_toplevel::Event::Close = event && let Some(output) = state.outputs.get_mut(id) {
-            output.wallpaper.take(); output.refuse(1); state.changed = true;
+            output.closed(); state.changed = true;
         }
     }
 }
@@ -356,7 +374,7 @@ impl Desktop {
                 let region = compositor.create_region(handle, ()); surface.set_input_region(Some(&region)); region.destroy();
                 surface.commit();
                 output.wallpaper = Some(Wallpaper { surface, role, rect: output.rect, title, presented: self.secret.is_none(), configured: false,
-                    size: (output.rect.width as u32, output.rect.height as u32), scale: output.scale, buffers: Vec::new(), pixels: Vec::new(), target: (0, 0), mapping: PixelMapping::default(), generation: 0 });
+                    size: (output.rect.width as u32, output.rect.height as u32), scale: output.scale, buffers: Vec::new(), pixels: Vec::new(), target: (0, 0), mapping: PixelMapping::default(), generation: 0, painted_at: None });
             }
             let wallpaper = output.wallpaper.as_mut().unwrap();
             if !wallpaper.configured || wallpaper.size.0 == 0 || wallpaper.size.1 == 0 { continue; }
@@ -418,8 +436,7 @@ impl Desktop {
             if wallpaper.surface.version() >= 4 { wallpaper.surface.damage_buffer(0, 0, size.0 as i32, size.1 as i32); }
             else { wallpaper.surface.damage(0, 0, wallpaper.size.0 as i32, wallpaper.size.1 as i32); }
             wallpaper.surface.commit(); wallpaper.generation = generation;
-            // A surface that paints is a good one: earlier closings no longer count against it.
-            output.refused = None;
+            wallpaper.painted_at.get_or_insert_with(std::time::Instant::now);
         }
         Ok(())
     }
@@ -683,6 +700,17 @@ mod tests {
         // The count starts over in a new configuration.
         assert!(!Refusal::add(closed, before, 1).blocks(before));
         assert_eq!(Refusal::add(closed, before, 1).times, 1);
+        // Closed right after the first paint, again and again: the count is not reset by painting.
+        let quick = Some(std::time::Duration::from_millis(50));
+        let mut closed = None;
+        for time in 1..=CLOSED_RETRIES {
+            closed = Some(Refusal::closed(closed, after, quick));
+            assert_eq!(closed.unwrap().blocks(after), time == CLOSED_RETRIES, "closing {time}");
+        }
+        // A surface that stayed for a long while was a good one: its closing counts as the first.
+        let closed = Refusal::closed(closed, after, Some(STABLE));
+        assert_eq!(closed.times, 1);
+        assert!(!closed.blocks(after));
     }
     #[test]
     fn dimensions_respect_scale_and_bound_memory() {
