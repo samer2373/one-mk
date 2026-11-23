@@ -1164,8 +1164,9 @@ struct Devices {
     ready: Vec<reis::event::Device>,
     /// Devices we have sent events to since the last frame.
     dirty: Vec<reis::event::Device>,
-    /// Regions of the absolute pointer device, if it has any. Positions
-    /// outside them are ignored by the compositor, so moves are clamped in.
+    /// Regions of the absolute pointer device moves are sent to (the one
+    /// `with` picks: a resumed one), if it has any. Positions outside them
+    /// are ignored by the compositor, so moves are clamped in.
     regions: Option<Desktop>,
 }
 
@@ -1182,7 +1183,9 @@ impl Devices {
     }
 
     fn update_regions(&mut self) {
-        self.regions = self.all.iter().find(|d| d.interface::<ei::PointerAbsolute>().is_some()).and_then(|dev| {
+        // The same device `with` sends the motion to: a paused one with other regions must not
+        // decide where the resumed one is clamped.
+        self.regions = self.all.iter().find(|d| self.ready.contains(d) && d.interface::<ei::PointerAbsolute>().is_some()).and_then(|dev| {
             let rects: Vec<Rect> = dev
                 .regions()
                 .iter()
@@ -1415,10 +1418,12 @@ async fn run_inject(
                         if !inj.devices.ready.contains(&d.device) {
                             inj.devices.ready.push(d.device.clone());
                         }
+                        inj.devices.update_regions();
                     }
                     EiEvent::DevicePaused(d) => {
                         inj.devices.ready.retain(|x| *x != d.device);
                         inj.devices.dirty.retain(|x| *x != d.device);
+                        inj.devices.update_regions();
                     }
                     EiEvent::DeviceRemoved(d) => {
                         inj.devices.all.retain(|x| *x != d.device);
