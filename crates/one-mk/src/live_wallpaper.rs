@@ -415,6 +415,16 @@ fn discard_unused(dir: &Path, hash: &str, keep: &BTreeSet<String>) {
     if keep.contains(hash) { return; }
     if let Ok(path) = cache_path(&cache(dir), hash) { let _ = std::fs::remove_file(path); }
     let _ = std::fs::remove_file(cache(dir).join(format!("{hash}.png")));
+    // A typed link a probe made keeps the video's bytes on disk (a probe that was
+    // killed never got to remove its own). Names being made, `.…part`, are left.
+    if let Ok(entries) = std::fs::read_dir(one_mk_wallpaper::links_dir(&cache(dir))) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !entry.file_name().to_string_lossy().starts_with('.') && path.file_stem().is_some_and(|stem| stem == hash) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
 }
 
 async fn inspect(dir: &Path, hash: &str) -> Result<Media> {
@@ -1672,13 +1682,24 @@ mod tests {
             std::fs::write(cache_path(&cache(directory.path()), hash).unwrap(), b"x").unwrap();
             std::fs::write(cache(directory.path()).join(format!("{hash}.png")), b"x").unwrap();
         }
+        // A probe's typed link to each, and a link being made for the refused one.
+        let links = one_mk_wallpaper::links_dir(&cache(directory.path()));
+        std::fs::create_dir_all(&links).unwrap();
+        for hash in [&bad, &chosen] {
+            std::fs::hard_link(cache_path(&cache(directory.path()), hash).unwrap(), links.join(format!("{hash}.mp4"))).unwrap();
+        }
+        let making = links.join(format!(".{bad}-1.part"));
+        std::fs::write(&making, b"x").unwrap();
         let keep = BTreeSet::from([chosen.clone(), before.clone()]);
         discard_unused(directory.path(), &bad, &keep);
         assert!(!cache_path(&cache(directory.path()), &bad).unwrap().exists() && !cache(directory.path()).join(format!("{bad}.png")).exists());
+        assert!(!links.join(format!("{bad}.mp4")).exists(), "the refused video's typed link no longer holds its bytes");
+        assert!(making.exists(), "a name still being made is left to its maker");
         // Choosing the file that already plays, and failing, must not delete it.
         discard_unused(directory.path(), &chosen, &keep);
         discard_unused(directory.path(), &before, &keep);
         assert!(cache_path(&cache(directory.path()), &chosen).unwrap().exists() && cache_path(&cache(directory.path()), &before).unwrap().exists());
+        assert!(links.join(format!("{chosen}.mp4")).exists(), "the chosen video keeps its link");
     }
 
     #[cfg(unix)]
