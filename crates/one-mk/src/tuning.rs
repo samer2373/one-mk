@@ -861,9 +861,16 @@ impl TuningSettings {
     }
 
     pub fn local_keymaps_for(&self, devices: &[InputDevice], apps: &[String]) -> Result<KeymapSet> {
-        let mut set = KeymapSet::new(self.local_compiled_for_apps(None, apps)?.map);
+        self.local_keymaps_with(devices, apps, true)
+    }
+
+    /// `lenient`: a rule that cannot be built is left out (the file may have
+    /// been edited by hand); not lenient: it is an error, which is what a
+    /// command that is about to save a rule wants.
+    fn local_keymaps_with(&self, devices: &[InputDevice], apps: &[String], lenient: bool) -> Result<KeymapSet> {
+        let mut set = KeymapSet::new(self.local_compiled_with(None, apps, lenient)?.map);
         for device in devices {
-            let map = self.local_compiled_for_apps(Some(&device.fingerprint), apps)?.map;
+            let map = self.local_compiled_with(Some(&device.fingerprint), apps, lenient)?.map;
             if &map != set.base() { set.add(&[device.id], map); }
         }
         Ok(set)
@@ -910,7 +917,7 @@ impl TuningSettings {
         }
         let mut splits = splits.into_iter();
         let (base_system, base_tap) = splits.next().unwrap_or_default();
-        let compile = |specs: &[RuleSpec]| -> Result<_> { Ok(Keymap::compile(specs, remap::Target { os: os::MACOS, swap: false }, self.keymap.tap())?.map) };
+        let compile = |specs: &[RuleSpec]| -> Result<_> { Ok(Keymap::compile_lenient(specs, remap::Target { os: os::MACOS, swap: false }, self.keymap.tap())?.map) };
         let mut plan = one_mk_input::macos_hidmap::Plan { base: base_system, devices: Vec::new() };
         let mut maps = KeymapSet::new(compile(&base_tap)?);
         for (device, (system, tap)) in devices.iter().zip(splits) {
@@ -922,16 +929,17 @@ impl TuningSettings {
     }
 
     fn local_compiled_for(&self, device: Option<&Fingerprint>) -> Result<remap::Compiled> {
-        self.local_compiled_for_apps(device, &[])
+        self.local_compiled_with(device, &[], true)
     }
 
-    fn local_compiled_for_apps(&self, device: Option<&Fingerprint>, apps: &[String]) -> Result<remap::Compiled> {
+    fn local_compiled_with(&self, device: Option<&Fingerprint>, apps: &[String], lenient: bool) -> Result<remap::Compiled> {
         let peer = PeerFacts { name: "", id: "", os: os::local(), apps, device };
         let (specs, warnings) = self.specs_in(&peer, true);
         if !warnings.is_empty() {
             bail!("{}", warnings.join("; "));
         }
-        Ok(Keymap::compile(&specs, remap::Target { os: peer.os, swap: false }, self.keymap.tap())?)
+        let target = remap::Target { os: peer.os, swap: false };
+        Ok(if lenient { Keymap::compile_lenient(&specs, target, self.keymap.tap())? } else { Keymap::compile(&specs, target, self.keymap.tap())? })
     }
 
     fn specs_in(&self, peer: &PeerFacts, local: bool) -> (Vec<RuleSpec>, Vec<String>) {
@@ -997,7 +1005,8 @@ impl TuningSettings {
     pub fn resolve(&self, peer: &PeerFacts, swap: bool) -> Resolved {
         let (specs, mut warnings) = self.specs(peer);
         let target = remap::Target { os: peer.os, swap };
-        let keymap = match Keymap::compile(&specs, target, self.keymap.tap()) {
+        // One rule that cannot be built costs only itself, as the file promises.
+        let keymap = match Keymap::compile_lenient(&specs, target, self.keymap.tap()) {
             Ok(c) => {
                 warnings.extend(c.warnings);
                 c.map
@@ -1342,7 +1351,7 @@ impl TuningSettings {
                         out.push(format!("for {what}: gesture {} takes precedence over button/key mappings; a short click replays the original button", keynames::key_name(gesture.button)));
                     }
                 }
-                match Keymap::compile(&specs, target, self.keymap.tap()) {
+                match Keymap::compile_lenient(&specs, target, self.keymap.tap()) {
                     Ok(c) => out.extend(c.warnings),
                     Err(e) => out.push(format!("for {what}: {e}")),
                 }
@@ -1857,8 +1866,8 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
                 // with the rule's app focused.
                 if *scope.target() == Scope::Local {
                     let device = scope.device().map(str::parse::<Fingerprint>).transpose().map_err(anyhow::Error::msg)?;
-                    s.input.local_compiled_for(device.as_ref())?;
-                    s.input.local_keymaps(&[])?;
+                    s.input.local_compiled_with(device.as_ref(), &[], false)?;
+                    s.input.local_keymaps_with(&[], &[], false)?;
                 }
                 let focused: Vec<String> = app.iter().filter(|a| !a.starts_with('!') && !a.contains('*')).cloned().collect();
                 let device = scope.device().and_then(|d| d.parse::<Fingerprint>().ok());
@@ -3329,6 +3338,19 @@ scope = { device = "usb/0001:0002//Pad" }
         assert!(!resolved.warnings.iter().any(|w| w.contains("key rules not used")), "{:?}", resolved.warnings);
         assert!(!resolved.keymap.is_empty());
         assert!(t.check(&[]).iter().any(|p| p.contains("timeout_ms 49 is outside 50 to 2000 and is clamped")), "{:?}", t.check(&[]));
+    }
+
+    /// A hand-edited rule the key map cannot build (a tap/hold key with a modifier, a
+    /// layer name with a space) is left out with a warning; the other rules keep working.
+    #[test]
+    fn a_rule_that_cannot_be_built_does_not_drop_the_others() {
+        let t = load("[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"esc\"\n\n[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\nlayer = \"nav keys\"\n\n[[input.keymap.rule]]\nfrom = \"ctrl+space\"\ntap = \"space\"\nhold = \"lshift\"\n");
+        let resolved = t.resolve(&facts(os::LINUX), false);
+        assert!(!resolved.warnings.iter().any(|w| w.contains("key rules not used")), "{:?}", resolved.warnings);
+        assert!(!resolved.keymap.is_empty(), "the good rule still works");
+        assert!(t.check(&[]).iter().any(|p| p.contains("nav keys")), "{:?}", t.check(&[]));
+        // A command about to save a rule still refuses it.
+        assert!(t.local_compiled_with(None, &[], false).is_ok(), "this settings has no local rules");
     }
 
     /// `--peer` accepts the name chosen here (`one-mk rename`), but a visit
