@@ -192,3 +192,98 @@ fn history_that_cannot_be_read_says_why_and_an_empty_one_says_so() {
     assert!(win.has_text("Could not read history. Try Refresh when oneMK is running."), "{}", win.texts_joined());
     assert!(problems(&win).is_empty(), "{:#?}", problems(&win));
 }
+
+/// A daemon that knows its history instance, which a test can change to
+/// stand for a restart: it lists item 7 under the current instance, and
+/// refuses a preview or copy sent with another one, as the real daemon does.
+fn instance_daemon(win: &Win, instance: std::sync::Arc<std::sync::atomic::AtomicU64>, preview_delay_ms: u64) -> Socket {
+    use std::sync::atomic::Ordering;
+    let stale = "error The clipboard history was reloaded since this list was read (oneMK restarted); refresh the list and choose again";
+    Socket::listen(win, move |line| {
+        let now = instance.load(Ordering::SeqCst);
+        let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        match line {
+            "clip-history list --json" => format!(
+                r#"ok
+[{{"id":7,"instance":{now},"kind":"text","preview":"[hidden; use Show]","size":12,"timestamp":{timestamp},"origin":"Studio"}}]"#
+            ),
+            l if l.starts_with("clip-history preview 7 ") || l.starts_with("clip-history copy 7 ") => {
+                if l.starts_with("clip-history preview") { std::thread::sleep(std::time::Duration::from_millis(preview_delay_ms)); }
+                if l.ends_with(&format!(" {now}")) { if l.contains("preview") { "ok\nthe bounded preview".to_owned() } else { "ok".to_owned() } } else { stale.to_owned() }
+            }
+            _ => String::new(),
+        }
+    })
+}
+
+fn files_with_instance(delay: u64) -> (Win, Fake, Socket, std::sync::Arc<std::sync::atomic::AtomicU64>) {
+    let mut win = Win::light(1200.0, 900.0);
+    let fake = Fake::install(&mut win);
+    let instance = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(42));
+    let daemon = instance_daemon(&win, instance.clone(), delay);
+    win.settings("[clipboard]\nhistory_max = 50\n");
+    let mut status = two();
+    status.clipboard_history_enabled = true;
+    status.clipboard_history = 1;
+    win.status(Some(status));
+    win.go(Tab::Files);
+    win.wait("the history", |w| w.app.clipboard_history.as_ref().is_some_and(Result::is_ok));
+    (win, fake, daemon, instance)
+}
+
+#[test]
+fn show_and_copy_send_the_history_instance_the_row_was_listed_under() {
+    let (mut win, _fake, daemon, _instance) = files_with_instance(0);
+    win.click(SHOW7);
+    win.wait("the preview", |w| w.app.clipboard_reveal.is_some());
+    // The bounded preview, not the CLI's whole-item show.
+    assert_eq!(daemon.seen_with("clip-history preview"), vec!["clip-history preview 7 42"]);
+    assert!(daemon.seen_with("clip-history show").is_empty());
+    assert!(win.has_text("the bounded preview"), "{}", win.texts_joined());
+    let row = win.find_containing("Copy clipboard item 7 here").unwrap();
+    win.click_at(row.rect.center());
+    win.wait("the copy", |w| !w.app.busy.iter().any(|j| matches!(j, Job::Set { .. })) && !daemon.seen_with("clip-history copy").is_empty());
+    assert_eq!(daemon.seen_with("clip-history copy"), vec!["clip-history copy 7 42"]);
+}
+
+#[test]
+fn a_row_from_before_a_daemon_restart_is_refused_says_so_and_the_list_is_read_again() {
+    let (mut win, _fake, daemon, instance) = files_with_instance(0);
+    // The daemon restarted between two looks: its history is another instance now.
+    instance.store(43, std::sync::atomic::Ordering::SeqCst);
+    let lists = daemon.seen_with("clip-history list").len();
+    win.click(SHOW7);
+    win.wait("the refusal", |w| w.app.clipboard_reveal_error.is_some());
+    assert!(win.app.clipboard_reveal.is_none(), "nothing from the new history is shown for the old row");
+    assert!(win.has_text("The clipboard history was reloaded since this list was read (oneMK restarted); refresh the list and choose again"), "{}", win.texts_joined());
+    assert!(problems(&win).is_empty(), "{:#?}", problems(&win));
+    // The list is read again, so the next click goes out with the new instance.
+    win.wait("the list again", |_| daemon.seen_with("clip-history list").len() > lists);
+    win.wait("the new rows", |w| w.app.clipboard_history.as_ref().is_some_and(|h| h.as_ref().is_ok_and(|items| items.iter().all(|item| item.instance == Some(43)))));
+    win.click(SHOW7);
+    win.wait("the preview", |w| w.app.clipboard_reveal.is_some());
+    assert_eq!(daemon.seen_with("clip-history preview").last().map(String::as_str), Some("clip-history preview 7 43"));
+    assert!(win.app.clipboard_reveal_error.is_none(), "the next try clears it");
+    // Copy of a stale row: the daemon refuses, the window says so, and reads the list again.
+    instance.store(44, std::sync::atomic::Ordering::SeqCst);
+    let lists = daemon.seen_with("clip-history list").len();
+    let row = win.find_containing("Copy clipboard item 7 here").unwrap();
+    win.click_at(row.rect.center());
+    win.wait("the refusal", |w| w.app.toast.as_ref().is_some_and(|t| t.error));
+    win.wait("the list again", |_| daemon.seen_with("clip-history list").len() > lists);
+    assert_eq!(daemon.seen_with("clip-history copy"), vec!["clip-history copy 7 43"]);
+}
+
+#[test]
+fn a_preview_still_on_its_way_is_not_asked_for_twice() {
+    let (mut win, _fake, daemon, _instance) = files_with_instance(700);
+    win.click_now(SHOW7);
+    win.frames(3);
+    let show = win.find(SHOW7).expect("the row keeps its Show button");
+    assert!(show.disabled, "Show waits for the answer");
+    // Presses meanwhile go nowhere.
+    for _ in 0..3 { win.click_at(show.rect.center()); }
+    win.wait("the preview", |w| w.app.clipboard_reveal.is_some());
+    assert_eq!(daemon.seen_with("clip-history preview"), vec!["clip-history preview 7 42"]);
+    assert!(win.find(HIDE7).is_some_and(|button| !button.disabled));
+}
