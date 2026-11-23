@@ -40,7 +40,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CURSOR_SHOWING, CURSOR_SUPPRESSED, CURSORINFO, CreateWindowExW, DBT_DEVICEARRIVAL, DBT_DEVTYP_DEVICEINTERFACE,
     DEV_BROADCAST_DEVICEINTERFACE_W, DEV_BROADCAST_HDR, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetCursorInfo, GetMessageW, GetSystemMetrics, HTTRANSPARENT, HWND_TOPMOST, IsWindowVisible, MSG, PostMessageW,
-    PostQuitMessage, RegisterClassW, RegisterDeviceNotificationW, SM_MOUSEPRESENT, SW_HIDE, SW_SHOWNOACTIVATE,
+    PostQuitMessage, RegisterClassW, RegisterDeviceNotificationW, SM_MOUSEPRESENT, SMTO_ABORTIFHUNG, SW_HIDE, SW_SHOWNOACTIVATE,
+    SendMessageTimeoutW,
     SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SetWindowPos, ShowWindow, ShowWindowAsync, TranslateMessage, ULW_ALPHA, UnregisterDeviceNotification,
     UpdateLayeredWindow, WM_CLOSE, WM_DESTROY, WM_DEVICECHANGE, WM_NCHITTEST, WNDCLASSW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
@@ -157,10 +158,18 @@ impl Overlay for Window {
 
 impl Drop for Window {
     fn drop(&mut self) {
-        // SAFETY: posting to a window of ours; its thread destroys it.
-        unsafe { PostMessageW(self.hwnd as HWND, WM_CLOSE, 0, 0) };
+        // SAFETY: posting to a window of ours; its thread destroys it. A full message queue refuses a
+        // post, so then the close is sent instead (a sent message does not use the queue), waiting
+        // at most a second.
+        let closing = unsafe {
+            PostMessageW(self.hwnd as HWND, WM_CLOSE, 0, 0) != 0
+                || SendMessageTimeoutW(self.hwnd as HWND, WM_CLOSE, 0, 0, SMTO_ABORTIFHUNG, 1000, std::ptr::null_mut()) != 0
+        };
         if let Some(t) = self.thread.take() {
-            let _ = t.join();
+            // With no way to tell the thread, leave it be: the daemon must not wait for it forever.
+            if closing {
+                let _ = t.join();
+            }
         }
     }
 }
