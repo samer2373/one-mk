@@ -160,11 +160,10 @@ impl ClipSync {
 
     pub fn set_history_dir(&self, dir: &std::path::Path) {
         *self.history_dir.lock().unwrap_or_else(|error| error.into_inner()) = Some(dir.to_owned());
-        if one_mk_clipboard::history::clean_unfinished(dir).is_err() {
-            self.cb.history().lock().unwrap_or_else(|error| error.into_inner()).error = Some(
-                "Could not remove an unfinished clipboard-history save; check the settings folder is writable, then restart one-mk.".into()
-            );
-        }
+        // The history sweeps the folder for a crashed save, now and at every configure
+        // (also while saving is off), and keeps a failure to do so as its own warning,
+        // apart from the load error that a change of the saved file's place clears.
+        self.cb.history().lock().unwrap_or_else(|error| error.into_inner()).set_directory(dir.to_owned());
     }
 
     pub fn clipboard(&self) -> &Clipboard { &self.cb }
@@ -750,6 +749,25 @@ async fn read_exact(recv: &mut quinn::RecvStream, len: usize) -> anyhow::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The warning about an unfinished save that startup could not remove reaches the
+    /// status the window and `one-mk clipboard history` show, also once saving is on.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn an_unremovable_unfinished_save_stays_reported_when_history_saving_is_applied() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions. As root nothing is unremovable.
+        if unsafe { libc::geteuid() } == 0 { return; }
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join(".clipboard-history-x"), b"clipboard text").unwrap();
+        std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let pc = Pc::new();
+        pc.clip.set_history_dir(folder.path());
+        pc.settings(ClipSettings { history_persist: true, ..Default::default() });
+        let note = pc.clip.clipboard().history().lock().unwrap().status().note();
+        std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(note.is_some_and(|n| n.contains("unfinished")), "the warning was wiped by the settings that turn saving on");
+    }
 
     #[tokio::test]
     async fn rejected_automatic_push_retries_the_same_clipboard() {

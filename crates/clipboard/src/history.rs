@@ -101,6 +101,9 @@ pub struct History {
     /// that could not be removed; kept apart from `error`, which a change of the saved
     /// file's place clears.
     cleanup_error: Option<String>,
+    /// The settings folder, known even while the history is not saved (then no
+    /// path says where an unfinished save of an earlier run might be).
+    directory: Option<PathBuf>,
     pub monitoring_unavailable: bool,
     status: Arc<Status>,
     saver: Option<crate::history_save::Saver>,
@@ -113,7 +116,7 @@ pub struct History {
 impl Default for History {
     fn default() -> Self {
         Self { entries: VecDeque::new(), bytes: 0, max: 20, byte_cap: DEFAULT_BYTES,
-            item_cap: crate::DEFAULT_MAX_BYTES, next: 1, revision: 0, path: None, error: None, cleanup_error: None, monitoring_unavailable: false,
+            item_cap: crate::DEFAULT_MAX_BYTES, next: 1, revision: 0, path: None, error: None, cleanup_error: None, directory: None, monitoring_unavailable: false,
             status: Arc::default(), saver: None, last_saved: None, blocked: false, remove_path: None, removed_path: None }
     }
 }
@@ -141,13 +144,23 @@ impl History {
         self.save_checked();
     }
 
+    /// Tells the history which folder holds (or would hold) its saved file, and removes
+    /// what a crash left there of an unfinished save. A failure to remove it is kept
+    /// apart from `error`, so it is reported whatever happens to the saved file's place.
+    pub fn set_directory(&mut self, directory: PathBuf) {
+        self.directory = Some(directory);
+        self.clean_unfinished_saves();
+        self.publish();
+    }
+
     /// Removes what a crash left of an unfinished save beside the saved file, and says if it
     /// can't. Only while no save has been made by this process, whose own temporary
     /// file must not be taken for a leftover.
     fn clean_unfinished_saves(&mut self) {
         // With a save made, the sweep is skipped: what it said before still stands.
         if self.saver.is_some() { return; }
-        let Some(directory) = self.path.as_ref().and_then(|path| path.parent()).filter(|dir| dir.is_dir()) else {
+        let folder = self.path.as_ref().and_then(|path| path.parent()).or(self.directory.as_deref());
+        let Some(directory) = folder.filter(|dir| dir.is_dir()) else {
             self.cleanup_error = None;
             return;
         };
@@ -389,6 +402,34 @@ mod tests {
         history.configure(20, DEFAULT_BYTES, 1024, Some(directory.path().join("clipboard-history.bin")));
         assert!(history.status().note().is_none_or(|n| !n.contains("unfinished")));
         assert!(!directory.path().join(".clipboard-history-x").exists());
+    }
+
+    /// The warning set by `set_directory` (the daemon's startup sweep) is not lost when the
+    /// next configure turns saving on, and the folder is swept while saving is off.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_startup_sweep_warning_survives_turning_saving_on_and_off() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions. As root nothing is unremovable.
+        if unsafe { libc::geteuid() } == 0 { return; }
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("clipboard-history.bin");
+        let leftover = directory.path().join(".clipboard-history-x");
+        std::fs::write(&leftover, b"clipboard text").unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let mut history = History::default();
+        history.set_directory(directory.path().to_owned());
+        assert!(history.status().note().is_some_and(|n| n.contains("unfinished")), "reported at startup");
+        // Saving off (the path stays None), then on (None to Some): still reported.
+        history.configure(20, DEFAULT_BYTES, 1024, None);
+        assert!(history.status().note().is_some_and(|n| n.contains("unfinished")), "lost with saving off");
+        history.configure(20, DEFAULT_BYTES, 1024, Some(file.clone()));
+        assert!(history.status().note().is_some_and(|n| n.contains("unfinished")), "lost when saving was turned on");
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Now removable: the next configure sweeps it, even with saving off.
+        history.configure(20, DEFAULT_BYTES, 1024, None);
+        assert!(!leftover.exists());
+        assert!(history.status().note().is_none());
     }
 
     /// A warning about a leftover that could not be removed is not cleared by a settings
