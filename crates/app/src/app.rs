@@ -1244,6 +1244,12 @@ impl App {
     fn sheet_open(&self) -> bool {
         self.pairing.is_some() || self.pending_drop.is_some() || self.removing.is_some() || self.deleting_profile.is_some()
     }
+
+    /// Whether something owns the window (a sheet or Search): files let go
+    /// over its scrim are not for the page behind it, on any page.
+    fn drops_blocked(&self) -> bool {
+        self.sheet_open() || self.palette.open
+    }
 }
 
 /// Whether the pointer has left the window without the window being told:
@@ -1401,9 +1407,9 @@ impl App {
     /// with a pointer position that can't be trusted), ask which one,
     /// unless only one could take them.
     fn drop_files(&mut self, paths: Vec<PathBuf>, at: Option<Pos2>, now: f64) {
-        // A sheet (pairing, a question) is modal: files let go over its scrim
-        // are not for the page behind it, nor for a second sheet on top.
-        if self.sheet_open() {
+        // A sheet (pairing, a question) or Search is modal: files let go over
+        // its scrim are not for the page behind it, nor for a second sheet on top.
+        if self.drops_blocked() {
             return;
         }
         // This frame's drop is taken: a page drawn later in it must not read it again.
@@ -2666,7 +2672,7 @@ impl eframe::App for App {
         let desk_lay = (self.tab == Tab::Desk).then(|| desk_panel::desk_layout(full, f.bar.bottom()));
         let desk = desk_lay.as_ref().map_or(content, |l| l.scene);
         // Files let go over a page without the desk: ask where they go.
-        if !self.tab.desk() && self.tab != Tab::Wallpaper && !self.sheet_open() {
+        if !self.tab.desk() && self.tab != Tab::Wallpaper && !self.drops_blocked() {
             let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
             if !dropped.is_empty() {
                 self.set_tab(Tab::Files);

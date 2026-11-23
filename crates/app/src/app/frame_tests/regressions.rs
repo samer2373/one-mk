@@ -279,6 +279,25 @@ fn the_first_check_runs_again_when_a_computer_goes_offline_while_it_runs() {
 }
 
 #[test]
+fn files_let_go_over_search_reach_no_page_behind_it() {
+    for tab in [Tab::Desk, Tab::Files, Tab::Settings] {
+        let mut win = Win::light(1200.0, 780.0);
+        let fake = Fake::install(&mut win);
+        win.status(Some(two()));
+        win.go(tab);
+        win.app.open_palette(win.t);
+        win.settle();
+        let file = win.dir.join("a.txt");
+        std::fs::write(&file, "hello").unwrap();
+        win.drop_files(std::slice::from_ref(&file));
+        win.quiet();
+        assert!(fake.calls_with(&["send"]).is_empty(), "{tab:?}: sent through Search: {:?}", fake.calls());
+        assert!(win.app.pending_drop.is_none() && win.app.palette.open, "{tab:?}: the drop was taken");
+        assert_eq!(win.tab(), tab, "{tab:?}: the page changed under Search");
+    }
+}
+
+#[test]
 fn leaving_settings_stops_a_shortcut_being_recorded() {
     let mut win = Win::light(1200.0, 780.0);
     win.status(Some(two()));

@@ -69,7 +69,8 @@ impl App {
         let no_wallpaper = Default::default();
         let wallpaper = status.as_ref().and_then(|status| status.wallpaper.as_ref()).unwrap_or(&no_wallpaper);
         // A drop is a choice like Choose…: only while choosing is possible.
-        let dropped = ui.input(|input| input.raw.dropped_files.first().map(|file| file.path().to_path_buf()));
+        // (Not while a sheet or Search owns the window: a drop on its scrim is not for this page.)
+        let dropped = ui.input(|input| input.raw.dropped_files.first().map(|file| file.path().to_path_buf())).filter(|_| !self.drops_blocked());
         let preparing = self.wallpaper_preparing();
         if let Some(path) = dropped && accepts_drop(status.is_some(), wallpaper.available) && !preparing { self.wallpaper_command(Command::Set { path }); }
         let plan = wallpaper.plan.as_ref();

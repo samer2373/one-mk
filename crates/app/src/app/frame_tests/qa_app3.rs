@@ -161,6 +161,19 @@ fn no_control_can_end_a_wallpaper_that_is_being_prepared_except_turning_it_off()
 }
 
 #[test]
+fn a_file_let_go_over_search_does_not_choose_a_wallpaper() {
+    let (mut win, daemon) = wallpaper_window(|line| if line.starts_with("wallpaper-live ") { "ok".to_owned() } else { String::new() });
+    win.app.open_palette(win.t);
+    win.settle();
+    let path = win.dir.join("loop.mp4");
+    std::fs::write(&path, b"not really a video").unwrap();
+    win.drop_files(std::slice::from_ref(&path));
+    win.frames(5);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert_eq!(sent_wallpaper(&daemon), 0, "{:?}", daemon.seen());
+}
+
+#[test]
 fn a_wallpaper_change_the_service_dropped_says_so() {
     // The service answers a change it dropped for a newer one with nothing at all.
     let (mut win, _daemon) = wallpaper_window(|_| String::new());
