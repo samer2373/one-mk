@@ -8,6 +8,7 @@
 use super::pages::{GROUP_LABEL, group_card};
 use super::settings_controls::{HOOK_ROW, SHORTCUT_ROW};
 use super::*;
+use crate::view::{EDGE_CORNER_MAX, EDGE_DWELL_MAX};
 
 const ANALYTICS_NOTE: &str = "Optional, off by default. After enabling/resetting, restart the app and daemon to begin collection. Withdrawal stops new sends immediately. Shares feature outcomes and redacted error/panic diagnostics with a random installation ID. App source locations may be included, never panic messages, input, clipboard, user files/paths or peer identity. Private retry/crash records expire after 24 hours. Off removes pending records and the ID; sent data cannot be recalled.";
 
@@ -17,18 +18,6 @@ const WRAP: [(&str, &str); 3] = [("off", "Off"), ("on", "Left / right"), ("all",
 const LEARN: [(&str, &str); 3] = [("off", "Off"), ("suggest", "Ask me"), ("auto", "Place them")];
 const POINTER: [(&str, &str); 3] = [("auto", "Auto"), ("always", "Always"), ("never", "Never")];
 const SCOPE: [(&str, &str); 5] = [("", "Shared"), ("left", "Left"), ("right", "Right"), ("top", "Top"), ("bottom", "Bottom")];
-
-/// The most `one-mk edge --corner` and `--dwell` take (`one-mk`'s settings
-/// cap the saved values at the same).
-const EDGE_CORNER_MAX: u32 = 500;
-const EDGE_DWELL_MAX: u32 = 5000;
-
-/// The key an edge rule holds, spelled as the choices are: `own` if it is a
-/// key (any case, `control` and `option` too), else the `shared` one, else none.
-fn effective_modifier(own: &str, shared: &str) -> String {
-    use one_mk_proto::Modifier;
-    own.parse::<Modifier>().or_else(|_| shared.parse()).unwrap_or_default().to_string()
-}
 
 /// A row on a page (the handoff's 52).
 const ROW: f32 = 52.0;
@@ -369,15 +358,14 @@ impl App {
     }
 
     /// (corner px, wait ms, key to hold, stay in fullscreen) for `side`, as
-    /// the daemon applies them: a corner or wait over the most is the most,
-    /// a key spelled another way (`Control`) is the same key, and one edge's
-    /// key that is no key is the shared one.
+    /// the daemon applies them (`Prefs::read` already did: a corner or wait
+    /// over the most is the most, a key spelled another way (`Control`) is
+    /// the same key, and one edge's key that is no key is the shared one).
     fn edge_rules(&self, side: &str) -> (u32, u32, String, bool) {
-        let (corner, dwell, own, fullscreen) = match self.prefs.edge_sides.iter().find(|(name, _)| name == side) {
-            Some((_, rules)) => (rules.corner, rules.dwell, rules.modifier.as_str(), rules.fullscreen),
-            None => (self.prefs.edge_corner, self.prefs.edge_dwell_ms, self.prefs.edge_modifier.as_str(), self.prefs.edge_fullscreen),
-        };
-        (corner.min(EDGE_CORNER_MAX), dwell.min(EDGE_DWELL_MAX), effective_modifier(own, &self.prefs.edge_modifier), fullscreen)
+        match self.prefs.edge_sides.iter().find(|(name, _)| name == side) {
+            Some((_, rules)) => (rules.corner, rules.dwell, rules.modifier.clone(), rules.fullscreen),
+            None => (self.prefs.edge_corner, self.prefs.edge_dwell_ms, self.prefs.edge_modifier.clone(), self.prefs.edge_fullscreen),
+        }
     }
 
     /// Room under "Stay in fullscreen windows" for what this desktop can't do.
@@ -501,8 +489,7 @@ impl App {
                 }
             }
             "pointer-wrap" => {
-                // The file may spell it `ALL`; the daemon reads any case.
-                let current = self.prefs.edge_wrap.to_ascii_lowercase();
+                let current = self.prefs.edge_wrap.clone();
                 if let Some(k) = self.seg_row(ui, r, "pointer-wrap", "Pointer wrap", "edge-wrap", &WRAP, &current, None) {
                     self.settings_command("Pointer wrap", vec!["edge".into(), "--wrap".into(), WRAP[k].0.into()]);
                 }
@@ -662,16 +649,6 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
-    #[test]
-    fn edge_keys_show_as_the_daemon_reads_them() {
-        assert_eq!(effective_modifier("Control", "none"), "ctrl");
-        assert_eq!(effective_modifier("OPTION", "none"), "alt");
-        // An edge's own key that is no key is the shared one; that none, none.
-        assert_eq!(effective_modifier("hyper", "Control"), "ctrl");
-        assert_eq!(effective_modifier("hyper", "hyper"), "none");
-        assert_eq!(effective_modifier("shift", "ctrl"), "shift");
-    }
-
     // The window tests do not build on Windows (frame_tests is not compiled there).
     #[cfg(not(windows))]
     #[test]
@@ -680,7 +657,7 @@ mod tests {
         win.app.prefs = crate::view::Prefs::read("[edge]\nmodifier = \"Control\"\ndwell_ms = 8000\ncorner = 900\nwrap = \"ALL\"\n[edge.left]\nmodifier = \"hyper\"\n", "");
         assert_eq!(win.app.edge_rules(""), (500, 5000, "ctrl".to_owned(), false));
         assert_eq!(win.app.edge_rules("left"), (500, 5000, "ctrl".to_owned(), false));
-        assert_eq!(win.app.prefs.edge_wrap.to_ascii_lowercase(), "all");
+        assert_eq!(win.app.prefs.edge_wrap, "all");
     }
 
     #[test]

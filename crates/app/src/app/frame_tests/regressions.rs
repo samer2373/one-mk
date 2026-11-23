@@ -428,3 +428,26 @@ fn a_recipient_scrolled_out_of_sight_takes_no_drop_over_the_bar() {
     win.quiet();
     assert!(fake.calls_with(&["send"]).is_empty(), "sent to a computer that cannot be seen: {:?}", fake.calls());
 }
+
+#[test]
+fn a_plan_tile_that_is_still_gliding_takes_clicks_where_it_is_drawn() {
+    crate::motion::set_reduced(false);
+    let mut win = Win::light(1400.0, 1000.0);
+    let _fake = Fake::install(&mut win);
+    win.status(Some(two_sided()));
+    win.go(Tab::Arrange);
+    let tile = |win: &Win| win.find_containing("Office PC: drag it to place it").unwrap_or_else(|| panic!("no tile: {:#?}", win.names())).rect;
+    let me = win.find_containing("Studio").map(|i| i.rect.center().x).unwrap_or_else(|| panic!("no tile: {:#?}", win.names()));
+    assert!(tile(&win).center().x > me, "Office PC starts on the right");
+    // The layout swaps the two computers; the tile starts to glide across.
+    let mut swapped = two_sided();
+    swapped.peers[0].side = Side::Left;
+    swapped.peers[1].side = Side::Right;
+    win.tx.send(Event::Status(Box::new(Some(swapped)))).unwrap();
+    win.frames(3);
+    let hit = tile(&win);
+    assert!(hit.center().x > me, "it takes clicks where it is drawn, not already at its destination: {hit:?} (this computer's tile is at {me})");
+    // Settled, it is at its place.
+    win.settle();
+    assert!(tile(&win).center().x < me, "Office PC ends on the left");
+}

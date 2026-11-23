@@ -431,6 +431,9 @@ impl App {
     /// The panel's contents in `c`; how tall they are.
     fn panel_body(&mut self, ui: &mut Ui, c: Rect, now: f64) -> f32 {
         let Some(status) = self.status.clone() else {
+            if self.not_answering() {
+                return self.panel_words(ui, c, "oneMK isn't answering", super::NOT_ANSWERING_HELP, "not-answering");
+            }
             let h = para(ui, c.min, c.width(), "Looking for oneMK…", semibold(T_TITLE), pal().ink);
             return h;
         };

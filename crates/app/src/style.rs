@@ -508,16 +508,64 @@ pub struct Themer {
     shown: Option<Theme>,
     from: Option<Palette>,
     since: f64,
-    /// Linux: the desktop's colour scheme, read at start and whenever the
-    /// window comes to the front (winit doesn't report it there).
+    /// Linux: the desktop's colour scheme, read at start, whenever the
+    /// window comes to the front and whenever the desktop says it changed
+    /// (winit doesn't report it there).
     desktop: Arc<std::sync::Mutex<Option<Theme>>>,
     focused: bool,
+    /// Linux: the `gsettings monitor` that tells of changes is running; its
+    /// stdin, which ends it when this (or the whole app) goes.
+    watching: Option<Option<std::process::ChildStdin>>,
 }
 
 impl Default for Themer {
     fn default() -> Self {
-        Themer { shown: None, from: None, since: 0.0, desktop: Arc::default(), focused: false }
+        Themer { shown: None, from: None, since: 0.0, desktop: Arc::default(), focused: false, watching: None }
     }
+}
+
+/// The theme a `color-scheme` value or `gsettings monitor` line names
+/// (`'prefer-dark'`, `'default'`, `color-scheme: 'prefer-light'`).
+fn desktop_theme(said: &str) -> Option<Theme> {
+    if said.contains("dark") {
+        Some(Theme::Dark)
+    } else if said.contains("light") || said.contains("default") {
+        Some(Theme::Light)
+    } else {
+        None
+    }
+}
+
+/// `gsettings monitor` for the colour scheme, ended by its parent: the
+/// shell holds it until its stdin closes (we close it, or the app goes,
+/// however it goes), then stops it, so none is left behind.
+fn follow_command() -> std::process::Command {
+    let mut command = std::process::Command::new("sh");
+    command.args(["-c", "gsettings monitor org.gnome.desktop.interface color-scheme & monitor=$!; cat >/dev/null; kill $monitor"]);
+    command
+}
+
+/// Runs `command` and reads the desktop's theme from each line it prints,
+/// asking for a new frame when it changes. The returned stdin keeps
+/// `command` going: dropping it (with the process, or the Themer) closes it.
+/// `None` when it can't run (the first reading and the one at focus remain).
+fn watch_desktop(mut command: std::process::Command, slot: Arc<std::sync::Mutex<Option<Theme>>>, ctx: egui::Context) -> Option<std::process::ChildStdin> {
+    use std::io::BufRead;
+    use std::process::Stdio;
+    let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let (stdin, stdout) = (child.stdin.take()?, child.stdout.take()?);
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            let Some(theme) = desktop_theme(&line) else { continue };
+            let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+            if *slot != Some(theme) {
+                *slot = Some(theme);
+                ctx.request_repaint();
+            }
+        }
+        let _ = child.wait();
+    });
+    Some(stdin)
 }
 
 /// How long the theme cross-fade takes.
@@ -532,6 +580,10 @@ impl Themer {
             return appearance.theme(None);
         }
         let focused = ctx.input(|i| i.focused);
+        if cfg!(target_os = "linux") && !cfg!(test) && self.watching.is_none() {
+            // Asked once, and the desktop tells of every change after that: no polling.
+            self.watching = Some(watch_desktop(follow_command(), self.desktop.clone(), ctx.clone()));
+        }
         if cfg!(target_os = "linux") && (self.shown.is_none() || (focused && !self.focused)) {
             self.ask_desktop(ctx);
         }
@@ -545,10 +597,7 @@ impl Themer {
         let (slot, ctx) = (self.desktop.clone(), ctx.clone());
         std::thread::spawn(move || {
             let read = std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.interface", "color-scheme"]).output();
-            let theme = read.ok().filter(|o| o.status.success()).and_then(|o| {
-                let said = String::from_utf8_lossy(&o.stdout);
-                if said.contains("dark") { Some(Theme::Dark) } else if said.contains("light") || said.contains("default") { Some(Theme::Light) } else { None }
-            });
+            let theme = read.ok().filter(|o| o.status.success()).and_then(|o| desktop_theme(&String::from_utf8_lossy(&o.stdout)));
             let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
             if *slot != theme {
                 *slot = theme;
@@ -1119,6 +1168,43 @@ fn parse_match(text: &str) -> Option<Found> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_desktops_colour_scheme_is_read_from_its_words() {
+        assert_eq!(desktop_theme("'prefer-dark'\n"), Some(Theme::Dark));
+        assert_eq!(desktop_theme("color-scheme: 'prefer-dark'"), Some(Theme::Dark));
+        assert_eq!(desktop_theme("color-scheme: 'prefer-light'"), Some(Theme::Light));
+        assert_eq!(desktop_theme("'default'"), Some(Theme::Light));
+        assert_eq!(desktop_theme("color-scheme: 'sepia'"), None);
+        assert_eq!(desktop_theme(""), None);
+    }
+
+    /// A theme change the desktop announces is seen without the window
+    /// changing focus, and the watcher ends when it is let go.
+    #[cfg(unix)]
+    #[test]
+    fn a_desktop_theme_change_is_followed_while_the_window_keeps_focus() {
+        let slot: Arc<std::sync::Mutex<Option<Theme>>> = Arc::default();
+        let mut command = std::process::Command::new("sh");
+        // Says dark, then light, as `gsettings monitor` does at each change; ends when its stdin does.
+        command.args(["-c", "echo \"color-scheme: 'prefer-dark'\"; sleep 0.2; echo \"color-scheme: 'prefer-light'\"; cat >/dev/null"]);
+        let stdin = watch_desktop(command, slot.clone(), egui::Context::default());
+        assert!(stdin.is_some(), "the watcher starts");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (mut saw_dark, mut saw_light) = (false, false);
+        while std::time::Instant::now() < deadline && !saw_light {
+            match *slot.lock().unwrap() {
+                Some(Theme::Dark) => saw_dark = true,
+                Some(Theme::Light) => saw_light = saw_dark,
+                None => {}
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(saw_dark && saw_light, "dark, then light");
+        drop(stdin);
+        // One that can't run leaves the first reading and the focus one.
+        assert!(watch_desktop(std::process::Command::new("/nonexistent/gsettings"), slot, egui::Context::default()).is_none());
+    }
 
     fn cjk() -> Found {
         Found { path: "/fonts/cjk.ttc".into(), index: 2, covers: Some(vec![(0x20, 0x7e), (0x4e00, 0x9fff)]) }
