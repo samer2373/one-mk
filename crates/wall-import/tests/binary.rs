@@ -79,6 +79,9 @@ fn killed_workers_at_each_checkpoint_and_cancel_leave_no_partials_or_descendants
             assert_eq!(std::fs::read_dir(&output).unwrap().count(), 1, "SIGKILL must leave an unpublished partial for recovery");
             let recovered = invoke(&["import".as_ref(), source.as_os_str(), "--output".as_ref(), output.as_os_str(), "--runtime".as_ref(), &runtime, "--json".as_ref()]);
             assert!(recovered.status.success(), "{}", String::from_utf8_lossy(&recovered.stdout));
+            let delegation = std::env::var_os("ONE_MK_WALL_TEST_CGROUP_ROOT").expect("explicit private cgroup delegation required");
+            let stale: Vec<_> = std::fs::read_dir(&delegation).unwrap().map(|entry| entry.unwrap().file_name()).filter(|name| name.to_string_lossy().starts_with("one-mk-import-")).collect();
+            assert!(stale.is_empty(), "the killed import's cgroup must be reclaimed by the retry: {stale:?}");
             let record: one_mk_wall_import::ImportRecord = serde_json::from_slice(&recovered.stdout).unwrap();
             std::fs::remove_dir_all(output.join(record.source_blake3)).unwrap();
         } else { assert_eq!(result.status.code(), Some(if stage == "cancel" { 130 } else { 5 }), "{}", String::from_utf8_lossy(&result.stdout)); }
