@@ -2105,12 +2105,12 @@ mod tests {
     fn a_camera_far_out_still_comes_to_rest() {
         // At this size one 10% step is smaller than f32 can tell apart, so
         // the old rule (snap within 0.05) never got there.
-        let mut x = 244999.9375_f32;
+        let mut x = 245_000.0_f32 - 0.0625;
         for _ in 0..600 {
             x = approach(x, 245000.0, 0.1, 1.0 / 60.0, 0.05);
         }
         assert_eq!(x, 245000.0);
-        let mut x = 99999.9375_f32;
+        let mut x = 100_000.0_f32 - 0.0625;
         for _ in 0..600 {
             x = approach(x, 100000.0, 0.1, 1.0 / 144.0, 0.05);
         }
