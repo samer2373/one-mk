@@ -180,11 +180,24 @@ pub fn check_name(name: &str) -> Result<String> {
     Ok(clean.to_owned())
 }
 
+/// `name` as it may be shown and put on one status line: a name read from
+/// a hand-edited `profiles.toml` is not checked (see [`check_name`]), so
+/// control characters (a tab or newline would split or forge a status line)
+/// are taken out of it.
+fn shown(name: &str) -> String {
+    if name.chars().any(char::is_control) { sanitize_name(name) } else { name.to_owned() }
+}
+
 impl Profiles {
     pub fn load(dir: &Path) -> Result<Profiles> {
         let path = path(dir);
         match std::fs::read_to_string(&path) {
-            Ok(s) => toml::from_str(&s).with_context(|| format!("reading {}", path.display())),
+            Ok(s) => toml::from_str::<Profiles>(&s)
+                .map(|mut all| {
+                    all.active = all.active.map(|active| shown(&active));
+                    all
+                })
+                .with_context(|| format!("reading {}", path.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Profiles::default()),
             Err(e) => Err(e.into()),
         }
@@ -193,7 +206,10 @@ impl Profiles {
     fn save(&self, dir: &Path) -> Result<()> {
         static N: AtomicU32 = AtomicU32::new(0);
         std::fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        // Through a symlink the file it points to is replaced, not the link.
+        let target = crate::settings::write_target(&path(dir));
+        let folder = target.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(dir).to_owned();
+        let tmp = folder.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let write = || -> Result<()> {
             use std::io::Write;
             let mut file = one_mk_ctl::private::create_new(&tmp)?;
@@ -201,9 +217,9 @@ impl Profiles {
             // On disk before it replaces the old file: a crash leaves one or the other.
             file.sync_all()?;
             drop(file);
-            std::fs::rename(&tmp, path(dir))?;
+            std::fs::rename(&tmp, &target)?;
             // And the folder, so the new name survives a crash too.
-            one_mk_net::sync_dir(dir)
+            one_mk_net::sync_dir(&folder)
         };
         write().inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
@@ -238,8 +254,9 @@ impl Profiles {
         self.list.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name))
     }
 
+    /// The profiles' names, as they may be shown.
     pub fn names(&self) -> Vec<String> {
-        self.list.iter().map(|p| p.name.clone()).collect()
+        self.list.iter().map(|p| shown(&p.name)).collect()
     }
 
     pub fn any_auto(&self) -> bool {
@@ -349,17 +366,19 @@ pub async fn run(dir: &Path, cmd: ProfileCmd) -> Result<()> {
             }
             let n = devices.len();
             let replaced = Profiles::update(dir, |all| {
-                let replaced = match all.get_mut(&name) {
+                // The name as stored: `HOME` updates `home`, and `home` is
+                // the profile in use (restarts compare it exactly).
+                let (stored, replaced) = match all.get_mut(&name) {
                     Some(p) => {
                         p.devices = devices;
-                        true
+                        (p.name.clone(), true)
                     }
                     None => {
                         all.list.push(Profile { name: name.clone(), devices, ..Profile::default() });
-                        false
+                        (name.clone(), false)
                     }
                 };
-                all.active = Some(name.clone());
+                all.active = Some(stored);
                 Ok(replaced)
             })?;
             let what = if n == 1 { "1 computer".to_owned() } else { format!("{n} computers") };
@@ -369,7 +388,12 @@ pub async fn run(dir: &Path, cmd: ProfileCmd) -> Result<()> {
         ProfileCmd::Use { name } => {
             let (name, moved) = use_profile(dir, &name)?;
             if moved.is_empty() {
-                println!("Using layout profile {name:?}; everything was already in place.");
+                let forgotten = forgotten(&Profiles::load(dir)?, &name, &TrustStore::load(dir)?);
+                match forgotten {
+                    0 => println!("Using layout profile {name:?}; everything was already in place."),
+                    1 => println!("Using layout profile {name:?}; the computer it places is no longer paired, so nothing was moved."),
+                    n => println!("Using layout profile {name:?}; {n} of the computers it places are no longer paired and were skipped, the rest were already in place."),
+                }
                 return Ok(());
             }
             println!("Using layout profile {name:?}: moved {}.", moved.join(", "));
@@ -415,7 +439,11 @@ pub async fn run(dir: &Path, cmd: ProfileCmd) -> Result<()> {
                     Rule::Subnet(ip, len) => format!("{ip}/{len}"),
                 });
             }
-            let ssid: Vec<String> = ssid.into_iter().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect();
+            // A Wi-Fi name is matched exactly, spaces at its ends included
+            // (they are legal): only an empty one cannot name a network.
+            if ssid.iter().any(String::is_empty) {
+                bail!("--ssid needs a Wi-Fi network name, not an empty one");
+            }
             let p = Profiles::update(dir, |all| {
                 let Some(p) = all.get_mut(&name) else { bail!("no layout profile called {name:?}; save one first") };
                 if off || clear {
@@ -445,6 +473,12 @@ pub async fn run(dir: &Path, cmd: ProfileCmd) -> Result<()> {
     }
 }
 
+/// How many of profile `name`'s computers are no longer paired (applying
+/// the profile skips them).
+fn forgotten(all: &Profiles, name: &str, trust: &TrustStore) -> usize {
+    all.get(name).map_or(0, |p| p.devices.iter().filter(|d| !d.fingerprint.parse().ok().is_some_and(|fp| trust.get(&fp).is_some())).count())
+}
+
 fn netwatch_available() -> bool {
     cfg!(any(unix, windows))
 }
@@ -465,14 +499,17 @@ fn render(all: &Profiles, trust: Option<&TrustStore>) -> String {
     let mut out = String::new();
     for p in &all.list {
         let active = all.active.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(&p.name));
-        out += &format!("{}{}\n", p.name, if active { " (in use)" } else { "" });
+        out += &format!("{}{}\n", shown(&p.name), if active { " (in use)" } else { "" });
         if p.is_auto() {
             out += &format!("  switches by itself {}\n", describe_rules(p));
         }
         for d in &p.devices {
             let side = d.side.parse().unwrap_or(Side::Right);
-            let name = d.fingerprint.parse().ok().and_then(|fp| trust.and_then(|t| t.get(&fp).map(|dev| t.display(dev)))).unwrap_or_else(|| sanitize_name(&d.name));
-            out += &format!("  {:<24} {}\n", name, manage::placement(side, d.offset));
+            let paired = d.fingerprint.parse().ok().and_then(|fp| trust.and_then(|t| t.get(&fp).map(|dev| t.display(dev))));
+            // Skipped when the profile is put in place: say so, when we know.
+            let gone = if paired.is_none() && trust.is_some() { " (no longer paired)" } else { "" };
+            let name = paired.unwrap_or_else(|| sanitize_name(&d.name));
+            out += &format!("  {:<24} {}{gone}\n", name, manage::placement(side, d.offset));
         }
     }
     out
@@ -664,6 +701,89 @@ mod tests {
             assert_eq!(profiles.matching(&network).map(|profile| profile.name.as_str()), expected);
         }
         assert!(profiles.matching(&NetworkId::default()).is_none());
+    }
+
+    /// A name read from a hand-edited `profiles.toml` never splits or forges
+    /// the tab- and newline-based status lines.
+    #[test]
+    fn names_from_the_file_are_safe_for_status_lines() {
+        let dir = temp_dir("hostile-names");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(path(&dir), "active = \"a\\nprofile\\tb\"\n\n[[profile]]\nname = \"a\\nprofiles\\tx\"\n\n[[profile]]\nname = \"Home  Office\"\n").unwrap();
+        let all = Profiles::load(&dir).unwrap();
+        for text in all.names().iter().chain(all.active.iter()) {
+            assert!(!text.chars().any(char::is_control), "{text:?}");
+        }
+        assert_eq!(all.names(), ["aprofilesx".to_owned(), "Home  Office".to_owned()], "a name that is fine is shown as it is");
+        let shown = render(&all, None);
+        assert!(shown.lines().all(|line| !line.starts_with("profiles") && !line.starts_with("profile\t")), "{shown}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Updating `home` as `HOME` keeps the stored spelling as the profile in
+    /// use, which a restart compares exactly.
+    #[tokio::test]
+    async fn resaving_with_other_capitals_records_the_stored_name() {
+        let dir = temp_dir("resave-case");
+        pair(&dir, "laptop", Side::Left);
+        run(&dir, ProfileCmd::Save { name: "home".into() }).await.unwrap();
+        run(&dir, ProfileCmd::Save { name: "HOME".into() }).await.unwrap();
+        let all = Profiles::load(&dir).unwrap();
+        assert_eq!((all.names(), all.active.as_deref()), (vec!["home".to_owned()], Some("home")));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Computers forgotten since the profile was saved are counted, so
+    /// `profile use` can say what it skipped, and `profile list` marks them.
+    #[tokio::test]
+    async fn forgotten_computers_are_reported() {
+        let dir = temp_dir("forgotten");
+        let laptop = pair(&dir, "laptop", Side::Left);
+        run(&dir, ProfileCmd::Save { name: "home".into() }).await.unwrap();
+        let all = Profiles::load(&dir).unwrap();
+        assert_eq!(forgotten(&all, "home", &TrustStore::load(&dir).unwrap()), 0);
+        TrustStore::load(&dir).map(|mut t| { t.remove(&laptop[..8]); t.save().unwrap() }).unwrap();
+        let trust = TrustStore::load(&dir).unwrap();
+        assert_eq!(forgotten(&all, "home", &trust), 1);
+        assert_eq!(forgotten(&all, "nowhere", &trust), 0);
+        let (_, moved) = use_profile(&dir, "home").unwrap();
+        assert!(moved.is_empty(), "nothing could move");
+        assert!(render(&all, Some(&trust)).contains("(no longer paired)"));
+        assert!(!render(&all, None).contains("(no longer paired)"), "without the paired list nothing is known");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A Wi-Fi name is kept exactly as typed, spaces at its ends included.
+    #[tokio::test]
+    async fn wifi_names_keep_their_spaces() {
+        let dir = temp_dir("ssid-spaces");
+        pair(&dir, "laptop", Side::Left);
+        run(&dir, ProfileCmd::Save { name: "desk".into() }).await.unwrap();
+        let auto = |ssid: &str| ProfileCmd::Auto { name: "desk".into(), ssid: vec![ssid.into()], network: vec![], off: false, clear: false };
+        run(&dir, auto("Desk ")).await.unwrap();
+        let all = Profiles::load(&dir).unwrap();
+        assert_eq!(all.get("desk").unwrap().ssid, ["Desk "]);
+        assert!(all.matching(&NetworkId { ssids: vec!["Desk ".into()], ..NetworkId::default() }).is_some());
+        assert!(all.matching(&NetworkId { ssids: vec!["Desk".into()], ..NetworkId::default() }).is_none());
+        assert!(run(&dir, auto("")).await.is_err(), "an empty name is refused, not dropped");
+        assert_eq!(Profiles::load(&dir).unwrap().get("desk").unwrap().ssid, ["Desk "]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Saving through a symlinked profiles.toml writes the file it points to.
+    #[cfg(unix)]
+    #[test]
+    fn saving_keeps_a_symlinked_profiles_file_a_symlink() {
+        let dir = temp_dir("profiles-symlink");
+        let dotfiles = temp_dir("profiles-symlink-target");
+        let real = dotfiles.join("profiles.toml");
+        std::fs::write(&real, "").unwrap();
+        std::os::unix::fs::symlink(&real, path(&dir)).unwrap();
+        Profiles::update(&dir, |all| { all.list.push(Profile { name: "home".into(), ..Profile::default() }); Ok(()) }).unwrap();
+        assert!(std::fs::symlink_metadata(path(&dir)).unwrap().file_type().is_symlink());
+        assert!(std::fs::read_to_string(&real).unwrap().contains("home"));
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(dotfiles);
     }
 
     /// `profile auto` checks its rules and needs an existing profile.
