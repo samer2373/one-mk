@@ -423,6 +423,10 @@ fn ufw_allows(rules: &str, port: u16) -> bool {
         if !l.starts_with("-A ufw-user-input") || !l.ends_with("-j ACCEPT") || !l.contains("-p udp") {
             return false;
         }
+        // A rule for one source, destination or interface does not open the port for the paired computer.
+        if l.split_whitespace().any(|w| matches!(w, "-s" | "--source" | "-d" | "--destination" | "-i" | "--in-interface" | "-o" | "--out-interface")) {
+            return false;
+        }
         let mut words = l.split_whitespace();
         while let Some(w) = words.next() {
             if w == "--dport" || w == "--dports" {
@@ -441,6 +445,11 @@ fn ufw_allows(rules: &str, port: u16) -> bool {
 }
 
 pub fn firewall_check(os: Os, f: &Firewall, port: u16) -> Check {
+    firewall_check_for(os, f, port, true)
+}
+
+/// [`firewall_check`]; mDNS must pass the firewall only when `discovery` is in use.
+pub fn firewall_check_for(os: Os, f: &Firewall, port: u16, discovery: bool) -> Check {
     let title = "Firewall";
     let out = match os {
         Os::Windows => Outcome::skip(
@@ -454,12 +463,12 @@ pub fn firewall_check(os: Os, f: &Firewall, port: u16) -> Check {
             _ => Outcome::skip("The firewall's rules could not be checked."),
         },
         Os::Other => Outcome::skip("Not checked on this system."),
-        Os::Linux => linux_firewall(f, port),
+        Os::Linux => linux_firewall(f, port, discovery),
     };
     check("firewall", title, out)
 }
 
-fn linux_firewall(f: &Firewall, port: u16) -> Outcome {
+fn linux_firewall(f: &Firewall, port: u16, discovery: bool) -> Outcome {
     let mut active = false;
     let mut blocked: Vec<String> = Vec::new();
     let mut unknown: Vec<String> = Vec::new();
@@ -476,7 +485,7 @@ fn linux_firewall(f: &Firewall, port: u16) -> Outcome {
     }
     if let Some(fw) = &f.firewalld {
         active = true;
-        let mdns = fw.services.split_whitespace().any(|s| s == "mdns") || port_listed(&fw.ports, MDNS_PORT);
+        let mdns = !discovery || fw.services.split_whitespace().any(|s| s == "mdns") || port_listed(&fw.ports, MDNS_PORT);
         let mut missing = Vec::new();
         let mut fix = Vec::new();
         if !port_listed(&fw.ports, port) {
@@ -506,7 +515,7 @@ fn linux_firewall(f: &Firewall, port: u16) -> Outcome {
         );
     }
     if active {
-        Outcome::pass(format!("The firewall allows UDP {port} and mDNS."))
+        Outcome::pass(if discovery { format!("The firewall allows UDP {port} and mDNS.") } else { format!("The firewall allows UDP {port}.") })
     } else if f.ufw_active.is_none() {
         Outcome::warn(
             "Could not tell whether a firewall is on (ufw and firewalld could not be queried without root).",
@@ -537,6 +546,19 @@ pub fn portal_check(os: Os, p: Option<&Portals>, running: &[String]) -> Check {
         ),
     };
     check("input", title, out)
+}
+
+/// The Permissions line for a running daemon whose input backend is not the portal (X11, wlroots,
+/// native): there is no portal to probe, but what the backend reports (a lost compositor
+/// connection, a failed capture) is still said.
+fn backend_permissions_check(backend: &str, running: &[String]) -> Check {
+    if running.is_empty() {
+        return check("portals", "Permissions", Outcome::skip(format!("this daemon uses the {backend} backend")));
+    }
+    check("portals", "Permissions", Outcome::warn(
+        format!("The running one-mk ({backend} backend) says: {}", running.join(" ")),
+        "Do as it says; `one-mk status` shows it until it is resolved.",
+    ))
 }
 
 fn macos_permissions() -> Outcome {
@@ -998,9 +1020,17 @@ pub fn unrecognised_check(d: &Daemon) -> Option<Check> {
 
 /// Private IPv4 ranges (RFC 1918): what a home or office LAN uses.
 pub fn network_check(addrs: &[Addr]) -> Check {
+    network_check_with(addrs, &[])
+}
+
+/// [`network_check`], also knowing the up interfaces that have a usable IPv6 address: oneMK works over
+/// an IPv6-only network, so no IPv4 address is then no reason to say there is no network.
+pub fn network_check_with(addrs: &[Addr], ipv6: &[String]) -> Check {
     let title = "Network";
     let out = if let Some(a) = addrs.iter().find(|a| a.ip.is_private()) {
         Outcome::pass(format!("Connected to a private network ({} on {}).", a.ip, a.iface))
+    } else if addrs.is_empty() && !ipv6.is_empty() {
+        Outcome::pass(format!("Connected over IPv6 only (on {}); there is no IPv4 address.", ipv6.join(", ")))
     } else if addrs.is_empty() {
         Outcome::fail(
             "This computer has no IPv4 address on any active network.",
@@ -1335,6 +1365,16 @@ pub async fn run(dir: &Path, json: bool, all: bool) -> Result<()> {
     Ok(())
 }
 
+/// The wallpaper line: not available is a skip, a player that failed or stopped is a warning
+/// (its message says why), anything else passes.
+fn wallpaper_check(status: &one_mk_wallpaper::Status) -> Check {
+    let failed = status.available && (status.computers.values().any(|playback| matches!(playback, one_mk_wallpaper::Playback::Error(_)))
+        || status.message.starts_with("The wallpaper player stopped"));
+    check("wallpaper", "Wallpaper", if !status.available { Outcome::skip(&status.message) }
+        else if failed { Outcome::warn(&status.message, "Choose Play in the wallpaper settings to try again, or `one-mk wallpaper off`.") }
+        else { Outcome::pass(&status.message) })
+}
+
 pub async fn diagnose(dir: &Path) -> Vec<Check> {
     let os = this_os();
     // The daemon and the config tell the other probes what to look for.
@@ -1384,8 +1424,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     if let Some(status) = daemon.status().and_then(|status| status.wallpaper.as_ref())
         && (status.plan.is_some() || !status.available)
     {
-        checks.push(check("wallpaper", "Wallpaper", if status.available { Outcome::pass(&status.message) }
-            else { Outcome::skip(&status.message) }));
+        checks.push(wallpaper_check(status));
     }
     let (available, detail) = crate::update::doctor(dir);
     checks.push(check("updates", "Updates", if available { Outcome::warn(detail, "update-now") }
@@ -1400,9 +1439,9 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     checks.extend(config_checks(&config, dir));
     checks.push(port_check(&daemon, &port_facts));
     checks.push(mdns_check(&daemon, &mdns));
-    checks.push(firewall_check(os, &firewall, port));
+    checks.push(firewall_check_for(os, &firewall, port, !daemon.status().is_some_and(|status| status.discovery == Some(false))));
     checks.push(if os == Os::Mac { macos_daemon_permissions(daemon.status()) } else { match non_portal {
-        Some(status) => check("portals", "Permissions", Outcome::skip(format!("this daemon uses the {} backend", status.backend.as_str()))),
+        Some(status) => backend_permissions_check(status.backend.as_str(), &status.input),
         None => portal_check(os, portals.as_ref(), daemon.status().map_or(&[], |s| &s.input)),
     }});
     if let Ok(settings) = crate::settings::Settings::load_lenient(dir) {
@@ -1447,7 +1486,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     }
     checks.extend(layout_check(&daemon));
     checks.extend(unrecognised_check(&daemon));
-    checks.push(network_check(&addrs));
+    checks.push(network_check_with(&addrs, &blocking(probe_ipv6, Vec::new()).await));
     checks.push(connection_check(&daemon));
     let seen = mdns.seen.as_deref().unwrap_or_default();
     checks.extend(peer_checks(&daemon, &paired, seen));
@@ -1499,10 +1538,13 @@ fn one_line(error: &str) -> String {
 
 fn probe_port(port: u16, dir: &Path) -> PortFacts {
     let mut bind = Bind::Free;
-    // The daemon binds dual-stack, so either address family collides with it.
+    // The daemon binds dual-stack, so IPv4 in use collides with it; an IPv6-only holder does not (it falls back to IPv4).
     for addr in [format!("0.0.0.0:{port}"), format!("[::]:{port}")] {
         match UdpSocket::bind(&addr) {
             Ok(_) => {}
+            // Held on IPv6 only, with IPv4 free (the first probe passed): the daemon's dual-stack
+            // bind fails and it falls back to IPv4, so it runs.
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && addr.starts_with('[') => {}
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                 bind = Bind::InUse;
                 break;
@@ -1590,7 +1632,8 @@ async fn probe_mdns(wanted: Vec<String>) -> MdnsFacts {
         let id = Identity::ephemeral().map_err(|e| format!("{e:#}"))?;
         let (_discovery, mut rx) = Discovery::browse(&id).map_err(|e| format!("{e:#}"))?;
         let mut seen: Vec<Seen> = Vec::new();
-        let done = |seen: &[Seen]| wanted.iter().all(|w| seen.iter().any(|s| &s.id == w));
+        // With no one in particular to wait for, listen for the whole window to count who is near.
+        let done = |seen: &[Seen]| !wanted.is_empty() && wanted.iter().all(|w| seen.iter().any(|s| &s.id == w));
         let _ = tokio::time::timeout(MDNS_WINDOW, async {
             while !done(&seen) {
                 let Some(Found { fingerprint, addrs, .. }) = rx.recv().await else {
@@ -1735,6 +1778,18 @@ async fn probe_shortcuts(_os: Os) -> Option<Result<u32, String>> {
 #[cfg(not(target_os = "linux"))]
 async fn probe_portals(_os: Os, _dir: std::path::PathBuf) -> Option<Portals> {
     None
+}
+
+/// Up, non-virtual interfaces with an IPv6 address another computer could reach (not loopback or link-local).
+fn probe_ipv6() -> Vec<String> {
+    let mut names: Vec<String> = if_addrs::get_if_addrs().unwrap_or_default().iter()
+        .filter(|i| i.is_oper_up() && !is_virtual_interface(&i.name))
+        .filter(|i| matches!(&i.addr, if_addrs::IfAddr::V6(a) if !a.ip.is_loopback() && !a.ip.is_unspecified() && !a.ip.is_multicast() && !a.ip.is_unicast_link_local()))
+        .map(|i| i.name.clone())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 fn probe_addrs() -> Vec<Addr> {
@@ -2191,6 +2246,88 @@ mod tests {
         assert!(!ufw_allows("-A ufw-user-input -p udp --dport 24900 -j DROP\n", 24900));
         assert!(ufw_allows("-A ufw-user-input -p udp -m multiport --dports 5000:25000,30000 -j ACCEPT\n", 24900));
         assert!(!ufw_allows("", 24900));
+    }
+
+    #[test]
+    fn a_ufw_rule_for_one_source_or_interface_is_not_general_access() {
+        assert!(!ufw_allows("-A ufw-user-input -p udp --dport 24900 -s 10.9.9.9 -j ACCEPT\n", 24900));
+        assert!(!ufw_allows("-A ufw-user-input -i eth0 -p udp --dport 24900 -j ACCEPT\n", 24900));
+        assert!(!ufw_allows("-A ufw-user-input -d 192.168.1.2 -p udp --dport 24900 -j ACCEPT\n", 24900));
+        assert!(ufw_allows("-A ufw-user-input -p udp --dport 24900 -j ACCEPT\n", 24900));
+    }
+
+    #[test]
+    fn mdns_is_not_required_of_the_firewall_when_discovery_is_off() {
+        let zone = fw(Some(false), None, Some(("24900/udp", "ssh")));
+        let with = firewall_check_for(Os::Linux, &zone, 24900, true);
+        assert_eq!(st(&with), Status::Fail);
+        assert!(with.outcome.fix.unwrap().contains("mdns"));
+        assert_eq!(st(&firewall_check_for(Os::Linux, &zone, 24900, false)), Status::Pass);
+        assert_eq!(st(&firewall_check(Os::Linux, &zone, 24900)), Status::Fail, "the default still wants mDNS");
+        let closed = fw(Some(false), None, Some(("", "ssh")));
+        assert_eq!(st(&firewall_check_for(Os::Linux, &closed, 24900, false)), Status::Fail, "the port itself is still needed");
+    }
+
+    #[test]
+    fn a_non_portal_backend_still_says_what_it_reports() {
+        let quiet = backend_permissions_check("wlroots", &[]);
+        assert_eq!(st(&quiet), Status::Skip);
+        let reports = backend_permissions_check("wlroots", &["reconnecting input".to_owned()]);
+        assert_eq!(st(&reports), Status::Warn);
+        assert!(reports.outcome.detail.contains("reconnecting input"), "{}", reports.outcome.detail);
+    }
+
+    #[test]
+    fn a_wallpaper_player_that_failed_is_not_a_pass() {
+        use one_mk_wallpaper::{Playback, Status as Wallpaper};
+        let status = |message: &str, playback: Option<Playback>| Wallpaper {
+            available: true, message: message.into(),
+            computers: playback.into_iter().map(|p| ("me".to_owned(), p)).collect(), ..Wallpaper::default()
+        };
+        assert_eq!(st(&wallpaper_check(&status("playing", Some(Playback::Ready)))), Status::Pass);
+        assert_eq!(st(&wallpaper_check(&status("the player could not start", Some(Playback::Error("the player could not start".into()))))), Status::Warn);
+        assert_eq!(st(&wallpaper_check(&status("The wallpaper player stopped (exit status: 1). Choose Play to try again.", None))), Status::Warn);
+        assert_eq!(st(&wallpaper_check(&Wallpaper { available: false, message: "no video".into(), ..Wallpaper::default() })), Status::Skip);
+    }
+
+    #[test]
+    fn an_ipv6_only_network_is_not_reported_as_disconnected() {
+        assert_eq!(st(&network_check_with(&[], &[])), Status::Fail);
+        let c = network_check_with(&[], &["eth0".to_owned()]);
+        assert_eq!(st(&c), Status::Pass);
+        assert!(c.outcome.detail.contains("IPv6") && c.outcome.detail.contains("eth0"), "{}", c.outcome.detail);
+        // An IPv4 address still decides as before.
+        assert_eq!(st(&network_check_with(&[addr("wlan0", [169, 254, 1, 1])], &["wlan0".to_owned()])), Status::Warn);
+    }
+
+    /// Something else holds the port on IPv6 only: the daemon falls back to IPv4, so it is not a collision.
+    #[cfg(unix)]
+    #[test]
+    fn a_port_held_only_on_ipv6_is_not_in_use() {
+        use std::os::fd::{FromRawFd, OwnedFd, AsRawFd};
+        // SAFETY: plain socket calls on a descriptor owned here.
+        let fd = unsafe { libc::socket(libc::AF_INET6, libc::SOCK_DGRAM, 0) };
+        if fd < 0 { eprintln!("skipped: no IPv6"); return; }
+        // SAFETY: just opened, owned here.
+        let socket = unsafe { OwnedFd::from_raw_fd(fd) };
+        let on: libc::c_int = 1;
+        // SAFETY: a valid descriptor and an int option of the length given.
+        let set = unsafe { libc::setsockopt(socket.as_raw_fd(), libc::IPPROTO_IPV6, libc::IPV6_V6ONLY, (&raw const on).cast(), std::mem::size_of::<libc::c_int>() as libc::socklen_t) };
+        // SAFETY: an all-zero sockaddr_in6 is the IPv6 wildcard address with port 0.
+        let mut address: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+        address.sin6_family = libc::AF_INET6 as libc::sa_family_t;
+        // SAFETY: a valid descriptor and an address of the length given.
+        let bound = unsafe { libc::bind(socket.as_raw_fd(), (&raw const address).cast(), std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t) };
+        if set != 0 || bound != 0 { eprintln!("skipped: could not bind an IPv6-only socket"); return; }
+        let mut length = std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t;
+        // SAFETY: a valid descriptor and room for the address.
+        let named = unsafe { libc::getsockname(socket.as_raw_fd(), (&raw mut address).cast(), &mut length) };
+        assert_eq!(named, 0);
+        let port = u16::from_be(address.sin6_port);
+        // The IPv4 side of the same port must be free for the claim to hold.
+        if UdpSocket::bind(("0.0.0.0", port)).is_err() { eprintln!("skipped: the port is taken on IPv4 too"); return; }
+        let facts = probe_port(port, Path::new("/nonexistent"));
+        assert_ne!(facts.bind, Bind::InUse);
     }
 
     fn fw(ufw: Option<bool>, rules: Option<&str>, firewalld: Option<(&str, &str)>) -> Firewall {
