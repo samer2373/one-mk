@@ -248,6 +248,13 @@ const fn rgba(hex: u32, alpha: f32) -> Color32 {
 }
 
 impl Palette {
+    /// The label of a resting, enabled choice in a segmented control: a touch
+    /// darker than `ink2` (which is 4.45:1 on the light track, just under the
+    /// 4.5:1 of text), still quieter than the chosen one.
+    pub fn segment_ink(&self) -> Color32 {
+        mix(self.ink2, self.ink, 0.15)
+    }
+
     /// Daylight: warm paper, white surfaces, ink text, cobalt.
     pub fn light() -> Palette {
         let (bg, surface, surface2, ink, ink2, ink3) = (rgb(0xF4F3F0), rgb(0xFFFFFF), rgb(0xEFEEEA), rgb(0x16171A), rgb(0x6B6D73), rgb(0x8E9096));
@@ -768,7 +775,8 @@ pub fn fit(painter: &Painter, text: &str, font: &FontId, max_w: f32) -> String {
         if width(&cut(mid)) <= max_w { lo = mid } else { hi = mid - 1 }
     }
     // Never end on a combining mark that lost its letter.
-    while lo > 0 && is_combining(chars[lo]) {
+    // (`lo` is `chars.len()` when the whole text fits once its trailing spaces are cut.)
+    while lo > 0 && chars.get(lo).is_some_and(|c| is_combining(*c)) {
         lo -= 1;
     }
     cut(lo)
@@ -1269,6 +1277,7 @@ mod tests {
                 ("ink2 on an overlay", p.ink2, p.raised),
                 ("ink2 on the chosen tab", p.ink2, p.tab_on),
                 ("ink on the chosen segment", p.ink, p.seg_on),
+                ("a resting segment's label on the track", p.segment_ink(), p.surface2),
                 ("ink on a hovered quiet button", p.ink, p.surface2_hover),
                 ("accent text on accent soft", p.accent_text, p.accent_soft),
 
@@ -1293,6 +1302,28 @@ mod tests {
                 assert!(c >= 3.0, "{:?}: {what}: {c:.2}:1", p.theme);
             }
         }
+    }
+
+    /// A title that ends in spaces is as wide with them as the painter measures
+    /// it, but cut to a word and an ellipsis it fits: that cut is the whole
+    /// text, and nothing may be read past its end.
+    #[test]
+    fn fitting_a_title_that_ends_in_spaces_never_reads_past_it() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.painter();
+            let font = regular(12.0);
+            let width = |s: &str| painter.layout_no_wrap(s.to_owned(), font.clone(), Color32::PLACEHOLDER).size().x;
+            let title = format!("Holiday{}", " ".repeat(57));
+            let (short, full) = (width("Holiday…"), width(&title));
+            assert!(short < full, "trailing spaces count in the width: {short} {full}");
+            let room = (short + full) / 2.0;
+            assert_eq!(fit(painter, &title, &font, room), "Holiday…");
+            assert_eq!(fit(painter, "plain", &font, 500.0), "plain");
+            assert_eq!(fit(painter, "a longer title than the room", &font, width("a lon…")), "a lon…");
+        });
+        out.textures_delta.clear();
     }
 
     #[test]
