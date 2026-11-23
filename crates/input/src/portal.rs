@@ -1153,6 +1153,10 @@ fn push_into_barrier(st: &CaptureState, side: Side) {
 #[derive(Default)]
 struct Devices {
     all: Vec<reis::event::Device>,
+    /// The ones that are resumed (and started emulating): a paused device
+    /// ignores what is sent to it, so it must not shadow a usable one with
+    /// the same capability.
+    ready: Vec<reis::event::Device>,
     /// Devices we have sent events to since the last frame.
     dirty: Vec<reis::event::Device>,
     /// Regions of the absolute pointer device, if it has any. Positions
@@ -1162,7 +1166,7 @@ struct Devices {
 
 impl Devices {
     fn with<T: ei::Interface>(&mut self, f: impl FnOnce(&T)) -> bool {
-        let Some(dev) = self.all.iter().find(|d| d.interface::<T>().is_some()) else {
+        let Some(dev) = self.all.iter().find(|d| self.ready.contains(d) && d.interface::<T>().is_some()) else {
             return false;
         };
         f(&dev.interface::<T>().expect("checked above"));
@@ -1403,9 +1407,17 @@ async fn run_inject(
                     EiEvent::DeviceResumed(d) => {
                         inj.sequence = inj.sequence.wrapping_add(1);
                         d.device.device().start_emulating(d.serial, inj.sequence);
+                        if !inj.devices.ready.contains(&d.device) {
+                            inj.devices.ready.push(d.device.clone());
+                        }
+                    }
+                    EiEvent::DevicePaused(d) => {
+                        inj.devices.ready.retain(|x| *x != d.device);
+                        inj.devices.dirty.retain(|x| *x != d.device);
                     }
                     EiEvent::DeviceRemoved(d) => {
                         inj.devices.all.retain(|x| *x != d.device);
+                        inj.devices.ready.retain(|x| *x != d.device);
                         inj.devices.dirty.retain(|x| *x != d.device);
                         inj.devices.update_regions();
                     }
