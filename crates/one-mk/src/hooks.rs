@@ -902,7 +902,6 @@ impl Drop for ProcessGroup {
 /// Unix branch does with the hook's process group.
 #[cfg(windows)]
 async fn kill_tree(pid: u32) {
-    use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let root = std::env::var_os("SystemRoot").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from);
     let mut taskkill = tokio::process::Command::new(root.join("System32").join("taskkill.exe"));
@@ -1434,10 +1433,12 @@ mod tests {
     #[test]
     fn the_global_shell_leaves_events_with_their_own_choice_alone() {
         let argv = vec!["C:\\Tools\\my-hook.exe".to_owned(), "arg".to_owned()];
-        let mut hooks = Hooks::default();
-        hooks.on_enter = Some(Command::Argv(argv.clone()));
+        let mut hooks = Hooks {
+            on_enter: Some(Command::Argv(argv.clone())),
+            on_leave: Some(Command::Argv(vec!["notify".into(), "hi there".into()])),
+            ..Hooks::default()
+        };
         hooks.options.insert("enter".into(), HookOptions { shell: Some(false), ..HookOptions::default() });
-        hooks.on_leave = Some(Command::Argv(vec!["notify".into(), "hi there".into()]));
         HooksArgs { shell: Some(true), ..Default::default() }.apply(&mut hooks).unwrap();
         assert_eq!(hooks.on_enter, Some(Command::Argv(argv.clone())), "the array is not rewritten");
         assert_eq!(hooks.get(Event::Enter).unwrap().argv(false).unwrap(), argv);
