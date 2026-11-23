@@ -270,7 +270,7 @@ fn health_names_what_its_update_button_does_where_it_cannot_install() {
 
 #[test]
 fn layout_changes_reach_one_mk_in_the_order_they_were_asked() {
-    let (mut win, fake) = settings_on(settings_page::Cat::General);
+    let (win, fake) = settings_on(settings_page::Cat::General);
     let sides = [Side::Left, Side::Right, Side::Top, Side::Bottom];
     for n in 0..24 {
         win.app.link.set_side("p1", "Office PC", sides[n % 4], None);
@@ -289,4 +289,44 @@ fn layout_changes_reach_one_mk_in_the_order_they_were_asked() {
         assert_eq!(pair[1][2], "--swap-ctrl-cmd", "call {n}: {calls:?}");
         assert_eq!(pair[1][3], if n % 2 == 0 { "on" } else { "off" }, "call {n}: {calls:?}");
     }
+}
+
+#[test]
+fn connecting_to_a_name_looks_it_up_beside_the_window() {
+    let (mut win, fake) = settings_on(settings_page::Cat::General);
+    win.app.pairing = Some(PairUi { proc: None, step: Step::Searching { me: "Studio".into(), port: None }, since: win.t, opened: win.t - 1.0, hint: false, retry: None, me: "Studio".into(), port: None });
+    let now = win.t;
+    win.app.begin_pairing(crate::pairing::Method::Connect("localhost:32123".into()), now);
+    assert!(win.app.pair_lookup.is_some(), "the name is being looked up, not waited for");
+    assert!(win.app.pairing.as_ref().is_some_and(|pair| pair.proc.is_none()));
+    for _ in 0..300 {
+        win.frames(2);
+        if !fake.calls_with(&["pair"]).is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let calls = fake.calls_with(&["pair"]);
+    assert_eq!(calls.len(), 1, "{:?}", fake.calls());
+    assert_eq!(calls[0][..3], ["pair", "--machine", "--connect"], "{calls:?}");
+    assert!(calls[0][3].ends_with(":32123") && !calls[0][3].contains("localhost"), "the address it found: {calls:?}");
+    assert!(win.app.pair_lookup.is_none());
+}
+
+#[test]
+fn a_name_that_cannot_be_found_ends_pairing_with_a_message() {
+    let (mut win, fake) = settings_on(settings_page::Cat::General);
+    win.app.pairing = Some(PairUi { proc: None, step: Step::Searching { me: "Studio".into(), port: None }, since: win.t, opened: win.t - 1.0, hint: false, retry: None, me: "Studio".into(), port: None });
+    let now = win.t;
+    win.app.begin_pairing(crate::pairing::Method::Connect("no-such-host.invalid:32123".into()), now);
+    for _ in 0..400 {
+        win.frames(2);
+        if matches!(win.app.pairing.as_ref().map(|pair| &pair.step), Some(Step::Ended(_))) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(matches!(win.app.pairing.as_ref().map(|pair| &pair.step), Some(Step::Ended(_))), "{:?}", win.app.pairing.as_ref().map(|pair| &pair.step));
+    assert!(fake.calls_with(&["pair"]).is_empty(), "{:?}", fake.calls());
+    assert!(win.app.toast.as_ref().is_some_and(|toast| toast.error));
 }

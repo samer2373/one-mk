@@ -246,6 +246,8 @@ pub struct App {
     /// The computer whose right-click menu is open (by id: the scene's list closes up).
     menu_for: Option<String>,
     pairing: Option<PairUi>,
+    /// A name Connect was given, being looked up (and when it began).
+    pair_lookup: Option<(crate::pairing::Lookup, f64)>,
     /// Files dropped where it wasn't clear which computer they were for, and when.
     pending_drop: Option<(Vec<PathBuf>, f64)>,
     /// The frame (its time) in which files let go over the window were taken:
@@ -514,6 +516,7 @@ impl App {
             drag_side: None,
             menu_for: None,
             pairing: None,
+            pair_lookup: None,
             pending_drop: None,
             drop_taken: None,
             removing: None,
@@ -780,6 +783,7 @@ impl App {
             self.pending_broadcast = None;
         }
         self.pairing_steps(now);
+        self.pairing_lookup_step(now);
         // A side the daemon never confirmed: show what it really has.
         let before = self.pending_side.len();
         self.pending_side.retain(|_, (_, _, t)| now - *t < 5.0);

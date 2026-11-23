@@ -111,20 +111,69 @@ impl App {
         para(ui, pos2(rect.left(), top + 2.0), rect.width(), PAIR_ADDRESS, regular(T_META), pal().ink2);
         if let Some(method) = method {
             ui.ctx().data_mut(|data| data.remove::<String>(link_id));
-            let port = self.running().map_or(one_mk_proto::DEFAULT_PORT, |status| status.port);
-            if let Some(pair) = &mut self.pairing { pair.proc = None; }
-            match self.link.pair_with(method, port) {
-                Ok(proc) => if let Some(pair) = &mut self.pairing {
-                    pair.proc = Some(proc);
-                    pair.step = Step::Searching { me: pair.me.clone(), port: None };
-                    pair.since = now;
-                    pair.retry = None;
-                },
-                Err(error) => {
-                    if let Some(pair) = &mut self.pairing { pair.step = Step::Ended("Check the link or address and try again.".into()); }
-                    self.toast_error("Couldn't start pairing. Check the link or address and try again.", Some(error.to_string()), now);
+            self.begin_pairing(method, now);
+        }
+    }
+
+    /// Starts pairing the way `method` says. A name to connect to is looked up
+    /// first, beside the window; pairing starts when the lookup answers.
+    pub(super) fn begin_pairing(&mut self, method: crate::pairing::Method, now: f64) {
+        use crate::pairing::{Method, Target};
+        let port = self.running().map_or(one_mk_proto::DEFAULT_PORT, |status| status.port);
+        if let Some(pair) = &mut self.pairing { pair.proc = None; }
+        self.pair_lookup = None;
+        let method = match method {
+            Method::Connect(address) => match crate::pairing::connect_target(&address) {
+                Ok(Target::Ready(target)) => Method::Connect(target.to_string()),
+                Ok(Target::Name(name)) => {
+                    self.pair_lookup = Some((crate::pairing::Lookup::start(name, Some(self.ctx.clone())), now));
+                    if let Some(pair) = &mut self.pairing {
+                        pair.step = Step::Searching { me: pair.me.clone(), port: None };
+                        pair.since = now;
+                        pair.retry = None;
+                    }
+                    return;
                 }
+                Err(error) => return self.pairing_failed(&error, now),
+            },
+            other => other,
+        };
+        match self.link.pair_with(method, port) {
+            Ok(proc) => if let Some(pair) = &mut self.pairing {
+                pair.proc = Some(proc);
+                pair.step = Step::Searching { me: pair.me.clone(), port: None };
+                pair.since = now;
+                pair.retry = None;
+            },
+            Err(error) => self.pairing_failed(&error, now),
+        }
+    }
+
+    fn pairing_failed(&mut self, error: &std::io::Error, now: f64) {
+        if let Some(pair) = &mut self.pairing { pair.step = Step::Ended("Check the link or address and try again.".into()); }
+        self.toast_error("Couldn't start pairing. Check the link or address and try again.", Some(error.to_string()), now);
+    }
+
+    /// Once a frame: connects to the address a name was looked up for, or
+    /// says it could not be found. The sheet closing drops the lookup.
+    pub(super) fn pairing_lookup_step(&mut self, now: f64) {
+        let Some((lookup, started)) = &self.pair_lookup else { return };
+        if self.pairing.is_none() {
+            self.pair_lookup = None;
+            return;
+        }
+        let found = match lookup.poll() {
+            Some(found) => found,
+            None if now - started >= crate::pairing::LOOKUP_WAIT.as_secs_f64() => Err(crate::pairing::too_slow()),
+            None => {
+                self.ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                return;
             }
+        };
+        self.pair_lookup = None;
+        match found {
+            Ok(target) => self.begin_pairing(crate::pairing::Method::Connect(target.to_string()), now),
+            Err(error) => self.pairing_failed(&error, now),
         }
     }
     pub(super) fn edge_setting(&mut self, side: &str, flag: &str, value: &str) {
