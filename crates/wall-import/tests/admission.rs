@@ -202,3 +202,11 @@ fn webm_last_frame_lasts_as_long_as_the_default_duration_says() {
     // A DefaultDuration that contradicts the declared duration does not make it pass either.
     assert!(one_mk_wall_import::timeline(&webm_at(&[0, 40, 100], 300.0, Some(40_000_000))).is_err());
 }
+
+#[test]
+fn webm_last_frame_shorter_than_playback_allows_is_refused() {
+    // 101 ms declared and a 1 ms DefaultDuration agree, but the last frame would last 1 ms:
+    // playback (10 ms minimum) would reject the stream the importer had accepted.
+    assert!(one_mk_wall_import::timeline(&webm_at(&[0, 40, 100], 101.0, Some(1_000_000))).is_err());
+    assert!(one_mk_wall_import::timeline(&webm_at(&[0, 40, 100], 116.0, Some(16_000_000))).is_ok());
+}
