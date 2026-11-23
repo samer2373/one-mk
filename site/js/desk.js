@@ -518,7 +518,7 @@
           } else if (!ty.done) {
             ty.done = true; ty.next = now + 900; press(["enter"], now);
           } else {
-            sc.lines.push(sc.typed); sc.typed = ""; sc.draw(false); auto.typing = null; auto.until = now + 300;
+            sc.lines.push(sc.typed); if (sc.lines.length > 5) sc.lines.shift(); sc.typed = ""; sc.draw(false); auto.typing = null; auto.until = now + 300;
           }
         }
       } else if (now > follow && now > auto.until) {

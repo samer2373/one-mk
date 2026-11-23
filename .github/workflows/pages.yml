@@ -10,6 +10,9 @@ on:
       - "site/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
+  # Sent by the release workflow once a release is public (its sizes are on the page).
+  repository_dispatch:
+    types: [release-published]
 
 permissions:
   contents: read
@@ -37,13 +40,18 @@ jobs:
           cp -R site/. _site/
           rm -rf _site/tools _site/README.md _site/css/fonts-file.css
 
-      - name: Read the download sizes from the latest release
+      # The sizes are those of the release whose version the page shows (the
+      # checkout's), not of whichever release is the latest: main can be ahead
+      # of, or behind, what is published. The release workflow starts this one
+      # after it publishes. No such release yet: the sizes in the source stay.
+      - name: Read the download sizes from this version's release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
-            | python3 -c 'import json, sys; [print(a["name"], a["size"], sep="\t") for a in json.load(sys.stdin)["assets"]]' > sizes.tsv \
-            || { echo "::warning::could not read the latest release; keeping the sizes in the source"; : > sizes.tsv; }
+          tag="v$(sh scripts/version.sh)"
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag" > release.json \
+            && python3 -c 'import json; [print(a["name"], a["size"], sep="\t") for a in json.load(open("release.json"))["assets"]]' > sizes.tsv \
+            || { echo "::warning::could not read the release $tag; keeping the sizes in the source"; : > sizes.tsv; }
 
       - name: Stamp the release version, the address and the sizes
         run: sh site/tools/stamp.sh _site "$(sh scripts/version.sh)" "$SITE_URL" sizes.tsv

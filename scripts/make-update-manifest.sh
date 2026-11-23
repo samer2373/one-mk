@@ -24,7 +24,11 @@ def parts(text):
     match = semver.fullmatch(text)
     if not match:
         sys.exit(f"Not a release version (MAJOR.MINOR.PATCH): {text!r}")
-    return tuple(map(int, match.groups()))
+    numbers = tuple(map(int, match.groups()))
+    # The updater (the semver crate) reads each number as a u64 and a version of at most 128 characters.
+    if len(text) > 128 or max(numbers) > 2**64 - 1:
+        sys.exit(f"Release version too large for the updater (each number must fit 64 bits, at most 128 characters): {text!r}")
+    return numbers
 revoked = sorted(set(revoked_text.replace(",", " ").split()), key=parts)
 if version in revoked:
     sys.exit(f"Refusing to revoke the version being released ({version})")

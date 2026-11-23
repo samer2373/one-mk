@@ -52,7 +52,11 @@ modules:
       # The release build (built on the oldest supported distribution, so
       # it runs on the runtime's newer glibc): the release URL, or, in a
       # locally built bundle, the tarball next to this file.
+      # Programs for x86-64 only: on another architecture flatpak-builder
+      # skips this source and the install command above fails at once, rather
+      # than building a Flatpak of the wrong programs.
       - type: archive
+        only-arches: [x86_64]
         @ARCHIVE_KEY@: @ARCHIVE_REF@
         sha256: @SHA256@
         strip-components: 1
