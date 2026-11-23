@@ -117,14 +117,40 @@ impl Correlator {
         // A press counts on the device just matched to it (a held entry can
         // be stale when its release went elsewhere); repeats and the release
         // keep the press's device, so a rule applied on press is undone.
+        // Several keyboards can hold one key, so held entries are kept per
+        // device: a release that names its device ends that device's entry
+        // (or the unknown one, undoing a press whose device was not known),
+        // and only a release without a device falls back to the latest press.
         let fresh = match event { Event::Key { device, .. } | Event::Button { device, .. } => device, _ => None };
-        let held = self.local_held.iter().position(|entry| entry.0 == key.code);
-        match (held, key.down) {
-            (Some(index), true) if fresh.is_some() => self.local_held[index].1 = fresh,
-            (Some(index), true) => set_device(&mut event, self.local_held[index].1),
-            (Some(index), false) => { set_device(&mut event, self.local_held[index].1); self.local_held.swap_remove(index); }
-            (None, true) => self.local_held.push((key.code, fresh)),
-            (None, false) => {}
+        let code = key.code;
+        let latest = self.local_held.iter().rposition(|entry| entry.0 == code);
+        if key.down {
+            match fresh {
+                Some(device) => {
+                    if !self.local_held.iter().any(|entry| entry.0 == code && entry.1 == Some(device)) {
+                        match self.local_held.iter().position(|entry| entry.0 == code && entry.1.is_none()) {
+                            Some(index) => self.local_held[index].1 = Some(device),
+                            None => self.local_held.push((code, Some(device))),
+                        }
+                    }
+                }
+                None => match latest {
+                    Some(index) => set_device(&mut event, self.local_held[index].1),
+                    None => self.local_held.push((code, None)),
+                },
+            }
+        } else {
+            let own = fresh.and_then(|device| self.local_held.iter().position(|entry| entry.0 == code && entry.1 == Some(device)));
+            let unknown = || self.local_held.iter().position(|entry| entry.0 == code && entry.1.is_none());
+            let index = match (fresh, own) {
+                (Some(_), Some(index)) => Some(index),
+                (Some(_), None) => unknown(),
+                (None, _) => latest,
+            };
+            if let Some(index) = index {
+                if own.is_none() { set_device(&mut event, self.local_held[index].1); }
+                self.local_held.remove(index);
+            }
         }
         out.push(Correlated { event, local: Some(key.sequence) });
     }
@@ -154,6 +180,9 @@ impl Correlator {
     pub(crate) fn device_motion(&mut self, device: DeviceRef, now: u64) {
         if !self.enabled { return; }
         self.prune(now);
+        // One entry per device (its latest report), so a fast mouse cannot
+        // push another device out of the window.
+        self.motion.retain(|m| m.0 != device);
         if self.motion.len() == RING {
             self.motion.pop_front();
         }
@@ -465,7 +494,56 @@ mod tests {
         corr.local_key(local(3, true), 130, &mut out);
         corr.local_key(local(4, false), 150, &mut out);
         assert_eq!(devices(&out), [Some(A), Some(B), Some(B), Some(B)]);
+        // Only A's entry stays (bounded; a later A press names A again).
+        assert_eq!(corr.local_held, [(58, Some(A))]);
+    }
+
+    #[test]
+    fn two_keyboards_holding_one_key_release_in_their_own_order() {
+        let mut corr = Correlator::default();
+        let mut out = Vec::new();
+        corr.configure(true, &mut out);
+        let local = |sequence, down| crate::localmap_runtime::Key { sequence, code: 30, down, keyboard_type: 0, click_state: 0, at: std::time::Instant::now() };
+        corr.device_event(press(30, true), A, 0, &mut out);
+        corr.local_key(local(1, true), 0, &mut out);
+        corr.device_event(press(30, true), B, 10, &mut out);
+        corr.local_key(local(2, true), 10, &mut out);
+        // A is released first, with its own fresh sample.
+        corr.device_event(press(30, false), A, 20, &mut out);
+        corr.local_key(local(3, false), 20, &mut out);
+        corr.device_event(press(30, false), B, 30, &mut out);
+        corr.local_key(local(4, false), 30, &mut out);
+        assert_eq!(devices(&out), [Some(A), Some(B), Some(A), Some(B)]);
         assert!(corr.local_held.is_empty());
+    }
+
+    #[test]
+    fn a_release_without_a_device_names_the_latest_press() {
+        let mut corr = Correlator::default();
+        let mut out = Vec::new();
+        corr.configure(true, &mut out);
+        let local = |sequence, down| crate::localmap_runtime::Key { sequence, code: 30, down, keyboard_type: 0, click_state: 0, at: std::time::Instant::now() };
+        corr.device_event(press(30, true), A, 0, &mut out);
+        corr.local_key(local(1, true), 0, &mut out);
+        corr.device_event(press(30, true), B, 10, &mut out);
+        corr.local_key(local(2, true), 10, &mut out);
+        corr.local_key(local(3, false), 100, &mut out);
+        assert_eq!(devices(&out), [Some(A), Some(B), Some(B)]);
+        assert_eq!(corr.local_held, [(30, Some(A))]);
+    }
+
+    #[test]
+    fn a_fast_mouse_does_not_push_another_device_out_of_the_motion_window() {
+        let mut c = Correlator::default();
+        c.configure(true, &mut Vec::new());
+        let mut out = Vec::new();
+        c.device_motion(B, 0);
+        for t in 1..=(RING as u64) {
+            c.device_motion(A, t);
+        }
+        c.hook(Event::Motion { dx: 1.0, dy: 1.0, device: None }, RING as u64 + 1, &mut out);
+        assert_eq!(devices(&out), [None], "two devices moved within the window");
+        assert_eq!(c.motion.len(), 2);
     }
 
     #[test]

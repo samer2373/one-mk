@@ -185,46 +185,91 @@ impl DisplaySleeper for Dpms {
     }
 }
 
+/// What is known about the display being off: the monitor (GNOME's
+/// `PowerSaveMode`, when something reports it) and the computer being
+/// suspended are separate, and the display is asleep when either says so. A
+/// computer that wakes for maintenance with the monitor still off, or a
+/// monitor that comes back while resuming, must not be taken for the other.
+#[derive(Default)]
+struct DisplayState {
+    monitor_asleep: Option<bool>,
+    suspended: bool,
+    /// What was last reported (the display starts awake).
+    told: bool,
+}
+
+impl DisplayState {
+    fn asleep(&self) -> bool {
+        self.suspended || self.monitor_asleep == Some(true)
+    }
+
+    /// The new state, if it differs from the one reported last.
+    fn changed(&mut self) -> Option<bool> {
+        let now = self.asleep();
+        (std::mem::replace(&mut self.told, now) != now).then_some(now)
+    }
+
+    /// The monitor's state; the first value is the state, not a change.
+    fn monitor(&mut self, asleep: bool) -> Option<bool> {
+        let first = self.monitor_asleep.replace(asleep).is_none();
+        if first {
+            self.told = self.asleep();
+            return None;
+        }
+        self.changed()
+    }
+
+    fn suspend(&mut self, suspended: bool) -> Option<bool> {
+        self.suspended = suspended;
+        self.changed()
+    }
+}
+
 /// Reports the display sleeping (GNOME's `PowerSaveMode` leaving 0) and the
 /// computer suspending or resuming (logind's `PrepareForSleep`) as
 /// `PowerEvent::DisplayAsleep`. Event-driven, like [`watch_lock`].
 pub(super) fn watch_display(events: mpsc::UnboundedSender<PowerEvent>) {
-    let tx = events.clone();
+    let state = Arc::new(std::sync::Mutex::new(DisplayState::default()));
+    let (tx, shared) = (events.clone(), state.clone());
     tokio::spawn(async move {
-        if let Err(e) = watch_power_save(&tx).await {
+        if let Err(e) = watch_power_save(&tx, &shared).await {
             tracing::debug!("not watching the display power state: {e}");
         }
     });
     tokio::spawn(async move {
-        if let Err(e) = watch_suspend(&events).await {
+        if let Err(e) = watch_suspend(&events, &state).await {
             tracing::debug!("not watching for suspend: {e}");
         }
     });
 }
 
-async fn watch_power_save(events: &mpsc::UnboundedSender<PowerEvent>) -> zbus::Result<()> {
+async fn watch_power_save(events: &mpsc::UnboundedSender<PowerEvent>, state: &std::sync::Mutex<DisplayState>) -> zbus::Result<()> {
     let conn = zbus::Connection::session().await?;
     let proxy = zbus::Proxy::new(&conn, MUTTER_DISPLAY, MUTTER_PATH, MUTTER_DISPLAY).await?;
     let mut changes = proxy.receive_property_changed::<i32>("PowerSaveMode").await;
-    let mut last = None;
     while let Some(change) = changes.next().await {
         let Ok(mode) = change.get().await else { continue };
-        // -1 is "not supported", 0 on; the first value is the state, not a change.
-        let asleep = mode > 0;
-        if last.replace(asleep).is_some_and(|was| was != asleep) && events.send(PowerEvent::DisplayAsleep(asleep)).is_err() {
+        // -1 is "not supported", 0 on.
+        let changed = state.lock().map_or(None, |mut state| state.monitor(mode > 0));
+        if let Some(asleep) = changed
+            && events.send(PowerEvent::DisplayAsleep(asleep)).is_err()
+        {
             break;
         }
     }
     Ok(())
 }
 
-async fn watch_suspend(events: &mpsc::UnboundedSender<PowerEvent>) -> zbus::Result<()> {
+async fn watch_suspend(events: &mpsc::UnboundedSender<PowerEvent>, state: &std::sync::Mutex<DisplayState>) -> zbus::Result<()> {
     let conn = zbus::Connection::system().await?;
     let manager = zbus::Proxy::new(&conn, LOGIN1, "/org/freedesktop/login1", "org.freedesktop.login1.Manager").await?;
     let mut signals = manager.receive_signal("PrepareForSleep").await?;
     while let Some(msg) = signals.next().await {
         let Ok(suspending) = msg.body().deserialize::<bool>() else { continue };
-        if events.send(PowerEvent::DisplayAsleep(suspending)).is_err() {
+        let changed = state.lock().map_or(None, |mut state| state.suspend(suspending));
+        if let Some(asleep) = changed
+            && events.send(PowerEvent::DisplayAsleep(asleep)).is_err()
+        {
             break;
         }
     }
@@ -611,6 +656,29 @@ impl X11 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_resume_does_not_wake_a_display_that_is_still_off() {
+        let mut state = DisplayState::default();
+        assert_eq!(state.monitor(false), None, "the first value is the state");
+        assert_eq!(state.monitor(true), Some(true), "the monitor goes off");
+        assert_eq!(state.suspend(true), None, "already asleep");
+        // An automatic wake: the computer resumes, the monitor stays off.
+        assert_eq!(state.suspend(false), None);
+        assert!(state.asleep());
+        assert_eq!(state.monitor(false), Some(false), "the monitor comes back");
+        // Suspending with the monitor on, then resuming.
+        assert_eq!(state.suspend(true), Some(true));
+        assert_eq!(state.suspend(false), Some(false));
+    }
+
+    #[test]
+    fn without_a_monitor_report_suspend_alone_decides() {
+        let mut state = DisplayState::default();
+        assert_eq!(state.suspend(true), Some(true));
+        assert_eq!(state.suspend(false), Some(false));
+        assert_eq!(state.suspend(false), None);
+    }
+
     use super::*;
 
     /// Runs against whatever X server `DISPLAY` names, if any: it must not

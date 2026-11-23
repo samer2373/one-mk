@@ -107,9 +107,13 @@ impl KeyRepeat {
     }
 
     /// `(delay, interval)`, or `None` to not repeat at all. Applies from
-    /// the next key press.
+    /// the next key press; turning repeat off also stops a repeat in
+    /// progress (its deadline would otherwise stay armed and never advance).
     pub(crate) fn set_timing(&mut self, timing: Option<(Duration, Duration)>) {
         self.timing = timing.map(|(d, i)| (d, i.max(Duration::from_millis(5))));
+        if self.timing.is_none() {
+            self.repeating = None;
+        }
     }
 
     /// Records a key event from the peer. Returns false if it must not be
@@ -138,6 +142,7 @@ impl KeyRepeat {
 
     /// When `poll` next has something to do.
     pub(crate) fn deadline(&self) -> Option<Instant> {
+        self.timing?;
         self.repeating.map(|(_, t)| t)
     }
 
@@ -326,6 +331,20 @@ mod tests {
         assert!(r.key(31, false, t0 + ms(1600)));
         assert_eq!(r.deadline(), None);
         assert_eq!(r.poll(t0 + ms(5000)), None);
+    }
+
+    #[test]
+    fn turning_repeat_off_stops_a_repeat_in_progress() {
+        let ms = Duration::from_millis;
+        let t0 = Instant::now();
+        let mut r = KeyRepeat::new(Some((ms(400), ms(30))));
+        assert!(r.key(30, true, t0));
+        assert_eq!(r.deadline(), Some(t0 + ms(400)));
+        r.set_timing(None);
+        assert!(r.key(31, true, t0));
+        assert_eq!(r.deadline(), None, "no armed deadline without timing");
+        assert_eq!(r.poll(t0 + ms(1000)), None);
+        assert_eq!(r.deadline(), None);
     }
 
     #[test]

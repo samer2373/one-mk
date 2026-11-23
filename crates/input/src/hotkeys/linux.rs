@@ -79,7 +79,12 @@ enum End {
     Changed,
     /// The daemon is gone.
     Quit,
+    /// The desktop closed the session, with the portal service still there.
+    Closed,
 }
+
+/// How long to wait before binding again after the desktop closed the session.
+const REBIND_AFTER: std::time::Duration = std::time::Duration::from_secs(10);
 
 async fn run(mut rx: watch::Receiver<Bindings>, events: mpsc::UnboundedSender<Event>) {
     let status = |a: Availability| {
@@ -109,8 +114,17 @@ async fn run(mut rx: watch::Receiver<Bindings>, events: mpsc::UnboundedSender<Ev
                 }
             }
         };
-        if matches!(end, End::Quit) {
-            return;
+        match end {
+            End::Quit => return,
+            End::Changed => {}
+            End::Closed => {
+                // Nothing is registered any more: say so, and bind again.
+                status(Availability::Unavailable("the desktop closed the shortcut session; binding them again shortly".into()));
+                tokio::select! {
+                    changed = rx.changed() => if changed.is_err() { return },
+                    () = tokio::time::sleep(REBIND_AFTER) => {}
+                }
+            }
         }
     }
 }
@@ -125,6 +139,9 @@ async fn session(
 ) -> Result<End, String> {
     let mut activated = portal.receive_activated().await.map_err(|e| one_line(&e))?;
     let session = portal.create_session(Default::default()).await.map_err(|e| refused(&e, unregistered))?;
+    // Without this a session the desktop closes (the service staying up)
+    // would go on being reported as active.
+    let mut closed = session.receive_closed().await.map_err(|e| one_line(&e))?;
     let _ = events.send(Event::Hotkeys(Availability::Starting(
         "asking the desktop; confirm the shortcuts if it shows a dialog".into(),
     )));
@@ -183,6 +200,7 @@ async fn session(
                 }
             },
             changed = rx.changed() => break if changed.is_ok() { End::Changed } else { End::Quit },
+            _ = closed.next() => break End::Closed,
         }
     };
     close(&session).await;

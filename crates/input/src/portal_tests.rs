@@ -217,6 +217,25 @@ async fn keysym_permission_dialog_is_cancelled_by_input_cleanup() {
 }
 
 #[tokio::test]
+async fn keysym_setup_survives_routine_key_releases() {
+    let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+    harness.ready().await;
+    harness.world().dialog = Duration::from_secs(30);
+    harness.inject(Inject::Key { code: 42, down: true });
+    harness.inject(Inject::CharacterKey { code: 44, down: true, character: 'Z' });
+    harness.until("keyboard permission pending", |world| world.count("rd.Start") == 2).await;
+    // Shift coming up, and a key that was never held, are ordinary typing.
+    harness.inject(Inject::Key { code: 42, down: false });
+    harness.inject(Inject::Key { code: 30, down: false });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(harness.count("rd.Close"), 0, "the session stays: {:#?}", harness.log());
+    assert_eq!(harness.count("rd.CreateSession"), 2);
+    // The visit ending still cancels the setup.
+    harness.inject(Inject::Controlled(false));
+    harness.until("visit end cancels permission", |world| world.pressed.is_empty() && world.count("rd.Close") > 0).await;
+}
+
+#[tokio::test]
 async fn keysym_two_hundred_characters_are_ordered_and_acknowledged() {
     let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
     harness.ready().await;
@@ -424,6 +443,32 @@ fn retry_backs_off_and_starts_over_after_a_stable_session() {
 }
 
 #[test]
+fn a_failure_after_the_dialog_replaces_the_waiting_line() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut r = Retry::new(tx, "control", "Can't do it", "Waiting");
+    let lost = || Err(anyhow!("lost"));
+    // Told once already, then the dialog opens.
+    assert!(matches!(r.after(lost(), Duration::ZERO), Next::Retry(_)));
+    assert!(matches!(rx.try_recv(), Ok(Event::Status { problem: Some(_), .. })));
+    r.show(Some("Waiting".into()));
+    assert_eq!(rx.try_recv().unwrap(), Event::Status { part: "control", problem: Some("Waiting".into()) });
+    // The session fails after a long dialog: the line must not stay.
+    assert!(matches!(r.after(lost(), STABLE), Next::Retry(_)));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        Event::Status { part: "control", problem: Some("Can't do it: lost. Retrying in the background.".into()) }
+    );
+    // The same on a first start, where nothing was reported before.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut r = Retry::new(tx, "control", "Can't do it", "Waiting");
+    r.ever_ready = true;
+    r.show(Some("Waiting".into()));
+    let _ = rx.try_recv();
+    assert!(matches!(r.after(lost(), STABLE), Next::Retry(_)));
+    assert!(matches!(rx.try_recv(), Ok(Event::Status { problem: Some(p), .. }) if p != "Waiting"));
+}
+
+#[test]
 fn refusals_and_rejected_tokens() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut r = Retry::new(tx, "control", "Can't do it", "Waiting");
@@ -471,6 +516,8 @@ struct World {
     hang_release: bool,
     /// InputCapture.Disable never answers.
     hang_disable: bool,
+    /// The next this many InputCapture.Enable calls fail.
+    fail_enable: u32,
     ic_version: u32,
     /// Restore tokens given to SelectDevices / InputCapture.Start, by session.
     restoring: HashMap<String, Option<String>>,
@@ -509,6 +556,7 @@ impl Default for World {
             dialog: Duration::ZERO,
             hang_release: false,
             hang_disable: false,
+            fail_enable: 0,
             ic_version: 1,
             restoring: HashMap::new(),
             sessions: Vec::new(),
@@ -838,10 +886,15 @@ impl FakeInputCapture {
     }
 
     #[zbus(name = "Enable")]
-    async fn enable(&self, _session: OwnedObjectPath, _options: Opts) {
+    async fn enable(&self, _session: OwnedObjectPath, _options: Opts) -> zbus::fdo::Result<()> {
         let mut w = lock(&self.0);
         w.log.push("ic.Enable".into());
+        if w.fail_enable > 0 {
+            w.fail_enable -= 1;
+            return Err(zbus::fdo::Error::Failed("busy".into()));
+        }
         w.enabled = true;
+        Ok(())
     }
 
     #[zbus(name = "Disable")]
@@ -1296,6 +1349,29 @@ async fn a_closed_session_lets_go_and_comes_back() {
     h.hold().await;
     let next = h.activate().await;
     assert_ne!(next, id);
+}
+
+#[tokio::test]
+async fn the_portal_going_away_during_a_dialog_does_not_wait_forever() {
+    let Some(mut h) = Harness::start(&[], |w| w.dialog = Duration::from_secs(30)).await else { return };
+    h.capture().send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
+    h.until("both dialogs open", |w| w.count("rd.Start") == 1 && w.count("ic.CreateSession") == 1).await;
+    // xdg-desktop-portal restarts: the pending requests are lost.
+    drop(h.fake.take());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    h.fake = Some(serve_fake(&h.bus.as_ref().unwrap().addr.clone(), &h.world).await);
+    h.until("asked again", |w| w.count("rd.CreateSession") == 2 && w.count("ic.CreateSession") == 2).await;
+}
+
+#[tokio::test]
+async fn a_failed_barrier_update_is_tried_again_by_itself() {
+    let Some(mut h) = Harness::start(&[], |w| w.fail_enable = 1).await else { return };
+    // Enable fails once after the barriers were accepted; nothing else is
+    // sent to the backend, and crossing must still come back.
+    h.capture().send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
+    h.until("barriers enabled again", |w| w.count("ic.Enable") >= 2 && w.enabled).await;
+    h.until("injection", |w| w.emulating >= 2).await;
+    h.activate().await;
 }
 
 #[tokio::test]
