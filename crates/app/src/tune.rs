@@ -1191,7 +1191,9 @@ pub enum ScrollChange {
     Mode(&'static str),
     /// `None`: as on this computer (unset).
     Natural(Option<&'static str>),
-    /// A modifier (`shift`) and what it does (`horizontal`, `unchanged`...).
+    /// A modifier (`shift`) and what it does (`horizontal`, `x5`, or `off`: a
+    /// setting of its own that does nothing, which a wider scope's setting
+    /// cannot override; `unchanged` would forget the scope's own instead).
     Modifier(&'static str, &'static str),
 }
 
@@ -1220,11 +1222,10 @@ pub fn natural_as_here(input: &Input, f: &Facts, scope: &Scope, device: Option<D
     if scroll_shown(&without, f, device).natural.is_some() { ScrollChange::Natural(Some(natural_like_here())) } else { ScrollChange::Natural(None) }
 }
 
-/// The commands for a scroll change. Natural scrolling can only be unset
-/// by forgetting the rule (`--reset`) and writing the rest of it again;
-/// where that would lose what the command line cannot write back (a speed
-/// for one axis, a speed with more digits than it takes) it is set to what
-/// unset does here instead.
+/// The commands for a scroll change. Natural scrolling is unset with one
+/// `--clear-natural`, which forgets that setting in every table for the place
+/// and leaves all the rest of them (per-axis speeds, speeds with many digits,
+/// the other tables) as they are, in a single write.
 pub fn scroll_commands(input: &Input, scope: &Scope, device: Option<Device>, change: &ScrollChange) -> Vec<Vec<String>> {
     let base = |a: &mut Vec<String>| {
         if let Some(d) = device {
@@ -1235,44 +1236,10 @@ pub fn scroll_commands(input: &Input, scope: &Scope, device: Option<Device>, cha
     let mut a = vec!["scroll".to_owned()];
     match change {
         ScrollChange::Natural(None) => {
-            let tables: Vec<&ScrollRule> = input.scroll.iter().filter(|r| r.scope == *scope && r.device == device && r.app.is_none()).collect();
-            if tables.iter().all(|r| r.natural.is_none()) {
+            if !input.scroll.iter().any(|r| r.scope == *scope && r.device == device && r.app.is_none() && r.natural.is_some()) {
                 return vec![];
             }
-            // `--reset` forgets every table for this place, and only one is written
-            // back: with several, what the others hold is kept by setting the value
-            // instead (an edit folds them, as the daemon does when it resolves).
-            let r = tables[0];
-            let writable = tables.len() == 1 && r.speed_x.is_none() && r.speed_y.is_none() && r.speed.is_none_or(|v| trim_num(v).parse::<f64>() == Ok(v));
-            if !writable {
-                a.push(format!("--natural={}", natural_like_here()));
-                base(&mut a);
-                return vec![a];
-            }
-            a.push("--reset".into());
-            base(&mut a);
-            let mut again = vec!["scroll".to_owned()];
-            let on = |b: bool| if b { "on" } else { "off" };
-            if let Some(v) = r.reverse_vertical {
-                again.push(format!("--reverse-vertical={}", on(v)));
-            }
-            if let Some(v) = r.reverse_horizontal {
-                again.push(format!("--reverse-horizontal={}", on(v)));
-            }
-            if let Some(s) = r.speed {
-                again.push(format!("--speed={}", trim_num(s)));
-            }
-            if let Some(m) = &r.mode {
-                again.push(format!("--mode={m}"));
-            }
-            for (m, b) in &r.modifiers {
-                again.push(format!("--modifier={m}={b}"));
-            }
-            if again.len() == 1 {
-                return vec![a];
-            }
-            base(&mut again);
-            return vec![a, again];
+            a.push("--clear-natural".into());
         }
         ScrollChange::ReverseVertical(v) => a.push(format!("--reverse-vertical={}", if *v { "on" } else { "off" })),
         ScrollChange::ReverseHorizontal(v) => a.push(format!("--reverse-horizontal={}", if *v { "on" } else { "off" })),
@@ -2287,10 +2254,10 @@ os = "mac"
         let i = input();
         let one = |c: ScrollChange, d: Option<Device>| scroll_commands(&i, &Scope::All, d, &c);
         assert_eq!(one(ScrollChange::ReverseVertical(true), Some(Device::Touchpad)), [["scroll", "--reverse-vertical=on", "--kind=touchpad"]]);
-        assert_eq!(one(ScrollChange::Modifier("shift", "unchanged"), None), [["scroll", "--modifier=shift=unchanged"]]);
+        assert_eq!(one(ScrollChange::Modifier("shift", "off"), None), [["scroll", "--modifier=shift=off"]]);
         assert_eq!(one(ScrollChange::Speed(2.0), None), [["scroll", "--speed=2"]]);
-        // Back to "as here": the rule is forgotten, and the rest written again.
-        assert_eq!(one(ScrollChange::Natural(None), None), [vec!["scroll", "--reset"], vec!["scroll", "--modifier=alt=x5", "--modifier=shift=horizontal"]]);
+        // Back to "as here": only natural is forgotten, in one command.
+        assert_eq!(one(ScrollChange::Natural(None), None), [["scroll", "--clear-natural"]]);
         assert!(one(ScrollChange::Natural(None), Some(Device::Wheel)).is_empty(), "nothing to undo");
     }
 
@@ -2571,20 +2538,15 @@ mod fixes {
         let row = |speed: Option<f64>, speed_x: Option<f64>, speed_y: Option<f64>| ScrollRule {
             natural: Some("on".into()), speed, speed_x, speed_y, mode: Some("smooth".into()), ..Default::default()
         };
-        let reset = |cmds: Vec<Vec<String>>| cmds.iter().any(|c| c.iter().any(|a| a == "--reset"));
-        // A row the command line can write back whole is forgotten and written again.
-        let plain = rows(vec![row(Some(0.75), None, None)]);
-        let cmds = scroll_commands(&plain, &Scope::All, None, &ScrollChange::Natural(None));
-        assert!(reset(cmds.clone()), "{cmds:?}");
-        assert_eq!(cmds[1], ["scroll", "--speed=0.75", "--mode=smooth"]);
-        // One with a speed for each axis cannot be: it keeps both, and gets what unset does here.
-        let axes = rows(vec![row(None, Some(2.5), Some(0.75))]);
-        let cmds = scroll_commands(&axes, &Scope::All, None, &ScrollChange::Natural(None));
-        assert!(!reset(cmds.clone()), "{cmds:?}");
-        assert_eq!(cmds, vec![vec!["scroll".to_owned(), format!("--natural={}", natural_like_here())]]);
-        // Nor a speed with more digits than the command line is told.
-        let fine = rows(vec![row(Some(1.234), None, None)]);
-        assert!(!reset(scroll_commands(&fine, &Scope::All, None, &ScrollChange::Natural(None))));
+        // Whatever the row holds (a speed for each axis, a speed with many digits), one
+        // command clears natural and nothing else: no reset, no rewrite of the rest.
+        for r in [row(Some(0.75), None, None), row(None, Some(2.5), Some(0.75)), row(Some(1.234), None, None)] {
+            let cmds = scroll_commands(&rows(vec![r]), &Scope::All, None, &ScrollChange::Natural(None));
+            assert_eq!(cmds, [["scroll", "--clear-natural"]]);
+        }
+        let scoped = scroll_commands(&rows(vec![ScrollRule { scope: Scope::Os(os::LINUX), device: Some(Device::Wheel), ..row(None, Some(2.5), None) }]),
+            &Scope::Os(os::LINUX), Some(Device::Wheel), &ScrollChange::Natural(None));
+        assert_eq!(scoped, [["scroll", "--clear-natural", "--kind=wheel", "--os=linux"]]);
     }
 
     #[test]
@@ -2624,20 +2586,22 @@ mod fixes {
     }
 
     #[test]
-    fn unsetting_natural_scrolling_never_resets_a_place_with_several_tables() {
+    fn unsetting_natural_scrolling_covers_every_table_of_a_place_in_one_command() {
         let tables = rows(vec![
             ScrollRule { natural: Some("on".into()), ..Default::default() },
             ScrollRule { speed_y: Some(2.0), mode: Some("discrete".into()), ..Default::default() },
         ]);
         let cmds = scroll_commands(&tables, &Scope::All, None, &ScrollChange::Natural(None));
-        assert_eq!(cmds, vec![vec!["scroll".to_owned(), format!("--natural={}", natural_like_here())]], "a reset would drop the other table's settings");
+        assert_eq!(cmds, [["scroll", "--clear-natural"]], "the other table's settings are not rewritten");
         // The natural value in a later table is found too.
         let later = rows(vec![
             ScrollRule { mode: Some("smooth".into()), ..Default::default() },
             ScrollRule { natural: Some("on".into()), ..Default::default() },
         ]);
-        assert_eq!(scroll_commands(&later, &Scope::All, None, &ScrollChange::Natural(None)).len(), 1);
-        assert!(!scroll_commands(&later, &Scope::All, None, &ScrollChange::Natural(None))[0].contains(&"--reset".to_owned()));
+        assert_eq!(scroll_commands(&later, &Scope::All, None, &ScrollChange::Natural(None)), [["scroll", "--clear-natural"]]);
+        // No natural setting anywhere in the place: nothing is asked.
+        let none = rows(vec![ScrollRule { mode: Some("smooth".into()), ..Default::default() }]);
+        assert!(scroll_commands(&none, &Scope::All, None, &ScrollChange::Natural(None)).is_empty());
     }
 
     #[test]
