@@ -60,7 +60,9 @@ pub async fn gnome_check(connection: &zbus::Connection) -> anyhow::Result<()> {
 }
 
 pub fn match_monitor<'a>(monitors: &'a [Monitor], computer: &str, names: &[&str], local: Rect) -> Option<&'a Monitor> {
-    let candidates: Vec<_> = monitors.iter().filter(|monitor| monitor.computer == computer).collect();
+    // Offline entries only reserve canvas geometry; they are not outputs to put a wallpaper on, and
+    // letting them compete makes a live output's name or rectangle look ambiguous.
+    let candidates: Vec<_> = monitors.iter().filter(|monitor| monitor.computer == computer && monitor.online).collect();
     let named: Vec<_> = candidates.iter().copied().filter(|monitor| !monitor.name.is_empty()
         && (names.contains(&monitor.name.as_str()) || names.contains(&monitor.name.rsplit(" · ").next().unwrap_or_default()))).collect();
     if named.len() == 1 { return named.first().copied(); }
@@ -77,6 +79,20 @@ mod tests {
         assert_eq!(capabilities(false, 2), Err(UNSUPPORTED));
         assert!(capabilities(true, 0).is_err());
         assert!(capabilities(true, 2).is_ok());
+    }
+    #[test]
+    fn offline_reservations_never_make_a_live_output_ambiguous() {
+        let local = Rect { x: 0.0, y: 0.0, width: 1920.0, height: 1080.0 };
+        let canvas = |name: &str, x: f64, online: bool| Monitor { computer: "pc".into(), name: name.into(),
+            rect: Rect { x, ..local }, local: Some(local), scale: 1.0, online };
+        // The live output kept its rectangle; the reservation of a removed one still has the same local one.
+        let monitors = vec![canvas("2", 0.0, true), canvas("3", 1920.0, false)];
+        assert_eq!(match_monitor(&monitors, "pc", &["DP-9"], local), Some(&monitors[0]));
+        // An offline reservation is not matched by name either.
+        assert!(match_monitor(&monitors, "pc", &["3"], Rect::default()).is_none());
+        // Two live ones with the same rectangle are still ambiguous.
+        let both = vec![canvas("2", 0.0, true), canvas("3", 1920.0, true)];
+        assert!(match_monitor(&both, "pc", &["DP-9"], local).is_none());
     }
     #[test]
     fn names_win_then_unique_local_geometry_never_arbitrary_output_order() {
