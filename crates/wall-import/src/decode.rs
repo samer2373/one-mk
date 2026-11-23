@@ -63,16 +63,19 @@ fn animation(frames: image::Frames<'_>, media: &mut Media) -> Result<Vec<u8>, St
         pixels += u64::from(image.width()) * u64::from(image.height());
         if count > MAX_FRAMES || pixels > MAX_DECODED_PIXELS { return Err("decoded frame/pixel budget exceeded".into()); }
         let (numerator, denominator) = frame.delay().numer_denom_ms();
-        let delay = u64::from(numerator) / u64::from(denominator);
-        // The same rule as the container check (admission.rs): a GIF's 0 and 10 ms mean 100 ms.
-        let delay = if media.format == Format::Gif { crate::admission::gif_display_ms(delay) } else { delay.max(10) };
-        if delay < 17 { return Err("decoded source exceeds 60 fps; convert first".into()); }
+        let (numerator, denominator) = (u64::from(numerator), u64::from(denominator));
+        // The same rules as the container check (admission.rs): a GIF's 0 and 10 ms mean 100 ms,
+        // and an APNG's fractions of a millisecond are kept (to the microsecond).
+        let delay = if media.format == Format::Gif { crate::admission::gif_display_ms(numerator / denominator) * 1000 }
+            else if media.format == Format::Apng { crate::admission::rounded_micros(numerator, denominator).max(10_000) }
+            else { (numerator / denominator).max(10) * 1000 };
+        if delay < 17_000 { return Err("decoded source exceeds 60 fps; convert first".into()); }
         duration = duration.checked_add(delay).ok_or("duration overflow")?;
-        if duration > crate::MAX_DURATION_MS { return Err("decoded duration limit exceeded".into()); }
+        if duration > crate::MAX_DURATION_MS * 1000 { return Err("decoded duration limit exceeded".into()); }
         if poster.is_none() { poster = Some(poster_bytes(&flatten(image))); }
     }
     if count != media.frames { return Err("decoded frame count differs from container".into()); }
-    media.duration_ms = duration;
+    media.duration_ms = (duration + 500) / 1000;
     poster.ok_or_else(|| "no decoded poster".into())
 }
 
@@ -181,6 +184,25 @@ mod tests {
             let decoded = decode_with_limits(&bytes, media, image::Limits::default()).unwrap();
             assert_eq!(decoded.media.duration_ms, 2 * shown, "{written} ms: decoder");
         }
+    }
+
+    /// The decoder keeps an APNG's fractions of a millisecond like the container check does.
+    #[test]
+    fn the_decoder_and_the_container_check_agree_on_apng_fractions_of_a_millisecond() {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 2, 2);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_animated(3, 1).unwrap();
+            encoder.set_frame_delay(1, 24).unwrap();
+            let mut writer = encoder.write_header().unwrap();
+            for red in [8, 16, 32] { writer.write_image_data(&[red, 16, 32, 255].repeat(4)).unwrap(); }
+            writer.finish().unwrap();
+        }
+        let media = crate::inspect(&bytes).unwrap();
+        assert_eq!(media.duration_ms, 125);
+        let decoded = decode_with_limits(&bytes, media, image::Limits::default()).unwrap();
+        assert_eq!(decoded.media.duration_ms, 125);
     }
 
     #[test]

@@ -91,6 +91,7 @@ fn gif(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
     if header[4] & 0x80 != 0 { cursor.take(3usize << ((header[4] & 7) + 1))?; }
     let mut media = Media { format: Format::Gif, width, height, frames: 0, duration_ms: 0 };
     let mut delay = 100;
+    let mut total_us = 0;
     let mut metadata = 0;
     loop {
         match cursor.byte()? {
@@ -113,7 +114,7 @@ fn gif(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
                 if frame[8] & 0x80 != 0 { cursor.take(3usize << ((frame[8] & 7) + 1))?; }
                 if !(2..=8).contains(&cursor.byte()?) { return Err("invalid GIF LZW width".into()); }
                 cursor.blocks()?;
-                add_frame(&mut media, gif_display_ms(delay), delays)?;
+                add_frame(&mut media, gif_display_ms(delay) * 1000, delays, &mut total_us)?;
                 delay = 100;
             }
             0x3b if cursor.position == bytes.len() => return Ok(media),
@@ -131,12 +132,23 @@ fn gif(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
 /// [`validate_media`].
 pub(crate) fn gif_display_ms(delay_ms: u64) -> u64 { if delay_ms <= 10 { 100 } else { delay_ms } }
 
-fn add_frame(media: &mut Media, delay: u64, delays: &mut Vec<u32>) -> Result<(), String> {
-    if delay < 17 { return Err("source exceeds 60 fps; convert first".into()); }
-    if delay > MAX_DURATION_MS { return Err("frame/duration limit exceeded; convert first".into()); }
-    delays.push(u32::try_from(delay * 1000).map_err(|_| "frame delay overflow")?);
+/// A delay of `numerator / denominator` milliseconds in whole microseconds,
+/// rounded to the nearest. An APNG's 1/24 s (41666.67 us) must not become 41 ms:
+/// 240 such frames would loop 160 ms early every cycle.
+pub(crate) fn rounded_micros(numerator_ms: u64, denominator: u64) -> u64 {
+    (numerator_ms * 1000 + denominator / 2) / denominator
+}
+
+/// Adds a frame shown for `delay_us` microseconds. `total_us` is the running
+/// sum of the delays; `media.duration_ms` is that sum rounded to whole
+/// milliseconds.
+fn add_frame(media: &mut Media, delay_us: u64, delays: &mut Vec<u32>, total_us: &mut u64) -> Result<(), String> {
+    if delay_us < 17_000 { return Err("source exceeds 60 fps; convert first".into()); }
+    if delay_us > MAX_DURATION_MS * 1000 { return Err("frame/duration limit exceeded; convert first".into()); }
+    delays.push(u32::try_from(delay_us).map_err(|_| "frame delay overflow")?);
     media.frames += 1;
-    media.duration_ms = media.duration_ms.checked_add(delay).ok_or("duration overflow")?;
+    *total_us = total_us.checked_add(delay_us).ok_or("duration overflow")?;
+    media.duration_ms = (*total_us + 500) / 1000;
     if media.frames > MAX_FRAMES || media.duration_ms > MAX_DURATION_MS { return Err("frame/duration limit exceeded; convert first".into()); }
     if u64::from(media.width) * u64::from(media.height) * u64::from(media.frames) > crate::MAX_DECODED_PIXELS { return Err("decoded pixel budget exceeded; convert first to fewer frames or lower resolution".into()); }
     Ok(())
@@ -146,6 +158,7 @@ fn png(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
     let mut cursor = Cursor { bytes, position: 8 };
     let mut media = Media { format: Format::Apng, width: 0, height: 0, frames: 0, duration_ms: 0 };
     let mut declared = None;
+    let mut total_us = 0;
     let mut image_data = false;
     let mut metadata = 0usize;
     loop {
@@ -169,8 +182,8 @@ fn png(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
                 if u64::from(left) + u64::from(width) > u64::from(media.width) || u64::from(top) + u64::from(height) > u64::from(media.height) { return Err("APNG frame outside canvas".into()); }
                 let numerator = u16::from_be_bytes([chunk[20], chunk[21]]);
                 let denominator = u16::from_be_bytes([chunk[22], chunk[23]]);
-                let delay = (u64::from(numerator) * 1000 / u64::from(if denominator == 0 { 100 } else { denominator })).max(10);
-                add_frame(&mut media, delay, delays)?;
+                let delay = rounded_micros(u64::from(numerator) * 1000, u64::from(if denominator == 0 { 100 } else { denominator })).max(10_000);
+                add_frame(&mut media, delay, delays, &mut total_us)?;
             }
             b"IDAT" => image_data = true,
             b"IEND" if length == 0 && cursor.position == bytes.len() && declared == Some(media.frames) => return Ok(media),
@@ -196,6 +209,7 @@ fn webp(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
     cursor.take(4)?;
     let mut media = Media { format: Format::Webp, width: 0, height: 0, frames: 0, duration_ms: 0 };
     let mut animation = false;
+    let mut total_us = 0;
     let mut metadata = 0usize;
     while cursor.position < bytes.len() {
         let kind = cursor.take(4)?;
@@ -212,7 +226,7 @@ fn webp(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
                 let (left, top, width, height) = (le24(chunk) * 2, le24(&chunk[3..]) * 2, le24(&chunk[6..]) + 1, le24(&chunk[9..]) + 1);
                 dimensions(width, height)?;
                 if left + width > media.width || top + height > media.height { return Err("WebP frame outside canvas".into()); }
-                add_frame(&mut media, u64::from(le24(&chunk[12..])).max(10), delays)?;
+                add_frame(&mut media, u64::from(le24(&chunk[12..])).max(10) * 1000, delays, &mut total_us)?;
             }
             b"VP8X" | b"ANIM" | b"ANMF" => return Err("invalid/static WebP; convert first".into()),
             _ => {
@@ -263,6 +277,7 @@ fn webm(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
     let mut times = Vec::new();
     let mut metadata = 0usize;
     let mut declared_duration = None;
+    let mut default_duration = None;
     elements(bytes, |identifier, payload| {
         match identifier {
             0x1a45dfa3 if !header && !segment => {
@@ -315,7 +330,12 @@ fn webm(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
                                             Ok(())
                                         })?,
                                         0x6d80 => return Err("encoded/encrypted track forbidden; convert first".into()),
-                                        0x73c5 | 0x9c | 0x23e383 | 0x55ee | 0x22b59c | 0x536e | 0xb9 | 0x88 | 0x55aa | 0x63a2 | 0x258688 => {}
+                                        0x23e383 => {
+                                            let nanoseconds = integer(field)?;
+                                            if nanoseconds == 0 || nanoseconds > MAX_DURATION_MS * 1_000_000 { return Err("invalid WebM default frame duration".into()); }
+                                            default_duration = Some(nanoseconds);
+                                        }
+                                        0x73c5 | 0x9c | 0x55ee | 0x22b59c | 0x536e | 0xb9 | 0x88 | 0x55aa | 0x63a2 | 0x258688 => {}
                                         _ => return Err("unknown/external-reference track field; convert first".into()),
                                     }
                                     Ok(())
@@ -364,7 +384,12 @@ fn webm(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
     })?;
     if !tracks || !segment { return Err("incomplete WebM".into()); }
     let duration = declared_duration.ok_or("finite WebM duration required; convert first")? * scale as f64 / 1_000_000.0;
-    if !duration.is_finite() || duration > MAX_DURATION_MS as f64 || last_time.is_none_or(|time| duration <= time as f64 / 1_000_000.0) || (duration - media.duration_ms as f64).abs() > 2.0 {
+    // The last frame lasts as long as the track's DefaultDuration says; without one
+    // (or when the declared duration agrees with the guess instead) it is taken to
+    // last as long as the gap before it, at least 17 ms.
+    let by_default = default_duration.zip(last_time).map(|(frame, time)| (time.saturating_add(frame)) as f64 / 1_000_000.0);
+    let agrees = (duration - media.duration_ms as f64).abs() <= 2.0 || by_default.is_some_and(|end| (duration - end).abs() <= 2.0);
+    if !duration.is_finite() || duration > MAX_DURATION_MS as f64 || last_time.is_none_or(|time| duration <= time as f64 / 1_000_000.0) || !agrees {
         return Err("declared WebM duration contradicts bounded decoded timeline; convert first".into());
     }
     media.duration_ms = duration.round() as u64;
