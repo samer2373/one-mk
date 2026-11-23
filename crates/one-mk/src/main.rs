@@ -894,14 +894,28 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
 }
 
 fn forget(dir: &Path, device: &str) -> Result<()> {
-    let d = TrustStore::update(dir, |trust| {
-        let Some(d) = trust.remove(device) else { return Err(manage::not_found(trust, device)) };
-        Ok(d)
+    let removed = TrustStore::update(dir, |trust| {
+        match trust.remove(device) {
+            Some(d) => Ok(Some(d)),
+            // Already forgotten, but its wallpaper permission is still there: the full ID
+            // (shown by the warning below) finishes the job.
+            None if device.parse::<one_mk_net::Fingerprint>().is_ok() => Ok(None),
+            None => Err(manage::not_found(trust, device)),
+        }
     })?;
+    let Some(d) = removed else {
+        let fingerprint = device.parse::<one_mk_net::Fingerprint>()?.to_string();
+        if !wallpaper::has_grant(dir, &fingerprint)? {
+            return Err(anyhow::anyhow!("no paired computer or wallpaper permission matches {device}"));
+        }
+        wallpaper::forget(dir, &fingerprint)?;
+        println!("Removed the wallpaper permission of {fingerprint}.");
+        return Ok(());
+    };
     println!("Forgot {}.", one_mk_proto::sanitize_name(d.label()));
     // After the revocation is saved: a settings file that can't be read must not keep a peer trusted.
     if let Err(e) = wallpaper::forget(dir, &d.fingerprint) {
-        eprintln!("Warning: its wallpaper permission could not be removed ({e:#}). Fix settings.toml and run `one-mk forget` again, or remove [wallpaper] grants for it by hand.");
+        eprintln!("Warning: its wallpaper permission could not be removed ({e:#}). Fix settings.toml and run `one-mk forget {}` again to remove it.", d.fingerprint);
     }
     Ok(())
 }
@@ -1022,6 +1036,26 @@ mod tests {
         std::fs::write(dir.path().join("settings.toml"), "[wallpaper\n").unwrap();
         forget(dir.path(), "laptop").unwrap();
         assert!(TrustStore::load(dir.path()).unwrap().devices().is_empty());
+    }
+
+    /// The retry the warning asks for reaches the wallpaper permission even
+    /// though the trust entry is already gone.
+    #[test]
+    fn forgetting_again_with_the_full_id_removes_a_stale_wallpaper_grant() {
+        let dir = tempfile::tempdir().unwrap();
+        let fingerprint = one_mk_net::Fingerprint([7; 32]).to_string();
+        TrustStore::update(dir.path(), |trust| {
+            trust.upsert(one_mk_net::Device { name: "laptop".into(), fingerprint: fingerprint.clone(), ..Default::default() });
+            Ok(())
+        }).unwrap();
+        std::fs::write(dir.path().join("settings.toml"), "[wallpaper\n").unwrap();
+        forget(dir.path(), "laptop").unwrap();
+        std::fs::write(dir.path().join("settings.toml"), format!("[wallpaper]\nenabled = true\n[wallpaper.grants]\n{fingerprint} = 1\n")).unwrap();
+        assert!(wallpaper::has_grant(dir.path(), &fingerprint).unwrap());
+        assert!(forget(dir.path(), "laptop").is_err(), "a name still needs a trust entry");
+        forget(dir.path(), &fingerprint).unwrap();
+        assert!(!wallpaper::has_grant(dir.path(), &fingerprint).unwrap());
+        assert!(forget(dir.path(), &fingerprint).is_err(), "nothing left to forget");
     }
 
     /// The identity key is what says a migration is done, so it is copied last: a copy that stops
