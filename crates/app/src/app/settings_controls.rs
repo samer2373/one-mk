@@ -32,6 +32,7 @@ pub(super) fn shortcut_error(error: &str) -> &'static str {
 }
 
 /// `recorded_holding` for a caller that does not keep Super from frame to frame.
+#[cfg(test)]
 pub(super) fn recorded(events: &[egui::Event], jump: bool) -> Option<Result<String, ()>> {
     recorded_holding(events, jump, &mut false)
 }
