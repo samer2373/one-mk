@@ -194,7 +194,7 @@ pub fn input_line(line: &str) -> InputLine {
         ("You chose not to allow sharing. Restart oneMK, then choose Allow when your desktop asks.", Severity::Problem)
     } else if line.starts_with("Waiting for your approval") || line.contains("permission dialog") {
         ("Your desktop is asking if oneMK may share your mouse and keyboard. Look for its permission window (it can be behind other windows) and choose Allow.", Severity::Info)
-    } else if line.starts_with("Can't share this computer's mouse") || line.starts_with("Other computers can't control this one") {
+    } else if line.starts_with("Can't share this computer's mouse with others") || line.starts_with("Other computers can't control this one") {
         // Right after logging in the desktop's permission service can be
         // late; oneMK keeps asking by itself, so this is a wait, not a fault.
         ("Sharing isn't ready yet: oneMK is waiting for your desktop's permission and keeps trying. If a permission window appears, choose Allow.", Severity::Problem)
@@ -477,10 +477,12 @@ impl Status {
         // Lines of their own, which readers from before them skip.
         let l = &self.layout;
         if let Some(p) = &l.profile {
-            out += &format!("profile\t{p}\n");
+            out += &format!("profile\t{}\n", p.replace(['\t', '\n', '\r'], " "));
         }
+        // Names come from an editable file: a separator in one must not split it into two or add a line.
         if !l.profiles.is_empty() {
-            out += &format!("profiles\t{}\n", l.profiles.join("\t"));
+            let clean: Vec<String> = l.profiles.iter().map(|p| p.replace(['\t', '\n', '\r'], " ")).collect();
+            out += &format!("profiles\t{}\n", clean.join("\t"));
         }
         for (key, on) in [
             ("pointer_locked", self.pointer_locked),
@@ -944,6 +946,9 @@ mod tests {
         assert!(late[0].detail.contains("choose Allow") && late[0].severity == Severity::Problem);
         let declined = input_line("Can't share this computer's mouse with others: you declined the desktop's permission dialog. Restart one-mk to be asked again.");
         assert!(declined.detail.starts_with("You chose not to allow") && declined.severity == Severity::Problem);
+        // The Windows backend's "mouse and keyboard" failure is final and is no portal wait.
+        let windows = input_line("Can't share this computer's mouse and keyboard with others: hook failed");
+        assert!(!windows.detail.contains("choose Allow") && !windows.detail.contains("keeps trying"));
         let legacy = Status::decode("ok\ninput\tWaiting for your approval: allow sharing.\n").unwrap();
         assert_eq!(legacy.input_lines()[0].severity, Severity::Info);
         for state in ["on", "starting", "unavailable", "off"] {
@@ -1015,6 +1020,20 @@ mod tests {
         assert_eq!((older.peers.len(), older.offsets.len(), older.layout.profile), (2, 0, None));
         assert_eq!(placement(Side::Top, None), "above");
         assert_eq!(placement(Side::Left, Some((-1920, 40))), "on your left, its (0,0) at -1920,40 of yours");
+    }
+
+    #[test]
+    fn a_profile_name_with_separators_cannot_break_the_framing() {
+        // Profile names come from an editable file, not from a validated save.
+        let s = Status { layout: Box::new(LayoutStatus {
+            profile: Some("x\ny".into()),
+            profiles: vec!["a\tb".into(), "c\nname\tevil".into(), "plain".into()],
+            warnings: vec![],
+        }), name: "desk".into(), ..Status::default() };
+        let back = Status::decode(&s.encode()).unwrap();
+        assert_eq!(back.name, "desk");
+        assert_eq!(back.layout.profiles, ["a b", "c name evil", "plain"]);
+        assert_eq!(back.layout.profile.as_deref(), Some("x y"));
     }
 
     #[test]
