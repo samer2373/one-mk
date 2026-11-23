@@ -319,6 +319,9 @@ struct State {
     mods_sent: Option<Modifiers>,
     /// The seat's held modifiers (depressed and latched), for the daemon once capture is confirmed.
     seat_mods: u32,
+    /// The seat's locked modifiers (Caps Lock, Num Lock) as last said to a surface of ours, which
+    /// the virtual keyboard starts from instead of turning them all off.
+    seat_locked: u32,
     notches: Notches,
     /// A peer controls this machine: its motion (relative events come
     /// with injected motion too) must not push through our edges.
@@ -356,6 +359,7 @@ impl State {
             mods: None,
             mods_sent: None,
             seat_mods: 0,
+            seat_locked: 0,
             notches: Notches::default(),
             controlled: false,
             started: Instant::now(),
@@ -733,7 +737,9 @@ impl State {
                     // The compositor keeps the keys held across a new
                     // keymap: so does the state the modifiers come from.
                     let held = self.mods.as_ref().map_or(&[][..], |m| m.held());
-                    self.mods = Some(KeyboardMods::new(&keymap, held, self.group));
+                    let mut mods = KeyboardMods::new(&keymap, held, self.group);
+                    mods.set_locked(self.seat_locked);
+                    self.mods = Some(mods);
                     self.mods_sent = None;
                 }
                 Err(e) => {
@@ -1010,6 +1016,14 @@ impl State {
                 self.send(Event::KeyboardModifiers { depressed: mods_depressed, latched: mods_latched, locked: mods_locked, group });
                 self.group = group;
                 self.seat_mods = mods_depressed | mods_latched;
+                // While a peer controls this computer no surface of ours has the keyboard, so this
+                // is what this computer's own keyboards have set, not what the peer left.
+                if !self.controlled {
+                    self.seat_locked = mods_locked;
+                    if let Some(m) = &mut self.mods {
+                        m.set_locked(mods_locked);
+                    }
+                }
                 if let Some(m) = &mut self.mods {
                     m.set_group(group);
                 }
