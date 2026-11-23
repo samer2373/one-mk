@@ -57,6 +57,11 @@ fn norm(a: V3) -> V3 {
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
+/// `x` kept within `lo..=hi`; a range with no room (a small monitor in a big
+/// wall, once its margins are taken off) gives its middle, where `clamp` panics.
+fn keep_between(x: f32, lo: f32, hi: f32) -> f32 {
+    if lo <= hi { x.clamp(lo, hi) } else { (lo + hi) / 2.0 }
+}
 /// Frame-rate independent approach: `rate` is the share covered per 60 Hz
 /// frame. It snaps once within `eps`, so it stops asking for frames as
 /// soon as the rest is invisible.
@@ -66,7 +71,9 @@ pub fn approach(cur: f32, target: f32, rate: f32, dt: f32, eps: f32) -> f32 {
     }
     let k = 1.0 - (1.0 - rate).powf(dt * 60.0);
     let next = lerp(cur, target, k);
-    if (next - target).abs() < eps { target } else { next }
+    // A step too small for f32 at this size changes nothing: that is as
+    // close as it gets (far out, one step is wider than `eps`).
+    if (next - target).abs() < eps || (next == cur && k > 0.0) { target } else { next }
 }
 fn rgba(c: [u8; 3], k: f32, a: f32) -> Color32 {
     let f = |x: u8| (x as f32 * k).clamp(0.0, 255.0) as u8;
@@ -1197,6 +1204,12 @@ impl Scene {
             Cargo::Probe => 1.1,
             _ => (0.45 + 0.0025 * d).clamp(0.5, 0.8),
         };
+        // Only one flight at a time: a pointer still on its way lands where it
+        // was going before another cargo takes its place, or it never would.
+        if let Some(f) = &self.flight && f.cargo == Cargo::Pointer && !f.landed {
+            self.cursor_on = f.to.clone();
+            self.cursor_t0 = self.now;
+        }
         let ribbon = !motion::reduced();
         self.flight = Some(Flight { from: from.into(), to: to.into(), t0: self.now, secs: if ribbon { secs } else { 0.15 }, cargo, landed: false, ribbon });
     }
@@ -1816,7 +1829,7 @@ impl Scene {
                 if near != m {
                     return;
                 }
-                (cu, cw) = (cu.clamp(glass[0], glass[2] - 0.02), cw.clamp(glass[1], glass[3] - 0.03));
+                (cu, cw) = (keep_between(cu, glass[0], glass[2] - 0.02), keep_between(cw, glass[1], glass[3] - 0.03));
             }
             // An arrow in screen pixels of a 1600 px wide screen; it pops
             // in at the edge it came through.
@@ -2086,6 +2099,72 @@ mod tests {
         assert_eq!(s.cursor_on, "mac");
         assert_eq!(s.devices.len(), 1, "the one that left is gone");
         assert!(!s.step(t + 1.0, None), "and nothing asks for frames");
+    }
+
+    #[test]
+    fn a_camera_far_out_still_comes_to_rest() {
+        // At this size one 10% step is smaller than f32 can tell apart, so
+        // the old rule (snap within 0.05) never got there.
+        let mut x = 245_000.0_f32 - 0.0625;
+        for _ in 0..600 {
+            x = approach(x, 245000.0, 0.1, 1.0 / 60.0, 0.05);
+        }
+        assert_eq!(x, 245000.0);
+        let mut x = 100_000.0_f32 - 0.0625;
+        for _ in 0..600 {
+            x = approach(x, 100000.0, 0.1, 1.0 / 144.0, 0.05);
+        }
+        assert_eq!(x, 100000.0);
+        // No time passing is no progress, and not an arrival.
+        assert_eq!(approach(0.0, 10.0, 0.1, 0.0, 0.05), 0.0);
+    }
+
+    #[test]
+    fn a_range_with_no_room_gives_its_middle_instead_of_panicking() {
+        assert_eq!(keep_between(5.0, 1.0, 3.0), 3.0);
+        assert_eq!(keep_between(0.0, 1.0, 3.0), 1.0);
+        assert_eq!(keep_between(2.0, 1.0, 3.0), 2.0);
+        assert!((keep_between(2.0, 1.34, -1.36) + 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_small_monitor_in_a_big_wall_draws_its_pointer() {
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1400.0, 700.0));
+        let mut s = two();
+        let mut wall = Device::new("wall", "wall", Kind::Monitor, false, [0x283430, 0x101614]);
+        wall.screens = vec![
+            Monitor { x: 0, y: 0, w: 3840, h: 2160 },
+            Monitor { x: 3840, y: 0, w: 1920, h: 1080 },
+            Monitor { x: 5760, y: 0, w: 3840, h: 2160 },
+            Monitor { x: 9600, y: 1300, w: 640, h: 480 },
+            Monitor { x: 10240, y: 0, w: 3840, h: 2160 },
+        ];
+        s.devices.push(wall);
+        s.cursor_on = "wall".into();
+        s.cursor_uw = (0.7, 0.7);
+        settle(&mut s, 0.0);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+            s.paint(&painter, rect);
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_pointer_on_its_way_lands_when_a_parcel_takes_the_flight() {
+        let mut s = two();
+        let t = settle(&mut s, 0.0);
+        let mut c = Device::new("pc", "pc", Kind::Monitor, false, [0x283430, 0x101614]);
+        c.pos.x = SPACING;
+        c.target.x = SPACING;
+        s.devices.push(c);
+        s.cursor_on = "mac".into();
+        s.now = t;
+        s.fly("mac", "me", Cargo::Pointer);
+        s.fly("me", "pc", Cargo::Parcel);
+        settle(&mut s, t);
+        assert_eq!(s.cursor_on, "me", "the pointer is where control is");
     }
 
     #[test]

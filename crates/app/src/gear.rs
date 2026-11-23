@@ -91,7 +91,11 @@ impl Cam {
         let back = p3(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos());
         let eye = target + back * dist;
         let fwd = (-back).norm();
-        let right = fwd.cross(p3(0.0, 1.0, 0.0)).norm();
+        // Straight from the yaw: the cross product with the world's up
+        // (`fwd x up`) turns the image half a turn as the camera passes
+        // overhead (pitch past a right angle), which the soft orbit of a
+        // downward drag reaches.
+        let right = p3(yaw.cos(), 0.0, -yaw.sin());
         let up = right.cross(fwd);
         Self { eye, right, up, fwd, foc, centre }
     }
@@ -1280,6 +1284,25 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Looking straight down and a little past it is one continuous turn, not a
+    /// half turn: the same point moves a little between two pitches either side
+    /// of a right angle, and left stays left.
+    #[test]
+    fn the_camera_does_not_flip_as_it_passes_overhead() {
+        let at = |pitch: f32| Cam::new(p3(0.0, 0.0, 0.0), 0.3, pitch, 2000.0, 1000.0, Pos2::ZERO);
+        let (before, after) = (at(1.55), at(1.60));
+        for point in [p3(40.0, 0.0, 0.0), p3(0.0, 0.0, 40.0), p3(-40.0, 5.0, -20.0)] {
+            let (a, b) = (before.pt(point), after.pt(point));
+            assert!(a.distance(b) < 15.0, "{point:?} jumps from {a:?} to {b:?}");
+        }
+        assert!(before.right.x * after.right.x > 0.0, "left and right swapped");
+        // And the same ordering of keys across the board, left to right.
+        for pitch in [1.32, 1.62] {
+            let cam = at(pitch);
+            assert!(cam.pt(p3(-50.0, 0.0, 0.0)).x < cam.pt(p3(50.0, 0.0, 0.0)).x, "pitch {pitch}");
         }
     }
 

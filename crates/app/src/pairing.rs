@@ -27,7 +27,8 @@ pub enum Step {
 }
 
 pub struct Pairing {
-    child: Child,
+    /// `None` once `finish` has handed it to its reaper.
+    child: Option<Child>,
     stdin: Option<ChildStdin>,
     pub rx: Receiver<Step>,
 }
@@ -101,6 +102,7 @@ impl Pairing {
         std::thread::spawn(move || {
             let mut last_name = String::new();
             let mut over = false;
+            let mut gone = false;
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 let Some(mut step) = parse(&line) else { continue };
                 match &mut step {
@@ -109,20 +111,42 @@ impl Pairing {
                     _ => {}
                 }
                 over |= matches!(step, Step::Paired { .. } | Step::Ended(_));
-                if tx.send(step).is_err() {
-                    return;
+                // Nobody listening any more (the sheet is gone): keep reading
+                // all the same, so a process that goes on talking never
+                // finds its output closed and fails on it.
+                if !gone && tx.send(step).is_err() {
+                    gone = true;
                 }
                 ctx.request_repaint();
             }
             // It exited. If it never said how pairing ended, say so, with
             // its own error if it left one: never leave the sheet waiting.
             let err = errors.join().unwrap_or_default();
-            if !over {
+            if !over && !gone {
                 let _ = tx.send(Step::Ended(if err.is_empty() { STOPPED.into() } else { plain(&err) }));
                 ctx.request_repaint();
             }
         });
-        Ok(Self { stdin: child.stdin.take(), child, rx })
+        Ok(Self { stdin: child.stdin.take(), child: Some(child), rx })
+    }
+
+    /// Pairing is over and it worked: `one-mk` still has things to do after
+    /// its last event (it updates the file manager's entries for the new
+    /// computer), so it is left to end by itself, beside the window, and
+    /// only a process that hangs is stopped, after a while. Dropping a
+    /// `Pairing` instead kills it at once.
+    pub fn finish(mut self) {
+        self.stdin = None;
+        if let Some(mut child) = self.child.take() {
+            std::thread::spawn(move || {
+                let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while child.try_wait().ok().flatten().is_none() && std::time::Instant::now() < end {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+            });
+        }
     }
 
     pub fn answer(&mut self, yes: bool) {
@@ -175,8 +199,10 @@ impl Method {
 impl Drop for Pairing {
     /// Closing the sheet stops pairing.
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -210,6 +236,64 @@ mod tests {
         // Byte 4 is inside a character here.
         assert_eq!(short("abcéfghijk"), "abcéfghijk");
         assert!(matches!(parse("paired\tééééééé\tOffice PC\tright"), Some(Step::Paired { .. })));
+    }
+
+    /// A stand-in for `one-mk`: says "paired", then takes a moment before it
+    /// writes a marker (what the real one does with the file manager's entries).
+    #[cfg(unix)]
+    fn slow_finisher(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("one-mk-fake");
+        let marker = dir.join("integrated");
+        std::fs::write(&script, format!("#!/bin/sh\nprintf 'paired\\t0123456789abcdef\\tStudio PC\\tright\\n'\nsleep 0.3\ntouch '{}'\n", marker.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (script, marker)
+    }
+
+    #[cfg(unix)]
+    fn start_fake(script: &std::path::Path) -> Pairing {
+        // A script just written can be "busy" for a moment while another test forks.
+        for _ in 0..50 {
+            match Pairing::with_method(script, &[], egui::Context::default(), Method::Search, 1) {
+                Ok(pairing) => return pairing,
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => std::thread::sleep(std::time::Duration::from_millis(20)),
+                Err(e) => panic!("{e}"),
+            }
+        }
+        panic!("the fake one-mk stayed busy");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_finished_pairing_lets_one_mk_end_by_itself() {
+        let dir = std::env::temp_dir().join(format!("omk-pairing-finish-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (script, marker) = slow_finisher(&dir);
+        let pairing = start_fake(&script);
+        assert!(matches!(pairing.rx.recv_timeout(std::time::Duration::from_secs(10)), Ok(Step::Paired { .. })));
+        pairing.finish();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !marker.exists() && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(marker.exists(), "the process was ended before it finished its work");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn closing_the_sheet_still_stops_pairing_at_once() {
+        let dir = std::env::temp_dir().join(format!("omk-pairing-drop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (script, marker) = slow_finisher(&dir);
+        let pairing = start_fake(&script);
+        assert!(matches!(pairing.rx.recv_timeout(std::time::Duration::from_secs(10)), Ok(Step::Paired { .. })));
+        drop(pairing);
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        assert!(!marker.exists(), "a dropped pairing is killed");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

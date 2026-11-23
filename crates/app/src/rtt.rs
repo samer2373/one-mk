@@ -44,6 +44,9 @@ pub struct Ring {
     samples: VecDeque<Sample>,
     /// The daemon's running count of lost packets at the last sample.
     lost_seen: Option<u64>,
+    /// ... and of packets sent: it only grows within one connection, so a
+    /// lower number is a new connection even when no packet was ever lost.
+    sent_seen: Option<u64>,
 }
 
 impl Ring {
@@ -58,8 +61,15 @@ impl Ring {
         if self.samples.back().is_some_and(|s| now - s.at > SPAN) {
             self.samples.clear();
             self.lost_seen = None;
+            self.sent_seen = None;
         }
+        let replaced = self.sent_seen.is_some_and(|before| link.sent < before);
         let lost = match self.lost_seen {
+            // Another connection under the same name (the counts started over): nothing before it counts.
+            Some(_) if replaced => {
+                self.samples.clear();
+                0
+            }
             Some(before) if link.lost >= before => u32::try_from(link.lost - before).unwrap_or(u32::MAX),
             // The count went down: another connection. Nothing before it counts.
             Some(_) => {
@@ -70,6 +80,7 @@ impl Ring {
             None => 0,
         };
         self.lost_seen = Some(link.lost);
+        self.sent_seen = Some(link.sent);
         while self.samples.front().is_some_and(|s| now - s.at > SPAN) || self.samples.len() >= CAPACITY {
             self.samples.pop_front();
         }
@@ -326,6 +337,23 @@ mod tests {
         assert_eq!(change(&old, &named(&[("a", 4.2, 3), ("b", 4.0, 0)])), Change::Urgent, "a computer joined");
         assert_eq!(change(&old, &named(&[("b", 4.2, 3)])), Change::Urgent, "another computer");
         assert_eq!(change(&[], &old), Change::Urgent, "the first reading");
+    }
+
+    #[test]
+    fn a_connection_replaced_between_looks_starts_the_history_over() {
+        // No packet lost on either: only the sent count tells them apart.
+        let mut rtts = Rtts::default();
+        for k in 0..6u32 {
+            rtts.record(f64::from(k), &[("p".into(), LinkStats { rtt_us: 150_000, lost: 0, sent: 5000 + u64::from(k) * 100 })]);
+        }
+        let before = rtts.of("p").and_then(|r| r.summary(5.0)).expect("history");
+        assert_eq!((before.count, before.p95_us), (6, 150_000));
+        rtts.record(6.0, &[("p".into(), LinkStats { rtt_us: 2000, lost: 0, sent: 10 })]);
+        rtts.record(7.0, &[("p".into(), LinkStats { rtt_us: 2100, lost: 0, sent: 60 })]);
+        let after = rtts.of("p").and_then(|r| r.summary(7.0)).expect("history");
+        assert_eq!(after.count, 2, "the old connection's samples are gone");
+        assert!(after.p95_us < 5000, "{after:?}");
+        assert_eq!(after.lost, 0);
     }
 
     fn ring(times: &[f32]) -> (Ring, f64) {
