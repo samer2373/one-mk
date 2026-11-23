@@ -80,16 +80,7 @@ impl Identity {
             Some((c, k)) => {
                 restrict_file(&key_path)?;
                 restrict_file(&cert_path)?;
-                usable(&c, &k).with_context(|| {
-                    format!(
-                        "this computer's identity in {} is damaged ({} and {} must be a matching pair). \
-                         If you have no copy of them, move both away to make a new identity, then pair this computer again \
-                         (the computers paired with it will not recognise a new identity)",
-                        dir.display(),
-                        cert_path.file_name().unwrap_or_default().to_string_lossy(),
-                        key_path.file_name().unwrap_or_default().to_string_lossy()
-                    )
-                })?;
+                usable(&c, &k).with_context(|| damaged(dir, &cert_path, &key_path))?;
                 (c, k)
             }
             None => {
@@ -110,6 +101,18 @@ impl Identity {
             }
         };
         Ok(Self::from_parts(cert, key))
+    }
+
+    /// Whether the identity in `dir` is there and usable, without making, changing or locking
+    /// anything (`one-mk doctor`): `Ok(true)` for a matching key and certificate, `Ok(false)` when
+    /// one or both are missing (they are made when sharing starts), and an error that says what is
+    /// wrong for a pair `load_or_create` would refuse (damaged, mismatched or unreadable).
+    pub fn check(dir: &Path) -> Result<bool> {
+        let cert_path = dir.join("identity.cert.der");
+        let key_path = dir.join("identity.key.der");
+        let Some((c, k)) = read_pair(&cert_path, &key_path)? else { return Ok(false) };
+        usable(&c, &k).with_context(|| damaged(dir, &cert_path, &key_path))?;
+        Ok(true)
     }
 
     /// A throwaway identity (benchmarks and tests).
@@ -141,6 +144,18 @@ fn read_pair(cert_path: &Path, key_path: &Path) -> Result<Option<(Vec<u8>, Vec<u
     };
     let (cert, key) = (read(cert_path)?, read(key_path)?);
     Ok(cert.zip(key))
+}
+
+/// What to tell the person about a key and certificate that do not work together.
+fn damaged(dir: &Path, cert_path: &Path, key_path: &Path) -> String {
+    format!(
+        "this computer's identity in {} is damaged ({} and {} must be a matching pair). \
+         If you have no copy of them, move both away to make a new identity, then pair this computer again \
+         (the computers paired with it will not recognise a new identity)",
+        dir.display(),
+        cert_path.file_name().unwrap_or_default().to_string_lossy(),
+        key_path.file_name().unwrap_or_default().to_string_lossy()
+    )
 }
 
 /// Whether `cert` and `key` can be used together for connections: what a
@@ -324,6 +339,27 @@ mod damage_tests {
         assert_ne!(first, second);
         assert!(dir.join("identity.cert.der").exists() && dir.join("identity.key.der").exists());
         assert_eq!(Identity::load_or_create(&dir).unwrap().fingerprint, second);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `check` tells a good, a missing and a damaged identity apart and writes nothing.
+    #[test]
+    fn check_reads_without_making_or_changing_anything() {
+        let dir = temp();
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!Identity::check(&dir).unwrap(), "a fresh folder has none");
+        assert!(!dir.join("identity.key.der").exists() && !dir.join("identity.cert.der").exists(), "check made a file");
+        Identity::load_or_create(&dir).unwrap();
+        assert!(Identity::check(&dir).unwrap());
+        let (cert, key) = (std::fs::read(dir.join("identity.cert.der")).unwrap(), std::fs::read(dir.join("identity.key.der")).unwrap());
+        std::fs::write(dir.join("identity.key.der"), generate().unwrap().1).unwrap();
+        let error = Identity::check(&dir).unwrap_err();
+        assert!(format!("{error:#}").contains("damaged"), "{error:#}");
+        std::fs::write(dir.join("identity.key.der"), &key).unwrap();
+        std::fs::remove_file(dir.join("identity.cert.der")).unwrap();
+        assert!(!Identity::check(&dir).unwrap(), "one half missing is missing, not damaged");
+        assert!(!dir.join("identity.cert.der").exists(), "check made the certificate");
+        std::fs::write(dir.join("identity.cert.der"), cert).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
