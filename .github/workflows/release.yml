@@ -243,6 +243,11 @@ jobs:
     needs: [test, release-checks, build]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    # One publisher per tag: two runs for the same tag (a re-run, a second
+    # push) must not upload over each other or sign two different manifests.
+    concurrency:
+      group: release-publish-${{ github.ref_name }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
@@ -261,7 +266,17 @@ jobs:
       - name: Homebrew and Flatpak files
         run: |
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
-          src=$(curl -fsSL "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz" | sha256sum | cut -d' ' -f1)
+          # Downloaded to a file first: in a pipeline a failed curl would still
+          # leave sha256sum with (partial or empty) input, and the step would
+          # go on with the checksum of that.
+          curl -fsSL --retry 3 -o source.tar.gz "https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz"
+          [ -s source.tar.gz ] || { echo "the source tarball is empty" >&2; exit 1; }
+          gzip -t source.tar.gz
+          src=$(sha256sum source.tar.gz | cut -d' ' -f1)
+          case $src in
+            *[!0-9a-f]*) echo "not a sha256: $src" >&2; exit 1 ;;
+          esac
+          [ "${#src}" -eq 64 ] || { echo "not a sha256: $src" >&2; exit 1; }
           SOURCE_SHA256=$src sh scripts/package-homebrew.sh
           sh scripts/package-flatpak.sh dist/one-mk-x86_64-unknown-linux-gnu.tar.gz "$base/one-mk-x86_64-unknown-linux-gnu.tar.gz"
       # What is uploaded, and SHA256SUMS over all of it.
@@ -328,11 +343,31 @@ jobs:
           fi
           gh release upload "$tag" release-files/* --repo "$GITHUB_REPOSITORY" --clobber
           export LC_ALL=C   # one collation for sort and comm
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > uploaded
           (cd release-files && ls) | sort > staged
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > uploaded
+          # A draft left by an earlier attempt can hold files this run does not
+          # stage (a renamed asset); they are outside the signed manifest, so
+          # they go while it is still a draft.
+          comm -13 staged uploaded | while IFS= read -r stale; do
+            echo "removing a stale asset from the draft: $stale" >&2
+            gh release delete-asset "$tag" "$stale" --repo "$GITHUB_REPOSITORY" --yes
+          done
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > uploaded
+          # Exactly what was staged, nothing missing and nothing extra.
           missing=$(comm -23 staged uploaded)
-          if [ -n "$missing" ]; then
+          extra=$(comm -13 staged uploaded)
+          if [ -n "$missing" ] || [ -n "$extra" ]; then
             echo "not uploaded: $missing" >&2
+            echo "not staged: $extra" >&2
             exit 1
           fi
           gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
+      # The page shows this release's file sizes. A release published with the
+      # workflow token starts no workflow by itself (only a dispatch does), so
+      # the Pages workflow is told here.
+      - name: Refresh the landing page
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/dispatches" -f event_type=release-published \
+            || echo "::warning::could not start the Pages workflow; run it by hand"
