@@ -279,6 +279,10 @@ struct State {
     /// False after a refused activation, until the pointer leaves the edge,
     /// so pushing against an edge with no peer doesn't spam the daemon.
     armed: bool,
+    /// The activation saved while the local rules hand over (`Local::activation`) came from the
+    /// pointer touching an edge, not from an explicit switch: it is dropped if the pointer backs
+    /// away before the handover is done.
+    edge_request: bool,
     cursor_hidden: bool,
     tap: Option<CFRetained<CFMachPort>>,
     /// Keys held on this Mac when capture started; their releases are let
@@ -316,6 +320,7 @@ impl State {
             secure_reported: false,
             local_gate: LocalInputGate::default(),
             armed: true,
+            edge_request: false,
             cursor_hidden: false,
             tap: None,
             local_keys: [false; 128],
@@ -950,7 +955,12 @@ impl Ctx {
                 self.end(&mut st);
             }
             Msg::Cmd(CaptureCmd::DeviceRules(enabled)) => self.hid.rules(enabled),
-            Msg::Cmd(CaptureCmd::SetEdges(edges)) => st.edges = edges,
+            Msg::Cmd(CaptureCmd::SetEdges(edges)) => {
+                let changed = st.edges != edges;
+                st.edges = edges;
+                // The edge that was touched may not lead anywhere any more.
+                if changed { self.cancel_edge_request(&mut st); }
+            }
             Msg::Cmd(CaptureCmd::Release { id, pos }) => {
                 // A release for an earlier activation is stale.
                 if st.active && st.id == id {
@@ -980,7 +990,7 @@ impl Ctx {
                 {
                     // Unlike an edge hit, this can come mid-drag: the app has the press already.
                     st.snapshot_local_buttons();
-                    self.start(&mut st, side, desktop.clamp(Pos::new(at.x, at.y)));
+                    self.start(&mut st, side, desktop.clamp(Pos::new(at.x, at.y)), false);
                 }
             }
             Msg::Quit => {
@@ -1108,12 +1118,22 @@ impl Ctx {
                     }
                     Some(side) if st.armed => {
                         let pos = desktop.clamp(p);
-                        if self.start(st, side, pos) {
+                        // Another segment than the one waiting: that request is stale.
+                        let saved = st.local_rules.as_ref().and_then(|local| local.activation).map(|(saved, _)| saved);
+                        if crate::common_logic::edge_request_stale(st.edge_request, saved, Some(side)) {
+                            self.cancel_edge_request(st);
+                        }
+                        if self.start(st, side, pos, true) {
                             return false;
                         }
                     }
                     Some(_) => {}
-                    None => st.armed = true,
+                    None => {
+                        st.armed = true;
+                        // The pointer backed away from the edge while the local rules were still
+                        // handing over: the switch is no longer wanted.
+                        self.cancel_edge_request(st);
+                    }
                 }
             }
             _ => {}
@@ -1123,7 +1143,7 @@ impl Ctx {
 
     /// Starts capturing for `side`, telling the daemon which modifiers are
     /// held (for modifier-to-cross). False if the daemon is gone.
-    fn start(&self, st: &mut State, side: Side, pos: Pos) -> bool {
+    fn start(&self, st: &mut State, side: Side, pos: Pos, edge: bool) -> bool {
         if st.local_rules.as_ref().is_some_and(|local| local.paused && !local.held()) {
             return self.start_now(st, side, pos);
         }
@@ -1132,13 +1152,27 @@ impl Ctx {
             self.local_fence(st, Destination::Remote);
             if let Some(local) = st.local_rules.as_mut() && local.pending.is_some() {
                 local.activation = Some((side, pos));
+                st.edge_request = edge;
             }
             return false;
         }
         self.start_now(st, side, pos)
     }
 
+    /// Drops an activation that is waiting for the local rules because the pointer touched an
+    /// edge, and puts the rules back on this Mac. While the fence is still out that is a new fence
+    /// for this Mac, which supersedes the one for the peer. Once it is done and the system
+    /// mappings are being restored, nothing is started when that finishes (`system_pump` finds
+    /// no activation) and the rules are fenced back to this Mac there.
+    fn cancel_edge_request(&self, st: &mut State) {
+        if !std::mem::take(&mut st.edge_request) { return; }
+        let Some(local) = st.local_rules.as_mut() else { return };
+        if local.activation.take().is_none() { return; }
+        if local.pending.is_some() && local.enabled && !local.paused { self.local_fence(st, Destination::Local); }
+    }
+
     fn start_now(&self, st: &mut State, side: Side, pos: Pos) -> bool {
+        st.edge_request = false;
         let held = (0..128u16).filter(|&k| st.local_keys[usize::from(k)]).filter_map(logic::mac_to_evdev);
         let _ = self.tx.send(Event::Modifiers(Mods::from_keys(held)));
         let id = st.id.wrapping_add(1);

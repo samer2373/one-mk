@@ -269,6 +269,10 @@ struct State {
     restore_ticket: Option<(u64, Instant)>,
     /// When the hooks were last installed.
     hooks_refreshed: Instant,
+    /// The activation saved while the local rules hand over (`Local::activation`) came from the
+    /// pointer touching an edge, not from an explicit switch: it is dropped if the pointer backs
+    /// away before the handover is done.
+    edge_request: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -529,6 +533,7 @@ fn capture_thread(
             pending_rules: None,
             restore_ticket: None,
             hooks_refreshed: Instant::now(),
+            edge_request: false,
             local_recovery: None,
             session_active: true,
             awake: true,
@@ -899,19 +904,33 @@ impl State {
         }
     }
 
-    fn activate(&mut self, side: Side, x: i32, y: i32) -> (bool, Effect) {
+    /// Starts capturing, once the local rules have handed over. `edge`: the pointer touched an
+    /// edge (as opposed to an explicit switch).
+    fn activate(&mut self, side: Side, x: i32, y: i32, edge: bool) -> (bool, Effect) {
         if let Some(local) = self.local_rules.as_ref() {
             if local.activation.is_some() { return (false, Effect::None); }
             self.local_fence(Destination::Remote);
             if let Some(local) = self.local_rules.as_mut() && local.pending.is_some() {
                 local.activation = Some((side, x, y));
+                self.edge_request = edge;
             }
             return (false, Effect::None);
         }
         self.activate_now(side, x, y)
     }
 
+    /// Drops an activation that is waiting for the local rules because the pointer touched an
+    /// edge, and fences the rules back to this computer (that supersedes the fence for the peer,
+    /// whose completion is then ignored).
+    fn cancel_edge_request(&mut self) {
+        if !std::mem::take(&mut self.edge_request) { return; }
+        let Some(local) = self.local_rules.as_mut() else { return };
+        if local.activation.take().is_none() { return; }
+        if local.enabled && !local.paused { self.local_fence(Destination::Local); }
+    }
+
     fn activate_now(&mut self, side: Side, x: i32, y: i32) -> (bool, Effect) {
+        self.edge_request = false;
         let pos = self.space.to_logical(x, y);
         let id = self.next_id.wrapping_add(1);
         // Key-ups hidden by the lock screen, Ctrl+Alt+Del or a UAC prompt
@@ -982,8 +1001,14 @@ impl State {
             let hit = self.space.edge_hit(&self.edges, x, y, dx, dy);
             // Only asked at an edge: a drag must not cross machines.
             let dragging = hit.is_some() && async_any_button();
+            // The pointer backed away while the local rules were still handing over: the switch is
+            // no longer wanted (or the edge is another one: the old request is stale).
+            let saved = self.local_rules.as_ref().and_then(|local| local.activation).map(|(side, ..)| side);
+            if crate::common_logic::edge_request_stale(self.edge_request, saved, hit) {
+                self.cancel_edge_request();
+            }
             return match self.gate.check(hit, dragging) {
-                Some(side) => self.activate(side, x, y),
+                Some(side) => self.activate(side, x, y, true),
                 None => (false, Effect::None),
             };
         };
@@ -1186,7 +1211,10 @@ impl State {
                 self.send_all(out)
             }
             CaptureCmd::SetEdges(edges) => {
+                let changed = self.edges != edges;
                 self.edges = edges;
+                // The edge that was touched may not lead anywhere any more.
+                if changed { self.cancel_edge_request(); }
                 Effect::None
             }
             CaptureCmd::Release { id, pos } => {
@@ -1205,7 +1233,7 @@ impl State {
                 if unsafe { GetCursorPos(&mut p) } == 0 {
                     return Effect::None;
                 }
-                self.activate(side, p.x, p.y).1
+                self.activate(side, p.x, p.y, false).1
             }
         }
     }
