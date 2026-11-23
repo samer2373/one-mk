@@ -24,10 +24,15 @@ use windows_sys::Win32::UI::Input::{
     RAWINPUTHEADER, RID_INPUT, RIDEV_DEVNOTIFY, RIDEV_INPUTSINK, RIDEV_REMOVE, RIDI_DEVICENAME, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
     RegisterRawInputDevices,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, RI_KEY_BREAK, RI_KEY_E0, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL, SM_SWAPBUTTON};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, PostMessageW, RI_KEY_BREAK, RI_KEY_E0, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL, SM_SWAPBUTTON, WM_APP};
+use std::sync::{Arc, Mutex};
 
 /// Generic desktop page: mouse (2) and keyboard (6).
 const USAGES: [(u16, u16); 2] = [(1, 2), (1, 6)];
+
+/// Posted to the window given to [`RawDevices::probe_in_background`] when a device's strings came
+/// back: ask [`RawDevices::enumerate`] again.
+pub(crate) const WM_IDENTITY: u32 = WM_APP + 6;
 
 /// The devices Raw Input knows, and the events being matched.
 #[derive(Default)]
@@ -37,6 +42,23 @@ pub(crate) struct RawDevices {
     next: u32,
     pub(crate) corr: Correlator,
     registered: bool,
+    probes: Option<Probes>,
+}
+
+/// Devices whose HID strings are being asked for on worker threads. Opening a HID interface and
+/// reading its strings is a round trip to the driver: for a sleeping Bluetooth keyboard or a
+/// flaky USB one it can take seconds, and the thread that owns the low-level hooks must not wait
+/// that long (Windows drops a hook whose thread is slow). A device is announced once its answer
+/// is in; until then its input counts as coming from an unknown device, which only the rules
+/// without a device apply to.
+struct Probes {
+    window: usize,
+    /// Finished probes, filled by the workers.
+    done: Arc<Mutex<Vec<(isize, Fingerprint)>>>,
+    /// Handles being asked for.
+    asking: Vec<isize>,
+    /// Answers waiting for their device to be added.
+    known: Vec<(isize, Fingerprint)>,
 }
 
 impl RawDevices {
@@ -54,6 +76,53 @@ impl RawDevices {
             tracing::debug!("Raw Input refused: input from every device counts as unknown");
         }
         self.registered = ok;
+    }
+
+    /// From now on a new device's HID strings are asked for on a worker thread, which posts
+    /// [`WM_IDENTITY`] to `window` when it is done. Without this, they are asked for in
+    /// [`enumerate`](Self::enumerate) itself.
+    #[cfg_attr(not(feature = "native-local-remap"), allow(dead_code))]
+    pub(crate) fn probe_in_background(&mut self, window: HWND) {
+        self.probes = Some(Probes { window: window as usize, done: Arc::default(), asking: Vec::new(), known: Vec::new() });
+    }
+
+    /// Who the device `h` is, or `None` while that is being asked for.
+    fn fingerprint(&mut self, h: isize, kinds: Kinds) -> Option<Fingerprint> {
+        let Some(probes) = &mut self.probes else { return Some(identity(h as HANDLE, kinds)) };
+        if let Some(at) = probes.known.iter().position(|(x, _)| *x == h) {
+            return Some(probes.known.swap_remove(at).1);
+        }
+        if probes.asking.contains(&h) {
+            return None;
+        }
+        let (done, window) = (Arc::clone(&probes.done), probes.window);
+        let worker = std::thread::Builder::new().name("one-mk-hid-probe".into()).spawn(move || {
+            let fingerprint = identity(h as HANDLE, kinds);
+            if let Ok(mut done) = done.lock() {
+                done.push((h, fingerprint));
+            }
+            // SAFETY: posting to a window handle is safe even if it is gone.
+            unsafe { PostMessageW(window as HWND, WM_IDENTITY, 0, 0) };
+        });
+        match worker {
+            Ok(_) => {
+                probes.asking.push(h);
+                None
+            }
+            // No thread to ask on: wait for the driver here, as before.
+            Err(_) => Some(identity(h as HANDLE, kinds)),
+        }
+    }
+
+    /// Takes in the probes that finished, and forgets what no device is waiting for.
+    fn collect_probes(&mut self, listed: &[(isize, u32)]) {
+        let Some(probes) = &mut self.probes else { return };
+        let finished = probes.done.lock().map(|mut done| std::mem::take(&mut *done)).unwrap_or_default();
+        for (h, fingerprint) in finished {
+            probes.asking.retain(|x| *x != h);
+            probes.known.push((h, fingerprint));
+        }
+        probes.known.retain(|(h, _)| listed.iter().any(|(x, _)| x == h));
     }
 
     /// Stops reading Raw Input (capture ends); what waits goes to `out`.
@@ -78,6 +147,7 @@ impl RawDevices {
     /// before the new list.
     pub(crate) fn enumerate(&mut self, out: &mut Vec<Correlated>) -> Option<Vec<InputDevice>> {
         let handles = device_list();
+        self.collect_probes(&handles);
         let before: Vec<InputDevice> = self.table.iter().map(|(_, d)| d.clone()).collect();
         self.table.retain(|(h, _)| handles.iter().any(|(x, _)| x == h));
         for d in &before {
@@ -89,10 +159,10 @@ impl RawDevices {
             if self.table.iter().any(|(x, _)| *x == h) {
                 continue;
             }
+            let kinds = Kinds { keyboard: kind == RIM_TYPEKEYBOARD, pointer: kind == RIM_TYPEMOUSE };
+            let Some(fingerprint) = self.fingerprint(h, kinds) else { continue };
             let Some(next) = self.next.checked_add(1) else { break };
             self.next = next;
-            let kinds = Kinds { keyboard: kind == RIM_TYPEKEYBOARD, pointer: kind == RIM_TYPEMOUSE };
-            let fingerprint = identity(h as HANDLE, kinds);
             self.table.push((h, InputDevice { id: DeviceRef(self.next), fingerprint, kinds }));
         }
         let now: Vec<InputDevice> = self.table.iter().map(|(_, d)| d.clone()).collect();
