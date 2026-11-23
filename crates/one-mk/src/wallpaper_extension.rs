@@ -76,6 +76,14 @@ fn outdated(destination: &Path) -> bool {
         std::fs::read(destination.join(name)).is_ok_and(|installed| installed != contents.as_bytes()))
 }
 
+/// Whether GNOME runs the extension from somewhere other than `destination`:
+/// another copy of the same UUID (a system or work-managed one) is then not
+/// oneMK's to switch off.
+#[cfg(any(test, all(unix, not(target_os = "macos"))))]
+fn loaded_elsewhere(state: Option<u32>, path: Option<&str>, destination: &Path) -> bool {
+    state.is_some_and(|state| state != 99) && path != destination.to_str()
+}
+
 struct ShellState { version: String, state: Option<u32>, path: Option<String>, user_extensions: bool, listed: bool }
 
 #[cfg(any(test, all(unix, not(target_os = "macos"))))]
@@ -225,8 +233,15 @@ fn regular(path: &Path) -> Result<std::fs::Metadata> {
     Ok(metadata)
 }
 
-fn install(destination: &Path, renderer: &Path) -> Result<()> {
-    if std::fs::symlink_metadata(destination).is_ok() { bail!("extension path exists; uninstall the managed copy first"); }
+fn install(destination: &Path, renderer: &Path) -> Result<()> { install_with(destination, renderer, false) }
+
+/// Installs into `destination`. With `replace`, an older copy oneMK installed
+/// is swapped for the new one only once everything is checked and staged, and
+/// is put back if the swap fails: a refused renderer or a full disk never
+/// leaves the extension uninstalled.
+fn install_with(destination: &Path, renderer: &Path, replace: bool) -> Result<()> {
+    if replace { check_managed(destination)?; }
+    else if std::fs::symlink_metadata(destination).is_ok() { bail!("extension path exists; uninstall the managed copy first"); }
     if !renderer.is_absolute() { bail!("--renderer must name an absolute path: {}", renderer.display()); }
     if regular(renderer)?.len() == 0 { bail!("renderer is empty: {}", renderer.display()); }
     let parent = destination.parent().context("missing extension parent")?;
@@ -248,6 +263,16 @@ fn install(destination: &Path, renderer: &Path) -> Result<()> {
         }
         hashes.insert("libexec/one-mk-wallpaper".into(), json!(blake3::hash(&std::fs::read(copied)?).to_hex().to_string()));
         one_mk_ctl::private::write_readable(&stage.join(MARKER), serde_json::to_vec(&json!({"uuid": UUID, "version": 1, "files": hashes}))?)?;
+        if replace {
+            let old = parent.join(format!(".one-mk-old-{}-{}", std::process::id(), rand::random::<u64>()));
+            std::fs::rename(destination, &old)?;
+            if let Err(error) = std::fs::rename(&stage, destination) {
+                let _ = std::fs::rename(&old, destination);
+                return Err(error.into());
+            }
+            let _ = std::fs::remove_dir_all(old);
+            return Ok(());
+        }
         if std::fs::symlink_metadata(destination).is_ok() { bail!("extension appeared during install"); }
         std::fs::rename(&stage, destination)?;
         Ok(())
@@ -301,8 +326,7 @@ pub async fn command(command: &Command) -> Result<Value> {
             let target = destination.clone();
             tokio::task::spawn_blocking(move || {
                 // An older copy oneMK installed (and nobody changed) is replaced.
-                if regular(&target.join(MARKER)).is_ok() && outdated(&target) { uninstall(&target)?; }
-                install(&target, &renderer)
+                install_with(&target, &renderer, regular(&target.join(MARKER)).is_ok() && outdated(&target))
             }
                 .with_context(|| format!("installing renderer {} into {}", renderer.display(), target.display()))).await??;
             match switch_on_for_next_login().await {
@@ -340,9 +364,13 @@ pub async fn command(command: &Command) -> Result<Value> {
 /// left where it is and the error says so.
 pub async fn remove() -> Result<String> {
     if !cfg!(target_os = "linux") { bail!("GNOME wallpaper extensions are Linux-only"); }
-    remove_from(&destination()?, || async {
+    let destination = destination()?;
+    remove_from(&destination, || async {
         #[allow(unused_mut)]
         let mut problems = Vec::new();
+        // GNOME running a different copy of this UUID: that one stays switched on.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if observe_shell().await.is_ok_and(|shell| loaded_elsewhere(shell.state, shell.path.as_deref(), &destination)) { return problems; }
         #[cfg(all(unix, not(target_os = "macos")))]
         if let Err(error) = disable_now().await { problems.push(format!("{error:#}")); }
         #[cfg(all(unix, not(target_os = "macos")))]
@@ -532,6 +560,46 @@ mod tests {
         uninstall(&destination).unwrap();
         assert!(!destination.exists());
         uninstall(&destination).unwrap();
+    }
+
+    /// A refused renderer (or any failure before the swap) leaves an older
+    /// managed copy exactly as it was; a good update replaces it in one swap.
+    #[test]
+    fn updating_an_older_copy_never_removes_it_before_the_new_one_is_ready() {
+        let root = tempfile::tempdir().unwrap();
+        let renderer = root.path().join("renderer");
+        std::fs::write(&renderer, "renderer").unwrap();
+        let destination = root.path().join("extensions").join(UUID);
+        install(&destination, &renderer).unwrap();
+        let manifest_path = destination.join(MARKER);
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        std::fs::write(destination.join("extension.js"), "// older").unwrap();
+        manifest["files"]["extension.js"] = json!(blake3::hash(b"// older").to_hex().to_string());
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(outdated(&destination));
+        for bad in [Path::new("relative/renderer"), &root.path().join("missing")] {
+            assert!(install_with(&destination, bad, true).is_err());
+            assert_eq!(std::fs::read_to_string(destination.join("extension.js")).unwrap(), "// older", "the working copy is still there");
+            check_managed(&destination).unwrap();
+        }
+        // Something that is not a managed copy is never swapped out.
+        std::fs::write(destination.join("foreign"), "keep me").unwrap();
+        assert!(install_with(&destination, &renderer, true).is_err());
+        assert!(destination.join("foreign").exists());
+        std::fs::remove_file(destination.join("foreign")).unwrap();
+        install_with(&destination, &renderer, true).unwrap();
+        assert_eq!(std::fs::read_to_string(destination.join("extension.js")).unwrap(), FILES[1].1);
+        check_managed(&destination).unwrap();
+        assert_eq!(std::fs::read_dir(destination.parent().unwrap()).unwrap().count(), 1, "no staging or backup folder is left");
+    }
+
+    #[test]
+    fn a_copy_gnome_loaded_from_elsewhere_is_not_ours_to_switch_off() {
+        let here = Path::new("/home/me/.local/share/gnome-shell/extensions/one-mk-wallpaper@one-mk.org");
+        assert!(loaded_elsewhere(Some(1), Some("/usr/share/gnome-shell/extensions/one-mk-wallpaper@one-mk.org"), here));
+        assert!(!loaded_elsewhere(Some(1), here.to_str(), here));
+        // Not loaded at all (or on the way out): ours to tidy.
+        assert!(!loaded_elsewhere(None, None, here) && !loaded_elsewhere(Some(99), Some("/elsewhere"), here));
     }
 
     #[test]
