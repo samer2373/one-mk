@@ -739,10 +739,7 @@ impl App {
             }
         });
         if let Some(val) = chosen.filter(|v| *v != current) {
-            self.pending_swap.insert(peer.id.clone(), val.to_owned());
-            self.busy.push(Job::Swap { id: peer.id.clone(), name: peer.name.clone(), swap: val.to_owned() });
-            self.link.set_swap(&peer.id, &peer.name, val);
-            self.sync_scene();
+            self.ask_swap(&peer.id, &peer.name, val);
         }
         widgets::hairline(ui.painter(), c.x_range(), row.bottom());
         // Its keys: how many are changed for it; the Keys page, for it.

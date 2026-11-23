@@ -132,7 +132,7 @@ fn a_drop_lands_where_the_pointer_was_let_go() {
     win.push(egui::Event::PointerMoved(from));
     release(&mut win, from);
     win.quiet();
-    assert_eq!(win.app.layout_asked.get("p1").map(|(side, _)| *side), Some(Side::Right), "{:?}", win.app.layout_asked);
+    assert_eq!(win.app.layout_asked.get("p1").map(|(side, ..)| *side), Some(Side::Right), "{:?}", win.app.layout_asked);
 }
 
 #[test]

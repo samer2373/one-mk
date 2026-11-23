@@ -253,8 +253,10 @@ pub enum Job {
     UpdateCheck,
     UpdateSettings,
     Start,
-    Layout { id: String, name: String, side: one_mk_proto::Side },
-    Swap { id: String, name: String, swap: String },
+    /// Moving a computer; `seq` tells this request from every other one
+    /// for it (two moves to the same side differ only in their offset).
+    Layout { id: String, name: String, side: one_mk_proto::Side, offset: Option<(i32, i32)>, seq: u64 },
+    Swap { id: String, name: String, swap: String, seq: u64 },
     TakeBack,
     Stop,
     Forget(String),
@@ -818,15 +820,15 @@ impl Link {
 
     /// Moves a peer to `side`: with an offset, to that exact place; without,
     /// anywhere along it.
-    pub fn set_side(&self, peer: &str, name: &str, side: one_mk_proto::Side, offset: Option<(i32, i32)>) {
+    pub fn set_side(&self, peer: &str, name: &str, side: one_mk_proto::Side, offset: Option<(i32, i32)>, seq: u64) {
         let (id, word) = (peer.to_owned(), side.to_string());
         let at = offset.map_or_else(|| "--offset=none".to_owned(), |(x, y)| format!("--offset={x},{y}"));
-        self.layout_job(Job::Layout { id: peer.into(), name: name.into(), side }, vec!["layout".into(), id, word, at]);
+        self.layout_job(Job::Layout { id: peer.into(), name: name.into(), side, offset, seq }, vec!["layout".into(), id, word, at]);
     }
 
-    pub fn set_swap(&self, peer: &str, name: &str, swap: &str) {
+    pub fn set_swap(&self, peer: &str, name: &str, swap: &str, seq: u64) {
         let (id, value) = (peer.to_owned(), swap.to_owned());
-        let what = Job::Swap { id: peer.into(), name: name.into(), swap: swap.into() };
+        let what = Job::Swap { id: peer.into(), name: name.into(), swap: swap.into(), seq };
         self.layout_job(what, vec!["layout".into(), id, "--swap-ctrl-cmd".into(), value]);
     }
 
