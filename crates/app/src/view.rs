@@ -337,6 +337,38 @@ fn find_value<'a>(entries: &'a [Entry], table: &str, key: &str) -> Option<&'a Va
     })
 }
 
+/// The most `one-mk edge --corner` and `--dwell` take: the saved values are
+/// capped at the same (`MAX_CORNER` and `MAX_DWELL_MS` in `one-mk`'s settings).
+pub const EDGE_CORNER_MAX: u32 = 500;
+pub const EDGE_DWELL_MAX: u32 = 5000;
+
+/// A saved corner or wait as the daemon applies it: never negative, never
+/// over the most.
+fn edge_number(saved: i64, most: u32) -> u32 {
+    saved.clamp(0, i64::from(most)) as u32
+}
+
+/// The key an edge holds as the daemon reads it: `own` if it is a key (any
+/// case; `control` and `option` too), else `shared` (the same), else none;
+/// spelled as the choices are (`none`, `shift`, `ctrl`, `alt`).
+fn edge_modifier(own: &str, shared: &str) -> String {
+    use one_mk_proto::Modifier;
+    own.parse::<Modifier>().or_else(|_| shared.parse()).unwrap_or_default().to_string()
+}
+
+/// `[edge] wrap` as the daemon reads it: `off`, `on` or `all` in any case, or
+/// a bare `true` or `false`; anything else is off.
+fn edge_wrap(saved: Option<&Val>) -> String {
+    match saved {
+        Some(Val::Bool(on)) => if *on { "on" } else { "off" }.to_owned(),
+        Some(Val::Str(word)) => match word.to_ascii_lowercase().as_str() {
+            word @ ("on" | "all") => word.to_owned(),
+            _ => "off".to_owned(),
+        },
+        _ => "off".to_owned(),
+    }
+}
+
 impl Prefs {
     pub fn read(settings: &str, profiles: &str) -> Prefs {
         let e = read_toml(settings);
@@ -377,14 +409,14 @@ impl Prefs {
             drop_zones: num("", "settings_version", 1) >= 3 && flag("drag", "enabled", false),
             broadcast_idle: num("broadcast", "idle_off_minutes", 15).clamp(0, 1440) as u32,
             pointer_draw: text("pointer", "draw_when_no_mouse", "auto"),
-            edge_wrap: get("edge", "wrap").and_then(Val::as_bool).map(|on| if on { "on" } else { "off" }.to_owned()).unwrap_or_else(|| text("edge", "wrap", "off")),
+            edge_wrap: edge_wrap(get("edge", "wrap")),
             edge_learn: text("edge", "learn", "suggest"),
             edge_sides: ["left", "right", "top", "bottom"].into_iter().map(|side| {
                 let table = format!("edge.{side}");
                 (side.to_owned(), EdgePrefs {
-                    corner: num(&table, "corner", num("edge", "corner", 0)).max(0) as u32,
-                    dwell: num(&table, "dwell_ms", num("edge", "dwell_ms", 0)).max(0) as u32,
-                    modifier: text(&table, "modifier", &text("edge", "modifier", "none")),
+                    corner: edge_number(num(&table, "corner", num("edge", "corner", 0)), EDGE_CORNER_MAX),
+                    dwell: edge_number(num(&table, "dwell_ms", num("edge", "dwell_ms", 0)), EDGE_DWELL_MAX),
+                    modifier: edge_modifier(&text(&table, "modifier", ""), &text("edge", "modifier", "none")),
                     fullscreen: flag(&table, "fullscreen_guard", flag("edge", "fullscreen_guard", false)),
                 })
             }).collect(),
@@ -399,9 +431,9 @@ impl Prefs {
                 _ => "physical",
             },
             lock_sync: flag("", "lock_sync", false),
-            edge_corner: num("edge", "corner", 0).max(0) as u32,
-            edge_dwell_ms: num("edge", "dwell_ms", 0).max(0) as u32,
-            edge_modifier: text("edge", "modifier", "none"),
+            edge_corner: edge_number(num("edge", "corner", 0), EDGE_CORNER_MAX),
+            edge_dwell_ms: edge_number(num("edge", "dwell_ms", 0), EDGE_DWELL_MAX),
+            edge_modifier: edge_modifier(&text("edge", "modifier", "none"), ""),
             edge_fullscreen: flag("edge", "fullscreen_guard", false),
             block_screensaver: flag("power", "block_screensaver_on_peers", false),
             sleep_sync: flag("power", "sleep_sync", false),
@@ -984,6 +1016,25 @@ mod tests {
         assert_eq!(prefs.hook_options["enter"], ("abcdef01".into(), 12, true));
         assert_eq!(prefs.hook_options["leave"], (String::new(), 9, false));
         assert_eq!(Prefs::read("[edge]\nwrap=true", "").edge_wrap, "on");
+    }
+
+    /// What the window shows for hand-edited edge rules is what the daemon
+    /// applies: any case and the aliases for keys and wrap, a corner or wait
+    /// over the most is the most, an edge's key that is no key is the shared one.
+    #[test]
+    fn edge_rules_are_read_as_the_daemon_applies_them() {
+        let prefs = Prefs::read("[edge]\nwrap=\"ALL\"\nmodifier=\"Control\"\ncorner=900\ndwell_ms=8000\n[edge.left]\nmodifier=\"hyper\"\n[edge.right]\nmodifier=\"OPTION\"\ncorner=-4\n[edge.top]\nmodifier=\"Shift\"\ndwell_ms=7\n", "");
+        assert_eq!((prefs.edge_wrap.as_str(), prefs.edge_modifier.as_str(), prefs.edge_corner, prefs.edge_dwell_ms), ("all", "ctrl", 500, 5000));
+        let side = |name: &str| prefs.edge_sides.iter().find(|(side, _)| side == name).unwrap().1.clone();
+        assert_eq!((side("left").modifier.as_str(), side("left").corner, side("left").dwell), ("ctrl", 500, 5000), "no key: the shared one");
+        assert_eq!((side("right").modifier.as_str(), side("right").corner), ("alt", 0), "Option is Alt; a negative corner is none");
+        assert_eq!((side("top").modifier.as_str(), side("top").dwell), ("shift", 7));
+        assert_eq!(side("bottom").modifier, "ctrl");
+        // A shared key that is no key is none; a wrap that is no word is off.
+        let odd = Prefs::read("[edge]\nmodifier=\"hyper\"\nwrap=\"sideways\"\n[edge.left]\nmodifier=\"hyper\"\n", "");
+        assert_eq!((odd.edge_modifier.as_str(), odd.edge_wrap.as_str()), ("none", "off"));
+        assert_eq!(odd.edge_sides[0].1.modifier, "none");
+        assert_eq!(Prefs::read("[edge]\nwrap=\"On\"", "").edge_wrap, "on");
     }
 
     #[test]
