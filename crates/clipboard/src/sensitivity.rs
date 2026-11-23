@@ -52,7 +52,7 @@ pub(super) fn concealed(apps: &[String]) -> anyhow::Result<bool> {
 /// becomes sensitive in between offers the marker type, and shows.
 #[cfg(target_os = "linux")]
 pub(super) enum Guard {
-    X11 { connection: x11rb::rust_connection::RustConnection, clipboard: u32 },
+    X11 { connection: Box<x11rb::rust_connection::RustConnection>, clipboard: u32 },
     Offers(std::collections::HashSet<String>),
     /// Nothing to watch with (no XFixes; types that can't be asked for).
     Unwatched,
@@ -88,7 +88,7 @@ impl Guard {
             Ok(clipboard)
         };
         match setup() {
-            Ok(clipboard) => Ok(Guard::X11 { connection, clipboard }),
+            Ok(clipboard) => Ok(Guard::X11 { connection: Box::new(connection), clipboard }),
             Err(error) => {
                 tracing::debug!("clipboard change guard unavailable: {error:#}");
                 Ok(Guard::Unwatched)
