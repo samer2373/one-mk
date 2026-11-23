@@ -1452,9 +1452,16 @@ async fn run_inject(
                                         opened = &mut opening => break opened?,
                                         incoming = rx.recv() => {
                                             let Some(incoming) = incoming else { bail!("input disconnected during keyboard setup"); };
-                                            if matches!(incoming, Inject::Controlled(false) | Inject::Key { down: false, .. }) {
-                                                bail!("input released during keyboard setup");
-                                            }
+                                            // The visit ending, or a held key (Ctrl, Alt, Meta...)
+                                            // coming up, ends the setup with the session. Any
+                                            // other release (Shift, a key never held) is routine
+                                            // typing and waits its turn with the rest.
+                                            let released = match incoming {
+                                                Inject::Controlled(false) => true,
+                                                Inject::Key { code, down: false } => inj.held.keys.contains(&code) && !matches!(code, 42 | 54),
+                                                _ => false,
+                                            };
+                                            if released { bail!("input released during keyboard setup"); }
                                             if queued.len() >= 256 { bail!("input backlog during keyboard setup"); }
                                             queued.push_back(incoming);
                                         }

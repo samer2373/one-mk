@@ -217,6 +217,25 @@ async fn keysym_permission_dialog_is_cancelled_by_input_cleanup() {
 }
 
 #[tokio::test]
+async fn keysym_setup_survives_routine_key_releases() {
+    let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
+    harness.ready().await;
+    harness.world().dialog = Duration::from_secs(30);
+    harness.inject(Inject::Key { code: 42, down: true });
+    harness.inject(Inject::CharacterKey { code: 44, down: true, character: 'Z' });
+    harness.until("keyboard permission pending", |world| world.count("rd.Start") == 2).await;
+    // Shift coming up, and a key that was never held, are ordinary typing.
+    harness.inject(Inject::Key { code: 42, down: false });
+    harness.inject(Inject::Key { code: 30, down: false });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(harness.count("rd.Close"), 0, "the session stays: {:#?}", harness.log());
+    assert_eq!(harness.count("rd.CreateSession"), 2);
+    // The visit ending still cancels the setup.
+    harness.inject(Inject::Controlled(false));
+    harness.until("visit end cancels permission", |world| world.pressed.is_empty() && world.count("rd.Close") > 0).await;
+}
+
+#[tokio::test]
 async fn keysym_two_hundred_characters_are_ordered_and_acknowledged() {
     let Some(mut harness) = Harness::start(&[], |_| {}).await else { return };
     harness.ready().await;
