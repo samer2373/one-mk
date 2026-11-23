@@ -20,10 +20,31 @@ fn primary_scale() -> f64 {
     if found && x != 0 { f64::from(x) / 96.0 } else { 1.0 }
 }
 
+/// The monitors in physical pixels (this thread is per-monitor DPI aware), for snapping a zone
+/// that touches a screen edge to it.
+fn monitors() -> Vec<one_mk_proto::Rect> {
+    use windows_sys::Win32::{Foundation::{LPARAM, RECT}, Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO}};
+    unsafe extern "system" fn each(mon: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> i32 {
+        // SAFETY: `data` is the `&mut Vec` passed below, alive for the call.
+        let found = unsafe { &mut *(data as *mut Vec<one_mk_proto::Rect>) };
+        let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..unsafe { std::mem::zeroed() } };
+        // SAFETY: valid monitor handle from the enumeration; `mi` is sized.
+        if unsafe { GetMonitorInfoW(mon, &mut mi) } != 0 {
+            let r = mi.rcMonitor;
+            found.push(one_mk_proto::Rect::new(r.left, r.top, r.right - r.left, r.bottom - r.top));
+        }
+        1
+    }
+    let mut found = Vec::new();
+    // SAFETY: the callback only touches `found`, which outlives the call.
+    unsafe { EnumDisplayMonitors(std::ptr::null_mut(), std::ptr::null(), Some(each), &mut found as *mut Vec<one_mk_proto::Rect> as LPARAM) };
+    found
+}
+
 /// The zones in physical pixels, from the space the daemon sees.
 fn physical(zones: Vec<Zone>) -> Vec<Zone> {
-    let scale = primary_scale();
-    zones.into_iter().map(|zone| Zone { rect: scale::to_physical(zone.rect, scale), ..zone }).collect()
+    let (scale, screens) = (primary_scale(), monitors());
+    zones.into_iter().map(|zone| Zone { rect: scale::to_physical(zone.rect, scale, &screens), ..zone }).collect()
 }
 
 fn set_thread_dpi_awareness() {

@@ -135,8 +135,20 @@ if mac_run "$scratch/mac-new"; then bad "the install succeeded although the one-
 elif [ "$(cat "$mhome/Applications/one-mk.app/Contents/MacOS/marker")" = previous ] && [ -z "$(find "$mhome/Applications" -maxdepth 1 -name '.one-mk.app.*')" ]; then
     ok "when the one-mk command cannot be written, the previous app is still in place and nothing is left behind"
 else bad "the previous app was lost: $(cat "$mhome/Applications/one-mk.app/Contents/MacOS/marker" 2>&1); $(ls -A "$mhome/Applications"); $(cat "$scratch/out")"; fi
+# A folder (or a link to one) where the command goes: with the real mv the staged
+# file would be moved inside it and the install would look fine, so it is refused
+# before the app is touched.
+for kind in folder link; do
+    rm -rf "$mhome/.local"; mkdir -p "$mhome/.local/bin"
+    if [ $kind = folder ]; then mkdir "$mhome/.local/bin/one-mk"; else mkdir "$mhome/.local/elsewhere"; ln -s ../elsewhere "$mhome/.local/bin/one-mk"; fi
+    if mac_run "$scratch/mac-new"; then bad "the install succeeded with a $kind where the one-mk command goes"
+    elif [ "$(cat "$mhome/Applications/one-mk.app/Contents/MacOS/marker")" = previous ] && [ -z "$(find "$mhome/Applications" -maxdepth 1 -name '.one-mk.app.*')" ] \
+        && [ -z "$(find "$mhome/.local" -name '.one-mk*')" ] && grep -q "is a folder, not a program" "$scratch/out"; then
+        ok "a $kind where the one-mk command goes is refused and the previous app stays (nothing swallowed)"
+    else bad "a $kind at the command path: $(ls -A "$mhome/Applications"); $(find "$mhome/.local"); $(cat "$scratch/out")"; fi
+done
 # The launcher goes in last: if it cannot be put in place, the previous app is restored.
-rm -f "$mhome/.local"; mkdir -p "$mhome/.local/bin/one-mk"   # a folder where the command goes
+rm -rf "$mhome/.local"; mkdir -p "$mhome/.local/bin"
 mkdir -p "$scratch/stubs-mvfail"
 cat > "$scratch/stubs-mvfail/mv" <<'SH'
 #!/bin/sh

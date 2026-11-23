@@ -518,6 +518,13 @@ struct World {
     hang_disable: bool,
     /// The next this many InputCapture.Enable calls fail.
     fail_enable: u32,
+    /// How many SetPointerBarriers calls are answered with every barrier rejected.
+    fail_barriers: u32,
+    /// The injection side offers two absolute pointers: a paused one with a small region first,
+    /// then a resumed one that covers the desktop.
+    abs_devices: bool,
+    /// Where absolute motion was sent (the injected side).
+    abs: Vec<(f32, f32)>,
     ic_version: u32,
     /// Restore tokens given to SelectDevices / InputCapture.Start, by session.
     restoring: HashMap<String, Option<String>>,
@@ -557,6 +564,9 @@ impl Default for World {
             hang_release: false,
             hang_disable: false,
             fail_enable: 0,
+            fail_barriers: 0,
+            abs_devices: false,
+            abs: Vec::new(),
             ic_version: 1,
             restoring: HashMap::new(),
             sessions: Vec::new(),
@@ -874,6 +884,12 @@ impl FakeInputCapture {
             respond(conn, handle.clone(), Duration::ZERO, 0, Results::from([("failed_barriers", Value::from(ids))]));
             return path(&handle);
         }
+        if w.fail_barriers > 0 && !ids.is_empty() {
+            w.fail_barriers -= 1;
+            w.log.push(format!("ic.SetPointerBarriers rejected {ids:?}"));
+            respond(conn, handle.clone(), Duration::ZERO, 0, Results::from([("failed_barriers", Value::from(ids))]));
+            return path(&handle);
+        }
         w.barriers = ids;
         w.positions = barriers
             .iter()
@@ -992,8 +1008,17 @@ fn fake_eis(world: Shared, sender: bool) -> zbus::fdo::Result<zbus::zvariant::Ow
                                 }
                                 devices.push(dev);
                             }
+                            if sender && w.abs_devices {
+                                let caps = DeviceCapability::PointerAbsolute.into();
+                                // Paused: never resumed, and with other regions.
+                                devices.push(b.seat.add_device(Some("abs-paused"), reis::eis::device::DeviceType::Virtual, caps, |d| d.device().region(0, 0, 100, 100, 1.0)));
+                                let dev = b.seat.add_device(Some("abs"), reis::eis::device::DeviceType::Virtual, caps, |d| d.device().region(0, 0, 1920, 1080, 1.0));
+                                dev.resumed();
+                                devices.push(dev);
+                            }
                         }
                         EisRequest::DeviceStartEmulating(_) => w.emulating += 1,
+                        EisRequest::PointerMotionAbsolute(m) => w.abs.push((m.dx_absolute, m.dy_absolute)),
                         EisRequest::KeyboardKey(k) => {
                             if k.state == reis::eis::keyboard::KeyState::Press {
                                 w.pressed.insert(('k', k.key));
@@ -1372,6 +1397,28 @@ async fn a_failed_barrier_update_is_tried_again_by_itself() {
     h.until("barriers enabled again", |w| w.count("ic.Enable") >= 2 && w.enabled).await;
     h.until("injection", |w| w.emulating >= 2).await;
     h.activate().await;
+}
+
+#[tokio::test]
+async fn barriers_the_compositor_rejected_are_asked_for_again() {
+    // The call succeeds but every barrier is in failed_barriers (a layout change in progress):
+    // no error, and still crossing has to come back without another edge change.
+    let Some(mut h) = Harness::start(&[], |w| w.fail_barriers = 1).await else { return };
+    h.capture().send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
+    h.until("rejected once", |w| w.count("ic.SetPointerBarriers rejected") == 1).await;
+    h.until("barriers accepted the second time", |w| !w.barriers.is_empty() && w.enabled).await;
+    h.until("injection", |w| w.emulating >= 2).await;
+    h.activate().await;
+}
+
+#[tokio::test]
+async fn absolute_motion_is_clamped_to_the_regions_of_the_device_that_gets_it() {
+    // The first absolute device is paused and small; the resumed one covers the desktop.
+    let Some(h) = Harness::start(&[], |w| w.abs_devices = true).await else { return };
+    h.until("injection", |w| w.emulating >= 3).await;
+    h.inject(Inject::MoveTo(Pos::new(1500.0, 500.0)));
+    h.until("moved", |w| !w.abs.is_empty()).await;
+    assert_eq!(h.world().abs, vec![(1500.0, 500.0)]);
 }
 
 #[tokio::test]

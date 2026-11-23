@@ -244,6 +244,21 @@ impl DisplayState {
     }
 }
 
+/// Updates the shared state and tells the consumer of the change as one step: the two sources run
+/// on different workers, and if each sent after letting go of the lock, the older state could
+/// arrive last while the state says otherwise. False when the consumer is gone.
+fn publish(
+    events: &mpsc::UnboundedSender<PowerEvent>,
+    state: &std::sync::Mutex<DisplayState>,
+    update: impl FnOnce(&mut DisplayState) -> Option<bool>,
+) -> bool {
+    let Ok(mut state) = state.lock() else { return true };
+    match update(&mut state) {
+        Some(asleep) => events.send(PowerEvent::DisplayAsleep(asleep)).is_ok(),
+        None => true,
+    }
+}
+
 /// Reports the display sleeping (GNOME's `PowerSaveMode` leaving 0) and the
 /// computer suspending or resuming (logind's `PrepareForSleep`) as
 /// `PowerEvent::DisplayAsleep`. Event-driven, like [`watch_lock`].
@@ -269,12 +284,7 @@ async fn watch_power_save(events: &mpsc::UnboundedSender<PowerEvent>, state: &st
     while let Some(change) = changes.next().await {
         let Ok(mode) = change.get().await else { continue };
         // -1 is "not supported", 0 on.
-        let changed = state.lock().map_or(None, |mut state| state.monitor(mode > 0));
-        if let Some(asleep) = changed
-            && events.send(PowerEvent::DisplayAsleep(asleep)).is_err()
-        {
-            break;
-        }
+        if !publish(events, state, |state| state.monitor(mode > 0)) { break; }
     }
     Ok(())
 }
@@ -285,12 +295,7 @@ async fn watch_suspend(events: &mpsc::UnboundedSender<PowerEvent>, state: &std::
     let mut signals = manager.receive_signal("PrepareForSleep").await?;
     while let Some(msg) = signals.next().await {
         let Ok(suspending) = msg.body().deserialize::<bool>() else { continue };
-        let changed = state.lock().map_or(None, |mut state| state.suspend(suspending));
-        if let Some(asleep) = changed
-            && events.send(PowerEvent::DisplayAsleep(asleep)).is_err()
-        {
-            break;
-        }
+        if !publish(events, state, |state| state.suspend(suspending)) { break; }
     }
     Ok(())
 }
@@ -705,6 +710,23 @@ mod tests {
         assert!(!holding.is_finished(), "released before it was asked to");
         drop(release);
         assert_eq!(tokio::time::timeout(Duration::from_secs(1), holding).await.unwrap().unwrap(), Some(7));
+    }
+
+    /// Two workers reporting at once: what the consumer sees last is what the state says.
+    #[test]
+    fn concurrent_reports_reach_the_consumer_in_the_order_the_state_changed() {
+        for _ in 0..200 {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let state = std::sync::Mutex::new(DisplayState::default());
+            publish(&tx, &state, |state| state.monitor(false));
+            std::thread::scope(|scope| {
+                scope.spawn(|| for i in 0..50 { publish(&tx, &state, |state| state.suspend(i % 2 == 0)); });
+                scope.spawn(|| for i in 0..50 { publish(&tx, &state, |state| state.monitor(i % 3 == 0)); });
+            });
+            let mut last = false;
+            while let Ok(PowerEvent::DisplayAsleep(asleep)) = rx.try_recv() { last = asleep; }
+            assert_eq!(last, state.lock().unwrap().asleep());
+        }
     }
 
     #[test]

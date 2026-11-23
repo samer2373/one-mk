@@ -192,6 +192,12 @@ if [ "$(uname -s)" = Darwin ]; then
     # Written before the app is touched, so a failure here still leaves the
     # previous installation as it was.
     launcher="$HOME/.local/bin/.one-mk.new.$$"
+    # A folder where the command goes would swallow the staged file (mv moves
+    # a file into a folder and succeeds), so refuse it before the app is touched.
+    if [ -d "$HOME/.local/bin/one-mk" ]; then
+        rm -rf "$new"
+        die "$HOME/.local/bin/one-mk is a folder, not a program; move it out of the way and run this again (nothing was installed)"
+    fi
     mkdir -p "$HOME/.local/bin" \
         && printf '#!/bin/sh\nexec "%s/one-mk.app/Contents/MacOS/one-mk" "$@"\n' "$dest" > "$launcher" \
         && chmod 755 "$launcher" \
@@ -207,7 +213,7 @@ if [ "$(uname -s)" = Darwin ]; then
     fi
     # The old app is deleted only once everything is in place: when the
     # launcher cannot be installed, the previous app goes back.
-    if ! mv -f "$launcher" "$HOME/.local/bin/one-mk"; then
+    if [ -d "$HOME/.local/bin/one-mk" ] || ! mv -f "$launcher" "$HOME/.local/bin/one-mk"; then
         rm -f "$launcher"
         rm -rf "$dest/one-mk.app"
         if [ -e "$old" ]; then mv "$old" "$dest/one-mk.app"; fi

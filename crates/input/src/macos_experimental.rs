@@ -382,6 +382,14 @@ impl State {
         }
     }
 
+    /// Remembers which mouse buttons are down now: they went to this Mac's apps, so the release
+    /// of each stays here when capture starts.
+    fn snapshot_local_buttons(&mut self) {
+        self.local_buttons = (0..8u32)
+            .filter(|&button| CGEventSource::button_state(CGEventSourceStateID::HIDSystemState, CGMouseButton(button)))
+            .fold(0, |mask, button| mask | 1 << button);
+    }
+
     /// If mouse button `n` was held locally when capture started, forget it and return true.
     fn take_local_button(&mut self, n: u32) -> bool {
         let bit = 1u8.checked_shl(n).unwrap_or(0);
@@ -598,7 +606,9 @@ impl Ctx {
                 self.local_status("inactive: forwarding to another computer");
                 if self.restore_system(st) {
                     if let Some(local) = st.local_rules.as_mut() { local.activation = None; }
-                    if let Some((side, pos)) = activation { self.start_now(st, side, pos); }
+                    // The switch was waiting for the local rules fence: a button pressed meanwhile
+                    // went to this Mac's app too.
+                    if let Some((side, pos)) = activation { st.snapshot_local_buttons(); self.start_now(st, side, pos); }
                 }
             } else if local.enabled && !local.paused {
                 let rules = local.snapshots.load();
@@ -657,7 +667,7 @@ impl Ctx {
                     for code in keys.into_iter().filter_map(logic::evdev_to_mac) { st.set_local_key(code, true); }
                 }
                 if let Some(local) = st.local_rules.as_mut() {
-                    if let Some((side, pos)) = local.activation.take() { self.start_now(st, side, pos); }
+                    if let Some((side, pos)) = local.activation.take() { st.snapshot_local_buttons(); self.start_now(st, side, pos); }
                     else if local.enabled && !local.paused && !st.active && !st.quitting {
                         let held = (0..128u16).filter(|&code| CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, code)).filter_map(logic::mac_to_evdev);
                         local.baseline(held);
@@ -969,9 +979,7 @@ impl Ctx {
                     && let (Some(desktop), Some(at)) = (st.desktop.clone(), at)
                 {
                     // Unlike an edge hit, this can come mid-drag: the app has the press already.
-                    st.local_buttons = (0..8u32)
-                        .filter(|&button| CGEventSource::button_state(CGEventSourceStateID::HIDSystemState, CGMouseButton(button)))
-                        .fold(0, |mask, button| mask | 1 << button);
+                    st.snapshot_local_buttons();
                     self.start(&mut st, side, desktop.clamp(Pos::new(at.x, at.y)));
                 }
             }

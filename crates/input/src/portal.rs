@@ -39,7 +39,7 @@
 
 use crate::common_logic::{Backoff, drain_coalesced};
 use crate::{Backend, CaptureCmd, Event, Inject};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use ashpd::desktop::input_capture::{
     self, Barrier, Capabilities, InputCapture, ReleaseOptions, SetPointerBarriersOptions,
 };
@@ -707,6 +707,9 @@ impl Capture<'_> {
             timeout("enabling capture", self.portal.enable(self.session, Default::default())).await?;
         }
         self.enabled = want;
+        // The ones the compositor took are enabled; asking again for the whole set, after the
+        // layout is read once more, is the retry (a layout change can reject any of them).
+        ensure!(failed.is_empty(), "the compositor rejected {} of {} pointer barriers", failed.len(), wanted.len());
         Ok(())
     }
 
@@ -995,7 +998,9 @@ async fn run_capture(
                 was = now;
             },
             () = barrier_retry(cap.retry_at) => {
-                cap.apply(&st.edges, st.activation.is_some()).await;
+                // The layout may be what changed under the failed call.
+                cap.refresh(&st.edges, st.activation.is_some()).await;
+                st.report_desktop(&cap.desktop);
             },
             _ = closed.next() => bail!("the input capture session was closed"),
             owner = portal_owner.next() => {
@@ -1159,8 +1164,9 @@ struct Devices {
     ready: Vec<reis::event::Device>,
     /// Devices we have sent events to since the last frame.
     dirty: Vec<reis::event::Device>,
-    /// Regions of the absolute pointer device, if it has any. Positions
-    /// outside them are ignored by the compositor, so moves are clamped in.
+    /// Regions of the absolute pointer device moves are sent to (the one
+    /// `with` picks: a resumed one), if it has any. Positions outside them
+    /// are ignored by the compositor, so moves are clamped in.
     regions: Option<Desktop>,
 }
 
@@ -1177,7 +1183,9 @@ impl Devices {
     }
 
     fn update_regions(&mut self) {
-        self.regions = self.all.iter().find(|d| d.interface::<ei::PointerAbsolute>().is_some()).and_then(|dev| {
+        // The same device `with` sends the motion to: a paused one with other regions must not
+        // decide where the resumed one is clamped.
+        self.regions = self.all.iter().find(|d| self.ready.contains(d) && d.interface::<ei::PointerAbsolute>().is_some()).and_then(|dev| {
             let rects: Vec<Rect> = dev
                 .regions()
                 .iter()
@@ -1410,10 +1418,12 @@ async fn run_inject(
                         if !inj.devices.ready.contains(&d.device) {
                             inj.devices.ready.push(d.device.clone());
                         }
+                        inj.devices.update_regions();
                     }
                     EiEvent::DevicePaused(d) => {
                         inj.devices.ready.retain(|x| *x != d.device);
                         inj.devices.dirty.retain(|x| *x != d.device);
+                        inj.devices.update_regions();
                     }
                     EiEvent::DeviceRemoved(d) => {
                         inj.devices.all.retain(|x| *x != d.device);

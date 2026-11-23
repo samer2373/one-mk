@@ -306,7 +306,7 @@ fn outputs(surface: Surface<'_>, config: &PlayerConfig, mtm: MainThreadMarker) -
 
 /// The command-line helper pumps AppKit by hand instead of entering `NSApplication.run`, which would
 /// provide autorelease pools: everything Cocoa and AVFoundation autorelease here is drained by these
-/// (one around startup, one per pass of each loop below), not left until the process ends.
+/// (one around startup, one per pass of each loop below and one around each wait), not left until the process ends.
 pub fn run(config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     objc2::rc::autoreleasepool(|_| run_in_pool(config, receiver))
 }
@@ -412,7 +412,9 @@ fn run_in_pool(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()
             Ok(Some(if playing { if ready { 2.0 } else { 0.02 } } else { 1.0e10 }))
         })?;
         let Some(interval) = interval else { return Ok(()) };
-        NSRunLoop::mainRunLoop().runMode_beforeDate(unsafe { NSDefaultRunLoopMode }, &NSDate::dateWithTimeIntervalSinceNow(interval));
+        // The wait gets a pool too: the callbacks it dispatches and the date made for it autorelease
+        // here, and would otherwise pile up in the pool around startup for as long as this plays.
+        objc2::rc::autoreleasepool(|_| { NSRunLoop::mainRunLoop().runMode_beforeDate(unsafe { NSDefaultRunLoopMode }, &NSDate::dateWithTimeIntervalSinceNow(interval)); });
     }
 }
 
@@ -455,6 +457,6 @@ fn run_picture(mut config: PlayerConfig, receiver: Receiver<Input>, mtm: MainThr
         })?;
         if !running { return Ok(()); }
         // Wake only for AppKit/workspace notifications or a command on stdin.
-        NSRunLoop::mainRunLoop().runMode_beforeDate(unsafe { NSDefaultRunLoopMode }, &NSDate::distantFuture());
+        objc2::rc::autoreleasepool(|_| { NSRunLoop::mainRunLoop().runMode_beforeDate(unsafe { NSDefaultRunLoopMode }, &NSDate::distantFuture()); });
     }
 }

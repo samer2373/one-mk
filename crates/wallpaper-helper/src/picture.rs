@@ -141,6 +141,13 @@ pub(super) fn restore_step(applied: &std::collections::BTreeMap<String, String>,
     if legacy || ours { Restore::Now } else { Restore::Leave }
 }
 
+/// Whether turning off should put the layout (fill, stretch...) back: only when oneMK still owns
+/// a picture on some monitor (one it put back now, or one it must try again for), since the
+/// layout is global and a picture chosen after ours is shown the way the user left it. A legacy
+/// journal reads as owned for every monitor, so it is restored as it always was.
+#[cfg(any(windows, test))]
+pub(super) fn owns_the_layout(steps: &[Restore]) -> bool { steps.iter().any(|step| *step != Restore::Leave) }
+
 #[cfg(any(target_os = "macos", windows, test))]
 pub(super) fn native_or_overlay<Prepared>(prepared: Result<Prepared>, apply: impl FnOnce(Prepared) -> Result<()>) -> Result<one_mk_wallpaper::picture::Mode> {
     use one_mk_wallpaper::picture::Mode;
@@ -477,10 +484,17 @@ pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<on
         if !snapshot.exists() { atomic_write(&snapshot, &serde_json::to_vec(&gnome_snapshot(root)?)?)?; }
         let uri = file_uri(&path)?;
         // What the desktop shows now, so that a write that fails half way does not leave it half changed.
-        let before = GNOME_KEYS.into_iter().map(|key| Ok((key, settings("get", key, None)?.trim().to_owned()))).collect::<Result<Vec<_>>>()?;
+        // A key still at the desktop's default is put back with a reset, so it keeps following it.
+        let before = GNOME_KEYS.into_iter().map(|key| {
+            let value = settings("get", key, None)?.trim().to_owned();
+            Ok((key, (default_setting(key).as_deref() != Some(value.as_str())).then_some(value)))
+        }).collect::<Result<Vec<_>>>()?;
         let wanted = [("picture-uri", uri.as_str()), ("picture-uri-dark", uri.as_str()), ("picture-options", "spanned")];
         // The new picture file stays (the next change or Off prunes what nothing refers to).
-        set_or_roll_back(&before, &wanted, &mut |key, value| settings("set", key, Some(value)).map(drop))?;
+        set_or_roll_back(&before, &wanted, &mut |key, value| match value {
+            Some(value) => settings("set", key, Some(value)),
+            None => settings("reset", key, None),
+        }.map(drop))?;
         atomic_write(&root.join("current.json"), &serde_json::to_vec(&[&path])?)?;
         prune_pictures(root, &[path])?;
         Ok(one_mk_wallpaper::picture::Mode::Native)
@@ -511,15 +525,21 @@ pub fn restore(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Writes `wanted` in order; if one fails, every key is put back to its value in `before` (the
-/// snapshot for `Off` is kept either way) and the first failure is returned.
+/// Writes `wanted` in order; if one fails, the keys already written are put back to their value in
+/// `before` (`None`: the key had no value of the person's own, so it is reset) and the first failure
+/// is returned. A key that was not written is not touched, so it keeps following the desktop's
+/// default. (The snapshot for `Off` is kept either way.)
 #[cfg(target_os = "linux")]
-fn set_or_roll_back(before: &[(&str, String)], wanted: &[(&str, &str)], set: &mut impl FnMut(&str, &str) -> Result<()>) -> Result<()> {
+fn set_or_roll_back(before: &[(&str, Option<String>)], wanted: &[(&str, &str)], set: &mut impl FnMut(&str, Option<&str>) -> Result<()>) -> Result<()> {
+    let mut written = Vec::new();
     for (key, value) in wanted {
-        if let Err(error) = set(key, value) {
-            for (key, value) in before { let _ = set(key, value); }
+        if let Err(error) = set(key, Some(value)) {
+            for key in written.into_iter().rev() {
+                if let Some((_, value)) = before.iter().find(|(name, _)| *name == key) { let _ = set(key, value.as_deref()); }
+            }
             return Err(error);
         }
+        written.push(*key);
     }
     Ok(())
 }
@@ -591,17 +611,29 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_picture_write_that_fails_half_way_puts_the_desktop_back() {
-        let before = [("picture-uri", "'file:///old.png'".to_owned()), ("picture-uri-dark", "'file:///old-dark.png'".to_owned()), ("picture-options", "'zoom'".to_owned())];
+        // The dark key is at the desktop's default (no value of the person's own).
+        let before = [("picture-uri", Some("'file:///old.png'".to_owned())), ("picture-uri-dark", None), ("picture-options", Some("'zoom'".to_owned()))];
         let wanted = [("picture-uri", "file:///new.png"), ("picture-uri-dark", "file:///new.png"), ("picture-options", "spanned")];
-        let mut desktop: std::collections::BTreeMap<String, String> = before.iter().map(|(key, value)| ((*key).to_owned(), value.clone())).collect();
-        // The dark key is locked: the light one was already written when it fails.
+        // What the desktop stores: `None` is "not set".
+        let stored = || -> std::collections::BTreeMap<String, Option<String>> { before.iter().map(|(key, value)| ((*key).to_owned(), value.clone())).collect() };
+        let mut desktop = stored();
+        let mut calls = Vec::new();
+        // The options key is locked: the other two were already written when it fails.
         let error = set_or_roll_back(&before, &wanted, &mut |key, value| {
-            anyhow::ensure!(key != "picture-uri-dark" || value.starts_with('\''), "locked");
-            desktop.insert(key.to_owned(), value.to_owned());
+            calls.push((key.to_owned(), value.is_some()));
+            anyhow::ensure!(key != "picture-options" || value.is_none(), "locked");
+            desktop.insert(key.to_owned(), value.map(str::to_owned));
             Ok(())
         }).unwrap_err();
         assert_eq!(error.to_string(), "locked");
-        assert!(before.iter().all(|(key, value)| desktop[*key] == *value), "{desktop:?}");
+        // Back as it was, and the formerly unset key is unset again, not pinned to its default.
+        assert_eq!(desktop, stored(), "{desktop:?}");
+        assert!(desktop["picture-uri-dark"].is_none());
+        // The light key is locked: nothing was written, so nothing is written back.
+        let mut touched = Vec::new();
+        let error = set_or_roll_back(&before, &wanted, &mut |key, _| { touched.push(key.to_owned()); anyhow::bail!("locked {key}") }).unwrap_err();
+        assert_eq!(error.to_string(), "locked picture-uri");
+        assert_eq!(touched, ["picture-uri"], "keys that never changed are left alone");
         // Without a failure everything is written, in order.
         let mut written = Vec::new();
         set_or_roll_back(&before, &wanted, &mut |key, _| { written.push(key.to_owned()); Ok(()) }).unwrap();
@@ -863,5 +895,12 @@ mod tests {
         // A journal without ownership records is restored as it always was.
         assert_eq!(restore_step(&BTreeMap::new(), &BTreeMap::new(), "A", Some("C:\\anything.png")), Restore::Now);
         assert_eq!(restore_step(&BTreeMap::new(), &BTreeMap::new(), "A", None), Restore::Later);
+    }
+    #[test]
+    fn the_layout_goes_back_only_while_one_mk_owns_a_picture() {
+        assert!(owns_the_layout(&[Restore::Now, Restore::Leave]));
+        assert!(owns_the_layout(&[Restore::Leave, Restore::Later]), "a disconnected monitor still has ours");
+        assert!(!owns_the_layout(&[Restore::Leave, Restore::Leave]), "the user chose the picture, and its layout");
+        assert!(!owns_the_layout(&[]));
     }
 }

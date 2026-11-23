@@ -394,6 +394,9 @@ fn webm(bytes: &[u8], delays: &mut Vec<u32>) -> Result<Media, String> {
     }
     media.duration_ms = duration.round() as u64;
     let end = (duration * 1_000_000.0).round() as u64;
+    // The last frame is held to the same minimum as the gaps between blocks: playback refuses a
+    // stream with a frame shorter than 10 ms, and a 1 ms DefaultDuration would otherwise get here.
+    if last_time.is_some_and(|time| end.saturating_sub(time) < 16_000_000) { return Err("source exceeds 60 fps; convert first".into()); }
     for (index, time) in times.iter().enumerate() {
         let next = times.get(index + 1).copied().unwrap_or(end);
         let micros = next.checked_sub(*time).ok_or("nonmonotonic WebM timeline")? / 1000;
