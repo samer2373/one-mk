@@ -330,6 +330,9 @@ impl Link {
             let response = client::request(&link.dir, Request::LiveWallpaper(json), Duration::from_secs(660))?
                 .ok_or_else(|| anyhow::anyhow!("Start oneMK first"))?;
             anyhow::ensure!(!response.starts_with("error "), "{}", response.trim_start_matches("error ").trim());
+            // A change the service answers "ok" to is done. No answer at all is what the one
+            // it dropped for a newer change (or one that took too long) gets: not a success.
+            anyhow::ensure!(!response.trim().is_empty(), "Another wallpaper change came first, or this one took too long. Choose again if you still want it");
             Ok(())
         });
     }
@@ -577,7 +580,7 @@ impl Link {
     }
 
     /// `one-mk <args>` exactly as given.
-    fn run_one_mk(&self, args: &[&str]) -> anyhow::Result<String> {
+    fn run_one_mk<S: AsRef<std::ffi::OsStr>>(&self, args: &[S]) -> anyhow::Result<String> {
         let mut cmd = Command::new(&self.daemon);
         cmd.args(args).stdin(Stdio::null());
         let out = proc::hide_window(&mut cmd).output()?;
@@ -1077,9 +1080,11 @@ impl Link {
         let peer = peer.to_owned();
         let what = Job::Send { to: name.to_owned(), count: paths.len() };
         self.job(what, move |l| {
-            let mut args = vec!["send".to_owned(), "--to".into(), peer];
-            args.extend(paths.iter().map(|p| p.display().to_string()));
-            l.one_mk(&args.iter().map(String::as_str).collect::<Vec<_>>()).map(drop)
+            // The paths as they are: a name that is not Unicode would not survive being written out as text.
+            let mut args: Vec<std::ffi::OsString> = vec!["send".into(), "--to".into(), peer.into()];
+            args.extend(paths.into_iter().map(PathBuf::into_os_string));
+            args.extend(l.home_args().into_iter().map(Into::into));
+            l.run_one_mk(&args).map(drop)
         });
     }
 
@@ -1358,6 +1363,56 @@ mod tests {
         assert!(link.one_mk(&[]).is_err(), "`one-mk` with nothing to do is refused");
         assert!(!ran.exists());
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// A file whose name is not Unicode reaches `one-mk send` byte for byte,
+    /// not spelled with replacement characters (another file, or none).
+    #[cfg(unix)]
+    #[test]
+    fn files_are_sent_with_their_names_as_they_are() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let (mut link, base) = fake_service("send-names", "for a in \"$@\"; do printf '%s\\0' \"$a\"; done > \"$(dirname \"$0\")/argv\"");
+        let (tx, rx) = std::sync::mpsc::channel();
+        link.tx = tx;
+        let odd = PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/a\xff.txt"));
+        link.send_files("peer-1", "Office", vec![odd.clone(), PathBuf::from("/tmp/plain.txt")]);
+        match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+            Event::Done { error, .. } => assert_eq!(error, None),
+            _ => panic!("expected the job's result"),
+        }
+        let argv = std::fs::read(base.join("argv")).unwrap();
+        let args: Vec<Vec<u8>> = argv.split(|byte| *byte == 0).filter(|arg| !arg.is_empty()).map(<[u8]>::to_vec).collect();
+        assert_eq!(&args[..5], [b"send".to_vec(), b"--to".to_vec(), b"peer-1".to_vec(), odd.into_os_string().into_vec(), b"/tmp/plain.txt".to_vec()]);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// The service answers "ok" to a wallpaper change that is done. One it
+    /// dropped for a newer change gets no answer at all, which is not a success.
+    #[cfg(unix)]
+    #[test]
+    fn a_wallpaper_change_the_service_dropped_is_not_reported_as_done() {
+        use std::io::{BufRead, Write};
+        for (reply, ok) in [("ok\n", true), ("", false), ("error no space\n", false)] {
+            let base = std::env::temp_dir().join(format!("one-mk-app-wall-reply-{}-{}", std::process::id(), ok as u8 + reply.len() as u8));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(&base).unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let link = Link::new(Some(base.clone()), tx, egui::Context::default()).unwrap();
+            let listener = std::os::unix::net::UnixListener::bind(client::unix_socket_path(&base)).unwrap();
+            let server = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                std::io::BufReader::new(&stream).read_line(&mut line).unwrap();
+                (&stream).write_all(reply.as_bytes()).unwrap();
+            });
+            link.wallpaper(one_mk_wallpaper::Command::Off);
+            match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+                Event::Done { error, .. } => assert_eq!(error.is_none(), ok, "{reply:?}: {error:?}"),
+                _ => panic!("expected the job's result"),
+            }
+            server.join().unwrap();
+            std::fs::remove_dir_all(&base).unwrap();
+        }
     }
 
     #[cfg(unix)]
