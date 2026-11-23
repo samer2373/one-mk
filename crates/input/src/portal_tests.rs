@@ -497,6 +497,8 @@ struct World {
     hang_release: bool,
     /// InputCapture.Disable never answers.
     hang_disable: bool,
+    /// The next this many InputCapture.Enable calls fail.
+    fail_enable: u32,
     ic_version: u32,
     /// Restore tokens given to SelectDevices / InputCapture.Start, by session.
     restoring: HashMap<String, Option<String>>,
@@ -535,6 +537,7 @@ impl Default for World {
             dialog: Duration::ZERO,
             hang_release: false,
             hang_disable: false,
+            fail_enable: 0,
             ic_version: 1,
             restoring: HashMap::new(),
             sessions: Vec::new(),
@@ -864,10 +867,15 @@ impl FakeInputCapture {
     }
 
     #[zbus(name = "Enable")]
-    async fn enable(&self, _session: OwnedObjectPath, _options: Opts) {
+    async fn enable(&self, _session: OwnedObjectPath, _options: Opts) -> zbus::fdo::Result<()> {
         let mut w = lock(&self.0);
         w.log.push("ic.Enable".into());
+        if w.fail_enable > 0 {
+            w.fail_enable -= 1;
+            return Err(zbus::fdo::Error::Failed("busy".into()));
+        }
         w.enabled = true;
+        Ok(())
     }
 
     #[zbus(name = "Disable")]
@@ -1322,6 +1330,17 @@ async fn a_closed_session_lets_go_and_comes_back() {
     h.hold().await;
     let next = h.activate().await;
     assert_ne!(next, id);
+}
+
+#[tokio::test]
+async fn a_failed_barrier_update_is_tried_again_by_itself() {
+    let Some(mut h) = Harness::start(&[], |w| w.fail_enable = 1).await else { return };
+    // Enable fails once after the barriers were accepted; nothing else is
+    // sent to the backend, and crossing must still come back.
+    h.capture().send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
+    h.until("barriers enabled again", |w| w.count("ic.Enable") >= 2 && w.enabled).await;
+    h.until("injection", |w| w.emulating >= 2).await;
+    h.activate().await;
 }
 
 #[tokio::test]

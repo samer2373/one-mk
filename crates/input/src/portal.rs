@@ -417,6 +417,14 @@ async fn guarded(what: &str, f: impl Future<Output = Result<()>>) -> Result<()> 
     AssertUnwindSafe(f).catch_unwind().await.unwrap_or_else(|_| Err(anyhow!("{what} crashed")))
 }
 
+/// Waits until `at`, forever if there is no such time.
+async fn barrier_retry(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at.into()).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
 /// Waits for the next change of `power`, forever once its sender is gone.
 async fn power_changed(power: &mut watch::Receiver<Power>) -> Power {
     if power.changed().await.is_err() {
@@ -588,6 +596,12 @@ struct Capture<'a> {
     /// New edges are waiting for the capture in progress to end: changing
     /// barriers means disabling capture, which would end it.
     stale: bool,
+    /// When a failed barrier update is tried again, and how many failed in a
+    /// row. Without this a single failed call (the desktop busy during a
+    /// layout change) would leave crossing off until the next edge change.
+    retry_at: Option<Instant>,
+    failures: u32,
+    unit: Duration,
 }
 
 impl Capture<'_> {
@@ -684,16 +698,31 @@ impl Capture<'_> {
         Ok(())
     }
 
+    /// `apply_barriers`, with a failure logged and tried again later with
+    /// backoff (`retry_at`; the session loop waits for it). A session that
+    /// is really gone shows up as a closed libei connection instead.
+    async fn apply(&mut self, edges: &[Edge], capturing: bool) {
+        match self.apply_barriers(edges, capturing).await {
+            Ok(()) => {
+                self.retry_at = None;
+                self.failures = 0;
+            }
+            Err(e) => {
+                let delay = self.unit * (1u32 << self.failures.min(5)).min(30);
+                self.failures = self.failures.saturating_add(1);
+                tracing::warn!("setting pointer barriers: {e:#}; trying again in {delay:?}");
+                self.retry_at = Some(Instant::now() + delay);
+            }
+        }
+    }
+
     /// Re-reads the zones and re-applies the barriers. Failures are logged
-    /// and otherwise ignored: the old layout stays in use, and a session
-    /// that is really gone shows up as a closed libei connection.
+    /// and otherwise ignored: the old layout stays in use.
     async fn refresh(&mut self, edges: &[Edge], capturing: bool) {
         if let Err(e) = self.refresh_zones().await {
             tracing::warn!("reading the screen layout: {e:#}");
         }
-        if let Err(e) = self.apply_barriers(edges, capturing).await {
-            tracing::warn!("setting pointer barriers: {e:#}");
-        }
+        self.apply(edges, capturing).await;
     }
 
     /// Hands the pointer back. If the portal refuses, disabling capture
@@ -712,9 +741,7 @@ impl Capture<'_> {
             .context("couldn't release the pointer")?;
         self.enabled = false;
         self.applied = None;
-        if let Err(e) = self.apply_barriers(edges, false).await {
-            tracing::warn!("setting pointer barriers: {e:#}");
-        }
+        self.apply(edges, false).await;
         Ok(())
     }
 }
@@ -825,15 +852,16 @@ async fn run_capture(
         enabled: false,
         applied: None,
         stale: false,
+        retry_at: None,
+        failures: 0,
+        unit: env.unit,
     };
     // Without zones there is nothing to put barriers on, so this one is
     // fatal (and retried with a new session).
     cap.refresh_zones().await?;
     st.report_desktop(&cap.desktop);
     // A re-created session starts with no barriers.
-    if let Err(e) = cap.apply_barriers(&st.edges, false).await {
-        tracing::warn!("setting pointer barriers: {e:#}");
-    }
+    cap.apply(&st.edges, false).await;
     retry.ready();
     tracing::info!(screens = ?cap.desktop.screens, "input capture ready");
 
@@ -853,18 +881,14 @@ async fn run_capture(
             hiding &= hide;
         }
         // Edges that changed during a capture take effect once it is over.
-        if cap.stale && st.activation.is_none()
-            && let Err(e) = cap.apply_barriers(&st.edges, false).await
-        {
-            tracing::warn!("setting pointer barriers: {e:#}");
+        if cap.stale && st.activation.is_none() {
+            cap.apply(&st.edges, false).await;
         }
         tokio::select! {
             cmd = cmds.recv() => match cmd {
                 Some(CaptureCmd::SetEdges(edges)) => {
                     st.edges = edges;
-                    if let Err(e) = cap.apply_barriers(&st.edges, st.activation.is_some()).await {
-                        tracing::warn!("setting pointer barriers: {e:#}");
-                    }
+                    cap.apply(&st.edges, st.activation.is_some()).await;
                 }
                 Some(CaptureCmd::Release { id, pos }) => {
                     if let Some((ours, portal_id)) = st.activation
@@ -936,11 +960,12 @@ async fn run_capture(
                     // that can't say where the screens are is no good.
                     cap.refresh_zones().await.context("after waking up")?;
                     st.report_desktop(&cap.desktop);
-                    if let Err(e) = cap.apply_barriers(&st.edges, st.activation.is_some()).await {
-                        tracing::warn!("setting pointer barriers: {e:#}");
-                    }
+                    cap.apply(&st.edges, st.activation.is_some()).await;
                 }
                 was = now;
+            },
+            () = barrier_retry(cap.retry_at) => {
+                cap.apply(&st.edges, st.activation.is_some()).await;
             },
             _ = closed.next() => bail!("the input capture session was closed"),
             owner = portal_owner.next() => {
