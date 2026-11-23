@@ -81,6 +81,8 @@ jobs:
       - run: python3 scripts/third-party-notices.py --check
       - run: cargo deny --locked --all-features check
       - run: bash scripts/test-install.sh
+      - run: bash scripts/test-install-fixes.sh
+      - run: bash scripts/test-packaging-fixes.sh
       - run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           bash scripts/check-updates.sh

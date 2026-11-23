@@ -124,7 +124,7 @@ is hidden. With scripts `js/detect.js` picks one, in this order of trust:
 - Phones, tablets (including an iPad asking for the desktop site), ChromeOS and unknown agents get a note
   that oneMK is a desktop program and a button to copy or share the link; the downloads stay below.
 
-`node site/tools/checks.mjs OUT` runs 19 platforms through `detect()` and 7 of them through the real page
+`node site/tools/checks.mjs OUT` runs 24 platforms through `detect()` and 7 of them through the real page
 with a faked user agent, client hints, touch and GPU.
 
 ## Deploying (GitHub Pages)
