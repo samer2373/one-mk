@@ -122,6 +122,31 @@ fn contains_known(target: &toml::Table, known: &toml::Table) -> bool {
     })
 }
 
+/// Whether `element` is one of the `{ index, known, extra }` records
+/// `unknown_settings` makes for an element of an array of tables.
+fn is_element_record(element: &toml::Value) -> bool {
+    element.as_table().is_some_and(|table| {
+        table.get("index").is_some_and(toml::Value::is_integer)
+            && table.get("known").is_some_and(toml::Value::is_table)
+            && table.get("extra").is_some_and(toml::Value::is_table)
+    })
+}
+
+/// `value` as it is written into a place the file no longer has: the
+/// element records mean nothing without the array they point into (the
+/// rule they were kept for is gone), so they are left out, and the tables
+/// that held only them. `None` when nothing is left.
+fn without_element_records(value: &toml::Value) -> Option<toml::Value> {
+    match value {
+        toml::Value::Array(items) if !items.is_empty() && items.iter().all(is_element_record) => None,
+        toml::Value::Table(table) => {
+            let kept: toml::Table = table.iter().filter_map(|(key, value)| Some((key.clone(), without_element_records(value)?))).collect();
+            if kept.is_empty() && !table.is_empty() { None } else { Some(toml::Value::Table(kept)) }
+        }
+        other => Some(other.clone()),
+    }
+}
+
 fn merge_unknown(target: &mut toml::Table, unknown: &toml::Table) {
     for (key, value) in unknown {
         match (target.get_mut(key), value) {
@@ -146,7 +171,9 @@ fn merge_unknown(target: &mut toml::Table, unknown: &toml::Table) {
                     }
                 }
             }
-            (None, _) => { target.insert(key.clone(), value.clone()); }
+            (None, _) => {
+                if let Some(value) = without_element_records(value) { target.insert(key.clone(), value); }
+            }
             _ => {}
         }
     }
@@ -1606,6 +1633,21 @@ draw_when_no_mouse = "auto"
         // Its own rule changed: what the old version cannot judge is dropped.
         Settings::update(&dir, |s| { s.input.keymap.rule[0].to = Some(crate::tuning::To::One("f3".into())); Ok(()) }).unwrap();
         assert!(rules(&dir)[0].get("future_field").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Clearing the only rule that has a field from a newer one-mk leaves no
+    /// trace of the bookkeeping kept for it: the file stays valid.
+    #[test]
+    fn removing_the_last_rule_with_an_unknown_field_leaves_no_metadata() {
+        let dir = temp_dir("future-rule-cleared");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[[input.keymap.rule]]\nfrom = \"f1\"\nto = \"f2\"\nfuture_field = \"x\"\n").unwrap();
+        Settings::update(&dir, |s| { s.input.keymap.rule.clear(); Ok(()) }).unwrap();
+        let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        assert!(!text.contains("known") && !text.contains("extra"), "{text}");
+        let loaded = Settings::load(&dir).unwrap();
+        assert!(loaded.input.keymap.rule.is_empty() && loaded.problems.is_empty(), "{:?}", loaded.problems);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
