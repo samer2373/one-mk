@@ -613,19 +613,20 @@ fn modifier_group(name: &str) -> Result<usize, String> {
     }
 }
 
-/// `horizontal`, `vertical`, `x5`, `unchanged`.
+/// `horizontal`, `vertical`, `x5`, `unchanged` (`off` too: in a settings file it means the same;
+/// only `one-mk scroll --modifier` tells them apart, see [`ScrollArgs::modifier`]).
 pub fn parse_mod_scroll(s: &str) -> Result<ModScroll, String> {
     let s = s.trim().to_ascii_lowercase();
     match s.as_str() {
         "horizontal" => Ok(ModScroll::Horizontal),
         "vertical" | "vertical-only" => Ok(ModScroll::Vertical),
-        "unchanged" | "none" | "normal" => Ok(ModScroll::Unchanged),
+        "unchanged" | "none" | "normal" | "off" => Ok(ModScroll::Unchanged),
         _ => {
             let n = s.strip_prefix('x').or_else(|| s.strip_prefix("faster x")).unwrap_or(&s);
             match n.trim().parse::<f64>() {
                 Ok(k) if (0.1..=scroll::MAX_MULTIPLIER).contains(&k) => Ok(ModScroll::Multiply(k)),
                 Ok(_) => Err(format!("{s:?}: a multiplier goes from x0.1 to x{}", scroll::MAX_MULTIPLIER)),
-                Err(_) => Err(format!("{s:?}: say horizontal, vertical, unchanged or a multiplier like x5")),
+                Err(_) => Err(format!("{s:?}: say horizontal, vertical, unchanged, off or a multiplier like x5")),
             }
         }
     }
@@ -2107,9 +2108,15 @@ pub struct ScrollArgs {
     #[arg(long, value_enum)]
     pub natural: Option<NaturalSetting>,
     /// What holding a modifier does: shift=horizontal, alt=x5,
-    /// ctrl=vertical, meta=unchanged (repeatable; unchanged removes it).
+    /// ctrl=vertical, meta=unchanged (repeatable). `unchanged` removes this
+    /// scope's own setting, so a wider scope's applies again; `off` keeps a
+    /// setting of its own that does nothing, even where a wider scope sets one.
     #[arg(long, value_name = "MOD=WHAT")]
     pub modifier: Vec<String>,
+    /// Forget only the natural-scrolling setting of this scope (and device),
+    /// keeping its speed, direction, mode and modifiers as they are.
+    #[arg(long, conflicts_with = "natural")]
+    pub clear_natural: bool,
     /// Only for wheels or only for touchpads (`--device wheel|touchpad`
     /// still works too).
     #[arg(long, value_enum)]
@@ -2160,6 +2167,7 @@ impl ScrollArgs {
             || self.speed.is_some()
             || self.mode.is_some()
             || self.natural.is_some()
+            || self.clear_natural
             || !self.modifier.is_empty()
             || self.reset
     }
@@ -2193,7 +2201,11 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
         };
         let g = modifier_group(name).map_err(anyhow::Error::msg)?;
         let b = parse_mod_scroll(what).map_err(anyhow::Error::msg)?;
-        mods.push((GROUPS[g].to_owned(), (b != ModScroll::Unchanged).then(|| what.trim().to_ascii_lowercase())));
+        let word = what.trim().to_ascii_lowercase();
+        // `off` is written as `unchanged`, the word every version reads: a table of its own that
+        // does nothing, which overrides what wider tables set. Plain `unchanged` takes it away.
+        let value = if word == "off" { Some("unchanged".to_owned()) } else { (b != ModScroll::Unchanged).then_some(word) };
+        mods.push((GROUPS[g].to_owned(), value));
     }
     let s = Settings::update(dir, |s| {
         let rules = &mut s.input.scroll;
@@ -2215,7 +2227,7 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
             if args.reverse_horizontal.is_some() { r.reverse_horizontal = None; }
             if args.speed.is_some() { (r.speed, r.speed_x, r.speed_y) = (None, None, None); }
             if args.mode.is_some() { r.mode = None; }
-            if args.natural.is_some() { r.natural = None; }
+            if args.natural.is_some() || args.clear_natural { r.natural = None; }
             for (name, _) in &mods { set_modifier(&mut r.modifiers, name, None); }
         }
         let r = &mut rules[i];
@@ -2225,7 +2237,7 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
             (r.speed, r.speed_x, r.speed_y) = (args.speed, None, None);
         }
         r.mode = args.mode.or(r.mode);
-        r.natural = args.natural.or(r.natural);
+        r.natural = if args.clear_natural { None } else { args.natural.or(r.natural) };
         for (name, what) in &mods {
             // Whatever way the group was written (`alt`, `option`): one entry.
             set_modifier(&mut r.modifiers, name, what.as_deref());
@@ -3532,6 +3544,54 @@ scope = { device = "usb/0001:0002//Pad" }
         assert_eq!(modifiers(&dir)[2], ModScroll::Multiply(5.0));
         scroll_command(&dir, edit(&["meta=unchanged"])).await.unwrap();
         assert_eq!(modifiers(&dir)[3], ModScroll::Unchanged);
+    }
+
+    /// Turning a modifier off for one computer: `unchanged` only forgets that scope's own
+    /// setting (the wider one applies again), `off` is a setting of its own that does nothing.
+    #[tokio::test]
+    async fn a_modifier_can_be_turned_off_for_one_scope_without_touching_the_wider_one() {
+        let laptop = || ScopeArgs { os: Some("linux".into()), ..Default::default() };
+        let edit = |args: &[&str], scope: ScopeArgs| ScrollArgs { modifier: args.iter().map(|s| s.to_string()).collect(), scope, ..Default::default() };
+        let shift = |dir: &Path, os| saved(dir).resolve(&facts(os), false).scroll.wheel.modifiers[1];
+        let dir = settings_dir("modifier-off-scope", "");
+        scroll_command(&dir, edit(&["shift=horizontal"], ScopeArgs::default())).await.unwrap();
+        // The old spelling forgets the row's value: the wider rule still scrolls sideways.
+        scroll_command(&dir, edit(&["shift=unchanged"], laptop())).await.unwrap();
+        assert_eq!(shift(&dir, os::LINUX), ModScroll::Horizontal, "unchanged inherits");
+        scroll_command(&dir, edit(&["shift=off"], laptop())).await.unwrap();
+        assert_eq!(shift(&dir, os::LINUX), ModScroll::Unchanged, "off overrides the wider rule");
+        assert_eq!(shift(&dir, os::MACOS), ModScroll::Horizontal, "other computers keep the wider rule");
+        // Written as the word every version reads, never as `off`.
+        let text = std::fs::read_to_string(dir.join("settings.toml")).unwrap();
+        assert!(text.contains("shift = \"unchanged\"") && !text.contains("shift = \"off\""), "{text}");
+        // Back to inheriting, and the empty row goes.
+        scroll_command(&dir, edit(&["shift=unchanged"], laptop())).await.unwrap();
+        assert_eq!(shift(&dir, os::LINUX), ModScroll::Horizontal);
+        assert_eq!(saved(&dir).scroll.len(), 1, "nothing is left of the scope's row");
+        // A hand-written `off` reads as unchanged.
+        assert_eq!(parse_mod_scroll("off"), Ok(ModScroll::Unchanged));
+    }
+
+    /// `--clear-natural` forgets natural scrolling and nothing else on the row, in one write.
+    #[tokio::test]
+    async fn clearing_natural_keeps_the_rest_of_the_row() {
+        let text = "[[input.scroll]]\nnatural = 'on'\nspeed_x = 2.5\nspeed_y = 0.7512\nreverse_vertical = true\nmode = 'smooth'\nmodifiers = { shift = 'horizontal' }\n";
+        let dir = settings_dir("clear-natural", text);
+        scroll_command(&dir, ScrollArgs { clear_natural: true, ..Default::default() }).await.unwrap();
+        let rows = saved(&dir).scroll;
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!((row.natural, row.speed_x, row.speed_y, row.reverse_vertical, row.mode), (None, Some(2.5), Some(0.7512), Some(true), Some(ScrollMode::Smooth)));
+        assert_eq!(row.modifiers.get("shift").map(String::as_str), Some("horizontal"));
+        // Nothing but natural on it: the row goes. And it cannot be said together with a value.
+        let dir = settings_dir("clear-natural-only", "[[input.scroll]]\nnatural = 'off'\n");
+        scroll_command(&dir, ScrollArgs { clear_natural: true, ..Default::default() }).await.unwrap();
+        assert!(saved(&dir).scroll.is_empty());
+        // A row that has no natural setting: nothing to do, no row made.
+        scroll_command(&dir, ScrollArgs { clear_natural: true, ..Default::default() }).await.unwrap();
+        assert!(saved(&dir).scroll.is_empty());
+        let both = <ScrollArgs as clap::Args>::augment_args(clap::Command::new("scroll")).try_get_matches_from(["scroll", "--clear-natural", "--natural", "on"]);
+        assert!(both.is_err());
     }
 
 }

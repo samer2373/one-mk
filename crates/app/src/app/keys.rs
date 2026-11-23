@@ -2983,7 +2983,7 @@ impl App {
         y += para(ui, pos2(at.x, y - 6.0), w, explain, regular(T_META), pal().ink3) + 4.0;
         line(ui, y);
         if switch_help(ui, row(y), Id::unique("scroll-shift"), "Shift scrolls sideways", "scroll-shift", s.shift_sideways, true).clicked() {
-            change = Some(ScrollChange::Modifier("shift", if s.shift_sideways { "unchanged" } else { "horizontal" }));
+            change = Some(ScrollChange::Modifier("shift", if s.shift_sideways { "off" } else { "horizontal" }));
         }
         y += 46.0;
         if let Some(ch) = change {
@@ -3051,7 +3051,7 @@ impl App {
         line(ui, y);
         let alt = if mac() { "Option" } else { "Alt" };
         if switch_help(ui, row(y), Id::unique("scroll-alt"), &format!("Hold {alt} to scroll 5× faster"), "scroll-alt", s.alt_faster, true).clicked() {
-            change = Some(ScrollChange::Modifier("alt", if s.alt_faster { "unchanged" } else { "x5" }));
+            change = Some(ScrollChange::Modifier("alt", if s.alt_faster { "off" } else { "x5" }));
         }
         y += 46.0;
         if let Some(ch) = change {

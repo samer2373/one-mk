@@ -1442,7 +1442,10 @@ Options:
           [possible values: on, off, auto]
 
       --modifier <MOD=WHAT>
-          What holding a modifier does: shift=horizontal, alt=x5, ctrl=vertical, meta=unchanged (repeatable; unchanged removes it)
+          What holding a modifier does: shift=horizontal, alt=x5, ctrl=vertical, meta=unchanged (repeatable). `unchanged` removes this scope's own setting, so a wider scope's applies again; `off` keeps a setting of its own that does nothing, even where a wider scope sets one
+
+      --clear-natural
+          Forget only the natural-scrolling setting of this scope (and device), keeping its speed, direction, mode and modifiers as they are
 
       --kind <KIND>
           Only for wheels or only for touchpads (`--device wheel|touchpad` still works too)

@@ -36,13 +36,15 @@ on).
   peer name, except Windows `.bat`, `.cmd` and `.com` programs, which also receive
   sanitized values.
 - **Limits.** A command is at most 4096 bytes, is killed after 5 seconds
-  (`--timeout SECS`, at most 60), runs on its own task so oneMK never waits for it,
+  (`--timeout SECS`, at most 60; on Unix with its whole process group, on Windows
+  with everything it started, through `taskkill /T /F`), runs on its own task so oneMK never waits for it,
   and runs at most once per event per 500 ms (per peer for connect and disconnect).
   Faster triggers coalesce to the newest pending run; enter and leave run in one
   serial lane and peer events in another, so a slow connect hook cannot delay pointer
   work. All hooks share an eight-process cap. Disabling hooks cancels pending
-  commands and kills their Unix process groups. No timer runs when nothing is
-  pending.
+  commands and kills the running ones: on Unix their whole process groups, on
+  Windows only the hook's own process (what it started keeps running). No timer
+  runs when nothing is pending.
 - **Hooks run with your rights, from `settings.toml`:** anyone who can write that
   file can run programs as you. The daemon refuses hooks and `run:` key actions if
   the settings file or its folder is group- or world-writable or owned by another
