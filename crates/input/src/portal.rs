@@ -39,7 +39,7 @@
 
 use crate::common_logic::{Backoff, drain_coalesced};
 use crate::{Backend, CaptureCmd, Event, Inject};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use ashpd::desktop::input_capture::{
     self, Barrier, Capabilities, InputCapture, ReleaseOptions, SetPointerBarriersOptions,
 };
@@ -707,6 +707,9 @@ impl Capture<'_> {
             timeout("enabling capture", self.portal.enable(self.session, Default::default())).await?;
         }
         self.enabled = want;
+        // The ones the compositor took are enabled; asking again for the whole set, after the
+        // layout is read once more, is the retry (a layout change can reject any of them).
+        ensure!(failed.is_empty(), "the compositor rejected {} of {} pointer barriers", failed.len(), wanted.len());
         Ok(())
     }
 
@@ -995,7 +998,9 @@ async fn run_capture(
                 was = now;
             },
             () = barrier_retry(cap.retry_at) => {
-                cap.apply(&st.edges, st.activation.is_some()).await;
+                // The layout may be what changed under the failed call.
+                cap.refresh(&st.edges, st.activation.is_some()).await;
+                st.report_desktop(&cap.desktop);
             },
             _ = closed.next() => bail!("the input capture session was closed"),
             owner = portal_owner.next() => {
