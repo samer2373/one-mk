@@ -1688,6 +1688,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     fn rows(first_id: u64) -> String {
         format!(r#"ok
 [{{"id":{first_id},"instance":5,"kind":"text","preview":"[hidden; use Show]","size":1,"timestamp":1,"origin":"desk"}}]"#)
