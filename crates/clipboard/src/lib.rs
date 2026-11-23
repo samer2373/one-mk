@@ -177,7 +177,9 @@ enum Cmd {
     Digest { reply: oneshot::Sender<Result<Option<Digest>>> },
     #[cfg(target_os = "linux")]
     Capture { skip_history: bool, owner: u32, timestamp: u32 },
-    Write { data: ClipData, origin: String, record: bool, concealed: bool, reply: oneshot::Sender<Result<Digest>> },
+    /// `expected`: write only if the clipboard still holds this (`None` inside: empty);
+    /// the reply is `None` when it does not.
+    Write { data: ClipData, origin: String, record: bool, concealed: bool, expected: Option<Option<Digest>>, reply: oneshot::Sender<Result<Option<Digest>>> },
 }
 
 impl Clipboard {
@@ -329,7 +331,18 @@ impl Clipboard {
     }
 
     pub async fn write_from(&self, data: ClipData, origin: String, record: bool) -> Result<Digest> {
-        self.call(|reply| Cmd::Write { data, origin, record, concealed: false, reply }).await
+        let written = self.call(|reply| Cmd::Write { data, origin, record, concealed: false, expected: None, reply }).await?;
+        written.ok_or_else(|| anyhow!("clipboard write skipped"))
+    }
+
+    /// As [`write_from`](Self::write_from) (or [`write_concealed`](Self::write_concealed)
+    /// with `concealed`), but only if the clipboard still holds `expected`
+    /// (`None`: nothing) when the content is about to be installed. The check
+    /// is made on the clipboard thread after the image is decoded, so a copy
+    /// made while content was being fetched or decoded is not overwritten.
+    /// `Ok(None)`: it holds something else, and nothing was written.
+    pub async fn write_if_unchanged(&self, data: ClipData, origin: String, record: bool, concealed: bool, expected: Option<Digest>) -> Result<Option<Digest>> {
+        self.call(|reply| Cmd::Write { data, origin, record, concealed, expected: Some(expected), reply }).await
     }
 
     /// Puts content that another computer marked as sensitive on the
@@ -337,7 +350,8 @@ impl Clipboard {
     /// disk), and, like a local password copy, never pushed or handed on
     /// automatically.
     pub async fn write_concealed(&self, data: ClipData) -> Result<Digest> {
-        self.call(|reply| Cmd::Write { data, origin: String::new(), record: false, concealed: true, reply }).await
+        let written = self.call(|reply| Cmd::Write { data, origin: String::new(), record: false, concealed: true, expected: None, reply }).await?;
+        written.ok_or_else(|| anyhow!("clipboard write skipped"))
     }
 
     async fn call<T>(&self, cmd: impl FnOnce(oneshot::Sender<Result<T>>) -> Cmd) -> Result<T> {
@@ -776,11 +790,11 @@ impl Worker {
                         let r = self.backend_read().map(|raw| (!raw.is_empty()).then(|| raw.digest()));
                         let _ = reply.send(r);
                     }
-                    Cmd::Write { data, origin, record, concealed, reply } => {
+                    Cmd::Write { data, origin, record, concealed, expected, reply } => {
                         let data = data.without_empty_formats();
                         let saved = (record && !concealed).then(|| Arc::new(data.clone()));
-                        let r = self.write(data, concealed);
-                        if r.is_ok() && let Some(saved) = saved {
+                        let r = self.write(data, concealed, expected);
+                        if matches!(r, Ok(Some(_))) && let Some(saved) = saved {
                             let digest = history::digest(&saved);
                             self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(saved, digest, false, &origin);
                         }
@@ -893,9 +907,19 @@ impl Worker {
 
     /// Puts `data` on the clipboard; `concealed` when its sender marked it as
     /// sensitive.
-    fn write(&mut self, data: ClipData, concealed: bool) -> Result<Digest> {
+    ///
+    /// `expected`: see [`Clipboard::write_if_unchanged`]; `Ok(None)` when the
+    /// clipboard holds something else now. Checked after the decode, right
+    /// before the platform write, which is the slow part.
+    fn write(&mut self, data: ClipData, concealed: bool, expected: Option<Option<Digest>>) -> Result<Option<Digest>> {
         let saved = Arc::new(data.clone());
         let image = data.png.as_deref().map(decode_png).transpose()?;
+        if let Some(expected) = expected {
+            let now = self.backend_read().map(|raw| (!raw.is_empty()).then(|| raw.digest()))?;
+            if now != expected {
+                return Ok(None);
+            }
+        }
         let raw = Raw { text: data.text, html: data.html, image, concealed: false };
         let sensitive = if concealed { raw.digests_under_any_filter() } else { Vec::new() };
         if let Err(e) = self.backend.write(raw) {
@@ -918,7 +942,7 @@ impl Worker {
         self.restored = Some(digest);
         #[cfg(target_os = "linux")]
         if matches!(self.backend, Backend::System(_)) { self.restored_owner = sensitivity::owner().ok(); }
-        Ok(digest)
+        Ok(Some(digest))
     }
 }
 
@@ -1013,6 +1037,34 @@ mod tests {
         std::fs::remove_file(&new).unwrap();
         let newer = touch(".mutter-Xwaylandauth.NEW444", 1);
         assert_eq!(newest_xwayland_auth(dir.path(), uid), Some(newer));
+    }
+
+    /// A copy made after the caller looked at the clipboard, even one made
+    /// while a picture is still being decoded, is not overwritten.
+    #[tokio::test]
+    async fn a_guarded_write_keeps_a_copy_made_since_the_check() {
+        let (clipboard, memory) = Clipboard::memory();
+        memory.set_text("before");
+        let seen = clipboard.digest().await.unwrap();
+        assert!(seen.is_some());
+        let png = encode_png(&Image { width: 1, height: 1, rgba: vec![1, 2, 3, 255] }).unwrap();
+        let arriving = ClipData { png: Some(png), ..Default::default() };
+        // Unchanged: written.
+        let written = clipboard.write_if_unchanged(arriving.clone(), "peer".into(), true, false, seen).await.unwrap();
+        assert!(written.is_some());
+        assert!(memory.text().is_none());
+        // The user copies something else; the arrival, still expecting the old state, loses.
+        memory.set_text("newer copy");
+        let writes = memory.writes();
+        assert_eq!(clipboard.write_if_unchanged(arriving.clone(), "peer".into(), true, false, seen).await.unwrap(), None);
+        assert_eq!(memory.text().as_deref(), Some("newer copy"));
+        assert_eq!(memory.writes(), writes, "nothing was written");
+        assert_eq!(clipboard.write_if_unchanged(arriving, "peer".into(), true, true, seen).await.unwrap(), None);
+        assert_eq!(memory.text().as_deref(), Some("newer copy"));
+        // An empty clipboard is a state too.
+        memory.set(Raw::default());
+        let empty = clipboard.write_if_unchanged(ClipData { text: Some("x".into()), ..Default::default() }, "peer".into(), true, false, None).await.unwrap();
+        assert!(empty.is_some());
     }
 
     #[cfg(target_os = "linux")]
