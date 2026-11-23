@@ -233,6 +233,9 @@ pub struct App {
     /// `None` until the first look at the daemon. Shared: a frame hands it
     /// to every part of the page that wants a copy, which is a count, not a clone.
     status: Option<Option<Arc<Status>>>,
+    /// Since when the window has had no answer from the daemon at all (the
+    /// first look hasn't come back): `not_answering` after `LOOK_GRACE`.
+    looking_since: Option<f64>,
     clipboard_history: Option<Result<Vec<crate::daemon::HistoryItem>, String>>,
     clipboard_reveal: Option<(u64, String)>,
     clipboard_clear_confirm: bool,
@@ -397,6 +400,11 @@ fn edge_word(side: Side) -> &'static str {
 /// Room between neighbouring devices on the desk, in centimetres: enough
 /// for the crossing to read as an arc.
 const GAP: f32 = 26.0;
+/// What to do about a daemon that doesn't answer.
+pub(super) const NOT_ANSWERING_HELP: &str = "The window can't get a reply from it. Open Health to see why, or stop oneMK and start it again.";
+/// How long the window waits for the daemon's first answer before it says
+/// the daemon isn't answering (the watcher asks again every second or so).
+const LOOK_GRACE: f64 = 10.0;
 
 /// Where each computer stands, from the sides set in the layout. Each
 /// entry is (id, side, half width); this computer is at the origin, and
@@ -575,6 +583,7 @@ impl App {
             fonts: Fallbacks::default(),
             size: vec2(size[0], size[1]),
             now: 0.0,
+            looking_since: None,
             ctx,
             guide: crate::guide::Overlay::from_env(),
         }
@@ -1822,8 +1831,20 @@ impl App {
 
     // ---------- the panel ----------
 
+    /// The daemon has not answered the window's first look for a while:
+    /// something is holding it up (it takes the control connection and
+    /// never replies, or its control socket can't be used), not just a slow start.
+    pub(super) fn not_answering(&self) -> bool {
+        self.status.is_none() && self.looking_since.is_some_and(|since| self.now - since >= LOOK_GRACE)
+    }
+
     fn headline_text(&self) -> (String, String) {
-        let Some(s) = self.status.as_ref() else { return ("Looking for oneMK…".into(), String::new()) };
+        let Some(s) = self.status.as_ref() else {
+            if self.not_answering() {
+                return ("oneMK isn't answering".into(), NOT_ANSWERING_HELP.into());
+            }
+            return ("Looking for oneMK…".into(), String::new());
+        };
         let Some(s) = s else {
             return ("oneMK isn't running".into(), "Start it to share this computer's mouse, keyboard, clipboard and files.".into());
         };
@@ -2631,6 +2652,15 @@ impl eframe::App for App {
         let ui_started = std::time::Instant::now();
         let now = ui.input(|i| i.time);
         self.now = now;
+        // No answer yet: say so (not "looking" for ever) once it has been a while.
+        if self.status.is_some() {
+            self.looking_since = None;
+        } else {
+            let since = *self.looking_since.get_or_insert(now);
+            if now - since < LOOK_GRACE {
+                ui.ctx().request_repaint_after_secs((since + LOOK_GRACE - now) as f32 + 0.05);
+            }
+        }
         // The theme first: everything below paints with it.
         self.themer.frame(ui.ctx(), self.appearance(), now);
         if self.size.x > 0.0 {

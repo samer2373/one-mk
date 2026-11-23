@@ -73,6 +73,32 @@ fn resizing_through_every_width_never_breaks_a_page() {
 
 // ---------- states of the daemon ----------
 
+/// A daemon whose control socket takes a connection and never replies (or
+/// can't be opened) leaves the window with no answer at all: after a while it
+/// says so instead of "Looking for oneMK" for ever, and any answer ends it.
+#[test]
+fn a_daemon_that_never_answers_is_said_not_to_answer() {
+    let mut win = Win::light(1200.0, 780.0);
+    assert_eq!(win.app.status_line().1, "Looking for oneMK…");
+    win.t += 4.0;
+    win.frames(2);
+    assert_eq!(win.app.status_line().1, "Looking for oneMK…", "a slow start is not a fault");
+    win.t += 8.0;
+    win.frames(2);
+    assert!(win.app.not_answering());
+    assert_eq!(win.app.status_line().1, "oneMK isn't answering");
+    assert!(win.has_text("oneMK isn't answering"), "{}", win.texts_joined());
+    assert!(win.has_text("Open Health to see why"), "{}", win.texts_joined());
+    assert!(!win.has_text("Looking for oneMK"), "{}", win.texts_joined());
+    assert!(problems(&win).is_empty(), "{:#?}", problems(&win));
+    // It answers at last: the usual states.
+    win.status(None);
+    assert!(!win.app.not_answering());
+    assert_eq!(win.app.status_line().1, "Sharing is off");
+    win.status(Some(alone()));
+    assert_eq!(win.app.status_line().1, "On · not paired");
+}
+
 #[test]
 fn looking_then_off_then_running_then_off_again() {
     let mut win = Win::light(1200.0, 780.0);

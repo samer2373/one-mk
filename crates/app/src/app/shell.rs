@@ -247,6 +247,7 @@ impl App {
     pub(super) fn status_line(&self) -> (Color32, String) {
         let trouble = self.health_trouble();
         match self.status.as_ref() {
+            None if self.not_answering() => (pal().warn, "oneMK isn't answering".to_owned()),
             None => (pal().ink3, "Looking for oneMK…".to_owned()),
             Some(None) => (pal().ink3, "Sharing is off".to_owned()),
             Some(Some(_)) if trouble => (self.health_tone(), "On · check Health".to_owned()),
@@ -631,7 +632,7 @@ mod tests {
             assert!(b.status && b.search_word && b.tab_pad == 12.0 && b.wordmark, "1280: {b:?}");
             for action in ["Pair a computer", "Pair another computer", "Start oneMK", "Take back", "Stopping…", "Use keyboard to stop", "Taking back…"] {
                 for pill in [None, Some("Update ready"), Some("Update didn't finish")] {
-                    for status in ["On · connected", "On · check Health", "Looking for oneMK…"] {
+                    for status in ["On · connected", "On · check Health", "Looking for oneMK…", "oneMK isn't answering"] {
                         let t = BarText { action, status: Some(status), pill };
                         for inset in [0.0, MAC_INSET] {
                             for width in [820.0, 860.0, 900.0, 999.0, 1000.0, 1050.0, 1099.0, 1100.0, 1200.0, 1279.0, 1280.0, 1440.0, 1920.0] {
