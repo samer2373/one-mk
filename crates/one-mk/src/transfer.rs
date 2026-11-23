@@ -2625,10 +2625,10 @@ mod tests {
         for n in 0..10 {
             fs::write(src.join(format!("f{n:02}.txt")), format!("contents {n}")).unwrap();
         }
-        let files = collect(&[src.clone()]).unwrap();
+        let files = collect(std::slice::from_ref(&src)).unwrap();
         let mut locked = 0;
         for n in 0..4 {
-            fs::set_permissions(src.join(format!("f{n:02}.txt")), fs::Permissions::from_mode(0)).unwrap();
+            fs::set_permissions(src.join(format!("f{n:02}.txt")), fs::Permissions::from_mode(0o000)).unwrap();
             locked += 1;
         }
         // Root reads anything; the test is about the others.
@@ -2665,7 +2665,7 @@ mod tests {
         for n in 0..6 {
             fs::write(src.join(format!("b{n}.txt")), b"stays").unwrap();
         }
-        let files = collect(&[src.clone()]).unwrap();
+        let files = collect(std::slice::from_ref(&src)).unwrap();
         let folder = src.clone();
         let receiver = tokio::spawn(async move {
             loop {

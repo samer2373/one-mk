@@ -514,9 +514,8 @@ async fn a_switch_right_after_a_cancelled_broadcast_start_is_not_handed_back() {
     let fb = t.b.fp.clone();
     assert!(ask(&da, Request::Switch(SwitchTo::Device(fb[..8].to_owned()))).await.starts_with("ok\n"));
     let side = loop {
-        match next_capture(&mut t.a.h).await {
-            CaptureCmd::Activate { side } => break side,
-            _ => {}
+        if let CaptureCmd::Activate { side } = next_capture(&mut t.a.h).await {
+            break side;
         }
     };
     // One capture starts: it is the switch's.
