@@ -48,6 +48,7 @@ use anyhow::{Result, bail};
 use one_mk_proto::{Edge, Mods, Rect, Side};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -55,7 +56,7 @@ use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, GetLastError, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
-use windows_sys::Win32::Media::{timeBeginPeriod, timeEndPeriod};
+use windows_sys::Win32::Media::{timeBeginPeriod, timeEndPeriod, timeGetTime};
 use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::RemoteDesktop::{NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification};
@@ -67,7 +68,7 @@ use windows_sys::Win32::UI::HiDpi::{
     MDT_EFFECTIVE_DPI, SetProcessDpiAwarenessContext, SetThreadDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, GetKeyboardLayout, INPUT, INPUT_0, MAPVK_VK_TO_VSC_EX, MapVirtualKeyExW, MapVirtualKeyW, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+    GetAsyncKeyState, GetKeyboardLayout, GetLastInputInfo, INPUT, LASTINPUTINFO, INPUT_0, MAPVK_VK_TO_VSC_EX, MapVirtualKeyExW, MapVirtualKeyW, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
     KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput,
@@ -107,6 +108,10 @@ const TIMER_DEVICES: usize = 3;
 const WM_APP_DEVICES: u32 = WM_APP + 3;
 pub(crate) const WM_APP_LOCAL: u32 = WM_APP + 4;
 const TIMER_LOCAL: usize = 4;
+/// While nothing is captured, looks at whether the hooks still see input.
+const TIMER_IDLE: usize = 5;
+/// How often that is looked at (ms).
+const IDLE_CHECK_MS: u32 = 5000;
 pub(crate) const WM_APP_LOCAL_DESKTOP: u32 = WM_APP + 5;
 
 /// Side of the cursor-hiding window, in physical pixels.
@@ -262,6 +267,12 @@ struct State {
     session_notifications: bool,
     pending_rules: Option<CaptureCmd>,
     restore_ticket: Option<(u64, Instant)>,
+    /// When the hooks were last installed.
+    hooks_refreshed: Instant,
+    /// The activation saved while the local rules hand over (`Local::activation`) came from the
+    /// pointer touching an edge, not from an explicit switch: it is dropped if the pointer backs
+    /// away before the handover is done.
+    edge_request: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -402,6 +413,30 @@ enum Effect {
     Unpark((i32, i32)),
 }
 
+/// The time (`GetTickCount` milliseconds, as in the hook structures) of the last event each hook
+/// was called with. Windows removes a hook that is too slow without a word; a hook that is gone
+/// stops being called while the system's last input time goes on.
+static MOUSE_SEEN: AtomicU32 = AtomicU32::new(0);
+static KEY_SEEN: AtomicU32 = AtomicU32::new(0);
+
+/// Says both hooks are known to be alive as of now (they were just installed).
+fn hooks_seen_now() {
+    // SAFETY: plain call.
+    let now = unsafe { timeGetTime() };
+    MOUSE_SEEN.store(now, Ordering::Relaxed);
+    KEY_SEEN.store(now, Ordering::Relaxed);
+}
+
+/// Whether Windows has seen input that neither hook was called for.
+fn hooks_silent() -> bool {
+    let mut last = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    // SAFETY: a valid, sized out-structure.
+    if unsafe { GetLastInputInfo(&mut last) } == 0 {
+        return false;
+    }
+    crate::win_logic::hooks_silent(last.dwTime, MOUSE_SEEN.load(Ordering::Relaxed), KEY_SEEN.load(Ordering::Relaxed))
+}
+
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
 }
@@ -467,6 +502,7 @@ fn capture_thread(
             );
         }
     };
+    hooks_seen_now();
     // SAFETY: plain call.
     let self_elevated = process_elevated(unsafe { GetCurrentProcessId() }).unwrap_or(false);
 
@@ -496,13 +532,20 @@ fn capture_thread(
             local_rules: None,
             pending_rules: None,
             restore_ticket: None,
+            hooks_refreshed: Instant::now(),
+            edge_request: false,
             local_recovery: None,
             session_active: true,
             awake: true,
             session_notifications,
         })
     });
+    // The devices' HID strings are asked for by worker threads from here on: the driver may take
+    // long over them, and this thread must keep answering the hooks meanwhile.
+    with_state(|s| s.raw.probe_in_background(s.hwnd));
     with_state(State::devices_changed);
+    // SAFETY: our own window and timer.
+    unsafe { SetTimer(hwnd, TIMER_IDLE, IDLE_CHECK_MS, None) };
     tracing::info!("input capture ready");
 
     // The daemon's command channel is async; forward it into the message
@@ -573,6 +616,7 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
     if code == HC_ACTION as i32 {
         // SAFETY: for HC_ACTION, lparam points to an MSLLHOOKSTRUCT.
         let info = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
+        MOUSE_SEEN.store(info.time, Ordering::Relaxed);
         if let Some((swallow, effect, hwnd)) = with_state(|s| {
             let (swallow, effect) = s.on_mouse(wparam as u32, info);
             (swallow, effect, s.hwnd)
@@ -591,6 +635,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
     if code == HC_ACTION as i32 {
         // SAFETY: for HC_ACTION, lparam points to a KBDLLHOOKSTRUCT.
         let info = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+        KEY_SEEN.store(info.time, Ordering::Relaxed);
         let local_rules = with_state(|state| state.local_rules.is_some()).unwrap_or(false);
         if info.dwExtraInfo == OUR_INPUT || local_rules && (info.flags & LLKHF_INJECTED != 0 || info.vkCode == 0xE5) {
             // SAFETY: unmodified synthetic input and VK_PROCESSKEY bypass all routing.
@@ -859,19 +904,33 @@ impl State {
         }
     }
 
-    fn activate(&mut self, side: Side, x: i32, y: i32) -> (bool, Effect) {
+    /// Starts capturing, once the local rules have handed over. `edge`: the pointer touched an
+    /// edge (as opposed to an explicit switch).
+    fn activate(&mut self, side: Side, x: i32, y: i32, edge: bool) -> (bool, Effect) {
         if let Some(local) = self.local_rules.as_ref() {
             if local.activation.is_some() { return (false, Effect::None); }
             self.local_fence(Destination::Remote);
             if let Some(local) = self.local_rules.as_mut() && local.pending.is_some() {
                 local.activation = Some((side, x, y));
+                self.edge_request = edge;
             }
             return (false, Effect::None);
         }
         self.activate_now(side, x, y)
     }
 
+    /// Drops an activation that is waiting for the local rules because the pointer touched an
+    /// edge, and fences the rules back to this computer (that supersedes the fence for the peer,
+    /// whose completion is then ignored).
+    fn cancel_edge_request(&mut self) {
+        if !std::mem::take(&mut self.edge_request) { return; }
+        let Some(local) = self.local_rules.as_mut() else { return };
+        if local.activation.take().is_none() { return; }
+        if local.enabled && !local.paused { self.local_fence(Destination::Local); }
+    }
+
     fn activate_now(&mut self, side: Side, x: i32, y: i32) -> (bool, Effect) {
+        self.edge_request = false;
         let pos = self.space.to_logical(x, y);
         let id = self.next_id.wrapping_add(1);
         // Key-ups hidden by the lock screen, Ctrl+Alt+Del or a UAC prompt
@@ -942,8 +1001,14 @@ impl State {
             let hit = self.space.edge_hit(&self.edges, x, y, dx, dy);
             // Only asked at an edge: a drag must not cross machines.
             let dragging = hit.is_some() && async_any_button();
+            // The pointer backed away while the local rules were still handing over: the switch is
+            // no longer wanted (or the edge is another one: the old request is stale).
+            let saved = self.local_rules.as_ref().and_then(|local| local.activation).map(|(side, ..)| side);
+            if crate::common_logic::edge_request_stale(self.edge_request, saved, hit) {
+                self.cancel_edge_request();
+            }
             return match self.gate.check(hit, dragging) {
-                Some(side) => self.activate(side, x, y),
+                Some(side) => self.activate(side, x, y, true),
                 None => (false, Effect::None),
             };
         };
@@ -1146,7 +1211,10 @@ impl State {
                 self.send_all(out)
             }
             CaptureCmd::SetEdges(edges) => {
+                let changed = self.edges != edges;
                 self.edges = edges;
+                // The edge that was touched may not lead anywhere any more.
+                if changed { self.cancel_edge_request(); }
                 Effect::None
             }
             CaptureCmd::Release { id, pos } => {
@@ -1165,7 +1233,7 @@ impl State {
                 if unsafe { GetCursorPos(&mut p) } == 0 {
                     return Effect::None;
                 }
-                self.activate(side, p.x, p.y).1
+                self.activate(side, p.x, p.y, false).1
             }
         }
     }
@@ -1207,6 +1275,18 @@ impl State {
                     .into(),
             ));
             return Some(Guard::Ended(effect));
+        }
+        // The mouse hook keeps the cursor parked even when the keyboard hook is gone, so the check
+        // below cannot see that: Windows has seen input that neither hook was called for.
+        if self.watchdog.silence(hooks_silent()) {
+            tracing::warn!("neither input hook sees the input Windows reports; giving the pointer back");
+            let effect = self.end();
+            let _ = self.tx.send(Event::Error(
+                "Windows stopped passing this PC's keyboard and mouse to one-mk, so the pointer was \
+                 brought back here."
+                    .into(),
+            ));
+            return Some(Guard::GaveUp(self.hooks, effect));
         }
         // Something else (an app, a remote tool) may have moved the cursor;
         // if it keeps happening our hooks are probably gone.
@@ -1261,7 +1341,11 @@ fn reinstall_hooks(old: Hooks) -> bool {
     match Hooks::install() {
         Ok(h) => {
             old.remove();
-            with_state(|s| s.hooks = h);
+            hooks_seen_now();
+            with_state(|s| {
+                s.hooks = h;
+                s.hooks_refreshed = Instant::now();
+            });
             true
         }
         Err(err) => {
@@ -1286,6 +1370,22 @@ fn refresh_idle_hooks() {
             ));
         });
     }
+}
+
+/// Whether the idle hooks are due to be put back (see [`refresh_idle_hooks`]): Windows has seen
+/// input the hooks were not called for, or it has been a while. Only where the hooks can be
+/// expected to see input: not on the lock screen, not asleep, not with a program running as
+/// administrator in front (that input is hidden from them by design).
+fn idle_hooks_due() -> bool {
+    with_state(|s| {
+        if s.captured.is_some() || !s.session_active || !s.awake {
+            return false;
+        }
+        let elapsed = s.hooks_refreshed.elapsed();
+        let silent = elapsed >= crate::win_logic::HOOKS_COOLDOWN && desktop_active() && !s.foreground_elevated() && hooks_silent();
+        crate::win_logic::idle_refresh_due(elapsed, silent)
+    })
+    .unwrap_or(false)
 }
 
 pub(crate) unsafe extern "system" fn desktop_changed(
@@ -1399,6 +1499,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 Some(Guard::Ended(effect)) => apply(effect, hwnd),
             }
+            0
+        }
+        WM_TIMER if wparam == TIMER_IDLE => {
+            if idle_hooks_due() {
+                tracing::info!("putting the input hooks back");
+                refresh_idle_hooks();
+            }
+            0
+        }
+        crate::windows_devices::WM_IDENTITY => {
+            with_state(State::devices_changed);
             0
         }
         WM_APP_DEVICES => {

@@ -381,6 +381,14 @@ pub fn report(config: &PlayerConfig, holds: &Holds) {
     }
 }
 
+/// Says what is really happening after a pause or a play was handled, even if
+/// nothing changed (a pause and a play read in one pass cancel out, and the
+/// service has already shown "Paused" for the pause): `Ready` when playing,
+/// else the hold, as [`report`] does.
+pub fn acknowledge(config: &PlayerConfig, holds: &Holds) {
+    if holds.playing() { event(Playback::Ready); } else { report(config, holds); }
+}
+
 pub fn valid_hash(hash: &str) -> bool { hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) }
 
 pub fn cache_path(root: &Path, hash: &str) -> anyhow::Result<PathBuf> {

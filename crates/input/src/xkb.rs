@@ -133,6 +133,15 @@ impl State {
         }
     }
 
+    /// Sets the locked modifiers, keeping the rest.
+    fn set_locked(&mut self, locked: u32) {
+        let m = self.modifiers();
+        if m.locked != locked {
+            let layout = unsafe { (self.lib.state_serialize_layout)(self.state, LAYOUT_LOCKED) };
+            unsafe { (self.lib.state_update_mask)(self.state, m.depressed, m.latched, locked, 0, 0, layout) };
+        }
+    }
+
     /// Locks the layout `group` (the seat's), keeping the modifiers.
     fn lock_group(&mut self, group: u32) {
         let locked = unsafe { (self.lib.state_serialize_layout)(self.state, LAYOUT_LOCKED) };
@@ -302,6 +311,16 @@ impl KeyboardMods {
         }
     }
 
+    /// The seat's locked modifiers (Caps Lock, Num Lock) as the compositor last said them to a
+    /// surface of ours: what this computer's own keyboards have set, so the first key sent to the
+    /// virtual keyboard does not turn Num Lock off under someone who enabled it.
+    pub(crate) fn set_locked(&mut self, locked: u32) {
+        match &mut self.real {
+            Some(s) => s.set_locked(locked),
+            None => self.fallback.locked = locked,
+        }
+    }
+
     /// The seat's layout changed (another layout picked here).
     pub(crate) fn set_group(&mut self, group: u32) {
         self.group = group;
@@ -329,6 +348,32 @@ mod tests {
         }
         let keymap = format!("xkb_keymap {{ xkb_keycodes {{ include \"evdev+aliases(qwerty)\" }}; xkb_types {{ include \"complete\" }}; xkb_compat {{ include \"complete\" }}; xkb_symbols {{ include \"pc+{symbols}+inet(evdev)\" }}; }};");
         Some(LayoutResolver::from_keymap(keymap.as_bytes()).expect("system layout compiles"))
+    }
+
+    #[test]
+    fn the_virtual_keyboard_takes_over_the_seats_locked_modifiers() {
+        if lib().is_none() || !std::path::Path::new("/usr/share/X11/xkb/symbols/us").exists() {
+            eprintln!("SKIP: libxkbcommon or system XKB data unavailable");
+            return;
+        }
+        let keymap = "xkb_keymap { xkb_keycodes { include \"evdev+aliases(qwerty)\" }; xkb_types { include \"complete\" }; xkb_compat { include \"complete\" }; xkb_symbols { include \"pc+us+inet(evdev)\" }; };";
+        let mut mods = KeyboardMods::new(keymap.as_bytes(), &[], 0);
+        assert!(mods.is_real());
+        assert_eq!(mods.get().locked, 0);
+        // Num Lock is Mod2, Caps Lock Lock: the seat had Num Lock on.
+        mods.set_locked(1 << 4);
+        assert_eq!(mods.get().locked, 1 << 4);
+        // Keys on top of it: Shift is held, the lock stays; Caps Lock adds to it.
+        mods.key(42, true);
+        assert_eq!(mods.get().locked, 1 << 4);
+        assert_eq!(mods.get().depressed, 1);
+        mods.key(58, true);
+        mods.key(58, false);
+        assert_eq!(mods.get().locked, (1 << 4) | 2);
+        // The seat said something else since (Num Lock off at its own keyboard).
+        mods.set_locked(0);
+        assert_eq!(mods.get().locked, 0);
+        assert_eq!(mods.get().depressed, 1, "held keys are kept");
     }
 
     #[test]

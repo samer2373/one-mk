@@ -12,7 +12,11 @@
 //!   locked on it (pointer constraints), the cursor hidden, and motion
 //!   read from `zwp_relative_pointer_v1` (accelerated, as the pointer here
 //!   would have moved). Without pointer constraints every output gets a
-//!   capture surface, and the pointer, though it moves, stays on them.
+//!   capture surface, and the pointer, though it moves, stays on them. The
+//!   daemon is told (`Activated`) only once the compositor has configured
+//!   the surface, entered it with the keyboard and activated the pointer
+//!   lock (`Handoff`); if that takes more than two seconds, the surfaces
+//!   come down and the daemon gets an `Event::Error` instead.
 //! - Injection: `zwlr_virtual_pointer_v1` and `zwp_virtual_keyboard_v1`,
 //!   the keyboard with the seat's own keymap (so this machine's layout
 //!   applies) and modifiers worked out here, since the compositor takes
@@ -35,7 +39,7 @@
 
 use crate::common_logic::{Backoff, drain_coalesced};
 use crate::linux_logic::{
-    AxisFrame, EdgePush, Held, Notches, OutputGeometry, Pressed, absolute_motion, armed_at, edge_strips, pushes_out,
+    AxisFrame, EdgePush, Handoff, Held, Notches, OutputGeometry, Pressed, absolute_motion, armed_at, edge_strips, pushes_out,
     segment_point, wlr_missing,
 };
 use crate::linux_rt::{Socket, forward_lock, lock_changed, spawn_thread};
@@ -64,6 +68,7 @@ use zwlr_layer_surface_v1::{Anchor, KeyboardInteractivity};
 
 const NO_CAPTURE: &str = "Can't move the pointer to another computer right now: the Wayland compositor is not ready.";
 const LAYER_NAMESPACE: &str = "one-mk";
+const NOT_GRANTED: &str = "The Wayland compositor did not let one-mk take the keyboard and mouse for another computer (another program may hold an exclusive keyboard or pointer lock), so the switch was cancelled.";
 /// Keymap format `xkb_v1` (`wl_keyboard.keymap_format`).
 const XKB_V1: u32 = 1;
 /// A keymap for a seat without a keyboard; the compositor fills in the
@@ -249,6 +254,8 @@ struct Layer {
     /// The output's registry name.
     output: u32,
     edge_rect: Option<Rect>,
+    /// A capture surface that takes the keyboard (one per capture).
+    exclusive: bool,
     surface: wl_surface::WlSurface,
     layer: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
     viewport: Option<wp_viewport::WpViewport>,
@@ -271,6 +278,12 @@ impl Layer {
 struct Capture {
     id: u32,
     lock: Option<zwp_locked_pointer_v1::ZwpLockedPointerV1>,
+    side: Side,
+    at: Pos,
+    /// What the compositor still has to do before the daemon is told (`Activated`).
+    handoff: Handoff,
+    /// The daemon has been told: only then are keys, buttons and motion passed on.
+    confirmed: bool,
 }
 
 struct State {
@@ -304,6 +317,11 @@ struct State {
     mods: Option<KeyboardMods>,
     /// The modifiers last sent to it.
     mods_sent: Option<Modifiers>,
+    /// The seat's held modifiers (depressed and latched), for the daemon once capture is confirmed.
+    seat_mods: u32,
+    /// The seat's locked modifiers (Caps Lock, Num Lock) as last said to a surface of ours, which
+    /// the virtual keyboard starts from instead of turning them all off.
+    seat_locked: u32,
     notches: Notches,
     /// A peer controls this machine: its motion (relative events come
     /// with injected motion too) must not push through our edges.
@@ -340,6 +358,8 @@ impl State {
             held: Held::default(),
             mods: None,
             mods_sent: None,
+            seat_mods: 0,
+            seat_locked: 0,
             notches: Notches::default(),
             controlled: false,
             started: Instant::now(),
@@ -386,7 +406,13 @@ impl State {
             self.after_dispatch();
             queue.flush()?;
             let Some(guard) = queue.prepare_read() else { continue };
+            // Only while a capture waits for the compositor.
+            let waiting = self.waiting_until().map(tokio::time::Instant::from_std);
             tokio::select! {
+                _ = tokio::time::sleep_until(waiting.unwrap_or_else(tokio::time::Instant::now)), if waiting.is_some() => {
+                    drop(guard);
+                    self.handoff_expired();
+                }
                 r = socket.readable() => {
                     r?;
                     match guard.read() {
@@ -543,7 +569,8 @@ impl State {
         layer.set_keyboard_interactivity(keyboard);
         surface.commit();
         let viewport = self.s.viewporter.as_ref().map(|v| v.get_viewport(&surface, &qh, ()));
-        self.layers.push(Layer { id, role, output, edge_rect: None, surface, layer, viewport, buffer: None });
+        let exclusive = role == Role::Capture && keyboard == KeyboardInteractivity::Exclusive;
+        self.layers.push(Layer { id, role, output, edge_rect: None, exclusive, surface, layer, viewport, buffer: None });
     }
 
     fn configure(&mut self, id: u32, serial: u32, w: u32, h: u32) {
@@ -568,6 +595,9 @@ impl State {
         l.surface.commit();
         if let Some(old) = l.buffer.replace(buffer) {
             old.destroy();
+        }
+        if self.layers[i].exclusive {
+            self.handoff_step(Handoff::configured);
         }
     }
 
@@ -627,16 +657,50 @@ impl State {
         self.axis = AxisFrame::default();
         self.keep.next_id = self.keep.next_id.wrapping_add(1);
         let id = self.keep.next_id;
-        self.capture = Some(Capture { id, lock: None });
-        self.send(Event::Activated { id, side, pos: at });
+        let handoff = Handoff::new(self.keyboard.is_some(), self.pointer.is_some(), Instant::now());
+        self.capture = Some(Capture { id, lock: None, side, at, handoff, confirmed: false });
+        tracing::debug!(id, %side, ?at, "asked for the keyboard and the pointer");
+    }
+
+    /// Whether capture is on and the daemon knows: input is passed on only then.
+    fn captured(&self) -> bool {
+        self.capture.as_ref().is_some_and(|c| c.confirmed)
+    }
+
+    /// Tells the daemon capture began, once the compositor has done everything it was asked.
+    fn handoff_step(&mut self, step: impl FnOnce(&mut Handoff)) {
+        let Some(c) = self.capture.as_mut() else { return };
+        if c.confirmed { return; }
+        step(&mut c.handoff);
+        if !c.handoff.ready() { return; }
+        c.confirmed = true;
+        let (id, side, at) = (c.id, c.side, c.at);
         tracing::debug!(id, %side, ?at, "captured");
+        self.send(Event::Activated { id, side, pos: at });
+        // What the keyboard held when it entered, which came before this.
+        self.send(Event::Modifiers(Mods::from_xkb(self.seat_mods)));
+    }
+
+    /// When the compositor must have handed over, while a capture waits for it.
+    fn waiting_until(&self) -> Option<Instant> {
+        self.capture.as_ref().filter(|c| !c.confirmed).map(|c| c.handoff.deadline())
+    }
+
+    /// The compositor did not hand over in time: the surfaces come down again.
+    fn handoff_expired(&mut self) {
+        let Some(c) = self.capture.as_ref().filter(|c| !c.confirmed && Instant::now() >= c.handoff.deadline()) else { return };
+        tracing::warn!(missing = c.handoff.missing(), "the compositor did not hand over the keyboard and pointer in time");
+        self.end_capture(true);
     }
 
     /// Ends capture; `tell` the daemon if it did not ask for it.
     fn end_capture(&mut self, tell: bool) {
         let Some(c) = self.capture.take() else { return };
-        if tell {
+        if tell && c.confirmed {
             self.send(Event::Deactivated { id: c.id });
+        } else if tell {
+            // The daemon was never told it began: the answer to its request is that it did not.
+            self.send(Event::Error(NOT_GRANTED.into()));
         }
         if let Some(lock) = c.lock {
             lock.destroy();
@@ -673,7 +737,9 @@ impl State {
                     // The compositor keeps the keys held across a new
                     // keymap: so does the state the modifiers come from.
                     let held = self.mods.as_ref().map_or(&[][..], |m| m.held());
-                    self.mods = Some(KeyboardMods::new(&keymap, held, self.group));
+                    let mut mods = KeyboardMods::new(&keymap, held, self.group);
+                    mods.set_locked(self.seat_locked);
+                    self.mods = Some(mods);
                     self.mods_sent = None;
                 }
                 Err(e) => {
@@ -817,7 +883,7 @@ impl State {
             }
             P::Button { button, state, .. } => {
                 let down = state == WEnum::Value(wl_pointer::ButtonState::Pressed);
-                if self.capture.is_some() && self.pressed.update(button, down) {
+                if self.captured() && self.pressed.update(button, down) {
                     self.send(Event::Button { button, down, device: None });
                 }
             }
@@ -852,7 +918,7 @@ impl State {
 
     fn axis_frame(&mut self) {
         let events = self.axis.finish();
-        if self.capture.is_some() {
+        if self.captured() {
             for ev in events {
                 self.send(ev);
             }
@@ -865,6 +931,11 @@ impl State {
             p.set_cursor(serial, None, 0, 0);
         }
         let qh = self.qh().clone();
+        // Without pointer constraints there is no lock to wait for: being on the surface is all.
+        if self.s.constraints.is_none() {
+            self.handoff_step(Handoff::pointer_ready);
+            return;
+        }
         let (Some(c), Some(constraints), Some(pointer)) = (self.capture.as_mut(), &self.s.constraints, &self.pointer)
         else {
             return;
@@ -877,7 +948,7 @@ impl State {
 
     fn on_relative(&mut self, dx: f64, dy: f64) {
         if self.capture.is_some() {
-            if dx != 0.0 || dy != 0.0 {
+            if self.captured() && (dx != 0.0 || dy != 0.0) {
                 self.send(Event::Motion { dx, dy, device: None });
             }
             return;
@@ -919,6 +990,11 @@ impl State {
                     self.send(Event::KeyboardLayoutUnavailable);
                 }
             }
+            K::Enter { surface, .. } => {
+                if self.layer_of(&surface).is_some_and(|l| l.role == Role::Capture && l.exclusive) {
+                    self.handoff_step(Handoff::keyboard_entered);
+                }
+            }
             K::Leave { surface, .. } => {
                 if self.capture.is_some() && self.layer_of(&surface).is_some_and(|l| l.role == Role::Capture) {
                     tracing::info!("the compositor took the keyboard back: the pointer comes home");
@@ -932,17 +1008,26 @@ impl State {
                     // `repeated` (version 10): senders drop repeats.
                     _ => return,
                 };
-                if self.capture.is_some() && self.pressed.update(key, down) {
+                if self.captured() && self.pressed.update(key, down) {
                     self.send(Event::Key { code: key, down, device: None });
                 }
             }
             K::Modifiers { mods_depressed, mods_latched, mods_locked, group, .. } => {
                 self.send(Event::KeyboardModifiers { depressed: mods_depressed, latched: mods_latched, locked: mods_locked, group });
                 self.group = group;
+                self.seat_mods = mods_depressed | mods_latched;
+                // While a peer controls this computer no surface of ours has the keyboard, so this
+                // is what this computer's own keyboards have set, not what the peer left.
+                if !self.controlled {
+                    self.seat_locked = mods_locked;
+                    if let Some(m) = &mut self.mods {
+                        m.set_locked(mods_locked);
+                    }
+                }
                 if let Some(m) = &mut self.mods {
                     m.set_group(group);
                 }
-                if self.capture.is_some() {
+                if self.captured() {
                     self.send(Event::Modifiers(Mods::from_xkb(mods_depressed | mods_latched)));
                 }
             }
@@ -1174,12 +1259,18 @@ impl Dispatch<zwp_locked_pointer_v1::ZwpLockedPointerV1, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // A one-shot lock that ends is gone for good: so is the capture.
-        if let zwp_locked_pointer_v1::Event::Unlocked = event
-            && state.capture.as_ref().and_then(|c| c.lock.as_ref()) == Some(lock)
-        {
-            tracing::info!("the compositor ended the pointer lock: the pointer comes home");
-            state.end_capture(true);
+        if state.capture.as_ref().and_then(|c| c.lock.as_ref()) != Some(lock) {
+            return;
+        }
+        match event {
+            // The lock is active: the pointer is ours.
+            zwp_locked_pointer_v1::Event::Locked => state.handoff_step(Handoff::pointer_ready),
+            // A one-shot lock that ends is gone for good: so is the capture.
+            zwp_locked_pointer_v1::Event::Unlocked => {
+                tracing::info!("the compositor ended the pointer lock: the pointer comes home");
+                state.end_capture(true);
+            }
+            _ => {}
         }
     }
 }

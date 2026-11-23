@@ -324,6 +324,14 @@ impl Modifiers {
         }
     }
 
+    /// Takes over the Caps Lock state the system reports (a local keyboard may have toggled it),
+    /// unless a press of ours is held.
+    pub fn sync_caps(&mut self, real: bool) {
+        if !self.caps_held {
+            self.caps = real;
+        }
+    }
+
     pub fn flags(&self) -> u64 {
         let mut f = flags::NON_COALESCED;
         for (i, m) in MODIFIERS.iter().enumerate() {
@@ -845,6 +853,30 @@ mod tests {
         // In a corner, the dominant direction wins.
         assert_eq!(edge_hit(&all, Pos::new(1439.0, 899.0), 1.0, 5.0), Some(Side::Bottom));
         assert_eq!(edge_hit(&all, Pos::new(1439.0, 899.0), 5.0, 1.0), Some(Side::Right));
+    }
+
+    #[test]
+    fn caps_lock_follows_the_state_the_mac_reports() {
+        let mut m = Modifiers::default();
+        // Turned on at the Mac's own keyboard: injected letters must carry it.
+        m.sync_caps(true);
+        assert_ne!(m.flags() & flags::ALPHA_SHIFT, 0);
+        // A peer's press turns it off, as the real one does.
+        m.update(58, true);
+        m.update(58, false);
+        assert_eq!(m.flags() & flags::ALPHA_SHIFT, 0);
+        // And turned off locally while it is on here.
+        m.update(58, true);
+        m.update(58, false);
+        assert_ne!(m.flags() & flags::ALPHA_SHIFT, 0);
+        m.sync_caps(false);
+        assert_eq!(m.flags() & flags::ALPHA_SHIFT, 0);
+        // The next peer press then turns it on again, in step with the real one.
+        m.update(58, true);
+        assert_ne!(m.flags() & flags::ALPHA_SHIFT, 0);
+        // While a press of ours is held, the system may not show it yet.
+        m.sync_caps(false);
+        assert_ne!(m.flags() & flags::ALPHA_SHIFT, 0);
     }
 
     #[test]

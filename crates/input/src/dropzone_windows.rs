@@ -1,4 +1,4 @@
-use super::{Drop, Zone};
+use super::{Drop, Gesture, Zone};
 use anyhow::Result;
 use one_mk_proto::{Pos, drag::{Change, Drag}};
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
@@ -65,6 +65,8 @@ struct State {
     shown: Option<usize>,
     drag: Drag,
     held: bool,
+    /// Whether the held button is a drag that began outside the zones, not a click on a control.
+    gesture: Gesture,
     accepts: bool,
     dropped: mpsc::Sender<Drop>,
 }
@@ -77,8 +79,14 @@ impl State {
     }
 
     fn pointer(&mut self, point: POINT) {
-        let zone = self.zones.iter().position(|zone| zone.rect.contains(Pos::new(point.x.into(), point.y.into())));
-        match self.drag.pointer(self.held, zone) {
+        let at = Pos::new(point.x.into(), point.y.into());
+        let zone = self.zones.iter().position(|zone| zone.rect.contains(at));
+        // The window takes the input over the strip, and Windows has no signal that a file is being
+        // dragged before it is there: only a button that went down outside the zones and has moved
+        // as far as Windows asks for a drag counts, so a click or a scroll bar in the strip is safe.
+        let slop = f64::from(unsafe { GetSystemMetrics(SM_CXDRAG).max(GetSystemMetrics(SM_CYDRAG)) }.max(4));
+        let held = self.held && self.gesture.dragging(at, slop);
+        match self.drag.pointer(held, zone) {
             Change::Show(index) => {
                 self.hide();
                 let rect = self.zones[index].rect;
@@ -108,11 +116,15 @@ unsafe extern "system" fn mouse(code: i32, message: WPARAM, data: LPARAM) -> LRE
                 WM_LBUTTONDOWN => {
                     if state.drag.pointer(false, None) == Change::Hide { state.hide(); }
                     state.held = true;
+                    let at = Pos::new(event.pt.x.into(), event.pt.y.into());
+                    let inside = state.zones.iter().any(|zone| zone.rect.contains(at));
+                    state.gesture.press(at, inside);
                     state.pointer(event.pt);
                 }
                 WM_MOUSEMOVE if state.held => state.pointer(event.pt),
                 WM_LBUTTONUP => {
                     state.held = false;
+                    state.gesture.release();
                     if state.shown.is_some() { unsafe { SetTimer(Some(state.hwnd), 1, 300, None); } }
                     else { state.drag.pointer(false, None); }
                 }
@@ -226,7 +238,7 @@ pub(super) fn start(mut zones: watch::Receiver<Vec<Zone>>, dropped: mpsc::Sender
                     w!("Drop files to paired computer"), WS_POPUP, 0, 0, 1, 1, None, None, Some(instance), None)?;
                 resources.hwnd = hwnd;
                 let state = Rc::new(RefCell::new(State { hwnd, zones: physical(zones.borrow_and_update().clone()), shown: None,
-                    drag: Drag::default(), held: false, accepts: false, dropped: dropped.clone() }));
+                    drag: Drag::default(), held: false, gesture: Gesture::default(), accepts: false, dropped: dropped.clone() }));
                 let target: IDropTarget = OleTarget { state: state.clone() }.into();
                 RegisterDragDrop(hwnd, &target)?;
                 resources.mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse), Some(instance), 0)?;

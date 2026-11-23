@@ -7,10 +7,20 @@
 #![allow(dead_code)]
 
 use crate::Inject;
+use one_mk_proto::Side;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+// ---------------------------------------------------------- edge requests
+
+/// Whether an activation saved while the local rules hand over (Windows, macOS) is stale: it came
+/// from the pointer touching an edge (`edge_request`; an explicit switch does not depend on where
+/// the pointer is), and the pointer is no longer on that edge (`hit` is the side it touches now).
+pub(crate) fn edge_request_stale(edge_request: bool, saved: Option<Side>, hit: Option<Side>) -> bool {
+    edge_request && saved.is_some_and(|saved| hit != Some(saved))
+}
 
 // ------------------------------------------------------------- coalescing
 
@@ -408,5 +418,19 @@ mod tests {
         assert_eq!(secs, vec![1, 2, 4, 8, 16, 30, 30, 30]);
         b.reset();
         assert_eq!(b.next_delay().as_secs(), 1);
+    }
+
+    #[test]
+    fn an_edge_request_goes_stale_when_the_pointer_leaves_its_edge() {
+        use one_mk_proto::Side::{Left, Right};
+        // Still on the edge it asked for: wait for the handover.
+        assert!(!edge_request_stale(true, Some(Right), Some(Right)));
+        // Backed away, or on another edge now: the request is dropped.
+        assert!(edge_request_stale(true, Some(Right), None));
+        assert!(edge_request_stale(true, Some(Right), Some(Left)));
+        // An explicit switch does not care where the pointer is.
+        assert!(!edge_request_stale(false, Some(Right), None));
+        // Nothing saved, nothing to drop.
+        assert!(!edge_request_stale(true, None, None));
     }
 }

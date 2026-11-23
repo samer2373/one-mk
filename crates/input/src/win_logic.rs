@@ -34,6 +34,7 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 use one_mk_proto::{Desktop, Edge, Pos, Rect, Side, mediakeys};
+use std::time::Duration;
 
 // ------------------------------------------------------------ evdev codes
 
@@ -310,6 +311,8 @@ pub(crate) enum Watch {
 pub(crate) struct HookWatchdog {
     strikes: u8,
     reinstalled: bool,
+    #[cfg_attr(not(feature = "native-local-remap"), allow(dead_code))]
+    silent: u8,
 }
 
 impl HookWatchdog {
@@ -334,9 +337,101 @@ impl HookWatchdog {
         }
     }
 
+    /// Consecutive ticks of [`hooks_silent`] before capture is given up.
+    #[cfg_attr(not(feature = "native-local-remap"), allow(dead_code))]
+    const SILENT_STRIKES: u8 = 2;
+
+    /// Whether the hooks have stayed silent while Windows saw input, for long enough to end
+    /// the visit: the pointer is kept parked by the mouse hook even if the keyboard hook is gone,
+    /// so the cursor check above cannot see that.
+    #[cfg_attr(not(feature = "native-local-remap"), allow(dead_code))]
+    pub(crate) fn silence(&mut self, silent: bool) -> bool {
+        if !silent {
+            self.silent = 0;
+            return false;
+        }
+        self.silent = self.silent.saturating_add(1);
+        self.silent >= Self::SILENT_STRIKES
+    }
+
     /// A new activation starts with a clean slate.
     pub(crate) fn reset(&mut self) {
         *self = Self::default();
+    }
+}
+
+/// How far (ms) Windows' last input must be ahead of what both hooks last saw before the hooks
+/// count as silent.
+#[cfg_attr(not(feature = "native-local-remap"), allow(dead_code))]
+pub(crate) const HOOK_SILENCE_MS: i32 = 1500;
+/// While idle, the hooks are put back at least this often, whatever the evidence says.
+#[cfg_attr(not(feature = "native-local-remap"), allow(dead_code))]
+pub(crate) const HOOKS_REFRESH: Duration = Duration::from_secs(600);
+/// Evidence of silent hooks reinstalls them at most this often (input they can never see, such as
+/// a program running as administrator, must not make this a loop).
+#[cfg_attr(not(feature = "native-local-remap"), allow(dead_code))]
+pub(crate) const HOOKS_COOLDOWN: Duration = Duration::from_secs(15);
+
+/// Whether neither low-level hook has seen the latest input Windows reports. All three are
+/// `GetTickCount`-style milliseconds (the time of the last input, and of the last event each hook
+/// was called with), compared across the 49-day wrap. Windows removes a hook that is too slow
+/// without telling anyone, and nothing else says so: the hook just stops being called.
+#[cfg_attr(not(feature = "native-local-remap"), allow(dead_code))]
+pub(crate) fn hooks_silent(last_input: u32, mouse_seen: u32, key_seen: u32) -> bool {
+    let ahead = |seen: u32| last_input.wrapping_sub(seen) as i32;
+    ahead(mouse_seen) > HOOK_SILENCE_MS && ahead(key_seen) > HOOK_SILENCE_MS
+}
+
+/// Whether the hooks should be reinstalled now, while nothing is captured.
+#[cfg_attr(not(feature = "native-local-remap"), allow(dead_code))]
+pub(crate) fn idle_refresh_due(since_refresh: Duration, silent: bool) -> bool {
+    since_refresh >= HOOKS_REFRESH || silent && since_refresh >= HOOKS_COOLDOWN
+}
+
+/// The releases a peer's keys and buttons still owe this computer. Every key or button that went
+/// down remembers the input that lets it go. When that release is refused (the secure desktop of
+/// a lock screen or a UAC prompt takes `SendInput`), the entry is marked due and the release is
+/// tried again until it goes out: the daemon sends each release once, so nothing else would.
+#[derive(Debug)]
+pub(crate) struct Owed<T> {
+    held: Vec<(T, bool)>,
+}
+
+impl<T> Default for Owed<T> {
+    fn default() -> Self {
+        Self { held: Vec::new() }
+    }
+}
+
+impl<T: Copy + PartialEq> Owed<T> {
+    /// A press went out. Pressing again (key repeat, a new visit) takes back an earlier refusal:
+    /// the press is current and its own release will follow.
+    pub(crate) fn down(&mut self, release: T) {
+        match self.held.iter_mut().find(|(r, _)| *r == release) {
+            Some(entry) => entry.1 = false,
+            None => self.held.push((release, false)),
+        }
+    }
+
+    /// A release went out.
+    pub(crate) fn sent(&mut self, release: &T) {
+        self.held.retain(|(r, _)| r != release);
+    }
+
+    /// A release was refused. Nothing is owed for a press that never went out.
+    pub(crate) fn refused(&mut self, release: &T) {
+        if let Some(entry) = self.held.iter_mut().find(|(r, _)| r == release) {
+            entry.1 = true;
+        }
+    }
+
+    /// The releases to try again.
+    pub(crate) fn due(&self) -> Vec<T> {
+        self.held.iter().filter(|(_, due)| *due).map(|(r, _)| *r).collect()
+    }
+
+    pub(crate) fn any_due(&self) -> bool {
+        self.held.iter().any(|(_, due)| *due)
     }
 }
 
@@ -1117,5 +1212,88 @@ mod tests {
         assert_eq!(d.as_millis(), 250);
         assert_eq!(i.as_millis(), 400);
         assert_eq!(repeat_timing(9, 99), repeat_timing(3, 31));
+    }
+
+    #[test]
+    fn hooks_are_silent_only_when_neither_saw_the_latest_input() {
+        // Input at 10 s: a hook that saw it (or nearly) is alive.
+        assert!(!hooks_silent(10_000, 10_000, 1_000));
+        assert!(!hooks_silent(10_000, 1_000, 10_000));
+        assert!(!hooks_silent(10_000, 9_000, 9_000));
+        // Neither saw anything for more than 1.5 s of input.
+        assert!(hooks_silent(10_000, 8_000, 8_400));
+        assert!(!hooks_silent(10_000, 8_501, 8_000));
+        // Input older than what the hooks saw (they may be ahead by a tick) is not silence.
+        assert!(!hooks_silent(1_000, 10_000, 10_000));
+        // Across the wrap of the 32-bit tick count.
+        assert!(hooks_silent(500, u32::MAX - 3_000, u32::MAX - 3_000));
+        assert!(!hooks_silent(500, u32::MAX - 100, 0));
+    }
+
+    #[test]
+    fn silence_ends_the_visit_only_after_two_ticks_in_a_row() {
+        let mut w = HookWatchdog::default();
+        assert!(!w.silence(true));
+        assert!(!w.silence(false));
+        assert!(!w.silence(true));
+        assert!(w.silence(true));
+        w.reset();
+        assert!(!w.silence(true));
+    }
+
+    #[test]
+    fn idle_hooks_are_refreshed_on_evidence_and_now_and_then() {
+        let secs = Duration::from_secs;
+        assert!(!idle_refresh_due(secs(60), false));
+        assert!(idle_refresh_due(secs(60), true));
+        // Evidence that can never go away does not make a loop.
+        assert!(!idle_refresh_due(secs(5), true));
+        // Without evidence they are still put back every ten minutes.
+        assert!(!idle_refresh_due(secs(599), false));
+        assert!(idle_refresh_due(secs(600), false));
+    }
+
+    #[test]
+    fn a_refused_release_is_owed_until_it_goes_out() {
+        let mut owed = Owed::<u32>::default();
+        owed.down(1);
+        owed.down(2);
+        assert!(!owed.any_due());
+        // Released fine: nothing owed.
+        owed.sent(&2);
+        assert!(owed.due().is_empty());
+        // The lock screen took the release of key 1.
+        owed.refused(&1);
+        assert!(owed.any_due());
+        assert_eq!(owed.due(), vec![1]);
+        // Still refused on the next try: still owed.
+        owed.refused(&1);
+        assert_eq!(owed.due(), vec![1]);
+        owed.sent(&1);
+        assert!(!owed.any_due());
+        assert!(owed.due().is_empty());
+    }
+
+    #[test]
+    fn nothing_is_owed_for_a_press_that_never_went_out() {
+        let mut owed = Owed::<u32>::default();
+        owed.refused(&7);
+        assert!(!owed.any_due());
+        // A release that was never owed is not invented by a later one.
+        owed.sent(&7);
+        assert!(owed.due().is_empty());
+    }
+
+    #[test]
+    fn a_new_press_takes_back_the_refusal_of_the_old_release() {
+        let mut owed = Owed::<u32>::default();
+        owed.down(1);
+        owed.refused(&1);
+        // The next visit presses the same key again: its own release will follow, the old one must
+        // not let go of it early.
+        owed.down(1);
+        assert!(!owed.any_due());
+        owed.sent(&1);
+        assert!(owed.due().is_empty());
     }
 }
