@@ -1206,7 +1206,7 @@ impl one_mk_ctl::setup::Host for Link {
             // Pairing refreshes the entries for each computer it adds.
             computers: vec![],
         };
-        one_mk_ctl::integrate::install(&setup).map(|o| o.found).map_err(|e| format!("{e:#}"))
+        one_mk_ctl::integrate::install(&setup).map_err(|e| format!("{e:#}")).and_then(integration_result)
     }
 
     fn running(&self) -> bool {
@@ -1674,4 +1674,24 @@ fn mode(m: &std::fs::Metadata) -> u32 {
     return std::os::unix::fs::PermissionsExt::mode(&m.permissions());
     #[cfg(not(unix))]
     return u32::from(m.permissions().readonly());
+}
+
+/// What first-run setup is told of the file manager entries: skipped entries
+/// (something else is in the way) are a failure with the reason, not "done".
+fn integration_result(outcome: one_mk_ctl::integrate::Outcome) -> Result<bool, String> {
+    if outcome.skipped > 0 { Err(outcome.message) } else { Ok(outcome.found) }
+}
+
+#[cfg(test)]
+mod integration_result_tests {
+    use super::*;
+    use one_mk_ctl::integrate::Outcome;
+
+    #[test]
+    fn skipped_entries_fail_setup_with_the_reason() {
+        let outcome = |skipped, found| Outcome { message: "something else is in the way".into(), skipped, found };
+        assert_eq!(integration_result(outcome(0, true)), Ok(true));
+        assert_eq!(integration_result(outcome(0, false)), Ok(false));
+        assert_eq!(integration_result(outcome(2, true)), Err("something else is in the way".into()));
+    }
 }
