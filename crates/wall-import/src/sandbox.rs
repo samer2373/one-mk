@@ -82,7 +82,17 @@ fn validate_contents(root: &Path) -> Result<RuntimeManifest, String> {
         if root.metadata().map_err(|error| error.to_string())?.mode() & 0o022 != 0 { return Err("runtime root must not be group/world writable".into()); }
     }
     let mut manifest_bytes = Vec::new();
-    std::fs::File::open(&manifest_path).map_err(|error| format!("audited runtime manifest: {error}"))?.take(crate::MAX_METADATA as u64 + 1).read_to_end(&mut manifest_bytes).map_err(|error| error.to_string())?;
+    // Nonblocking and no-follow: a FIFO or device named runtime.json must be refused, not waited on
+    // (nothing here has a deadline), and it must be checked on the descriptor that is then read.
+    let manifest = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open(&manifest_path).map_err(|error| format!("audited runtime manifest: {error}"))?
+    };
+    let metadata = manifest.metadata().map_err(|error| error.to_string())?;
+    if !metadata.is_file() { return Err("runtime manifest must be a regular file".into()); }
+    trusted_owner(&metadata)?;
+    manifest.take(crate::MAX_METADATA as u64 + 1).read_to_end(&mut manifest_bytes).map_err(|error| error.to_string())?;
     if manifest_bytes.len() > crate::MAX_METADATA { return Err("runtime manifest too large".into()); }
     let manifest: RuntimeManifest = serde_json::from_slice(&manifest_bytes).map_err(|error| error.to_string())?;
     if manifest.schema != 1 || manifest.gstreamer != GST_VERSION || manifest.files.is_empty() { return Err("runtime version/manifest mismatch".into()); }
@@ -657,6 +667,20 @@ mod tests {
         let root = runtime("plugins/libgstopenh264.so");
         let error = validate_contents(root.path()).unwrap_err();
         assert!(error.contains("plugin allowlist"), "{error}");
+    }
+
+    #[test]
+    fn a_fifo_named_runtime_json_is_refused_instead_of_waited_on() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = runtime("lib/libfixture.so");
+        std::fs::remove_file(root.path().join("runtime.json")).unwrap();
+        let fifo = std::ffi::CString::new(root.path().join("runtime.json").as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let path = root.path().to_owned();
+        std::thread::spawn(move || { let _ = sender.send(validate_contents(&path)); });
+        let result = receiver.recv_timeout(std::time::Duration::from_secs(5)).expect("validate_contents blocked on the FIFO");
+        assert!(result.unwrap_err().contains("regular file"));
     }
 
     #[test]
