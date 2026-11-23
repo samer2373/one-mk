@@ -701,11 +701,17 @@ fn refresh_xauthority() {
     // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
     let Some(newest) = newest_xwayland_auth(&dir, uid) else { return };
+    // One writer at a time: the clipboard worker and the history watcher both come here.
+    static CHANGING: Mutex<()> = Mutex::new(());
+    let _one_at_a_time = CHANGING.lock().unwrap_or_else(|error| error.into_inner());
     if std::env::var_os("XAUTHORITY").as_deref() != Some(newest.as_os_str()) {
         tracing::debug!(file = %newest.display(), "XWayland has a new auth file; using it for the clipboard");
-        // SAFETY: only this thread reads the variable (it opens the X11
-        // connection that follows), and it changes only when XWayland has
-        // restarted, which is rare.
+        // SAFETY: not sound against a thread that reads the environment at the
+        // same moment (another X11 connection opening reads this variable): arboard
+        // and x11rb take their X11 authority only from it, so there is no way to hand
+        // them the file instead. It is reached only when XWayland has restarted
+        // and changed the file, which is rare, and it replaces the value of a
+        // variable that is already set.
         unsafe { std::env::set_var("XAUTHORITY", &newest) };
     }
 }
