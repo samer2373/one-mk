@@ -155,6 +155,9 @@ struct Reservation {
     limits: Arc<Mutex<Limits>>,
     fp: Fingerprint,
     left: u64,
+    /// The partial file's lock (see [`open_part`]), kept until the transfer is
+    /// over so another one-mk sharing the folder can't clear the file.
+    _claim: Option<File>,
 }
 
 impl Reservation {
@@ -694,7 +697,13 @@ fn sweep_dir(root: &Path, max_age: Option<Duration>, active: &Mutex<HashMap<Stri
         }
         // Holding the lock keeps `claim` from taking this file meanwhile.
         let active = active.lock().expect("poisoned");
-        if !active.contains_key(&part.name) && staging.remove(&part.name).is_ok() {
+        if active.contains_key(&part.name) {
+            continue;
+        }
+        // Another one-mk sharing this folder may be receiving it (see [`open_part`]):
+        // the lock is held while it is deleted, so none can start on it meanwhile.
+        let Some(_held) = staging.lock(&part.name) else { continue };
+        if staging.remove(&part.name).is_ok() {
             removed += 1;
         }
     }
@@ -792,6 +801,21 @@ impl Staging {
         Some((st.st_size.max(0) as u64, modified))
     }
 
+    /// Takes the lock a receiving one-mk holds on `name` (see [`open_part`]):
+    /// the file, locked, or `None` while another process receives into it (or
+    /// it is gone).
+    fn lock(&self, name: &str) -> Option<File> {
+        use std::os::fd::{AsRawFd as _, FromRawFd as _};
+        let c = std::ffi::CString::new(name).ok()?;
+        // SAFETY: valid descriptor and C string; the result is checked.
+        let fd = unsafe { libc::openat(self.0.as_raw_fd(), c.as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return None;
+        }
+        // SAFETY: `fd` was just opened and nobody else owns it.
+        locked(File::from(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }))
+    }
+
     /// Deletes `name` inside the opened folder, if it still is one of ours.
     fn remove(&self, name: &str) -> std::io::Result<()> {
         use std::os::fd::AsRawFd as _;
@@ -834,6 +858,11 @@ impl Staging {
             .collect()
     }
 
+    fn lock(&self, name: &str) -> Option<File> {
+        Self::open(&self.0).ok()?;
+        locked(File::open(long(&self.0.join(name))).ok()?)
+    }
+
     fn remove(&self, name: &str) -> std::io::Result<()> {
         Self::open(&self.0)?;
         let path = long(&self.0.join(name));
@@ -841,6 +870,19 @@ impl Staging {
             return Err(ErrorKind::InvalidInput.into());
         }
         fs::remove_file(path)
+    }
+}
+
+/// `file` with its lock taken, or `None` while another process holds it. A
+/// folder that can't lock counts as unheld, as it did before the lock.
+fn locked(file: File) -> Option<File> {
+    match file.try_lock() {
+        Ok(()) => Some(file),
+        Err(fs::TryLockError::WouldBlock) => None,
+        Err(fs::TryLockError::Error(e)) => {
+            tracing::debug!("cannot lock a partial file: {e}");
+            Some(file)
+        }
     }
 }
 
@@ -989,7 +1031,7 @@ fn prepare(
     // here; everything else only gives some back).
     let staging = limits.lock().expect("poisoned").staging.clone();
     let _staging = staging.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (file, part, offset) = open_part(root, id, size)?;
+    let (file, part, offset, claim) = open_part(root, id, size)?;
     let need = size - offset;
     let (reserved_total, peer_reserved) = {
         let l = limits.lock().expect("poisoned");
@@ -1008,7 +1050,7 @@ fn prepare(
         let r = l.reserved.entry(fp).or_default();
         *r = r.saturating_add(need);
     }
-    Ok((file, part, offset, Reservation { limits: limits.clone(), fp, left: need }))
+    Ok((file, part, offset, Reservation { limits: limits.clone(), fp, left: need, _claim: claim }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1108,7 +1150,13 @@ fn real_dir(dir: &Path) -> Result<()> {
 }
 
 /// Opens (or creates) the partial file. Returns how much of it is usable.
-fn open_part(root: &Path, id: &str, size: u64) -> Result<(File, PathBuf, u64)> {
+///
+/// The file is locked for as long as it is being received (the lock goes with
+/// the open file, so it ends with the process too): another one-mk using the
+/// same download folder (another settings home) must neither clear it nor
+/// receive into it meanwhile, which its own in-memory claims can't tell. The
+/// second handle returned keeps the lock until the transfer is over.
+fn open_part(root: &Path, id: &str, size: u64) -> Result<(File, PathBuf, u64, Option<File>)> {
     fs::create_dir_all(long(root)).with_context(|| format!("creating {}", root.display()))?;
     let staging = root.join(PARTIAL_DIR);
     real_dir(&staging)?;
@@ -1122,12 +1170,20 @@ fn open_part(root: &Path, id: &str, size: u64) -> Result<(File, PathBuf, u64)> {
     }
     let file = opts.open(&part).with_context(|| format!("opening {}", part.display()))?;
     ensure!(file.metadata()?.is_file(), "{} is not a file", part.display());
+    // Before anything is changed in it.
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => bail!("this file is being received by another one-mk on this computer right now; send it again in a moment"),
+        // A folder that can't lock (some network drives): as before, no claim.
+        Err(fs::TryLockError::Error(e)) => tracing::debug!("cannot lock {}: {e}", part.display()),
+    }
+    let claim = file.try_clone().ok();
     let mut len = file.metadata()?.len();
     if len > size {
         file.set_len(0)?;
         len = 0;
     }
-    Ok((file, part, len))
+    Ok((file, part, len, claim))
 }
 
 /// What the writer needs of a partial file: a real file, or (in tests) one
@@ -2578,6 +2634,35 @@ mod tests {
         inbox.active.lock().unwrap().insert(busy.clone(), Slot::default());
         assert_eq!(inbox.clear_partials(), 2);
         assert!(staging.join(&busy).exists() && !staging.join(&one).exists() && !staging.join(&two).exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Another one-mk (another settings home on the same download folder) clears the staging
+    /// folder with nothing active in its own memory: a file being received is locked, so it stays.
+    /// Once the transfer is over the file can go, and a clear in the middle of one can't be
+    /// followed by a second receive into the same file.
+    #[test]
+    fn a_partial_being_received_by_another_process_is_not_cleared() {
+        let root = temp("claimed");
+        let fp = Fingerprint([7; 32]);
+        let id = part_id(fp, "big.bin", 100, 1);
+        let limits = Arc::new(Mutex::new(Limits::default()));
+        let (file, part, _, reservation) = prepare(&root, &id, &fp_prefix(fp), 100, PEER_PARTIAL_CAP, &limits, fp).unwrap();
+        fs::write(&part, vec![1u8; 40]).unwrap();
+        // The offline home's `partials --clear`, and a sweep, which know nothing of the receive.
+        assert_eq!(clear_idle_partials_in(&root), 0);
+        assert!(part.exists(), "the file of a receive in progress was deleted");
+        assert_eq!(sweep_dir(&root, None, &Mutex::default()), 0);
+        // Nor can a second one-mk start receiving into it.
+        let err = prepare(&root, &id, &fp_prefix(fp), 100, PEER_PARTIAL_CAP, &limits, fp).err().unwrap();
+        assert!(format!("{err:#}").contains("being received by another one-mk"), "{err:#}");
+        assert_eq!(fs::metadata(&part).unwrap().len(), 40, "its content was left alone");
+        // The writer is done but placing is not: still held through the reservation.
+        drop(file);
+        assert_eq!(clear_idle_partials_in(&root), 0);
+        drop(reservation);
+        assert_eq!(clear_idle_partials_in(&root), 1);
+        assert!(!part.exists());
         let _ = fs::remove_dir_all(&root);
     }
 
