@@ -15,7 +15,8 @@
 //!   capture surface, and the pointer, though it moves, stays on them. The
 //!   daemon is told (`Activated`) only once the compositor has configured
 //!   the surface, entered it with the keyboard and activated the pointer
-//!   lock (`Handoff`); if that takes more than two seconds, the surfaces
+//!   lock (`Handoff`), and told what the keyboard holds (`Modifiers` goes before
+//!   `Activated`); if that takes more than two seconds, the surfaces
 //!   come down and the daemon gets an `Event::Error` instead.
 //! - Injection: `zwlr_virtual_pointer_v1` and `zwp_virtual_keyboard_v1`,
 //!   the keyboard with the seat's own keymap (so this machine's layout
@@ -490,6 +491,11 @@ impl State {
 
     /// Work left by the event handlers.
     fn after_dispatch(&mut self) {
+        // A compositor sends the modifiers right after the enter, in the same batch: one that sent
+        // none is not waited for any longer than that.
+        if self.capture.as_ref().is_some_and(|c| !c.confirmed && c.handoff.awaits_modifiers()) {
+            self.handoff_step(Handoff::keyboard_modifiers);
+        }
         if std::mem::take(&mut self.outputs_changed) {
             let rects: Vec<Rect> = self.outputs.iter().filter_map(|o| o.geometry.rect()).collect();
             let desktop = (!rects.is_empty()).then(|| Desktop::new(rects));
@@ -676,9 +682,11 @@ impl State {
         c.confirmed = true;
         let (id, side, at) = (c.id, c.side, c.at);
         tracing::debug!(id, %side, ?at, "captured");
+        // What the keyboard held when it entered, said first: the edge rules are judged on it when
+        // the daemon hears of the capture. None without a keyboard.
+        let held = if self.keyboard.is_some() { self.seat_mods } else { 0 };
+        self.send(Event::Modifiers(Mods::from_xkb(held)));
         self.send(Event::Activated { id, side, pos: at });
-        // What the keyboard held when it entered, which came before this.
-        self.send(Event::Modifiers(Mods::from_xkb(self.seat_mods)));
     }
 
     /// When the compositor must have handed over, while a capture waits for it.
@@ -1029,6 +1037,9 @@ impl State {
                 }
                 if self.captured() {
                     self.send(Event::Modifiers(Mods::from_xkb(mods_depressed | mods_latched)));
+                } else {
+                    // The ones the compositor sends once the keyboard has entered.
+                    self.handoff_step(Handoff::keyboard_modifiers);
                 }
             }
             _ => {}
