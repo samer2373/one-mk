@@ -34,7 +34,12 @@ seconds, `Show` when it ends. The extension uses
 
 `HideUntilMoved` hides it where it stands after another computer has moved
 this one's pointer and let go, until this computer's own mouse or touchpad is
-used.
+used. Motion in the first 0.4 s after is not counted: the shell reports the last
+of the motion that put the pointer there the same way as a real touch of the mouse
+and the extension cannot tell them apart, so a single nudge in that time, and then
+stillness, leaves the pointer hidden until the next move. Counting that motion
+would show the pointer again at once on every visit, which is what the feature
+is for avoiding.
 
 ## Testing
 

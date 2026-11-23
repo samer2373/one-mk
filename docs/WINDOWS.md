@@ -20,6 +20,12 @@ step first run on real hardware is in [TESTING.md](TESTING.md).
   keys, lock sync, sleep sync, hotkeys (`RegisterHotKey`), network profiles (WlanAPI and IP Helper),
   autoscroll and gestures, and a drawn pointer on a computer with no mouse.
 - **Taking the computer back** works by using its own mouse or keyboard.
+- **Lost input hooks are put back.** Windows removes a low-level hook whose program was too slow,
+  without telling it. oneMK notes when each hook last saw input: while idle (every few seconds, and
+  at least every 10 minutes) and during a visit, if Windows has input that neither hook saw it
+  installs them again, and a visit that lost them ends. A key or button of the other computer that
+  Windows refused to release (a lock screen or UAC prompt was in front) is released again as soon
+  as input works again.
 - **Shortcuts differ** so they do not collide with AltGr, which Windows reports as Ctrl+Alt: jump
   and broadcast use `Ctrl+Alt+Shift+...`, and the clipboard fetch shortcut is `Ctrl+Alt+Shift+V`.
 
