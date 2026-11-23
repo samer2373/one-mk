@@ -410,12 +410,15 @@ impl Raw {
     /// What [`Raw::digest`] of this content is under each combination of
     /// format switches: a later read with another filter sees the same copy
     /// by another digest, and has to know it is the same copy.
+    ///
+    /// Works on borrowed views: for a picture this is hashing megabytes up to
+    /// eight times, not copying them as well.
     fn digests_under_any_filter(&self) -> Vec<Digest> {
-        let base = self.clone().without_empty_formats();
+        let base = View::of(self).without_empty_formats();
         let mut all = Vec::new();
         for bits in 0..8u8 {
             let filter = Filter { text: bits & 1 != 0, html: bits & 2 != 0, image: bits & 4 != 0, ..Filter::default() };
-            let seen = base.clone().filtered(&filter).prefer_text();
+            let seen = base.filtered(&filter).prefer_text();
             if seen.is_empty() {
                 continue;
             }
@@ -469,6 +472,55 @@ impl Raw {
     }
 
     fn digest(&self) -> Digest {
+        View::of(self).digest()
+    }
+}
+
+/// [`Raw`] by reference, for what only needs its digest under some filter
+/// (the same steps as `Raw`'s own, on borrowed data).
+#[derive(Clone, Copy)]
+struct View<'a> {
+    text: Option<&'a str>,
+    html: Option<&'a str>,
+    image: Option<&'a Image>,
+}
+
+impl<'a> View<'a> {
+    fn of(raw: &'a Raw) -> Self {
+        View { text: raw.text.as_deref(), html: raw.html.as_deref(), image: raw.image.as_ref() }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.text.is_none() && self.html.is_none() && self.image.is_none()
+    }
+
+    fn has_words(&self) -> bool {
+        self.text.is_some_and(|t| !t.is_empty()) || self.html.is_some_and(|h| !h.is_empty())
+    }
+
+    fn without_empty_formats(mut self) -> Self {
+        if self.has_words() || self.image.is_some() {
+            self.text = self.text.filter(|t| !t.is_empty());
+            self.html = self.html.filter(|h| !h.is_empty());
+        }
+        self
+    }
+
+    fn filtered(mut self, f: &Filter) -> Self {
+        if !f.text { self.text = None; }
+        if !f.html { self.html = None; }
+        if !f.image { self.image = None; }
+        self
+    }
+
+    fn prefer_text(mut self) -> Self {
+        if self.has_words() {
+            self.image = None;
+        }
+        self.without_empty_formats()
+    }
+
+    fn digest(&self) -> Digest {
         let mut h = blake3::Hasher::new();
         let mut field = |tag: u8, bytes: Option<&[u8]>| {
             if let Some(b) = bytes {
@@ -477,9 +529,9 @@ impl Raw {
                 h.update(b);
             }
         };
-        field(1, self.text.as_deref().map(str::as_bytes));
-        field(2, self.html.as_deref().map(str::as_bytes));
-        if let Some(i) = &self.image {
+        field(1, self.text.map(str::as_bytes));
+        field(2, self.html.map(str::as_bytes));
+        if let Some(i) = self.image {
             h.update(&[3]);
             h.update(&(i.width as u64).to_le_bytes());
             h.update(&(i.height as u64).to_le_bytes());
@@ -932,14 +984,17 @@ impl Worker {
     fn write(&mut self, data: ClipData, concealed: bool, expected: Option<Option<Digest>>) -> Result<Option<Digest>> {
         let saved = Arc::new(data.clone());
         let image = data.png.as_deref().map(decode_png).transpose()?;
+        let raw = Raw { text: data.text, html: data.html, image, concealed: false };
+        // Prepared before the check below, which then sits right against the
+        // platform write: hashing a picture takes long enough for a copy made
+        // here meanwhile to be overwritten.
+        let sensitive = if concealed { raw.digests_under_any_filter() } else { Vec::new() };
         if let Some(expected) = expected {
             let now = self.backend_read().map(|raw| (!raw.is_empty()).then(|| raw.digest()))?;
             if now != expected {
                 return Ok(None);
             }
         }
-        let raw = Raw { text: data.text, html: data.html, image, concealed: false };
-        let sensitive = if concealed { raw.digests_under_any_filter() } else { Vec::new() };
         if let Err(e) = self.backend.write(raw) {
             if let Backend::System(cb) = &mut self.backend {
                 *cb = None;
