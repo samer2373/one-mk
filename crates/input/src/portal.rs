@@ -292,6 +292,18 @@ impl Retry {
         f.await
     }
 
+    /// `asking`, given up when `lost` says the portal (or the session the
+    /// request belongs to) is gone: a restarted portal never answers the
+    /// request it lost, and the dialog with it, so nothing would end the wait.
+    async fn asking_unless<T>(&mut self, f: impl Future<Output = Result<T>>, lost: impl Future<Output = anyhow::Error>) -> Result<T> {
+        tokio::pin!(lost);
+        let asking = self.asking(f);
+        tokio::select! {
+            r = asking => r,
+            e = &mut lost => Err(e),
+        }
+    }
+
     fn after(&mut self, result: Result<()>, ran_for: Duration) -> Next {
         let e = match result {
             Ok(()) => return Next::Stop,
@@ -794,6 +806,7 @@ async fn capture_session(
     let portal = timeout("InputCapture", InputCapture::with_connection(conn))
         .await
         .context("InputCapture portal not available")?;
+    let mut portal_owner = portal.receive_owner_changed().await?;
     let caps = Capabilities::Keyboard | Capabilities::Pointer;
     let v2 = portal.version() >= 2;
     let session = if v2 {
@@ -801,16 +814,33 @@ async fn capture_session(
     } else {
         // Version 1 asks the user here, every time.
         let create = portal.create_session(None, input_capture::CreateSessionOptions::default().set_capabilities(caps));
-        retry.asking(create).await.context("permission to capture input was not granted")?.0
+        let lost = async {
+            let owner = portal_owner.next().await;
+            anyhow!("the desktop portal {}", if owner.flatten().is_some() { "restarted" } else { "went away" })
+        };
+        retry
+            .asking_unless(async { Ok(create.await?) }, lost)
+            .await
+            .context("permission to capture input was not granted")?
+            .0
     };
     let result = guarded("input capture", async {
         if v2 {
+            let mut closed = session.receive_closed().await?;
             let start = async |token: Option<String>, retry: &mut Retry| {
                 let opts = input_capture::StartOptions::default()
                     .set_capabilities(caps)
                     .set_persist_mode(PersistMode::ExplicitlyRevoked)
                     .set_restore_token(token);
-                let request = retry.asking(portal.start(&session, None, opts)).await?;
+                let lost = async {
+                    tokio::select! {
+                        _ = closed.next() => anyhow!("the input capture session was closed"),
+                        owner = portal_owner.next() => {
+                            anyhow!("the desktop portal {}", if owner.flatten().is_some() { "restarted" } else { "went away" })
+                        }
+                    }
+                };
+                let request = retry.asking_unless(async { Ok(portal.start(&session, None, opts).await?) }, lost).await?;
                 request.response().context("permission to capture input was not granted")
             };
             with_token(tokens, retry, start, |r| r.restore_token()).await?;
@@ -1313,7 +1343,15 @@ async fn run_inject(
             .set_persist_mode(PersistMode::ExplicitlyRevoked)
             .set_restore_token(token.as_deref());
         timeout("selecting devices", portal.select_devices(session, opts)).await?.response()?;
-        let request = retry.asking(portal.start(session, None, Default::default())).await?;
+        let lost = async {
+            tokio::select! {
+                _ = closed.next() => anyhow!("the remote desktop session was closed"),
+                owner = portal_owner.next() => {
+                    anyhow!("the desktop portal {}", if owner.flatten().is_some() { "restarted" } else { "went away" })
+                }
+            }
+        };
+        let request = retry.asking_unless(async { Ok(portal.start(session, None, Default::default()).await?) }, lost).await?;
         request.response().context("permission to control this computer was not granted")
     };
     let granted = with_token(tokens, retry, start, |s| s.restore_token()).await?;

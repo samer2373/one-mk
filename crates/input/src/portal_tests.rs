@@ -1352,6 +1352,18 @@ async fn a_closed_session_lets_go_and_comes_back() {
 }
 
 #[tokio::test]
+async fn the_portal_going_away_during_a_dialog_does_not_wait_forever() {
+    let Some(mut h) = Harness::start(&[], |w| w.dialog = Duration::from_secs(30)).await else { return };
+    h.capture().send(CaptureCmd::SetEdges(vec![right_edge()])).unwrap();
+    h.until("both dialogs open", |w| w.count("rd.Start") == 1 && w.count("ic.CreateSession") == 1).await;
+    // xdg-desktop-portal restarts: the pending requests are lost.
+    drop(h.fake.take());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    h.fake = Some(serve_fake(&h.bus.as_ref().unwrap().addr.clone(), &h.world).await);
+    h.until("asked again", |w| w.count("rd.CreateSession") == 2 && w.count("ic.CreateSession") == 2).await;
+}
+
+#[tokio::test]
 async fn a_failed_barrier_update_is_tried_again_by_itself() {
     let Some(mut h) = Harness::start(&[], |w| w.fail_enable = 1).await else { return };
     // Enable fails once after the barriers were accepted; nothing else is
