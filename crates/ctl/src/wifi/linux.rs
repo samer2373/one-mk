@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedReceiver;
-use zbus::{Connection, Proxy, proxy::CacheProperties, zvariant::OwnedObjectPath};
+use zbus::{Connection, MatchRule, MessageStream, Proxy, message::Type, proxy::CacheProperties, zvariant::OwnedObjectPath};
 
 const NM: &str = "org.freedesktop.NetworkManager";
 const PATH: &str = "/org/freedesktop/NetworkManager";
@@ -75,8 +75,21 @@ async fn proxy<'a>(connection: &Connection, path: OwnedObjectPath, interface: &'
         .cache_properties(cache).build().await
 }
 
+/// Completes when the bus connection is gone (the bus restarted or was shut down). The property
+/// streams below only wait for events from a cache, so they never notice: the connection's own
+/// message stream is the one that ends (after an error) when its socket does.
+async fn disconnected(connection: &Connection) -> zbus::Result<()> {
+    let rule = MatchRule::builder().msg_type(Type::Signal).sender("org.freedesktop.DBus")?.interface("org.freedesktop.DBus")?
+        .member("NameOwnerChanged")?.arg(0, NM)?.build();
+    let mut messages = MessageStream::for_match_rule(rule, connection, Some(8)).await?;
+    while let Some(Ok(_)) = messages.next().await {}
+    Ok(())
+}
+
 async fn watch(shared: &Shared) -> zbus::Result<()> {
     let connection = Connection::system().await?;
+    let gone = disconnected(&connection);
+    tokio::pin!(gone);
     // Property change notifications need the properties cached; reads in `current` stay fresh.
     let manager = proxy(&connection, OwnedObjectPath::try_from(PATH)?, NM, CacheProperties::Lazily).await?;
     let mut active = manager.receive_property_changed::<Vec<OwnedObjectPath>>("ActiveConnections").await;
@@ -86,6 +99,7 @@ async fn watch(shared: &Shared) -> zbus::Result<()> {
         let changed = tokio::select! {
             event = active.next() => event.is_some(),
             event = primary.next() => event.is_some(),
+            _ = &mut gone => false,
         };
         if !changed { return Ok(()); }
         shared.publish(current(&connection).await?);
@@ -166,6 +180,32 @@ mod tests {
         sender.send(Action::Stop).unwrap();
         worker.join().unwrap();
         assert!(tries.load(Ordering::SeqCst) >= 3);
+    }
+
+    /// A real connection drop, not an injected error: a private bus is started and then killed.
+    #[test]
+    fn a_bus_that_goes_away_ends_the_wait() {
+        use std::io::BufRead;
+        let Ok(mut bus) = std::process::Command::new("dbus-daemon")
+            .args(["--session", "--nofork", "--print-address=1"])
+            .stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn()
+        else {
+            eprintln!("no dbus-daemon here; skipped");
+            return;
+        };
+        let mut address = String::new();
+        std::io::BufReader::new(bus.stdout.take().unwrap()).read_line(&mut address).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            let connection = zbus::connection::Builder::address(address.trim()).unwrap().build().await.unwrap();
+            let wait = disconnected(&connection);
+            tokio::pin!(wait);
+            // Alive: still waiting.
+            assert!(tokio::time::timeout(Duration::from_millis(200), &mut wait).await.is_err());
+            bus.kill().unwrap();
+            bus.wait().unwrap();
+            assert!(tokio::time::timeout(Duration::from_secs(5), &mut wait).await.is_ok(), "the lost bus was not noticed");
+        });
     }
 
     #[test]
