@@ -141,6 +141,13 @@ pub(super) fn restore_step(applied: &std::collections::BTreeMap<String, String>,
     if legacy || ours { Restore::Now } else { Restore::Leave }
 }
 
+/// Whether turning off should put the layout (fill, stretch...) back: only when oneMK still owns
+/// a picture on some monitor (one it put back now, or one it must try again for), since the
+/// layout is global and a picture chosen after ours is shown the way the user left it. A legacy
+/// journal reads as owned for every monitor, so it is restored as it always was.
+#[cfg(any(windows, test))]
+pub(super) fn owns_the_layout(steps: &[Restore]) -> bool { steps.iter().any(|step| *step != Restore::Leave) }
+
 #[cfg(any(target_os = "macos", windows, test))]
 pub(super) fn native_or_overlay<Prepared>(prepared: Result<Prepared>, apply: impl FnOnce(Prepared) -> Result<()>) -> Result<one_mk_wallpaper::picture::Mode> {
     use one_mk_wallpaper::picture::Mode;
@@ -863,5 +870,12 @@ mod tests {
         // A journal without ownership records is restored as it always was.
         assert_eq!(restore_step(&BTreeMap::new(), &BTreeMap::new(), "A", Some("C:\\anything.png")), Restore::Now);
         assert_eq!(restore_step(&BTreeMap::new(), &BTreeMap::new(), "A", None), Restore::Later);
+    }
+    #[test]
+    fn the_layout_goes_back_only_while_one_mk_owns_a_picture() {
+        assert!(owns_the_layout(&[Restore::Now, Restore::Leave]));
+        assert!(owns_the_layout(&[Restore::Leave, Restore::Later]), "a disconnected monitor still has ours");
+        assert!(!owns_the_layout(&[Restore::Leave, Restore::Leave]), "the user chose the picture, and its layout");
+        assert!(!owns_the_layout(&[]));
     }
 }

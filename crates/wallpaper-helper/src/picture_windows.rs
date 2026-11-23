@@ -100,9 +100,12 @@ pub fn restore(root: &Path) -> Result<bool> {
         let monitors = (0..desktop.0.GetMonitorDevicePathCount()?).map(|index| string(desktop.0.GetMonitorDevicePathAt(index)?)).collect::<Result<Vec<_>>>()?;
         // Only what oneMK still owns is put back: a picture chosen in Personalization after ours stays.
         let (applied, earlier) = (&previous.applied, &previous.previous_applied);
+        let mut steps = Vec::new();
         previous.screens = super::unrestored(previous.screens, |(monitor, path)| {
             let current = if monitors.contains(monitor) { desktop.0.GetWallpaper(PCWSTR(wide(monitor).as_ptr())).ok().and_then(|path| string(path).ok()) } else { None };
-            match super::restore_step(applied, earlier, monitor, current.as_deref()) {
+            let step = super::restore_step(applied, earlier, monitor, current.as_deref());
+            steps.push(step);
+            match step {
                 super::Restore::Now => desktop.0.SetWallpaper(PCWSTR(wide(monitor).as_ptr()), PCWSTR(wide(path).as_ptr())).is_ok(),
                 super::Restore::Leave => true,
                 super::Restore::Later => false,
@@ -111,8 +114,10 @@ pub fn restore(root: &Path) -> Result<bool> {
         previous.applied.retain(|monitor, _| previous.screens.iter().any(|(pending, _)| pending == monitor));
         previous.previous_applied.retain(|monitor, _| previous.screens.iter().any(|(pending, _)| pending == monitor));
         // Position: oneMK set stretch; if that is no longer what Windows has, the user changed it.
+        // It is global, so it also stays when every picture is one the user chose after ours.
         // The background colour is never changed by oneMK, so it is not written back.
-        let position_restored = desktop.0.GetPosition().is_ok_and(|position| position != DWPOS_STRETCH)
+        let position_restored = !super::owns_the_layout(&steps)
+            || desktop.0.GetPosition().is_ok_and(|position| position != DWPOS_STRETCH)
             || desktop.0.SetPosition(DESKTOP_WALLPAPER_POSITION(previous.position)).is_ok();
         super::atomic_write(&root.join("previous.json"), &serde_json::to_vec(&previous)?)?;
         Ok(previous.screens.is_empty() && position_restored)
