@@ -552,10 +552,19 @@ fn regular(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Where the version before an update is kept for `rollback`: `one-mk.old` beside
+/// the usual `one-mk` / `one-mk.exe`, and `<name>.old` for an AppImage under any
+/// other name, so two AppImages in one folder never share a backup.
+fn backup_path(target: &Path) -> Result<PathBuf> {
+    let parent = target.parent().context("update target has no directory")?;
+    let name = target.file_name().context("update target has no name")?.to_string_lossy();
+    Ok(if name == "one-mk" || name == "one-mk.exe" { parent.join("one-mk.old") } else { parent.join(format!("{name}.old")) })
+}
+
 fn replace(candidate: &Path, target: &Path) -> Result<()> {
     regular(target)?;
     let parent = target.parent().context("update target has no directory")?;
-    let old = parent.join("one-mk.old");
+    let old = backup_path(target)?;
     #[cfg(unix)]
     {
         let mut backup = Temporary::new(parent)?;
@@ -873,7 +882,7 @@ fn install_deb_as_root(staging: &Path) -> Result<()> {
 fn rollback(target: &Path) -> Result<()> {
     refuse_root()?;
     let _lock = target_lock(target, "This app's folder can't be changed by your account")?;
-    let old = target.parent().context("update target has no directory")?.join("one-mk.old");
+    let old = backup_path(target)?;
     regular(&old).context("no safe previous executable; reinstall the complete release manually")?;
     version_check(&old, None)?;
     let mut temporary = Temporary::new(target.parent().context("update target has no directory")?)?;
@@ -892,7 +901,9 @@ pub fn run(home: &Path, options: Options) -> Result<()> {
     let event = if options.status_json || options.move_to_applications || options.install_deb.is_some()
         || options.started_version.is_some() || options.check_on_start.is_some()
         || options.install_automatically.is_some() { None }
-        else if options.check || options.startup_check { Some(crate::analytics::Event::UpdateCheckFinished) }
+        // A check is recorded where it runs, in `run_inner`: a startup check that finds checks
+        // off or not yet due runs none.
+        else if options.check || options.startup_check { None }
         else if options.rollback { Some(crate::analytics::Event::UpdateRollbackFinished) }
         else { Some(crate::analytics::Event::UpdateRequestFinished) };
     let result = run_inner(home, options);
@@ -909,7 +920,8 @@ pub fn run(home: &Path, options: Options) -> Result<()> {
 }
 
 fn window_status(home: &Path) -> Result<policy::UpdateStatus> {
-    let settings = crate::settings::Settings::load(home)?.update;
+    // Read-only, so a typo elsewhere in the file costs only its own section.
+    let settings = crate::settings::Settings::load_lenient(home).unwrap_or_default().update;
     let state = load_state(home)?;
     let (executable, kind) = target()?;
     let movable = kind == InstallKind::MacApp && policy::translocated(&executable.to_string_lossy());
@@ -1006,11 +1018,19 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
         return Ok(());
     }
     ensure!(crate::update_key::PRODUCTION_KEY, "release verification is not configured: publisher must replace the test key; install the complete release manually");
-    let settings = crate::settings::Settings::load(home)?.update;
+    let settings = crate::settings::Settings::load_or_default(home).update;
     let endpoint = options.url.or(settings.url).unwrap_or_else(|| LATEST.into());
     let mut state = load_state(home)?;
     if options.startup_check && (!settings.check || !policy::startup_due(state.last_attempt, now()?)) { return Ok(()); }
-    let (manifest, release, origin, signed) = check_release(home, &endpoint, &mut state)?;
+    let checked = check_release(home, &endpoint, &mut state);
+    if options.check || options.startup_check {
+        let (outcome, code) = match &checked {
+            Ok(_) => (crate::analytics::Outcome::Success, crate::analytics::ErrorCode::None),
+            Err(error) => (crate::analytics::Outcome::Failed, crate::analytics::error_code(error)),
+        };
+        crate::analytics::record(home, crate::analytics::Event::UpdateCheckFinished, crate::analytics::Origin::Cli, outcome, code);
+    }
+    let (manifest, release, origin, signed) = checked?;
     if state.available.is_none() { println!("one-mk {} is up to date.", env!("CARGO_PKG_VERSION")); return Ok(()); }
     println!("one-mk {} is available (you have {}).", manifest.version, env!("CARGO_PKG_VERSION"));
     if options.check || options.startup_check { return Ok(()); }
@@ -1048,10 +1068,9 @@ pub async fn stop(home: &Path) -> Result<()> {
 
 pub fn startup(home: PathBuf) {
     if !crate::update_key::PRODUCTION_KEY || refuse_root().is_err() { return; }
-    let settings = match crate::settings::Settings::load(&home) {
-        Ok(settings) if settings.update.check => settings.update,
-        _ => return,
-    };
+    // Read-only, so a typo elsewhere in the file costs only its own section (it is logged).
+    let settings = crate::settings::Settings::load_or_default(&home).update;
+    if !settings.check { return; }
     let spawned = std::thread::Builder::new().name("one-mk-update".into()).spawn(move || {
         let result = (|| -> Result<()> {
             let _lock = lock(&home)?;
@@ -1072,7 +1091,16 @@ pub fn notice(home: &Path) -> Option<String> {
     let state = load_state(home).ok()?;
     let available = state.available?;
     (policy::compare(&available, env!("CARGO_PKG_VERSION")).ok()? == std::cmp::Ordering::Greater)
-        .then(|| format!("one-mk {available} is available; run one-mk update"))
+        .then(|| notice_text(&available, target().ok().map(|(_, kind)| kind)))
+}
+
+/// `one-mk update` only helps installs that update themselves (or a package it can install):
+/// for the others it refuses, so the line says what to do instead.
+fn notice_text(available: &str, kind: Option<InstallKind>) -> String {
+    match kind {
+        Some(kind) if !kind.installs_in_app() => format!("one-mk {available} is available. {} ({NOTES})", kind.advice()),
+        _ => format!("one-mk {available} is available; run one-mk update"),
+    }
 }
 
 pub fn doctor(home: &Path) -> (bool, String) {

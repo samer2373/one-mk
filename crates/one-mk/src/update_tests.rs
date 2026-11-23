@@ -211,6 +211,56 @@ fn local_download_replace_rollback_and_failures() -> Result<()> {
 }
 
 #[test]
+fn two_appimages_in_one_folder_each_roll_back_to_their_own_previous_version() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new()?;
+    let script = |version: &str| format!("#!/bin/sh\necho 'one-mk {version}'\n").into_bytes();
+    let write = |path: &Path, bytes: &[u8]| -> Result<()> {
+        fs::write(path, bytes)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        Ok(())
+    };
+    let (a, b) = (scratch.0.join("a.AppImage"), scratch.0.join("b.AppImage"));
+    write(&a, &script("1.0.0"))?;
+    write(&b, &script("2.0.0"))?;
+    for (target, version) in [(&a, "1.1.0"), (&b, "2.1.0")] {
+        let candidate = scratch.0.join("candidate");
+        write(&candidate, &script(version))?;
+        replace(&candidate, target)?;
+    }
+    rollback(&a)?;
+    assert_eq!(fs::read(&a)?, script("1.0.0"), "a.AppImage went back to its own previous version");
+    rollback(&b)?;
+    assert_eq!(fs::read(&b)?, script("2.0.0"));
+    // The usual names keep the backup name earlier versions used.
+    assert_eq!(backup_path(Path::new("/x/one-mk"))?, Path::new("/x/one-mk.old"));
+    assert_eq!(backup_path(Path::new("/x/one-mk.exe"))?, Path::new("/x/one-mk.old"));
+    Ok(())
+}
+
+#[test]
+fn a_typo_elsewhere_in_settings_does_not_stop_the_update_status() -> Result<()> {
+    let scratch = Scratch::new()?;
+    fs::write(scratch.0.join("settings.toml"), "[update]\ncheck = false\n\n[[input.scroll]]\nnatural = \"maybe\"\n")?;
+    assert!(crate::settings::Settings::load(&scratch.0).is_err(), "the strict loader fails on it");
+    let status = window_status(&scratch.0)?;
+    assert!(!status.check, "the [update] section that is fine is honoured");
+    Ok(())
+}
+
+#[test]
+fn the_available_notice_points_installs_that_cannot_update_themselves_elsewhere() {
+    for kind in [InstallKind::Portable, InstallKind::AppImage, InstallKind::MacApp, InstallKind::Deb] {
+        assert_eq!(notice_text("9.9.9", Some(kind)), "one-mk 9.9.9 is available; run one-mk update");
+    }
+    assert_eq!(notice_text("9.9.9", None), "one-mk 9.9.9 is available; run one-mk update");
+    for kind in [InstallKind::Homebrew, InstallKind::Flatpak, InstallKind::WindowsInstaller, InstallKind::Managed] {
+        let text = notice_text("9.9.9", Some(kind));
+        assert!(!text.contains("run one-mk update") && text.contains(kind.advice()), "{text}");
+    }
+}
+
+#[test]
 fn interrupted_download_and_redirect_refused() -> Result<()> {
     let mut interrupted = b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\n\r\n".to_vec();
     interrupted.extend(b"tiny");
