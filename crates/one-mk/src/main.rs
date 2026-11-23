@@ -779,7 +779,7 @@ fn run(cli: Cli) -> Result<()> {
 /// whether it is a custom one. `migrate` (moving an older version's files
 /// into the default folder) runs only when the default folder is the one
 /// used: a custom home never reaches outside itself, not even to look.
-fn select_home(given: Option<&Path>, default: Result<PathBuf>, migrate: impl FnOnce(&Path)) -> Result<(PathBuf, bool)> {
+fn select_home(given: Option<&Path>, default: Result<PathBuf>, migrate: impl FnOnce(&Path) -> Result<()>) -> Result<(PathBuf, bool)> {
     let (dir, custom) = match given {
         // Relative, a folder can't be checked up to the root (and the daemon
         // would see another folder after a `cd`): make it absolute now.
@@ -794,7 +794,7 @@ fn select_home(given: Option<&Path>, default: Result<PathBuf>, migrate: impl FnO
         None => (default?, false),
     };
     if !custom {
-        migrate(&dir);
+        migrate(&dir)?;
     }
     Ok((dir, custom))
 }
@@ -807,21 +807,23 @@ fn same_folder(a: &Path, b: &Path) -> bool {
 
 /// Moves an older version's files into the default home `dir`, once: on
 /// Windows they were kept in the roaming AppData.
-fn migrate_old_home(dir: &Path) {
+fn migrate_old_home(dir: &Path) -> Result<()> {
     #[cfg(windows)]
     if let Some(dirs) = directories::ProjectDirs::from("", "", "one-mk") {
-        migrate_roaming(dirs.config_dir(), dir);
+        return migrate_roaming(dirs.config_dir(), dir);
     }
     #[cfg(not(windows))]
     let _ = dir;
+    Ok(())
 }
 
 /// Earlier versions kept their settings in the roaming AppData; move them
-/// to the local one the first time.
+/// to the local one the first time. A move that fails is an error: carrying
+/// on would make the command create a new identity next to the old one.
 #[cfg(any(windows, test))]
-fn migrate_roaming(old: &Path, new: &Path) {
+fn migrate_roaming(old: &Path, new: &Path) -> Result<()> {
     if old == new || new.join("identity.key.der").exists() || !old.join("identity.key.der").exists() {
-        return;
+        return Ok(());
     }
     let moved = new.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::rename(old, new));
     if let Err(e) = moved {
@@ -829,8 +831,9 @@ fn migrate_roaming(old: &Path, new: &Path) {
         tracing::debug!("moving {} failed ({e}); copying", old.display());
         let copy = || -> std::io::Result<()> {
             std::fs::create_dir_all(new)?;
-            // The identity key goes last: its presence in the new folder is what says
-            // the migration is done, so a copy that stops half way is tried again.
+            // The identity key goes last, and under another name until it is whole:
+            // its presence in the new folder is what says the migration is done, so a
+            // copy that stops half way (or a key cut short) is tried again.
             let key = std::ffi::OsStr::new("identity.key.der");
             for entry in std::fs::read_dir(old)? {
                 let entry = entry?;
@@ -838,15 +841,23 @@ fn migrate_roaming(old: &Path, new: &Path) {
                     std::fs::copy(entry.path(), new.join(entry.file_name()))?;
                 }
             }
-            std::fs::copy(old.join(key), new.join(key))?;
-            std::fs::remove_dir_all(old)
+            let partial = new.join("identity.key.der.migrating");
+            let published = std::fs::copy(old.join(key), &partial).and_then(|_| std::fs::File::open(&partial)?.sync_all()).and_then(|()| std::fs::rename(&partial, new.join(key)));
+            if published.is_err() {
+                let _ = std::fs::remove_file(&partial);
+            }
+            published
         };
         if let Err(e) = copy() {
-            tracing::warn!("could not move settings from {} to {}: {e}", old.display(), new.display());
-            return;
+            return Err(anyhow::anyhow!("could not move settings from {} to {}: {e}; the old folder is kept, fix this and run the command again", old.display(), new.display()));
+        }
+        // The new folder is complete; the old one is only left behind.
+        if let Err(e) = std::fs::remove_dir_all(old) {
+            tracing::warn!("settings were copied to {}, but {} could not be removed: {e}", new.display(), old.display());
         }
     }
     tracing::info!("moved settings from {} to {}", old.display(), new.display());
+    Ok(())
 }
 
 pub(crate) fn default_downloads() -> Result<PathBuf> {
@@ -920,7 +931,7 @@ mod tests {
         let default = root.join("default");
         let custom = root.join("scratch");
         let migrated = std::cell::RefCell::new(Vec::new());
-        let note = |dir: &Path| migrated.borrow_mut().push(dir.to_owned());
+        let note = |dir: &Path| { migrated.borrow_mut().push(dir.to_owned()); Ok(()) };
 
         let (dir, is_custom) = select_home(Some(&custom), Ok(default.clone()), note).unwrap();
         assert_eq!((dir, is_custom), (custom.clone(), true));
@@ -939,7 +950,7 @@ mod tests {
 
         assert!(select_home(None, Err(anyhow::anyhow!("no home directory")), note).is_err());
         // A relative --home becomes absolute.
-        let (dir, _) = select_home(Some(Path::new("rel-home")), Ok(root.join("d")), |_| {}).unwrap();
+        let (dir, _) = select_home(Some(Path::new("rel-home")), Ok(root.join("d")), |_| Ok(())).unwrap();
         assert!(dir.is_absolute() && dir.ends_with("rel-home"));
     }
 
@@ -1025,15 +1036,16 @@ mod tests {
         }
         // The new folder exists with something in the way of one file: the rename fails, then so does a copy.
         std::fs::create_dir_all(new.join("devices.toml")).unwrap();
-        migrate_roaming(&old, &new);
+        assert!(migrate_roaming(&old, &new).is_err(), "a migration that failed must stop the command, which would create another identity");
         assert!(!new.join("identity.key.der").exists(), "the key must not be there while files are missing");
         assert!(old.join("devices.toml").is_file(), "the old folder is kept");
         std::fs::remove_dir_all(new.join("devices.toml")).unwrap();
-        migrate_roaming(&old, &new);
+        migrate_roaming(&old, &new).unwrap();
         for name in ["devices.toml", "settings.toml", "identity.cert.der", "identity.key.der"] {
             assert_eq!(std::fs::read_to_string(new.join(name)).unwrap(), name);
         }
         assert!(!old.exists());
+        assert!(!new.join("identity.key.der.migrating").exists(), "the key was published under its name");
     }
 
     #[test]
