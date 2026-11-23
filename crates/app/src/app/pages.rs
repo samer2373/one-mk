@@ -206,6 +206,8 @@ impl App {
     }
 
     pub(super) fn recheck(&mut self) {
+        // What this check is made against: if that changes before it ends, it runs again.
+        self.health_basis = Some(self.health_basis_now());
         self.busy.push(Job::Doctor);
         self.link.doctor();
     }

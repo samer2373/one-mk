@@ -730,12 +730,12 @@ impl App {
                     // (Health and the top bar's "check Health" tell the truth).
                     let basis = self.health_basis_now();
                     // (While a check runs, the change waits until it ends: see Event::Done.)
-                    if self.health_basis.as_ref() != Some(&basis) {
+                    // (`recheck` takes the basis a check starts with, and keeps it until the check ends.)
+                    if self.health_basis.as_ref() != Some(&basis) && !self.busy.contains(&Job::Doctor) {
                         if self.doctor.is_none() || self.health_basis.is_none() {
                             self.health_basis = Some(basis);
-                        } else if !self.busy.contains(&Job::Doctor) {
+                        } else {
                             self.recheck();
-                            self.health_basis = Some(basis);
                         }
                     }
                     self.sync_scene();
@@ -775,7 +775,6 @@ impl App {
                     if check {
                         let basis = self.health_basis_now();
                         if self.health_basis.as_ref().is_some_and(|was| *was != basis) && !self.busy.contains(&Job::Doctor) {
-                            self.health_basis = Some(basis);
                             self.recheck();
                         }
                     }

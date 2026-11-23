@@ -263,6 +263,22 @@ fn a_check_that_ends_after_a_change_runs_again() {
 }
 
 #[test]
+fn the_first_check_runs_again_when_a_computer_goes_offline_while_it_runs() {
+    let mut win = Win::light(1200.0, 780.0);
+    let fake = Fake::install(&mut win);
+    win.status(Some(two()));
+    fake.hold("doctor");
+    win.go(Tab::Health);
+    assert!(win.app.busy.contains(&Job::Doctor), "opening Health starts the first check");
+    win.status(Some(with(vec![peer("p1", "Office PC", Side::Right, os::WINDOWS, false)])));
+    assert_eq!(win.app.health_basis, Some((true, vec!["p1".to_owned()])), "the check is still about the state it started in");
+    fake.release("doctor");
+    win.health_check_ends();
+    assert_eq!(win.app.health_basis, Some((true, vec![])), "a second check was made for the new state");
+    assert_eq!(fake.calls_with(&["doctor"]).len(), 2, "{:?}", fake.calls());
+}
+
+#[test]
 fn leaving_settings_stops_a_shortcut_being_recorded() {
     let mut win = Win::light(1200.0, 780.0);
     win.status(Some(two()));
