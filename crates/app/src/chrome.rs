@@ -176,25 +176,35 @@ mod fake {
 
     #[cfg(any(debug_assertions, feature = "design-evidence"))]
     fn picture() -> &'static Option<egui::ColorImage> {
-        PICTURE.get_or_init(|| {
-            let bytes = std::fs::read(std::env::var_os("ONE_MK_APP_FAKE_DESKTOP")?).ok()?;
-            // Binary PPM: "P6 <w> <h> 255" then RGB.
-            let mut fields = Vec::new();
-            let mut at = 0;
-            while fields.len() < 4 {
-                while bytes.get(at)?.is_ascii_whitespace() {
-                    at += 1;
-                }
-                let start = at;
-                while !bytes.get(at)?.is_ascii_whitespace() {
-                    at += 1;
-                }
-                fields.push(std::str::from_utf8(&bytes[start..at]).ok()?.to_owned());
+        PICTURE.get_or_init(|| parse_ppm(&std::fs::read(std::env::var_os("ONE_MK_APP_FAKE_DESKTOP")?).ok()?))
+    }
+
+    /// Binary PPM: "P6 <w> <h> 255" then RGB. `None` for anything else, or a
+    /// size the bytes don't hold (never a panic: this reads a file by name).
+    #[cfg(any(debug_assertions, feature = "design-evidence"))]
+    pub(super) fn parse_ppm(bytes: &[u8]) -> Option<egui::ColorImage> {
+        let mut fields = Vec::new();
+        let mut at = 0;
+        while fields.len() < 4 {
+            while bytes.get(at)?.is_ascii_whitespace() {
+                at += 1;
             }
-            let (w, h): (usize, usize) = (fields[1].parse().ok()?, fields[2].parse().ok()?);
-            let rgb = bytes.get(at + 1..at + 1 + w * h * 3)?;
-            Some(egui::ColorImage::from_rgb([w, h], rgb))
-        })
+            let start = at;
+            while !bytes.get(at)?.is_ascii_whitespace() {
+                at += 1;
+            }
+            fields.push(std::str::from_utf8(&bytes[start..at]).ok()?.to_owned());
+        }
+        if fields[0] != "P6" || fields[3] != "255" {
+            return None;
+        }
+        let (w, h): (usize, usize) = (fields[1].parse().ok()?, fields[2].parse().ok()?);
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let len = w.checked_mul(h)?.checked_mul(3)?;
+        let rgb = bytes.get(at + 1..at.checked_add(1)?.checked_add(len)?)?;
+        Some(egui::ColorImage::from_rgb([w, h], rgb))
     }
 
     pub fn desktop() -> bool {
@@ -232,4 +242,23 @@ mod fake {
 #[cfg(any(debug_assertions, feature = "design-evidence"))]
 pub fn paint_fake_buttons(p: &egui::Painter) {
     fake::paint_buttons(p);
+}
+
+#[cfg(all(test, any(debug_assertions, feature = "design-evidence")))]
+mod tests {
+    use super::fake::parse_ppm;
+
+    #[test]
+    fn a_fake_desktop_picture_with_a_bad_header_is_refused_not_a_panic() {
+        let image = parse_ppm(b"P6 2 1 255\n\x01\x02\x03\x04\x05\x06").expect("a good picture");
+        assert_eq!(image.size, [2, 1]);
+        // A size whose bytes overflow (a debug build would panic on the product).
+        assert!(parse_ppm(b"P6 18446744073709551615 2 255\n\x01\x02\x03").is_none());
+        assert!(parse_ppm(b"P6 6148914691236517206 1 255\n\x01\x02\x03").is_none());
+        // Not P6 / 255, nothing to show, or fewer bytes than the header says.
+        assert!(parse_ppm(b"P3 1 1 255\n\x01\x02\x03").is_none());
+        assert!(parse_ppm(b"P6 1 1 65535\n\x01\x02\x03").is_none());
+        assert!(parse_ppm(b"P6 0 5 255\n").is_none());
+        assert!(parse_ppm(b"P6 2 2 255\n\x01\x02\x03").is_none());
+    }
 }
