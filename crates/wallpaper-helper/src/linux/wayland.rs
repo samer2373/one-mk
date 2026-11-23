@@ -35,7 +35,31 @@ struct Output {
     scale: i32,
     done: bool,
     wallpaper: Option<Wallpaper>,
-    closed: bool,
+    /// What a wallpaper surface for this output was refused or closed for.
+    refused: Option<Refusal>,
+}
+
+/// How many times a compositor may close an output's wallpaper surface, in
+/// one configuration of the output, before it is left without one.
+const CLOSED_RETRIES: u32 = 3;
+
+/// The part of an output a surface depends on: where, how many pixels, at what scale.
+type Configuration = (Rect, (i32, i32), i32);
+
+/// A surface the output was refused (too large, or closed by the compositor)
+/// holds only for the configuration it was refused in: the compositor may keep
+/// the same `wl_output` while its mode or scale changes, and the new
+/// configuration deserves a surface of its own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Refusal { configuration: Configuration, times: u32 }
+
+impl Refusal {
+    /// `weight` more refusals in `configuration`, after `previous`.
+    fn add(previous: Option<Self>, configuration: Configuration, weight: u32) -> Self {
+        let times = match previous { Some(previous) if previous.configuration == configuration => previous.times.saturating_add(weight), _ => weight };
+        Self { configuration, times }
+    }
+    fn blocks(&self, configuration: Configuration) -> bool { self.configuration == configuration && self.times >= CLOSED_RETRIES }
 }
 
 struct Wallpaper {
@@ -100,7 +124,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Desktop {
                     let proxy = registry.bind(name, version.min(4), handle, name);
                     let xdg = state.manager.as_ref().map(|manager| manager.get_xdg_output(&proxy, handle, name));
                     state.outputs.insert(name, Output { proxy, xdg, name: String::new(), xdg_name: String::new(), rect: Rect::default(),
-                        logical_size: None, logical_position: None, mode: (0, 0), rotated: false, scale: 1, done: false, wallpaper: None, closed: false });
+                        logical_size: None, logical_position: None, mode: (0, 0), rotated: false, scale: 1, done: false, wallpaper: None, refused: None });
                 }
                 _ => {}
             },
@@ -112,6 +136,8 @@ impl Dispatch<wl_registry::WlRegistry, ()> for Desktop {
 }
 
 impl Output {
+    fn configuration(&self) -> Configuration { (self.rect, self.mode, self.scale) }
+    fn refuse(&mut self, weight: u32) { self.refused = Some(Refusal::add(self.refused, self.configuration(), weight)); }
     fn update_rect(&mut self) {
         let (width, height) = if self.rotated { (self.mode.1, self.mode.0) } else { self.mode };
         let (width, height) = self.logical_size.unwrap_or((width / self.scale, height / self.scale));
@@ -161,7 +187,7 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, u32> for Desktop {
                     wallpaper.configured = true;
                 }
             }
-            zwlr_layer_surface_v1::Event::Closed => { output.wallpaper.take(); output.closed = true; }
+            zwlr_layer_surface_v1::Event::Closed => { output.wallpaper.take(); output.refuse(1); }
             _ => {}
         }
         state.changed = true;
@@ -187,7 +213,7 @@ impl Dispatch<xdg_surface::XdgSurface, u32> for Desktop {
 impl Dispatch<xdg_toplevel::XdgToplevel, u32> for Desktop {
     fn event(state: &mut Self, _: &xdg_toplevel::XdgToplevel, event: xdg_toplevel::Event, id: &u32, _: &Connection, _: &QueueHandle<Self>) {
         if let xdg_toplevel::Event::Close = event && let Some(output) = state.outputs.get_mut(id) {
-            output.wallpaper.take(); output.closed = true; state.changed = true;
+            output.wallpaper.take(); output.refuse(1); state.changed = true;
         }
     }
 }
@@ -302,7 +328,9 @@ impl Desktop {
     fn reconcile(&mut self, config: &PlayerConfig, handle: &QueueHandle<Self>, source: (u32, u32)) -> Result<()> {
         let compositor = self.compositor.as_ref().context("The Wayland compositor has no surface interface")?;
         for (id, output) in &mut self.outputs {
-            if !output.done || output.closed { continue; }
+            if !output.done { continue; }
+            let configuration = output.configuration();
+            if output.refused.is_some_and(|refused| refused.blocks(configuration)) { continue; }
             let Some(monitor) = one_mk_wallpaper::wayland::match_monitor(&config.plan.canvas.monitors, &config.computer, &[&output.name, &output.xdg_name], output.rect) else {
                 output.wallpaper.take(); continue;
             };
@@ -335,7 +363,7 @@ impl Desktop {
             // One output too large to paint must not take the others down.
             let Ok(size) = pixel_size(wallpaper.size, output.scale) else {
                 eprintln!("oneMK wallpaper: skipping output {id}, {}x{} at scale {} is too large", wallpaper.size.0, wallpaper.size.1, output.scale);
-                output.wallpaper.take(); output.closed = true; continue;
+                output.wallpaper.take(); output.refuse(CLOSED_RETRIES); continue;
             };
             if wallpaper.scale != output.scale || wallpaper.target != size || wallpaper.generation == 0 {
                 wallpaper.scale = output.scale; wallpaper.surface.set_buffer_scale(output.scale);
@@ -390,6 +418,8 @@ impl Desktop {
             if wallpaper.surface.version() >= 4 { wallpaper.surface.damage_buffer(0, 0, size.0 as i32, size.1 as i32); }
             else { wallpaper.surface.damage(0, 0, wallpaper.size.0 as i32, wallpaper.size.1 as i32); }
             wallpaper.surface.commit(); wallpaper.generation = generation;
+            // A surface that paints is a good one: earlier closings no longer count against it.
+            output.refused = None;
         }
         Ok(())
     }
@@ -633,6 +663,26 @@ mod tests {
         let title = window_title(secret, 7, Rect { x: -1920.0, y: -360.0, width: 1920.0, height: 1080.0 });
         assert_eq!(title, "oneMK:0123456789abcdef0123456789abcdef:7:-1920:-360:1920:1080");
         assert_eq!(&title[39..], "7:-1920:-360:1920:1080");
+    }
+    #[test]
+    fn a_refusal_holds_for_its_configuration_only() {
+        let rect = Rect { x: 0.0, y: 0.0, width: 40000.0, height: 1080.0 };
+        let before: Configuration = (rect, (40000, 1080), 1);
+        let after: Configuration = (Rect { width: 1920.0, ..rect }, (1920, 1080), 1);
+        // Too large: refused outright, until the output's mode or scale changes.
+        let refused = Refusal::add(None, before, CLOSED_RETRIES);
+        assert!(refused.blocks(before));
+        assert!(!refused.blocks(after));
+        assert!(!refused.blocks((rect, (40000, 1080), 2)));
+        // A compositor closing the surface is retried a few times, then given up on, per configuration.
+        let mut closed = None;
+        for time in 1..=CLOSED_RETRIES {
+            closed = Some(Refusal::add(closed, after, 1));
+            assert_eq!(closed.unwrap().blocks(after), time == CLOSED_RETRIES, "closing {time}");
+        }
+        // The count starts over in a new configuration.
+        assert!(!Refusal::add(closed, before, 1).blocks(before));
+        assert_eq!(Refusal::add(closed, before, 1).times, 1);
     }
     #[test]
     fn dimensions_respect_scale_and_bound_memory() {
