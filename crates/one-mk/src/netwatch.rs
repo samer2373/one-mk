@@ -307,27 +307,13 @@ mod nm {
     {
         let mut retry = Retry::default();
         let mut said = false;
-        let mut connected_before = false;
-        let mut connection_error = String::new();
-        let mut identical_failures = 0;
         loop {
             let started = std::time::Instant::now();
             let result = match connect().await {
-                Ok(conn) => {
-                    connected_before = true;
-                    identical_failures = 0;
-                    watch_connection(&conn, on_change).await
-                }
-                Err(error) => {
-                    let text = error.to_string();
-                    identical_failures = if text == connection_error { identical_failures + 1 } else { 1 };
-                    connection_error = text;
-                    if !connected_before && identical_failures >= 5 {
-                        tracing::info!("no system bus: network profiles will not switch automatically");
-                        return std::future::pending().await;
-                    }
-                    Err(error)
-                }
+                Ok(conn) => watch_connection(&conn, on_change).await,
+                // Tried again at the capped delay, however often it fails: a
+                // system bus (or NetworkManager) that starts late is picked up.
+                Err(error) => Err(error),
             };
             match result {
                 Ok(()) => tracing::debug!("NetworkManager's change notifications ended; reconnecting"),
@@ -467,7 +453,7 @@ mod nm {
         use super::*;
 
         #[tokio::test(start_paused = true)]
-        async fn absent_system_bus_stops_retrying() {
+        async fn absent_system_bus_is_retried_at_the_capped_delay() {
             let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let count = attempts.clone();
             let task = tokio::spawn(async move {
@@ -481,7 +467,14 @@ mod nm {
                 tokio::task::yield_now().await;
                 tokio::time::advance(Duration::from_secs(60)).await;
             }
-            assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 5);
+            // 1 + 2 + 4 + 8 + 16 + 32 s, then every 60 s: more than five tries.
+            let after_a_while = attempts.load(std::sync::atomic::Ordering::SeqCst);
+            assert!(after_a_while > 5, "gave up after {after_a_while} tries");
+            for _ in 0..3 {
+                tokio::task::yield_now().await;
+                tokio::time::advance(Duration::from_secs(60)).await;
+            }
+            assert!(attempts.load(std::sync::atomic::Ordering::SeqCst) > after_a_while, "stopped trying");
             task.abort();
             let _ = task.await;
         }

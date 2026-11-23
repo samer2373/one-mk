@@ -61,7 +61,11 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
     // the identity and trust files are blocking work: the daemon runs the
     // edge-drop send on its one thread, where the pointer and keyboard
     // forwarding would stand still meanwhile.
-    let (files, skipped) = tokio::task::spawn_blocking(move || transfer::collect_noted(&paths)).await.context("listing the files to send")??;
+    let (files, skipped) = tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        gate::wait(&paths);
+        transfer::collect_noted(&paths)
+    }).await.context("listing the files to send")??;
     if let Some(line) = skipped_line(&skipped) {
         eprintln!("{line}");
     }
@@ -384,6 +388,52 @@ fn bytes(n: u64) -> String {
     if u == 0 { format!("{n} B") } else { format!("{v:.1} {}", UNITS[u]) }
 }
 
+/// Test-only: holds the listing of chosen paths until the test lets it go, so that a
+/// test can show what else the runtime does meanwhile without timing real file work.
+#[cfg(test)]
+mod gate {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Duration;
+
+    #[derive(Default)]
+    pub struct Gate {
+        /// (released, gave up waiting)
+        state: Mutex<(bool, bool)>,
+        changed: Condvar,
+    }
+
+    static GATES: Mutex<Vec<(PathBuf, Arc<Gate>)>> = Mutex::new(Vec::new());
+
+    impl Gate {
+        pub fn release(&self) {
+            self.state.lock().unwrap().0 = true;
+            self.changed.notify_all();
+        }
+
+        /// Whether the listing waited in vain: nothing let it go in time.
+        pub fn gave_up(&self) -> bool {
+            self.state.lock().unwrap().1
+        }
+    }
+
+    pub fn arm(path: &Path) -> Arc<Gate> {
+        let gate = Arc::new(Gate::default());
+        GATES.lock().unwrap().push((path.to_owned(), gate.clone()));
+        gate
+    }
+
+    pub fn wait(paths: &[PathBuf]) {
+        let gate = GATES.lock().unwrap().iter().find(|(path, _)| paths.contains(path)).map(|(_, gate)| gate.clone());
+        let Some(gate) = gate else { return };
+        let (state, timeout) = gate.changed.wait_timeout_while(gate.state.lock().unwrap(), Duration::from_secs(5), |(released, _)| !*released).unwrap();
+        if timeout.timed_out() {
+            drop(state);
+            gate.state.lock().unwrap().1 = true;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,41 +566,32 @@ mod tests {
         drop(free.await.unwrap());
     }
 
-    /// Listing a big folder for an edge drop must not hold the one thread the
-    /// daemon's input forwarding runs on.
+    /// Listing a folder for an edge drop must not hold the one thread the daemon's input
+    /// forwarding runs on. The listing is held until another task of the runtime has run:
+    /// done inline, it would wait on the very thread that task needs, and give up.
     #[tokio::test(flavor = "current_thread")]
     async fn listing_files_to_send_does_not_stall_the_runtime() {
         let src = temp("walk-src");
-        for d in 0..100 {
-            let dir = src.join(format!("d{d:03}"));
-            std::fs::create_dir_all(&dir).unwrap();
-            for f in 0..100 {
-                std::fs::write(dir.join(format!("f{f:03}")), []).unwrap();
-            }
-        }
+        std::fs::write(src.join("f"), []).unwrap();
         let home = temp("walk-home");
-        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let ticker = {
-            let stop = stop.clone();
-            tokio::spawn(async move {
-                let mut worst = Duration::ZERO;
-                let mut last = Instant::now();
-                while !stop.load(Ordering::Relaxed) {
-                    tokio::time::sleep(Duration::from_millis(2)).await;
-                    worst = worst.max(last.elapsed());
-                    last = Instant::now();
-                }
-                worst
-            })
-        };
-        tokio::task::yield_now().await;
+        let gate = gate::arm(&src);
+        let sending = tokio::spawn({
+            let src = src.clone();
+            async move { send(&home, vec![src], None, vec![]).await }
+        });
+        // The runtime's only thread is free: this task runs while the listing is held.
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let other = tokio::spawn({
+            let ran = ran.clone();
+            async move { ran.store(true, Ordering::SeqCst) }
+        });
+        other.await.unwrap();
+        assert!(ran.load(Ordering::SeqCst));
+        gate.release();
         // No paired computer: the send ends right after the listing.
-        let result = send(&home, vec![src], None, vec![]).await;
+        let result = sending.await.unwrap();
         assert!(format!("{:#}", result.unwrap_err()).contains("no paired computers"));
-        stop.store(true, Ordering::Relaxed);
-        let worst = ticker.await.unwrap();
-        eprintln!("worst gap while listing: {worst:?}");
-        assert!(worst < Duration::from_millis(25), "the runtime stood still for {worst:?}");
+        assert!(!gate.gave_up(), "the runtime stood still while the listing was held");
     }
 
     /// The same path twice used to make two concurrent streams for one

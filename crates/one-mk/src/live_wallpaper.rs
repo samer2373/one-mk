@@ -16,6 +16,7 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct Peer { pub id: String, pub name: String, pub fingerprint: Fingerprint, pub address: std::net::SocketAddr, pub control: ControlWriter }
 
+#[derive(Clone)]
 pub struct Layout { pub computer: String, pub canvas: one_mk_wallpaper::Canvas, pub paired: BTreeSet<String> }
 impl Layout {
     pub fn from_status(status: &Status) -> Self {
@@ -55,6 +56,11 @@ struct State {
     /// [`COPY_RETRY`] has passed, not at every layout change.
     copy_failed: BTreeMap<Fingerprint, std::time::Instant>,
     deferred: Option<(PathBuf, Layout, Vec<Peer>, Node)>,
+    /// What the last [`Runtime::reconcile`] was given: a copy that failed is
+    /// asked again from it once [`COPY_RETRY`] has passed, without waiting for
+    /// a layout event that may not come.
+    latest: Option<(PathBuf, Layout, Vec<Peer>, Node)>,
+    retry: Option<tokio::task::JoinHandle<()>>,
     inbox: Option<Arc<crate::transfer::Inbox>>,
     authority_off: bool,
     pending: Option<(Fingerprint, Plan)>,
@@ -114,7 +120,10 @@ struct Saved {
 }
 
 /// How long a computer whose copy failed is left alone before it is tried again.
+#[cfg(not(test))]
 const COPY_RETRY: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const COPY_RETRY: Duration = Duration::from_millis(700);
 
 /// Why nothing plays while the screen is locked or the computer sleeps.
 const HELD_MESSAGE: &str = "Paused while this computer is locked or asleep; it resumes when you unlock it";
@@ -652,6 +661,7 @@ impl Runtime {
     pub fn reconcile(&self, dir: PathBuf, layout: Layout, peers: Vec<Peer>, node: Node) {
         let mut state = self.state.lock().unwrap();
         if state.coordinator.is_some() { return; }
+        state.latest = Some((dir.clone(), layout.clone(), peers.clone(), node.clone()));
         if state.authority_off {
             let connections = peers.iter().map(|peer| peer.fingerprint).collect();
             if state.connections != connections {
@@ -729,6 +739,10 @@ impl Runtime {
                 let detail: String = log.lines().next().unwrap_or_default().chars().take(300).collect();
                 if !detail.is_empty() { state.status.message = detail; }
             }
+            // Said by the state too, not only by the words: whoever reads the
+            // state (`one-mk doctor`) must not take a player that is gone for a ready one.
+            let (computer, message) = (state.computer.clone(), state.status.message.clone());
+            if !matches!(state.status.computers.get(&computer), Some(Playback::Error(_))) { state.status.computers.insert(computer, Playback::Error(message)); }
         }
         let mut status = state.status.clone();
         // Counted from what each computer said, not from the plan alone.
@@ -761,7 +775,29 @@ impl Runtime {
         state.generation += 1;
         if let Some(worker) = state.worker.take() { worker.abort(); }
         state.deferred = None;
+        state.latest = None;
+        if let Some(retry) = state.retry.take() { retry.abort(); }
         state.stop();
+    }
+
+    /// Asks again for the copies that failed once [`COPY_RETRY`] has passed:
+    /// the layout events that normally call [`reconcile`](Self::reconcile) may
+    /// not come. Dropped if another selection was made meanwhile; one timer at
+    /// a time, and a computer that disconnected is not asked (the latest
+    /// `reconcile` no longer lists it).
+    fn retry_copies(&self, generation: u64) {
+        let runtime = self.clone();
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(COPY_RETRY).await;
+            let latest = {
+                let mut state = runtime.state.lock().unwrap();
+                state.retry = None;
+                if state.generation != generation { return; }
+                state.latest.clone()
+            };
+            if let Some((dir, layout, peers, node)) = latest { runtime.reconcile(dir, layout, peers, node); }
+        });
+        if let Some(old) = self.state.lock().unwrap().retry.replace(task) { old.abort(); }
     }
 
     pub fn hold(&self, dir: &Path, locked: Option<bool>, asleep: Option<bool>) {
@@ -1122,15 +1158,19 @@ impl Runtime {
     async fn distribute(&self, dir: &Path, plan: &Plan, peer: &Peer, node: &Node, generation: u64) -> Result<()> {
         let result = self.deliver(dir, plan, peer, node, generation).await;
         let mut state = self.state.lock().unwrap();
+        let mut retry = false;
         match &result {
             Ok(()) => { state.copy_failed.remove(&peer.fingerprint); }
             Err(error) if state.generation == generation => {
                 state.connections.remove(&peer.fingerprint);
                 state.copy_failed.insert(peer.fingerprint, std::time::Instant::now());
                 if state.status.computers.get(&peer.id) == Some(&Playback::Preparing) { state.status.computers.insert(peer.id.clone(), Playback::Error(error.to_string())); }
+                retry = true;
             }
             Err(_) => {}
         }
+        drop(state);
+        if retry { self.retry_copies(generation); }
         result
     }
 
@@ -1984,6 +2024,52 @@ mod tests {
         runtime.reconcile(directory.path().to_owned(), two_monitor_layout(&plan, true), vec![remote()], node);
         let state = runtime.state.lock().unwrap();
         assert!(state.worker.is_some() && state.connections.contains(&peer.fingerprint));
+    }
+
+    /// A player that exited and left a line in its log is an error for this computer, whatever the
+    /// line says, so what reads the state sees a player that is gone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_exited_player_is_an_error_state_with_the_log_line_as_its_message() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(cache(directory.path())).unwrap();
+        std::fs::write(cache(directory.path()).join("player.log"), "no display\nmore\n").unwrap();
+        let runtime = Runtime::default();
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        { let mut state = runtime.state.lock().unwrap(); state.player = Some(child); state.computer = "host".into(); state.directory = Some(directory.path().to_owned()); state.status.computers.insert("host".into(), Playback::Ready); }
+        let status = runtime.status();
+        assert_eq!(status.message, "no display");
+        assert_eq!(status.computers.get("host"), Some(&Playback::Error("no display".into())));
+    }
+
+    /// A copy that failed is asked again once the pause is over without any
+    /// layout event to call `reconcile`: the input link and the monitors
+    /// stay as they are.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_copy_is_retried_without_a_layout_event() {
+        let (control, _incoming, peer, node, _remote) = controls().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Runtime::default();
+        let plan = plan();
+        let child = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        { let mut state = runtime.state.lock().unwrap(); state.status.plan = Some(plan.clone()); state.player = Some(child); state.computer = "host".into(); state.status.computers.insert("host".into(), Playback::Ready); }
+        let remote = Peer { id: "remote".into(), name: "remote".into(), fingerprint: peer.fingerprint, address: "127.0.0.1:9".parse().unwrap(), control: control.clone() };
+        runtime.reconcile(directory.path().to_owned(), two_monitor_layout(&plan, true), vec![remote], node);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let first = loop {
+            if let Some(at) = runtime.state.lock().unwrap().copy_failed.get(&peer.fingerprint).copied() { break at; }
+            assert!(std::time::Instant::now() < deadline, "the copy never failed");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        // No reconcile call from here on: only the timer can ask again.
+        loop {
+            if runtime.state.lock().unwrap().copy_failed.get(&peer.fingerprint).is_some_and(|at| *at > first) { break; }
+            assert!(std::time::Instant::now() < deadline, "the failed copy was never tried again");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        runtime.shutdown();
     }
 
     /// The clock requests of a plan that went on across a reconnect use the new link.

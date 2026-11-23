@@ -879,11 +879,25 @@ fn install_deb_as_root(staging: &Path) -> Result<()> {
     })
 }
 
+/// Why there is no previous executable. An earlier one-mk kept the backup of any
+/// AppImage as `one-mk.old`, a name every copy in the folder shared: it is not
+/// taken as this one's (it may be another's), but said, so whoever knows it is
+/// can rename it.
+fn legacy_backup_hint(target: &Path, old: &Path) -> String {
+    let message = "no safe previous executable; reinstall the complete release manually";
+    let shared = old.parent().map(|parent| parent.join("one-mk.old")).filter(|shared| shared != old && regular(shared).is_ok());
+    match shared {
+        Some(shared) => format!("{message}. An older oneMK left {} beside {}, which may belong to another copy; \
+            if it is this one's previous version, rename it to {} and run the rollback again", shared.display(), target.display(), old.display()),
+        None => message.to_owned(),
+    }
+}
+
 fn rollback(target: &Path) -> Result<()> {
     refuse_root()?;
     let _lock = target_lock(target, "This app's folder can't be changed by your account")?;
     let old = backup_path(target)?;
-    regular(&old).context("no safe previous executable; reinstall the complete release manually")?;
+    regular(&old).with_context(|| legacy_backup_hint(target, &old))?;
     version_check(&old, None)?;
     let mut temporary = Temporary::new(target.parent().context("update target has no directory")?)?;
     std::io::copy(&mut File::open(&old)?, &mut temporary.file)?;

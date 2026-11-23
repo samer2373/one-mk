@@ -145,7 +145,9 @@ impl History {
     /// can't. Only while no save has been made by this process, whose own temporary
     /// file must not be taken for a leftover.
     fn clean_unfinished_saves(&mut self) {
-        let Some(directory) = self.path.as_ref().and_then(|path| path.parent()).filter(|dir| self.saver.is_none() && dir.is_dir()) else {
+        // With a save made, the sweep is skipped: what it said before still stands.
+        if self.saver.is_some() { return; }
+        let Some(directory) = self.path.as_ref().and_then(|path| path.parent()).filter(|dir| dir.is_dir()) else {
             self.cleanup_error = None;
             return;
         };
@@ -387,6 +389,29 @@ mod tests {
         history.configure(20, DEFAULT_BYTES, 1024, Some(directory.path().join("clipboard-history.bin")));
         assert!(history.status().note().is_none_or(|n| !n.contains("unfinished")));
         assert!(!directory.path().join(".clipboard-history-x").exists());
+    }
+
+    /// A warning about a leftover that could not be removed is not cleared by a settings
+    /// reload that skips the sweep because a save of this process is running.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_unfinished_save_warning_survives_a_reload_once_a_save_has_started() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions. As root nothing is unremovable.
+        if unsafe { libc::geteuid() } == 0 { return; }
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("clipboard-history.bin");
+        std::fs::write(directory.path().join(".clipboard-history-x"), b"clipboard text").unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let mut history = History::default();
+        history.configure(20, DEFAULT_BYTES, 1024, Some(file.clone()));
+        assert!(history.cleanup_error.is_some());
+        history.record(text("first copy"), false, "here");
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(history.saver.is_some(), "a copy starts the saver");
+        history.configure(20, DEFAULT_BYTES, 1024, Some(file));
+        assert!(history.cleanup_error.is_some(), "the leftover is still there, so is the warning");
+        assert!(directory.path().join(".clipboard-history-x").exists());
     }
 
     #[test]

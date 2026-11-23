@@ -282,8 +282,9 @@ impl ClipSync {
     async fn push_once(&self, fp: Fingerprint, name: &str, addr: SocketAddr, also_skip: Option<Digest>) {
         let skip: Vec<Digest> = self.state().known.get(&fp).copied().into_iter().chain(also_skip).collect();
         // With sensitive content shared (`--skip-sensitive off`) a plain read does not
-        // say that a copy was marked; the explicit read does, and the mark must travel.
-        let read = if self.cb.filter().skip_concealed { self.cb.read(skip).await } else { self.cb.read_explicit(skip).await };
+        // say that a copy was marked; the background read does, and the mark must travel.
+        // A copy a peer sent as sensitive is never returned by it: that stays where it arrived.
+        let read = self.cb.read_background(skip).await;
         match read {
             Ok(Read::Changed { digest, data }) => self.push_data(fp, name, addr, digest, &data, false).await,
             Ok(Read::Sensitive { digest, data }) => {
@@ -556,7 +557,7 @@ impl ClipSync {
             send.reset(FETCH_DISABLED.into())?;
             return Ok(());
         }
-        let read = if self.cb.filter().skip_concealed { self.cb.read(Vec::new()).await? } else { self.cb.read_explicit(Vec::new()).await? };
+        let read = self.cb.read_background(Vec::new()).await?;
         // The read may have taken a while (a slow clipboard owner): fetching may
         // have been switched off meanwhile, and then nothing is sent.
         if !self.allow_pull.load(Ordering::Relaxed) {
@@ -585,7 +586,7 @@ impl ClipSync {
     async fn read_snapshot(&self, fp: Fingerprint, name: &str, header: &ClipHeader, recv: &mut quinn::RecvStream, pushed: bool) -> anyhow::Result<Received> {
         // The visit this arrives in, if one is running: it may be over when the
         // payload has arrived (see `visit_baseline`).
-        let visit = if pushed { self.state().sessions.get(&fp).map(|session| session.baseline) } else { None };
+        let visit = if pushed { self.state().sessions.get(&fp).map(|session| (session.id, session.baseline)) } else { None };
         let filter = self.cb.filter();
         let wanted = |f: ClipFormat| match f {
             ClipFormat::Text => filter.text,
@@ -657,8 +658,8 @@ impl ClipSync {
         };
         let mut s = self.state();
         s.known.insert(fp, digest);
-        // What it sent is no copy made here.
-        if let Some(session) = s.sessions.get_mut(&fp).filter(|session| session.baseline.is_some()) {
+        // What it sent is no copy made here: in the visit it arrived in, not in a later one.
+        if let Some(session) = s.sessions.get_mut(&fp).filter(|session| session.baseline.is_some() && visit.is_none_or(|(id, _)| id == session.id)) {
             session.baseline = Some(Some(digest));
         }
         Ok(Received::Stored { bytes, what })
@@ -666,15 +667,18 @@ impl ClipSync {
 
     /// What our clipboard held when `fp` took control, if it controls us:
     /// what arrives is newer than that only if nothing was copied here since.
-    /// `started`: the baseline of the visit that was running when the snapshot
-    /// began to arrive. If that visit has ended since (a large copy takes
-    /// seconds, and `left` removes the session), the copy made during it is
-    /// still newer than what arrives.
-    fn visit_baseline(&self, fp: Fingerprint, started: Option<Option<Option<Digest>>>) -> Option<Option<Digest>> {
+    /// `started`: the number and baseline of the visit that was running when
+    /// the snapshot began to arrive. If that visit has ended since (a large
+    /// copy takes seconds, and `left` removes the session), the copy made
+    /// during it is still newer than what arrives; so it is if `fp` has come
+    /// again, whose baseline already holds that copy.
+    fn visit_baseline(&self, fp: Fingerprint, started: Option<(u64, Option<Option<Digest>>)>) -> Option<Option<Digest>> {
         let s = self.state();
         match (s.sessions.get(&fp), started) {
-            (Some(session), _) => session.baseline,
-            (None, Some(baseline)) => baseline,
+            // The same visit: its baseline may have moved to a push of the peer's.
+            (Some(session), Some((id, _))) if session.id == id => session.baseline,
+            (_, Some((_, baseline))) => baseline,
+            (Some(session), None) => session.baseline,
             (None, None) => None,
         }
     }
@@ -1306,6 +1310,32 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(150)).await;
         text(&b.mem, "newer");
         b.clip.left(a.fp(), a.addr());
+        send.write_all(b" text").await.unwrap();
+        send.finish().unwrap();
+        let mut ack = [0u8; 1];
+        let _ = recv.read_exact(&mut ack).await;
+        assert_eq!(b.mem.text().as_deref(), Some("newer"));
+        assert_eq!(b.mem.writes(), 0);
+    }
+
+    /// The copy a big push is guarded by is the one its own visit began with: when the
+    /// peer comes again before the payload is in, the new visit's baseline (which
+    /// already holds the copy made in between) is not the one to compare with.
+    #[tokio::test]
+    async fn a_push_that_outlives_its_visit_is_not_judged_by_the_next_visit() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve();
+        text(&b.mem, "before the visit");
+        b.clip.entered(a.fp(), "a");
+        eventually("baseline read", || b.clip.state().sessions.get(&a.fp()).is_some_and(|s| s.baseline.is_some())).await;
+        let header = ClipHeader { items: vec![(ClipFormat::Text, 10)], pull: false, concealed: false };
+        let (mut send, mut recv) = a.raw_stream(&b, &header).await;
+        send.write_all(b"older").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        text(&b.mem, "newer");
+        b.clip.left(a.fp(), a.addr());
+        b.clip.entered(a.fp(), "a");
+        eventually("the second visit's baseline", || b.clip.state().sessions.get(&a.fp()).is_some_and(|s| s.baseline.is_some())).await;
         send.write_all(b" text").await.unwrap();
         send.finish().unwrap();
         let mut ack = [0u8; 1];
