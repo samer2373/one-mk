@@ -324,6 +324,32 @@ fn pressing_a_new_key_saves_the_rule_and_escape_cancels() {
     assert!(win.app.keys.error.is_none());
 }
 
+/// egui-winit takes the key-down of Ctrl+V for itself and says nothing when the
+/// clipboard holds neither text nor a picture: the recorder used to save Ctrl alone.
+#[test]
+fn recording_ctrl_v_with_an_empty_clipboard_records_the_chord() {
+    let (mut win, fake) = keys_window();
+    select_caps(&mut win);
+    win.click("Press the key Caps Lock should become");
+    assert!(win.app.keys.capture.is_some());
+    let ctrl = Modifiers::CTRL;
+    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+    // Ctrl goes down; V goes down too, and egui-winit swallows that (empty clipboard): no event.
+    win.push(key(Key::ControlLeft, true, Modifiers::NONE));
+    win.push(egui::Event::ModifiersChanged(ctrl));
+    win.frames(3);
+    assert!(win.app.keys.capture.is_some(), "still waiting for the key");
+    // V goes up, then Ctrl.
+    win.push(key(Key::V, false, ctrl));
+    win.frames(2);
+    win.push(key(Key::ControlLeft, false, Modifiers::NONE));
+    win.push(egui::Event::ModifiersChanged(Modifiers::NONE));
+    win.frames(3);
+    assert!(win.app.keys.capture.is_none(), "it recorded something");
+    win.quiet();
+    assert_eq!(fake.calls_with(&["keymap", "add"]), vec![args(&["keymap", "add", "--", "capslock", "ctrl+v"])]);
+}
+
 #[test]
 fn a_rule_the_command_refuses_says_so_next_to_the_key() {
     let (mut win, fake) = keys_window();

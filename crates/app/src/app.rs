@@ -8,6 +8,7 @@ mod cells;
 mod clipboard_history;
 mod keys;
 mod links;
+mod paste_key;
 mod page_ui;
 mod pages;
 mod place;
@@ -236,6 +237,8 @@ pub struct App {
     /// Since when the window has had no answer from the daemon at all (the
     /// first look hasn't come back): `not_answering` after `LOOK_GRACE`.
     looking_since: Option<f64>,
+    /// Ctrl+V and Cmd+V as the key recorder hears them (paste_key.rs).
+    paste_key: paste_key::PasteKey,
     clipboard_history: Option<Result<Vec<crate::daemon::HistoryItem>, String>>,
     clipboard_reveal: Option<(u64, String)>,
     clipboard_clear_confirm: bool,
@@ -584,6 +587,7 @@ impl App {
             size: vec2(size[0], size[1]),
             now: 0.0,
             looking_since: None,
+            paste_key: Default::default(),
             ctx,
             guide: crate::guide::Overlay::from_env(),
         }
@@ -2875,6 +2879,9 @@ impl eframe::App for App {
             debug::plan_keys(self, _ctx, raw_input);
             debug::drop_on(self, _ctx, raw_input);
         }
+        // A paste shortcut is egui-winit's: while a key is being recorded, V is heard anyway.
+        let listening = self.keys_grab(_ctx);
+        self.paste_key.mend(&mut raw_input.events, listening, raw_input.focused);
         // Text typed or pasted in any script shows in its own letters (a
         // layout named in Chinese), not as boxes.
         let typed: Vec<&str> = raw_input.events.iter().filter_map(|e| match e { egui::Event::Text(t) | egui::Event::Paste(t) => Some(t.as_str()), egui::Event::Ime(egui::ImeEvent::Commit(t) | egui::ImeEvent::Preedit { text: t, .. }) => Some(t.as_str()), _ => None }).collect();
