@@ -24,6 +24,14 @@ impl WallpaperUi {
 
 impl App {
     pub(super) fn wallpaper_command(&mut self, command: Command) {
+        // Whichever control asked (this page, Search, a computer's panel), a
+        // change while a choice is prepared would end it: only turning the
+        // wallpaper off (which cancels it) and the GNOME setup (which the
+        // service keeps apart from the wallpaper) go through.
+        if self.wallpaper_preparing() && !matches!(command, Command::Off | Command::GnomeExtension { .. }) {
+            self.toast("The new wallpaper is still being prepared. Wait for it, or turn the wallpaper off.", self.now);
+            return;
+        }
         // A new picture or video is prepared for as long as it takes; until it
         // is done (or fails) the window keeps the other changes waiting, as each
         // one the service gets ends the one before it.
@@ -61,7 +69,8 @@ impl App {
         let no_wallpaper = Default::default();
         let wallpaper = status.as_ref().and_then(|status| status.wallpaper.as_ref()).unwrap_or(&no_wallpaper);
         // A drop is a choice like Choose…: only while choosing is possible.
-        let dropped = ui.input(|input| input.raw.dropped_files.first().map(|file| file.path().to_path_buf()));
+        // (Not while a sheet or Search owns the window: a drop on its scrim is not for this page.)
+        let dropped = ui.input(|input| input.raw.dropped_files.first().map(|file| file.path().to_path_buf())).filter(|_| !self.drops_blocked());
         let preparing = self.wallpaper_preparing();
         if let Some(path) = dropped && accepts_drop(status.is_some(), wallpaper.available) && !preparing { self.wallpaper_command(Command::Set { path }); }
         let plan = wallpaper.plan.as_ref();

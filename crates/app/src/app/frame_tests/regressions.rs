@@ -132,7 +132,7 @@ fn a_drop_lands_where_the_pointer_was_let_go() {
     win.push(egui::Event::PointerMoved(from));
     release(&mut win, from);
     win.quiet();
-    assert_eq!(win.app.layout_asked.get("p1").map(|(side, _)| *side), Some(Side::Right), "{:?}", win.app.layout_asked);
+    assert_eq!(win.app.layout_asked.get("p1").map(|(side, ..)| *side), Some(Side::Right), "{:?}", win.app.layout_asked);
 }
 
 #[test]
@@ -260,6 +260,41 @@ fn a_check_that_ends_after_a_change_runs_again() {
     assert_eq!(win.app.health_basis, before, "the change waits for the check to end");
     win.send(Event::Done { what: Job::Doctor, error: None });
     assert_eq!(win.app.health_basis, Some((true, vec![])), "no new check was started for what changed");
+}
+
+#[test]
+fn the_first_check_runs_again_when_a_computer_goes_offline_while_it_runs() {
+    let mut win = Win::light(1200.0, 780.0);
+    let fake = Fake::install(&mut win);
+    win.status(Some(two()));
+    fake.hold("doctor");
+    win.go(Tab::Health);
+    assert!(win.app.busy.contains(&Job::Doctor), "opening Health starts the first check");
+    win.status(Some(with(vec![peer("p1", "Office PC", Side::Right, os::WINDOWS, false)])));
+    assert_eq!(win.app.health_basis, Some((true, vec!["p1".to_owned()])), "the check is still about the state it started in");
+    fake.release("doctor");
+    win.health_check_ends();
+    assert_eq!(win.app.health_basis, Some((true, vec![])), "a second check was made for the new state");
+    assert_eq!(fake.calls_with(&["doctor"]).len(), 2, "{:?}", fake.calls());
+}
+
+#[test]
+fn files_let_go_over_search_reach_no_page_behind_it() {
+    for tab in [Tab::Desk, Tab::Files, Tab::Settings] {
+        let mut win = Win::light(1200.0, 780.0);
+        let fake = Fake::install(&mut win);
+        win.status(Some(two()));
+        win.go(tab);
+        win.app.open_palette(win.t);
+        win.settle();
+        let file = win.dir.join("a.txt");
+        std::fs::write(&file, "hello").unwrap();
+        win.drop_files(std::slice::from_ref(&file));
+        win.quiet();
+        assert!(fake.calls_with(&["send"]).is_empty(), "{tab:?}: sent through Search: {:?}", fake.calls());
+        assert!(win.app.pending_drop.is_none() && win.app.palette.open, "{tab:?}: the drop was taken");
+        assert_eq!(win.tab(), tab, "{tab:?}: the page changed under Search");
+    }
 }
 
 #[test]

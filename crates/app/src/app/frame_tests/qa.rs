@@ -21,6 +21,8 @@ use std::sync::{Arc, Mutex};
 /// stderr, exit 1) or prints what the files `fail-<first>-<second>`,
 /// `fail-<first>`, `out-<first>-<second>` and `out-<first>` say, the most
 /// specific first. `<second>` is `_` for a call of one word (`update` alone).
+/// While a file `hold-<first>` exists it waits (after writing the call down),
+/// so a test can end a command at the moment it chooses.
 const SCRIPT: &str = r#"#!/bin/sh
 home=""
 prev=""
@@ -43,6 +45,7 @@ for a in "$@"; do
 done
 printf '%s\n' "$line" >> "$state/calls.log"
 [ -n "$second" ] || second="_"
+while [ -f "$state/hold-$first" ]; do sleep 0.02; done
 if [ -f "$state/fail-$first-$second" ]; then cat "$state/fail-$first-$second" >&2; exit 1; fi
 if [ -f "$state/fail-$first" ]; then cat "$state/fail-$first" >&2; exit 1; fi
 if [ -f "$state/out-$first-$second" ]; then cat "$state/out-$first-$second"; elif [ -f "$state/out-$first" ]; then cat "$state/out-$first"; fi
@@ -97,6 +100,15 @@ impl Fake {
     /// Calls starting with `first` (or `first-second`) fail with this message.
     pub fn fail(&self, which: &str, message: &str) {
         std::fs::write(self.state.join(format!("fail-{which}")), message).unwrap();
+    }
+
+    /// Calls starting with `first` wait, once written down, until `release`.
+    pub fn hold(&self, first: &str) {
+        std::fs::write(self.state.join(format!("hold-{first}")), "").unwrap();
+    }
+
+    pub fn release(&self, first: &str) {
+        let _ = std::fs::remove_file(self.state.join(format!("hold-{first}")));
     }
 
     pub fn mend(&self, which: &str) {

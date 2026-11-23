@@ -278,9 +278,14 @@ pub struct App {
     /// Sides (and offsets) chosen here and not yet reported back by the
     /// daemon, and when.
     pending_side: HashMap<String, (Side, Offset, f64)>,
-    /// The last place asked of the daemon for each computer (side and exact
-    /// offset): "Try again" on a failed move asks for that, not just the side.
-    layout_asked: HashMap<String, (Side, Offset)>,
+    /// The last place asked of the daemon for each computer (side, exact
+    /// offset and the request's number): a failure undoes the desk only when
+    /// it belongs to this last request, not to an older one.
+    layout_asked: HashMap<String, (Side, Offset, u64)>,
+    /// The number of the last Ctrl and Cmd change asked for each computer.
+    swap_asked: HashMap<String, u64>,
+    /// The last number given to a layout or swap request.
+    requests: u64,
     /// Layout learning's question (computer id, side) answered here, and
     /// hidden until the daemon stops asking it.
     answered: Option<(String, Side)>,
@@ -535,6 +540,8 @@ impl App {
             measuring: None,
             pending_side: HashMap::new(),
             layout_asked: HashMap::new(),
+            swap_asked: HashMap::new(),
+            requests: 0,
             answered: None,
             apart: HashSet::new(),
             plan: None,
@@ -623,20 +630,35 @@ impl App {
         matches!(job, Job::Layout { .. } | Job::Swap { .. } | Job::TakeBack | Job::Start | Job::Autostart(_) | Job::Set { .. } | Job::Wallpaper(_) | Job::Appearance(_) | Job::Open)
     }
 
+    /// Whether a newer move or Ctrl and Cmd choice for the same computer
+    /// replaced this job: what the person chose last is what stands.
+    fn superseded(&self, job: &Job) -> bool {
+        match job {
+            Job::Layout { id, seq, .. } => self.layout_asked.get(id).is_some_and(|(_, _, last)| last != seq),
+            Job::Swap { id, seq, .. } => self.swap_asked.get(id).is_some_and(|last| last != seq),
+            _ => false,
+        }
+    }
+
+    /// Asks for a Ctrl and Cmd change, and shows it at once.
+    fn ask_swap(&mut self, id: &str, name: &str, swap: &str) {
+        self.requests += 1;
+        let seq = self.requests;
+        self.pending_swap.insert(id.to_owned(), swap.to_owned());
+        self.swap_asked.insert(id.to_owned(), seq);
+        self.busy.push(Job::Swap { id: id.into(), name: name.into(), swap: swap.into(), seq });
+        self.link.set_swap(id, name, swap, seq);
+        self.sync_scene();
+    }
+
     /// Runs a failed job again, as the control that asked for it did.
     fn retry(&mut self, job: Job) {
         match job.clone() {
-            Job::Layout { id, side, .. } => {
-                // The whole place that was asked for: an exact offset stays exact.
-                let offset = self.layout_asked.get(&id).filter(|(asked, _)| *asked == side).and_then(|(_, offset)| *offset);
-                self.choose_place(&id, side, offset, true);
-            }
-            Job::Swap { id, name, swap } => {
-                self.pending_swap.insert(id.clone(), swap.clone());
-                self.busy.push(job);
-                self.link.set_swap(&id, &name, &swap);
-                self.sync_scene();
-            }
+            // The whole place that was asked for (an exact offset stays
+            // exact), unless a newer choice for this computer replaced it.
+            Job::Layout { id, side, offset, .. } if !self.superseded(&job) => self.choose_place(&id, side, offset, true),
+            Job::Swap { id, name, swap, .. } if !self.superseded(&job) => self.ask_swap(&id, &name, &swap),
+            Job::Layout { .. } | Job::Swap { .. } => {}
             Job::TakeBack => {
                 self.busy.push(job);
                 self.link.take_back();
@@ -708,12 +730,12 @@ impl App {
                     // (Health and the top bar's "check Health" tell the truth).
                     let basis = self.health_basis_now();
                     // (While a check runs, the change waits until it ends: see Event::Done.)
-                    if self.health_basis.as_ref() != Some(&basis) {
+                    // (`recheck` takes the basis a check starts with, and keeps it until the check ends.)
+                    if self.health_basis.as_ref() != Some(&basis) && !self.busy.contains(&Job::Doctor) {
                         if self.doctor.is_none() || self.health_basis.is_none() {
                             self.health_basis = Some(basis);
-                        } else if !self.busy.contains(&Job::Doctor) {
+                        } else {
                             self.recheck();
-                            self.health_basis = Some(basis);
                         }
                     }
                     self.sync_scene();
@@ -753,7 +775,6 @@ impl App {
                     if check {
                         let basis = self.health_basis_now();
                         if self.health_basis.as_ref().is_some_and(|was| *was != basis) && !self.busy.contains(&Job::Doctor) {
-                            self.health_basis = Some(basis);
                             self.recheck();
                         }
                     }
@@ -819,7 +840,7 @@ impl App {
             return;
         };
         let e = Some(e);
-        let again = Self::retryable(&what).then(|| what.clone());
+        let again = (Self::retryable(&what) && !self.superseded(&what)).then(|| what.clone());
         self.finished_error(what, e, now);
         if let (Some(t), Some(job)) = (self.toast.as_mut(), again)
             && t.error
@@ -839,9 +860,9 @@ impl App {
                 self.measuring = None;
                 self.failed_measure.insert(id);
             }
-            Job::Layout { id, name, side } => {
+            Job::Layout { id, name, side, offset, seq } => {
                 // A newer change for it is still on its way: the desk keeps showing that one.
-                if !self.busy.iter().any(|job| matches!(job, Job::Layout { id: other, .. } if *other == id)) {
+                if !self.superseded(&Job::Layout { id: id.clone(), name: name.clone(), side, offset, seq }) {
                     self.pending_side.remove(&id);
                 }
                 self.sync_scene();
@@ -850,8 +871,8 @@ impl App {
             Job::Send { to, count } => {
                 self.toast_error(format!("Couldn't send {} to {to}. Check that {to} is online, then drop the files again.", items(count)), e, now);
             }
-            Job::Swap { id, name, .. } => {
-                if !self.busy.iter().any(|job| matches!(job, Job::Swap { id: other, .. } if *other == id)) {
+            Job::Swap { id, name, swap, seq } => {
+                if !self.superseded(&Job::Swap { id: id.clone(), name: name.clone(), swap, seq }) {
                     self.pending_swap.remove(&id);
                 }
                 self.sync_scene();
@@ -1223,6 +1244,12 @@ impl App {
     fn sheet_open(&self) -> bool {
         self.pairing.is_some() || self.pending_drop.is_some() || self.removing.is_some() || self.deleting_profile.is_some()
     }
+
+    /// Whether something owns the window (a sheet or Search): files let go
+    /// over its scrim are not for the page behind it, on any page.
+    fn drops_blocked(&self) -> bool {
+        self.sheet_open() || self.palette.open
+    }
 }
 
 /// Whether the pointer has left the window without the window being told:
@@ -1292,9 +1319,11 @@ impl App {
         if self.place_of(id) != Some((side, offset)) {
             let name = self.name_of(id);
             self.pending_side.insert(id.to_owned(), (side, offset, self.now));
-            self.layout_asked.insert(id.to_owned(), (side, offset));
-            self.busy.push(Job::Layout { id: id.into(), name: name.clone(), side });
-            self.link.set_side(id, &name, side, offset);
+            self.requests += 1;
+            let seq = self.requests;
+            self.layout_asked.insert(id.to_owned(), (side, offset, seq));
+            self.busy.push(Job::Layout { id: id.into(), name: name.clone(), side, offset, seq });
+            self.link.set_side(id, &name, side, offset, seq);
             if hop {
                 self.hop = Some(id.to_owned());
             }
@@ -1378,9 +1407,9 @@ impl App {
     /// with a pointer position that can't be trusted), ask which one,
     /// unless only one could take them.
     fn drop_files(&mut self, paths: Vec<PathBuf>, at: Option<Pos2>, now: f64) {
-        // A sheet (pairing, a question) is modal: files let go over its scrim
-        // are not for the page behind it, nor for a second sheet on top.
-        if self.sheet_open() {
+        // A sheet (pairing, a question) or Search is modal: files let go over
+        // its scrim are not for the page behind it, nor for a second sheet on top.
+        if self.drops_blocked() {
             return;
         }
         // This frame's drop is taken: a page drawn later in it must not read it again.
@@ -1922,10 +1951,7 @@ impl App {
             }
         }
         for (id, name, val) in changes {
-            self.pending_swap.insert(id.clone(), val.to_owned());
-            self.busy.push(Job::Swap { id: id.clone(), name: name.clone(), swap: val.to_owned() });
-            self.link.set_swap(&id, &name, val);
-            self.sync_scene();
+            self.ask_swap(&id, &name, val);
         }
     }
 
@@ -2646,7 +2672,7 @@ impl eframe::App for App {
         let desk_lay = (self.tab == Tab::Desk).then(|| desk_panel::desk_layout(full, f.bar.bottom()));
         let desk = desk_lay.as_ref().map_or(content, |l| l.scene);
         // Files let go over a page without the desk: ask where they go.
-        if !self.tab.desk() && self.tab != Tab::Wallpaper && !self.sheet_open() {
+        if !self.tab.desk() && self.tab != Tab::Wallpaper && !self.drops_blocked() {
             let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
             if !dropped.is_empty() {
                 self.set_tab(Tab::Files);
@@ -3097,7 +3123,7 @@ mod debug {
             app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was.", Some("oneMK didn't answer within 3 seconds".into()), now);
             let peer = app.running().and_then(|s| s.peers.first().map(|p| (p.id.clone(), p.name.clone())));
             if let (Some(t), Some((id, name))) = (app.toast.as_mut(), peer) {
-                t.retry = Some(Job::Layout { id, name, side: Side::Left });
+                t.retry = Some(Job::Layout { id, name, side: Side::Left, offset: None, seq: 0 });
             }
         }
         if ready && var("ONE_MK_APP_BROADCAST").is_some() && now > 1.0 && once(&ctx, "broadcast") {

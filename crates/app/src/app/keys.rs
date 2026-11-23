@@ -1800,11 +1800,17 @@ impl App {
         let chosen = self.keys.selected.and_then(|code| self.own_rule(code)).map(|(i, _)| i);
         let mut act = None;
         let peers = self.scope_peers();
+        let mut seen: HashMap<String, usize> = HashMap::new();
         for (i, r) in input.keys.iter().enumerate() {
             // The widgets are the rule's own (its key, layer, scope and app), not the
             // row's place in the list: a list that changes under a held click does not
-            // hand that click to another rule.
-            let ident = (&r.from, &r.layer, r.scope.label(), &r.app);
+            // hand that click to another rule. The scope is its own variant and value
+            // (a computer named Macs and all Macs read alike), and a rule written twice
+            // is told apart by which time it is.
+            let key = format!("{:?}", (&r.from, &r.layer, &r.scope, &r.app));
+            let times = seen.entry(key.clone()).or_insert(0);
+            let ident = (key, *times);
+            *times += 1;
             let row = Rect::from_min_size(pos2(left, y), vec2(width, 34.0));
             let (text, ok) = match tune::sentence(input, r) {
                 Ok(s) => (s, true),
@@ -2959,7 +2965,7 @@ impl App {
                 if widgets::menu_item(ui, 240.0, widgets::MenuItem::choice(label, names[k], k == at_nat)).clicked() {
                     if k != at_nat {
                         change = Some(match nat_values[k] {
-                            None => tune::natural_as_here(input, &self.keys.scope, dev, s.natural.as_deref()),
+                            None => tune::natural_as_here(input, facts, &self.keys.scope, dev),
                             value => ScrollChange::Natural(value),
                         });
                     }

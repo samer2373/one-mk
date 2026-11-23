@@ -1206,13 +1206,18 @@ fn natural_like_here() -> &'static str {
     if os::local() == os::MACOS { "on" } else { "off" }
 }
 
-/// What "As here" for natural scrolling asks, given the natural scrolling
-/// now in force (`shown`) for the computers and kind chosen: forgetting the
-/// setting where this scope has one of its own, or, where a broader rule
-/// supplies it, a setting of its own that does what unset does here.
-pub fn natural_as_here(input: &Input, scope: &Scope, device: Option<Device>, shown: Option<&str>) -> ScrollChange {
-    let own = input.scroll.iter().any(|r| r.scope == *scope && r.device == device && r.app.is_none() && r.natural.is_some());
-    if shown.is_some() && !own { ScrollChange::Natural(Some(natural_like_here())) } else { ScrollChange::Natural(None) }
+/// What "As here" for natural scrolling asks, for the computers and kind
+/// chosen (`f` stands for them): forgetting the setting where this scope has
+/// one of its own and nothing broader would then supply one; where a broader
+/// rule would (or supplies it already), a setting of its own that does what
+/// unset does here.
+pub fn natural_as_here(input: &Input, f: &Facts, scope: &Scope, device: Option<Device>) -> ScrollChange {
+    // What would still apply once this scope's own setting is gone.
+    let mut without = input.clone();
+    for r in without.scroll.iter_mut().filter(|r| r.scope == *scope && r.device == device && r.app.is_none()) {
+        r.natural = None;
+    }
+    if scroll_shown(&without, f, device).natural.is_some() { ScrollChange::Natural(Some(natural_like_here())) } else { ScrollChange::Natural(None) }
 }
 
 /// The commands for a scroll change. Natural scrolling can only be unset
@@ -1230,11 +1235,15 @@ pub fn scroll_commands(input: &Input, scope: &Scope, device: Option<Device>, cha
     let mut a = vec!["scroll".to_owned()];
     match change {
         ScrollChange::Natural(None) => {
-            let Some(r) = input.scroll.iter().find(|r| r.scope == *scope && r.device == device && r.app.is_none()) else { return vec![] };
-            if r.natural.is_none() {
+            let tables: Vec<&ScrollRule> = input.scroll.iter().filter(|r| r.scope == *scope && r.device == device && r.app.is_none()).collect();
+            if tables.iter().all(|r| r.natural.is_none()) {
                 return vec![];
             }
-            let writable = r.speed_x.is_none() && r.speed_y.is_none() && r.speed.is_none_or(|v| trim_num(v).parse::<f64>() == Ok(v));
+            // `--reset` forgets every table for this place, and only one is written
+            // back: with several, what the others hold is kept by setting the value
+            // instead (an edit folds them, as the daemon does when it resolves).
+            let r = tables[0];
+            let writable = tables.len() == 1 && r.speed_x.is_none() && r.speed_y.is_none() && r.speed.is_none_or(|v| trim_num(v).parse::<f64>() == Ok(v));
             if !writable {
                 a.push(format!("--natural={}", natural_like_here()));
                 base(&mut a);
@@ -1812,11 +1821,7 @@ pub fn scroll_shown(input: &Input, f: &Facts, device: Option<Device>) -> ScrollS
         speed = r.speed.or(speed);
         speed_y = r.speed_y.or(speed_y);
         s.mode = r.mode.clone().unwrap_or(s.mode);
-    }
-    s.speed = speed_y.or(speed).unwrap_or(1.0).clamp(0.1, 10.0);
-    // `one-mk` keeps one modifier setting for wheels and touchpads alike:
-    // what a rule for either says counts for both.
-    for (_, _, r) in &rules {
+        // Modifiers too belong to the kind a rule names: a wheel's Shift is not the touchpad's.
         for (m, b) in &r.modifiers {
             match m.as_str() {
                 "shift" => s.shift_sideways = b == "horizontal",
@@ -1825,6 +1830,7 @@ pub fn scroll_shown(input: &Input, f: &Facts, device: Option<Device>) -> ScrollS
             }
         }
     }
+    s.speed = speed_y.or(speed).unwrap_or(1.0).clamp(0.1, 10.0);
     s
 }
 
@@ -2585,15 +2591,53 @@ mod fixes {
     fn as_here_for_natural_scrolling_overrides_what_a_broader_rule_supplies() {
         let all = rows(vec![ScrollRule { natural: Some("on".into()), ..Default::default() }]);
         let laptop = Scope::Peer("Laptop".into());
+        let facts = |scope: &Scope| Facts::of(scope, &[]);
         // Nothing of the laptop's own to forget: the command used to be empty.
         assert!(scroll_commands(&all, &laptop, None, &ScrollChange::Natural(None)).is_empty());
-        let change = natural_as_here(&all, &laptop, None, Some("on"));
+        let change = natural_as_here(&all, &facts(&laptop), &laptop, None);
         assert_eq!(change, ScrollChange::Natural(Some(natural_like_here())));
         let cmds = scroll_commands(&all, &laptop, None, &change);
         assert_eq!(cmds, vec![vec!["scroll".to_owned(), format!("--natural={}", natural_like_here()), "--peer=Laptop".to_owned()]]);
-        // Where the scope has its own, it is forgotten; where nothing is in force, nothing is asked.
-        assert_eq!(natural_as_here(&all, &Scope::All, None, Some("on")), ScrollChange::Natural(None));
-        assert_eq!(natural_as_here(&Input::default(), &laptop, None, None), ScrollChange::Natural(None));
+        // Where the scope has its own and nothing broader sets one, it is forgotten; where nothing is in force, nothing is asked.
+        assert_eq!(natural_as_here(&all, &facts(&Scope::All), &Scope::All, None), ScrollChange::Natural(None));
+        assert_eq!(natural_as_here(&Input::default(), &facts(&laptop), &laptop, None), ScrollChange::Natural(None));
+    }
+
+    #[test]
+    fn as_here_keeps_this_computers_direction_when_a_broader_rule_would_flip_it() {
+        // Everyone on, the laptop off: forgetting the laptop's own would put it on, not as here.
+        let laptop = Scope::Peer("Laptop".into());
+        let both = rows(vec![
+            ScrollRule { natural: Some("on".into()), ..Default::default() },
+            ScrollRule { natural: Some("off".into()), scope: laptop.clone(), ..Default::default() },
+        ]);
+        let change = natural_as_here(&both, &Facts::of(&laptop, &[]), &laptop, None);
+        assert_eq!(change, ScrollChange::Natural(Some(natural_like_here())));
+        // The kind's own row against a rule for both kinds at the same place.
+        let kinds = rows(vec![
+            ScrollRule { natural: Some("on".into()), ..Default::default() },
+            ScrollRule { natural: Some("off".into()), device: Some(Device::Wheel), ..Default::default() },
+        ]);
+        let all = Facts::of(&Scope::All, &[]);
+        assert_eq!(natural_as_here(&kinds, &all, &Scope::All, Some(Device::Wheel)), ScrollChange::Natural(Some(natural_like_here())));
+        assert_eq!(natural_as_here(&kinds, &all, &Scope::All, None), ScrollChange::Natural(None));
+    }
+
+    #[test]
+    fn unsetting_natural_scrolling_never_resets_a_place_with_several_tables() {
+        let tables = rows(vec![
+            ScrollRule { natural: Some("on".into()), ..Default::default() },
+            ScrollRule { speed_y: Some(2.0), mode: Some("discrete".into()), ..Default::default() },
+        ]);
+        let cmds = scroll_commands(&tables, &Scope::All, None, &ScrollChange::Natural(None));
+        assert_eq!(cmds, vec![vec!["scroll".to_owned(), format!("--natural={}", natural_like_here())]], "a reset would drop the other table's settings");
+        // The natural value in a later table is found too.
+        let later = rows(vec![
+            ScrollRule { mode: Some("smooth".into()), ..Default::default() },
+            ScrollRule { natural: Some("on".into()), ..Default::default() },
+        ]);
+        assert_eq!(scroll_commands(&later, &Scope::All, None, &ScrollChange::Natural(None)).len(), 1);
+        assert!(!scroll_commands(&later, &Scope::All, None, &ScrollChange::Natural(None))[0].contains(&"--reset".to_owned()));
     }
 
     #[test]
@@ -2609,11 +2653,17 @@ mod fixes {
         ]);
         let linux = Facts::of(&Scope::Os(os::LINUX), &[]);
         assert_eq!(scroll_shown(&reset, &linux, None).speed, 1.5);
-        // One modifier setting serves wheels and touchpads: a wheel's Shift is the touchpad's too.
-        let wheel = rows(vec![ScrollRule { device: Some(Device::Wheel), modifiers: vec![("shift".into(), "horizontal".into())], ..Default::default() }]);
-        for device in [None, Some(Device::Wheel), Some(Device::Touchpad)] {
-            assert!(scroll_shown(&wheel, &f, device).shift_sideways, "{device:?}");
-        }
+        // A modifier written for wheels is the wheel's alone (the daemon keeps them apart), and one for everything is both's.
+        let wheel = rows(vec![
+            ScrollRule { device: Some(Device::Wheel), modifiers: vec![("shift".into(), "horizontal".into())], ..Default::default() },
+            ScrollRule { device: Some(Device::Touchpad), modifiers: vec![("alt".into(), "x5".into())], ..Default::default() },
+            ScrollRule { modifiers: vec![("alt".into(), "x2".into())], scope: Scope::Os(os::LINUX), ..Default::default() },
+        ]);
+        let linux = Facts::of(&Scope::Os(os::LINUX), &[]);
+        let shown = |device| { let s = scroll_shown(&wheel, &linux, device); (s.shift_sideways, s.alt_faster) };
+        assert_eq!(shown(Some(Device::Wheel)), (true, true));
+        assert_eq!(shown(Some(Device::Touchpad)), (false, true), "the touchpad's Shift still scrolls normally");
+        assert_eq!(shown(None), (false, true), "only what is written for both kinds");
     }
 
     #[test]

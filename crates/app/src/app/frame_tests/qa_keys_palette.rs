@@ -282,6 +282,21 @@ fn a_held_click_on_remove_goes_to_the_rule_it_was_pressed_on() {
 }
 
 #[test]
+fn rules_with_alike_scopes_or_written_twice_each_have_their_own_controls() {
+    // A computer named Macs and all Macs both read "Only Macs"; the third rule is written twice.
+    let rules = [
+        "from = \"a\"\nto = \"b\"\nscope = { peer = \"Macs\" }",
+        "from = \"a\"\nto = \"b\"\nscope = { os = \"macos\" }",
+        "from = \"f1\"\nto = \"f2\"",
+        "from = \"f1\"\nto = \"f2\"",
+    ];
+    let status = with(vec![peer("p1", "Macs", Side::Right, one_mk_proto::os::MACOS, true)]);
+    let (win, _fake) = keys_window(status, &super::qa::rule_toml(&rules));
+    let removes = win.items().into_iter().filter(|i| i.name.starts_with("Remove: ")).count();
+    assert_eq!(removes, rules.len(), "{:#?}", win.names());
+}
+
+#[test]
 fn moving_a_rule_to_an_app_adds_the_new_rule_before_removing_the_old_one() {
     let (mut win, fake) = keys_window(two(), "[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"esc\"\n");
     fake.fail("keymap-add", "one-mk: refused");

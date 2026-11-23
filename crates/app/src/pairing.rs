@@ -317,16 +317,19 @@ mod tests {
         assert!(matches!(parse("paired\tééééééé\tOffice PC\tright"), Some(Step::Paired { .. })));
     }
 
-    /// A stand-in for `one-mk`: says "paired", then takes a moment before it
+    /// A stand-in for `one-mk`: says "paired", then waits (writing its process
+    /// number down) until the test creates the file `release`, and only then
     /// writes a marker (what the real one does with the file manager's entries).
     #[cfg(unix)]
-    fn slow_finisher(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    fn held_finisher(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let script = dir.join("one-mk-fake");
-        let marker = dir.join("integrated");
-        std::fs::write(&script, format!("#!/bin/sh\nprintf 'paired\\t0123456789abcdef\\tStudio PC\\tright\\n'\nsleep 0.3\ntouch '{}'\n", marker.display())).unwrap();
+        let (marker, release, pid) = (dir.join("integrated"), dir.join("release"), dir.join("pid"));
+        std::fs::write(&script, format!(
+            "#!/bin/sh\necho $$ > '{}'\nprintf 'paired\\t0123456789abcdef\\tStudio PC\\tright\\n'\nwhile [ ! -f '{}' ]; do sleep 0.02; done\ntouch '{}'\n",
+            pid.display(), release.display(), marker.display())).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        (script, marker)
+        (script, marker, release, pid)
     }
 
     #[cfg(unix)]
@@ -348,10 +351,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("omk-pairing-finish-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let (script, marker) = slow_finisher(&dir);
+        let (script, marker, release, _) = held_finisher(&dir);
         let pairing = start_fake(&script);
         assert!(matches!(pairing.rx.recv_timeout(std::time::Duration::from_secs(10)), Ok(Step::Paired { .. })));
         pairing.finish();
+        // It is still working when the window lets go of it; only then is it let finish.
+        assert!(!marker.exists());
+        std::fs::write(&release, "").unwrap();
         let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !marker.exists() && std::time::Instant::now() < end {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -366,12 +372,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("omk-pairing-drop-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let (script, marker) = slow_finisher(&dir);
+        let (script, marker, release, pid) = held_finisher(&dir);
         let pairing = start_fake(&script);
         assert!(matches!(pairing.rx.recv_timeout(std::time::Duration::from_secs(10)), Ok(Step::Paired { .. })));
+        let pid = std::fs::read_to_string(&pid).unwrap().trim().to_owned();
+        let alive = |pid: &str| std::process::Command::new("kill").args(["-0", pid]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        assert!(alive(&pid), "the held process is running before the sheet closes");
         drop(pairing);
-        std::thread::sleep(std::time::Duration::from_millis(700));
-        assert!(!marker.exists(), "a dropped pairing is killed");
+        // Dropping killed and reaped it, however long the test was kept waiting.
+        assert!(!alive(&pid), "a dropped pairing is killed");
+        std::fs::write(&release, "").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(!marker.exists(), "it finished its work after being dropped");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

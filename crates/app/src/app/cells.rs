@@ -74,9 +74,9 @@ impl App {
             }
         }
         let status = self.running_shared();
-        // Not while a sheet is up (it owns the window), and not what the window
-        // already took this frame from a page without the desk.
-        let dropped: Vec<PathBuf> = if self.sheet_open() || self.drop_taken == Some(self.now) {
+        // Not while a sheet or Search is up (it owns the window), and not what the
+        // window already took this frame from a page without the desk.
+        let dropped: Vec<PathBuf> = if self.drops_blocked() || self.drop_taken == Some(self.now) {
             vec![]
         } else {
             ui.input(|input| input.raw.dropped_files.iter().map(|file| file.path().to_path_buf()).collect())
