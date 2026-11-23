@@ -98,8 +98,9 @@ impl Local {
         match apple_permission(unsafe { self.manager.authorizationStatus() }.0) {
             Permission::NotDetermined => unsafe { self.manager.requestAlwaysAuthorization(); },
             _ => {
-                let _ = std::process::Command::new("/usr/bin/open")
-                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices").spawn();
+                // Reaped when it ends (a dropped `Child` is not waited for).
+                let _ = crate::proc::spawn_detached(std::path::Path::new("/usr/bin/open"),
+                    &["x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices".to_owned()], None);
             }
         }
     }

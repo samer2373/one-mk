@@ -55,7 +55,9 @@ pub(super) fn start(shared: Arc<Shared>) -> Box<dyn Fn(Action) + Send + Sync> {
             };
             *registered = registration == ERROR_SUCCESS;
             let mut state = current(*handle);
-            if registration == ERROR_ACCESS_DENIED {
+            // Not being able to subscribe is not the same as not being allowed to read: names
+            // the query could read stay, and only changes will not be announced by themselves.
+            if registration == ERROR_ACCESS_DENIED && state.ssids.is_empty() {
                 state.permission = Permission::Denied;
             } else if registration != ERROR_SUCCESS {
                 state.unavailable = true;
