@@ -123,13 +123,15 @@ fn unclaimed(mine: Vec<one_mk_proto::Edge>, taken: &[one_mk_proto::Edge]) -> (Ve
 /// ids (the daemon's order: by fingerprint, which the id spells); one at an
 /// exact place arms the exposed edges of its side that face an exposed edge
 /// of its own, within a couple of pixels; one without arms the whole side.
-/// What an earlier computer's edge already covers is not armed again.
+/// What an earlier computer's edge already covers is not armed again. A
+/// computer the daemon has no place for yet ([`awaits_placement`]) arms
+/// nothing, as there.
 pub(super) fn armed_edges(status: &Status) -> Vec<Segment> {
     if status.screens.is_empty() {
         return vec![];
     }
     let local = Desktop::new(status.screens.clone());
-    let mut peers: Vec<_> = status.peers.iter().filter(|p| p.online && !p.screens.is_empty()).collect();
+    let mut peers: Vec<_> = status.peers.iter().filter(|p| p.online && !p.screens.is_empty() && !awaits_placement(status, p)).collect();
     peers.sort_by(|a, b| a.id.cmp(&b.id));
     let mut armed: Vec<one_mk_proto::Edge> = Vec::new();
     for peer in peers {
@@ -147,6 +149,24 @@ pub(super) fn armed_edges(status: &Status) -> Vec<Segment> {
             if matches!(e.side, Side::Left | Side::Right) { ((at, lo), (at, hi)) } else { ((lo, at), (hi, at)) }
         })
         .collect()
+}
+
+/// Whether `peer` is paired but has no place yet (all four sides were taken
+/// when it paired): the daemon skips it when it arms edges, and says so in
+/// its layout warnings as "NAME: placement needed; ... `one-mk layout ARG
+/// ...`" (`pairing_layout::warning` in `crates/one-mk`), ARG being its name
+/// (when that finds only it) or its id. Such a computer has no offset; the
+/// name counts only when no other computer shares it.
+fn awaits_placement(status: &Status, peer: &one_mk_ctl::status::PeerStatus) -> bool {
+    if status.offset_of(&peer.id).is_some() {
+        return false;
+    }
+    let shown = one_mk_proto::sanitize_name(&peer.name);
+    let by_name = status.peers.iter().filter(|other| other.name == peer.name).count() == 1;
+    status.layout.warnings.iter().any(|w| {
+        w.contains("placement needed; ")
+            && (w.contains(&format!("`one-mk layout {} ", peer.id)) || by_name && w.starts_with(&format!("{shown}: ")))
+    })
 }
 
 /// What the warning under a computer says, shortly, when its screens don't
@@ -1384,6 +1404,27 @@ mod tests {
         // Without an exact place the whole side is armed.
         let whole = placed(vec![peer("p", Side::Left, true, theirs())], &[]);
         assert_eq!(armed_edges(&whole), vec![((0.0, 0.0), (0.0, 1440.0))]);
+    }
+
+    #[test]
+    fn a_computer_still_to_be_placed_arms_no_edge() {
+        let warning = |shown: &str, arg: &str| format!("{shown}: placement needed; automatic edge placement is unavailable. Use `one-mk layout {arg} <left|right|top|bottom> --offset DX,DY`.");
+        // "a" is the placeholder-left pending one and sorts first; the real left peer "b" keeps its stretch.
+        let mut status = placed(
+            vec![peer("a", Side::Left, true, vec![screen(0, 0, 800, 800)]), peer("b", Side::Left, true, vec![screen(0, 0, 800, 800)])],
+            &[("b", (-800, 0))],
+        );
+        status.layout.warnings = vec![warning("a", "a")];
+        assert_eq!(armed_edges(&status), vec![((0.0, 0.0), (0.0, 800.0))]);
+        // Told apart by id when another computer shares its name.
+        status.peers[0].name = "desk".into();
+        status.peers[1].name = "desk".into();
+        status.layout.warnings = vec![warning("desk", "a")];
+        assert_eq!(armed_edges(&status), vec![((0.0, 0.0), (0.0, 800.0))]);
+        // An unplaced computer without that warning (an older daemon's) still arms its whole side.
+        status.layout.warnings.clear();
+        status.offsets.clear();
+        assert_eq!(armed_edges(&status), vec![((0.0, 0.0), (0.0, 1440.0))]);
     }
 
     #[test]
