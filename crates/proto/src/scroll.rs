@@ -49,11 +49,14 @@ pub struct Params {
     pub speed_x: f64,
     pub speed_y: f64,
     pub mode: Mode,
+    /// By modifier group: Ctrl, Shift, Alt, Meta (see `keynames::CTRL`...).
+    /// Apart for wheels and touchpads: a rule for one kind is not the other's.
+    pub modifiers: [ModScroll; 4],
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Params { reverse_x: false, reverse_y: false, speed_x: 1.0, speed_y: 1.0, mode: Mode::Auto }
+        Params { reverse_x: false, reverse_y: false, speed_x: 1.0, speed_y: 1.0, mode: Mode::Auto, modifiers: [ModScroll::Unchanged; 4] }
     }
 }
 
@@ -64,8 +67,6 @@ pub struct ScrollConfig {
     pub wheel: Params,
     /// Touchpads and smooth scrolling (`Scroll`).
     pub smooth: Params,
-    /// By modifier group: Ctrl, Shift, Alt, Meta (see `keynames::CTRL`...).
-    pub modifiers: [ModScroll; 4],
 }
 
 impl ScrollConfig {
@@ -181,7 +182,7 @@ impl ScrollTune {
             dy = -dy;
         }
         let mut used = 0;
-        for (g, m) in self.cfg.modifiers.iter().enumerate() {
+        for (g, m) in p.modifiers.iter().enumerate() {
             let bits = held & sides(1 << g);
             if bits == 0 || *m == ModScroll::Unchanged {
                 continue;
@@ -301,12 +302,26 @@ mod tests {
         assert_eq!(t.discrete(-60, 120, 0).out, Some(ScrollOut::Smooth { dx: -24.0, dy: 48.0 }));
     }
 
+    /// A modifier rule for wheels and touchpads alike.
+    fn both(c: &mut ScrollConfig, group: usize, what: ModScroll) {
+        c.wheel.modifiers[group] = what;
+        c.smooth.modifiers[group] = what;
+    }
+
+    /// A modifier set for one kind of device is not applied to the other.
+    #[test]
+    fn a_modifier_for_wheels_leaves_touchpads_alone() {
+        let mut t = tune(|c| c.wheel.modifiers[1] = ModScroll::Horizontal);
+        assert_eq!(t.discrete(0, 120, LSHIFT), Tuned { out: Some(ScrollOut::Discrete { dx: 120, dy: 0 }), used: LSHIFT });
+        assert_eq!(t.smooth(0.0, 4.0, LSHIFT), Tuned { out: Some(ScrollOut::Smooth { dx: 0.0, dy: 4.0 }), used: 0 });
+    }
+
     #[test]
     fn modifiers_change_scrolling_and_say_so() {
         let mut t = tune(|c| {
-            c.modifiers[1] = ModScroll::Horizontal; // Shift
-            c.modifiers[2] = ModScroll::Multiply(5.0); // Alt
-            c.modifiers[0] = ModScroll::Unchanged; // Ctrl
+            both(c, 1, ModScroll::Horizontal); // Shift
+            both(c, 2, ModScroll::Multiply(5.0)); // Alt
+            both(c, 0, ModScroll::Unchanged); // Ctrl
         });
         assert_eq!(t.discrete(0, 120, RSHIFT), Tuned { out: Some(ScrollOut::Discrete { dx: 120, dy: 0 }), used: RSHIFT });
         assert_eq!(t.discrete(0, 120, LALT), Tuned { out: Some(ScrollOut::Discrete { dx: 0, dy: 600 }), used: LALT });
@@ -318,10 +333,10 @@ mod tests {
         // A reversed wheel stays reversed when Shift turns it sideways.
         let mut r = tune(|c| {
             c.wheel.reverse_y = true;
-            c.modifiers[1] = ModScroll::Horizontal;
+            both(c, 1, ModScroll::Horizontal);
         });
         assert_eq!(r.discrete(0, 120, LSHIFT).out, Some(ScrollOut::Discrete { dx: -120, dy: 0 }));
-        let mut v = tune(|c| c.modifiers[0] = ModScroll::Vertical);
+        let mut v = tune(|c| both(c, 0, ModScroll::Vertical));
         assert_eq!(v.smooth(3.0, 2.0, LCTRL).out, Some(ScrollOut::Smooth { dx: 0.0, dy: 2.0 }));
         assert_eq!(v.smooth(3.0, 0.0, LCTRL).out, None);
     }

@@ -759,6 +759,8 @@ struct App {
     auto_profile: Option<String>,
     /// A network change has been seen since starting.
     network_seen: bool,
+    /// The network the last report described.
+    last_network: Option<NetworkId>,
     /// What the input backend says needs the user, by part (`Event::Status`).
     input_problems: std::collections::BTreeMap<&'static str, String>,
     #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
@@ -908,6 +910,7 @@ pub async fn serve(
         watching_network: false,
         auto_profile: None,
         network_seen: false,
+        last_network: None,
         input_problems: Default::default(),
         #[cfg(all(any(windows, target_os = "macos"), feature = "native-local-remap"))]
         local_stop_replies: Vec::new(),
@@ -1556,10 +1559,10 @@ impl App {
             Event::Error(msg) => tracing::error!("{msg}"),
             Event::LocalRulesOff => {
                 self.settings.input.local_rules = false;
-                if let Err(error) = crate::settings::Settings::update_within(&self.dir, one_mk_net::DAEMON_LOCK_WAIT, |settings| {
-                    settings.input.local_rules = false;
-                    Ok(())
-                }) { tracing::error!(%error, "could not save emergency local-rules disable"); }
+                // Edits the raw file, so a typo elsewhere in it cannot keep the grab on.
+                if let Err(error) = crate::settings::Settings::local_rules_off_within(&self.dir, one_mk_net::DAEMON_LOCK_WAIT) {
+                    tracing::error!(%error, "could not save emergency local-rules disable");
+                }
                 #[cfg(any(windows, target_os = "macos"))]
                 self.reload_local_rules();
             }
@@ -2845,6 +2848,9 @@ impl App {
     /// one in use, tweaks made before the restart stand too.
     fn on_network(&mut self, net: &NetworkId) {
         let first = !std::mem::replace(&mut self.network_seen, true);
+        // Kept so a change to the automatic rules (`Request::Reload`) is
+        // applied to the network we are on, not only to the next change.
+        self.last_network = Some(net.clone());
         let all = match Profiles::load(&self.dir) {
             Ok(all) => all,
             Err(e) => return tracing::warn!("{e:#}"),
@@ -2854,7 +2860,9 @@ impl App {
             return;
         };
         if self.auto_profile.replace(p.name.clone()).as_deref() == Some(p.name.as_str())
-            || (first && all.active.as_deref() == Some(p.name.as_str()))
+            // Names compare without case, as everywhere else (an older file may
+            // hold the active name in another spelling).
+            || (first && all.active.as_deref().is_some_and(|active| active.eq_ignore_ascii_case(&p.name)))
         {
             return;
         }
@@ -2924,7 +2932,7 @@ impl App {
         let text = match req {
             Request::LocalRulesOff => {
                 self.settings.input.local_rules = false;
-                let result = crate::settings::Settings::update_within(&self.dir, one_mk_net::DAEMON_LOCK_WAIT, |settings| { settings.input.local_rules = false; Ok(()) });
+                let result = crate::settings::Settings::local_rules_off_within(&self.dir, one_mk_net::DAEMON_LOCK_WAIT);
                 #[cfg(any(windows, target_os = "macos"))]
                 self.reload_local_rules();
                 let text = match result { Ok(_) => "ok\n".to_owned(), Err(error) => format!("error {error:#}\n") };
@@ -2958,16 +2966,23 @@ impl App {
                 // `devices.toml` was reloaded above; layouts go out whatever
                 // `settings.toml` says. A settings file that can't be read
                 // keeps the settings in force (not the defaults).
-                if let Err(e) = self.reload_settings() {
+                let loaded = self.reload_settings();
+                if let Err(e) = &loaded {
                     tracing::warn!("keeping the current settings: {e:#}");
                 }
                 let fps: Vec<_> = self.peers.keys().copied().collect();
                 fps.into_iter().for_each(|fp| self.send_layout(fp));
                 self.watch_network_if_wanted();
+                // Automatic rules may have changed: the network we are on may now
+                // match another profile, or none. Nothing happens when it still
+                // matches the one already in place, so layout tweaks stand.
+                if let Some(net) = self.last_network.clone() { self.on_network(&net); }
                 // A computer may have been paired (again, on both ends).
                 self.removed.clear();
                 self.redial_soon();
-                "ok\n".to_owned()
+                // The rest is done either way, but a settings file that could not be
+                // read is not "applied": the caller that saved it must be told.
+                match loaded { Ok(()) => "ok\n".to_owned(), Err(e) => format!("error {e:#}\n") }
             }
             Request::Settings => match self.reload_settings() {
                 Ok(()) => "ok\n".to_owned(),
@@ -6759,6 +6774,44 @@ mod tests {
     mod broadcast;
     #[cfg(debug_assertions)]
     mod typing;
+
+    /// A saved change the daemon could not read is not "applied": `Reload` says so.
+    #[tokio::test]
+    async fn a_reload_of_an_unreadable_file_is_an_error_not_ok() {
+        let duo = Duo::start("reload-error", None).await;
+        std::fs::write(duo.da.join("settings.toml"), "[hooks\nthis is = = not toml").unwrap();
+        let reply = ask(&duo.da, Request::Reload).await;
+        assert!(reply.starts_with("error"), "{reply:?}");
+        assert!(crate::manage::reload_confirmed(&reply).is_err());
+        let reply = ask(&duo.da, Request::Status).await;
+        assert!(Status::decode(&reply).is_some(), "the daemon still answers: {reply:?}");
+        duo.stop().await;
+    }
+
+    /// A tap/hold key still undecided when a scroll arrives counts as held for that
+    /// scroll: the modifier rule shapes it and Shift is lifted, not sent with it.
+    #[tokio::test]
+    async fn a_pending_hold_counts_as_the_scroll_modifier() {
+        use crate::tuning::{KeyRule, ScrollRule};
+        let mut duo = Duo::start("pending-hold-scroll", None).await;
+        set(&duo.da, |s| {
+            s.input.keymap.rule = vec![KeyRule { from: "capslock".into(), tap: Some("esc".into()), hold: Some("lshift".into()), ..Default::default() }];
+            s.input.scroll = vec![ScrollRule { modifiers: [("shift".to_owned(), "horizontal".to_owned())].into(), ..Default::default() }];
+        }).await;
+        duo.enter_b().await;
+        duo.ha.events.send(Event::Key { code: 58, down: true, device: None }).unwrap();
+        duo.ha.events.send(Event::ScrollDiscrete { dx: 0, dy: 120, device: None }).unwrap();
+        let mut got = Vec::new();
+        while let Ok(Some(i)) = tokio::time::timeout(Duration::from_millis(400), duo.hb.inject.recv()).await {
+            if !matches!(i, Inject::Controlled(_) | Inject::MoveTo(_) | Inject::MoveBy { .. }) { got.push(i); }
+        }
+        let scrolls: Vec<_> = got.iter().filter_map(|i| match i { Inject::ScrollDiscrete { dx, dy } => Some((*dx, *dy)), _ => None }).collect();
+        assert_eq!(scrolls.len(), 1, "{got:?}");
+        assert!(scrolls[0].0 != 0 && scrolls[0].1 == 0, "turned sideways by the pending Shift: {got:?}");
+        let shift: Vec<_> = got.iter().filter_map(|i| match i { Inject::Key { code: 42, down } => Some(*down), _ => None }).collect();
+        assert_eq!(shift, [true, false], "Shift is lifted before the scroll, not left held on B: {got:?}");
+        duo.stop().await;
+    }
 
     #[test]
     fn swaps_only_between_a_mac_and_something_else() {

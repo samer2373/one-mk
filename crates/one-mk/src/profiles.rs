@@ -397,7 +397,9 @@ pub async fn run(dir: &Path, cmd: ProfileCmd) -> Result<()> {
                 return Ok(());
             }
             println!("Using layout profile {name:?}: moved {}.", moved.join(", "));
-            if control::request(dir, Request::Reload).await?.is_some() {
+            let reply = control::request(dir, Request::Reload).await.map_err(control::NotAnswering::saved)?;
+            if let Some(reply) = &reply { crate::manage::reload_confirmed(reply)?; }
+            if reply.is_some() {
                 println!("Applied right away. The other computers pick up the change too.");
             } else {
                 println!("one-mk is not running; this takes effect the next time it starts.");

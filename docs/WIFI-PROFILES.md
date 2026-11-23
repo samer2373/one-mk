@@ -24,8 +24,13 @@ all re-evaluate the rules. Identical snapshots do not re-select a profile, so a 
 by hand stays until the network really changes. There is no timer and no polling: the watchers
 sleep until the system reports an event, and a burst of events causes at most a few refreshes.
 
-- **Linux:** NetworkManager reports every change. Without NetworkManager (systemd-networkd or iwd
-  on their own) the automatic watcher is unavailable; `one-mk profile use NAME` still works.
+- **Linux:** NetworkManager reports changes of its state, primary connection and active
+  connections, and the kernel reports address and route changes. The Wi-Fi name comes from
+  NetworkManager; the router's hardware address comes from the kernel's IPv4 ARP table
+  (matched per interface), so a router that is only known over IPv6 does not match a router
+  rule. Subnet rules use both IPv4 and IPv6 addresses. Without NetworkManager (systemd-networkd
+  or iwd on their own) the automatic watcher is unavailable; `one-mk profile use NAME` still
+  works.
 - **macOS:** CoreWLAN reports the Wi-Fi name and a system-configuration listener reports IPv4/IPv6
   and service changes. The router's hardware address comes from the ARP/NDP neighbour table; a
   missing IPv4 neighbour triggers one bounded probe (at most one second) per refresh, never an
