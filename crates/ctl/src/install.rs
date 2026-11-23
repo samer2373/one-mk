@@ -152,25 +152,150 @@ pub fn is_installed_for(home: Option<&Path>) -> bool {
 /// disabled, an autostart entry the desktop has switched off, or a LaunchAgent macOS has
 /// disabled (all of which leave the file in place) are not login entries.
 fn login_entry() -> Option<String> {
+    login_entry_text(true)
+}
+
+/// The login entry's text; with `running_only` false also an entry the system has switched off
+/// (it is still there to be removed, and still names a settings folder).
+fn login_entry_text(running_only: bool) -> Option<String> {
     if cfg!(target_os = "linux") {
         let config = crate::xdg::config_home().ok()?;
         let mut text = String::new();
-        if let Ok(unit) = std::fs::read_to_string(unit_path(&config)) && (!systemd_for(&config) || ok("systemctl", &["--user", "is-enabled", "one-mk.service"])) {
+        if let Ok(unit) = std::fs::read_to_string(unit_path(&config)) && (!running_only || !systemd_for(&config) || ok("systemctl", &["--user", "is-enabled", "one-mk.service"])) {
             text += &unit;
         }
-        if let Ok(entry) = std::fs::read_to_string(desktop_path(&config)) && !autostart_disabled(&entry) {
+        if let Ok(entry) = std::fs::read_to_string(desktop_path(&config)) && (!running_only || !autostart_disabled(&entry)) {
             text += &entry;
         }
         (!text.is_empty()).then_some(text)
     } else if cfg!(target_os = "macos") {
         let home = home_dir().ok()?;
         let text = std::fs::read_to_string(plist_path(&home, LABEL)).ok()?;
-        let disabled = launchd_owns(&home, account_home().as_deref()) && Command::new("launchctl").args(["print-disabled", &gui_domain()]).output().ok()
+        let disabled = running_only && launchd_owns(&home, account_home().as_deref()) && Command::new("launchctl").args(["print-disabled", &gui_domain()]).output().ok()
             .is_some_and(|out| launchd_disabled(&String::from_utf8_lossy(&out.stdout), LABEL));
         (!disabled).then_some(text)
     } else {
         windows_startup_value().ok().flatten()
     }
+}
+
+/// The settings folder the login entry starts oneMK with (`None`: the usual one, or no entry).
+/// What `one-mk uninstall` reads before it removes the entry, so the wallpaper of that folder
+/// is put back too. On Windows an entry that belongs to another copy of oneMK (it is left in
+/// place) is not this copy's to clean up for, so it gives `None`.
+pub fn registered_home() -> Option<PathBuf> {
+    let text = login_entry_text(false)?;
+    if cfg!(windows) {
+        let exe = std::env::current_exe().ok()?;
+        if !windows_run_owned(&text, &exe.parent()?.to_string_lossy()) {
+            return None;
+        }
+    }
+    entry_home(&text)
+}
+
+/// The `--home` folder in a login entry written by [`install`]: a systemd unit or autostart
+/// entry (`ExecStart=` / `Exec=` lines), a LaunchAgent (the argument list), or a Windows `Run`
+/// value (one command line). Each is read back the way its system reads it, so a folder with
+/// spaces, quotes, `%` or `$` in its name comes out as it went in.
+fn entry_home(entry: &str) -> Option<PathBuf> {
+    if entry.contains("<plist") {
+        let (_, after) = entry.split_once("<string>--home</string>")?;
+        let after = after.trim_start().strip_prefix("<string>")?;
+        return Some(PathBuf::from(xml_unescape(after.split_once("</string>")?.0)));
+    }
+    let word_after_home = |words: Vec<String>| {
+        let at = words.iter().position(|w| w == "--home")?;
+        words.get(at + 1).filter(|w| !w.is_empty()).map(PathBuf::from)
+    };
+    let lines = entry.lines().map(str::trim);
+    let linux: Vec<Vec<String>> = lines.clone().filter_map(|line| {
+        line.strip_prefix("ExecStart=").map(|rest| exec_words(rest, false))
+            .or_else(|| line.strip_prefix("Exec=").map(|rest| exec_words(rest, true)))
+    }).collect();
+    if !linux.is_empty() {
+        return linux.into_iter().find_map(word_after_home);
+    }
+    word_after_home(win_words(entry.trim()))
+}
+
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+}
+
+/// The words of a systemd `ExecStart=` value (`desktop` false) or a desktop entry's `Exec=` value
+/// (true), undoing [`quote_systemd`] and [`quote_desktop`].
+fn exec_words(line: &str, desktop: bool) -> Vec<String> {
+    // A desktop entry's value is a string first (`\\` is a backslash), then Exec-quoted.
+    let text: String = if desktop {
+        let mut out = String::new();
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' { out.push(c); continue; }
+            match chars.next() {
+                Some('s') => out.push(' '),
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some(other) => out.push(other),
+                None => out.push('\\'),
+            }
+        }
+        out
+    } else {
+        line.to_owned()
+    };
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let (mut quoted, mut started) = (false, false);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => { quoted = !quoted; started = true; }
+            '\\' if quoted => {
+                if let Some(next) = chars.next() { word.push(next); }
+                started = true;
+            }
+            // `%%` (and systemd's `$$`) are one literal character.
+            '%' | '$' if chars.peek() == Some(&c) && (c == '%' || !desktop) => { chars.next(); word.push(c); started = true; }
+            c if c.is_whitespace() && !quoted => {
+                if started { words.push(std::mem::take(&mut word)); started = false; }
+            }
+            c => { word.push(c); started = true; }
+        }
+    }
+    if started { words.push(word); }
+    words
+}
+
+/// The words of a Windows command line, by the rules of `CommandLineToArgvW` (the inverse of [`quote_win`]).
+fn win_words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let (mut quoted, mut started) = (false, false);
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                let mut backslashes = 1;
+                while chars.peek() == Some(&'\\') { chars.next(); backslashes += 1; }
+                started = true;
+                if chars.peek() == Some(&'"') {
+                    word.push_str(&"\\".repeat(backslashes / 2));
+                    if backslashes % 2 == 1 { chars.next(); word.push('"'); }
+                } else {
+                    word.push_str(&"\\".repeat(backslashes));
+                }
+            }
+            '"' => { quoted = !quoted; started = true; }
+            c if c.is_whitespace() && !quoted => {
+                if started { words.push(std::mem::take(&mut word)); started = false; }
+            }
+            c => { word.push(c); started = true; }
+        }
+    }
+    if started { words.push(word); }
+    words
 }
 
 /// Whether an XDG autostart entry says it is off (`Hidden=true`, or the `X-GNOME-Autostart-enabled=false`
@@ -952,6 +1077,38 @@ mod tests {
         assert_eq!(tray_desktop_path(config), Path::new("/cfg/autostart/one-mk-tray.desktop"));
         assert_eq!(app_entry_path(data), Path::new("/dat/share/applications/io.github.onemk.OneMk.desktop"));
         assert_eq!(plist_path(Path::new("/home/u"), LABEL), Path::new("/home/u/Library/LaunchAgents/com.one-mk.daemon.plist"));
+    }
+
+    /// The settings folder is read back out of every kind of login entry exactly as it was
+    /// written, whatever the folder's name holds: spaces, quotes, `%`, `$`, backslashes, `&`.
+    #[test]
+    fn the_registered_home_is_read_back_from_every_kind_of_entry() {
+        let homes = ["/tmp/plain", "/tmp/with space/x", "/tmp/q\"uote", "/tmp/50%/$HOME/`x`", "/tmp/back\\slash", "/tmp/a&b<c>", "C:\\Users\\me\\One Mk\\", "/tmp/日本"];
+        for home in homes {
+            let l = Launch { exe: "/opt/my apps/one-mk".into(), tray: Some("/opt/my apps/one-mk-tray".into()), home: Some(home.into()), start_now: false };
+            let plain = Launch { exe: l.exe.clone(), tray: None, home: l.home.clone(), start_now: false };
+            let expect = Some(PathBuf::from(home));
+            assert_eq!(entry_home(&systemd_unit(&l)), expect, "systemd: {home}");
+            assert_eq!(entry_home(&desktop_entry("one-mk", &l.exe, &l.args())), expect, "desktop: {home}");
+            assert_eq!(entry_home(&desktop_entry("one-mk tray", l.tray.as_ref().unwrap(), &l.tray_args(false))), expect, "tray desktop: {home}");
+            let plist = launch_agent(LABEL, &l.exe, &l.args(), Path::new("/l"), true);
+            assert_eq!(entry_home(&plist), expect, "plist: {home}");
+            // A quote cannot be in a Windows path (and `quote_win` leaves one alone without a space).
+            if !home.contains('"') {
+                assert_eq!(entry_home(&run_value(&l)), expect, "windows tray: {home}");
+                assert_eq!(entry_home(&run_value(&plain)), expect, "windows run: {home}");
+            }
+            // Both files of one install, as `login_entry` joins them.
+            assert_eq!(entry_home(&(systemd_unit(&plain) + &desktop_entry("one-mk", &plain.exe, &plain.args()))), expect, "both: {home}");
+        }
+        // The usual folder: no `--home` anywhere.
+        let usual = launch(None);
+        for text in [systemd_unit(&usual), desktop_entry("one-mk", &usual.exe, &usual.args()), launch_agent(LABEL, &usual.exe, &usual.args(), Path::new("/l"), true), run_value(&usual)] {
+            assert_eq!(entry_home(&text), None, "{text}");
+        }
+        // A program path that merely contains the word, or `--home` last with nothing after it.
+        assert_eq!(entry_home("ExecStart=\"/opt/--home/one-mk\" run\n"), None);
+        assert_eq!(entry_home("\"C:\\a\\one-mk.exe\" run --home"), None);
     }
 
     /// The entries the desktop must find are written readable but never
