@@ -67,6 +67,9 @@ pub enum Resolution {
     Text(String),
     Shortcut(char),
     Character(char),
+    /// The text of an abandoned dead-key sequence (the accent) typed first, then the physical key
+    /// that abandoned it (Enter, Backspace): the accent is not lost and the key still does its job.
+    TextThenKey(String),
     Pending,
 }
 
@@ -88,6 +91,7 @@ impl Sender {
         let resolution = if down {
             self.held.entry(code).or_insert_with(|| match if matches!(code, 29 | 42 | 54 | 56 | 58 | 69 | 70 | 97 | 100 | 125 | 126) { Resolution::Physical } else { resolve() } {
                 Resolution::Text(text) if valid_sequence(&text) => Resolution::Text(text),
+                Resolution::TextThenKey(text) if valid_sequence(&text) => Resolution::TextThenKey(text),
                 Resolution::Shortcut(character) if printable(character) => Resolution::Shortcut(character),
                 Resolution::Character(character) if printable(character) => Resolution::Character(character),
                 Resolution::Pending => Resolution::Pending,
@@ -98,8 +102,14 @@ impl Sender {
             resolution
         };
         match resolution {
-            Resolution::Physical | Resolution::Character(_) if repeated => Vec::new(),
+            Resolution::Physical | Resolution::Character(_) | Resolution::TextThenKey(_) if repeated => Vec::new(),
             Resolution::Physical => vec![Control::Key { code, down }],
+            Resolution::TextThenKey(text) if down => {
+                let mut sent: Vec<_> = text.graphemes(true).map(|text| Control::Text { text: text.into() }).collect();
+                sent.push(Control::Key { code, down });
+                sent
+            }
+            Resolution::TextThenKey(_) => vec![Control::Key { code, down }],
             Resolution::Text(text) if down => text.graphemes(true).map(|text| Control::Text { text: text.into() }).collect(),
             Resolution::Shortcut(character) | Resolution::Character(character) => vec![Control::CharacterKey { code, down, character }],
             Resolution::Text(_) | Resolution::Pending => Vec::new(),
@@ -247,6 +257,24 @@ mod tests {
             assert_eq!(release.len(), usize::from(!matches!(resolution, Resolution::Text(_))));
             assert!(sender.release_all().is_empty());
         }
+    }
+
+    /// The accent of an abandoned dead key goes out before the key that abandoned it, and that key
+    /// is pressed and released as itself (once: its repeats are the receiver's).
+    #[test]
+    fn an_abandoned_accent_is_typed_before_the_physical_key() {
+        let mut sender = Sender::default();
+        let accent = Control::Text { text: "'".into() };
+        assert_eq!(sender.key_events(28, true, || Resolution::TextThenKey("'".into())), vec![accent, Control::Key { code: 28, down: true }]);
+        assert!(sender.key_events(28, true, || panic!("a repeat keeps its resolution")).is_empty());
+        assert_eq!(sender.key_events(28, false, || unreachable!()), vec![Control::Key { code: 28, down: false }]);
+        assert!(sender.release_all().is_empty());
+        // Text that cannot be sent leaves the key as it was.
+        assert_eq!(sender.key_events(14, true, || Resolution::TextThenKey(String::new())), vec![Control::Key { code: 14, down: true }]);
+        assert_eq!(sender.key_events(14, false, || unreachable!()), vec![Control::Key { code: 14, down: false }]);
+        // A visit that ends with the key down releases it.
+        sender.key_events(28, true, || Resolution::TextThenKey("`".into()));
+        assert_eq!(sender.release_all(), vec![Control::Key { code: 28, down: false }]);
     }
 
     #[test]

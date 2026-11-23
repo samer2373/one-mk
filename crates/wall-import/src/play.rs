@@ -21,6 +21,9 @@ pub const HEADER_BYTES: usize = 20;
 /// Shortest animated frame the stream admits (admission is stricter: 17 ms
 /// for images, 16 ms between WebM blocks).
 pub const MIN_FRAME_MICROS: u32 = 10_000;
+/// How long the decoder may take to preroll before the worker gives up, in seconds. The worker
+/// writes its header only after that, so whoever waits for the header must wait longer.
+pub const PREROLL_SECONDS: u64 = 30;
 
 /// How one frame's bytes are laid out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -367,8 +370,8 @@ mod gstreamer {
                 // Preroll first: the negotiated caps name the colour matrix
                 // before any frame is written.
                 if set_state(pipeline, STATE_PAUSED) == 0 { return Err("GStreamer refused PAUSED".into()); }
-                let message = pop(bus, 30_000_000_000, MESSAGE_ASYNC_DONE | MESSAGE_ERROR);
-                if message.is_null() { return Err("decoder did not preroll within 30 s".into()); }
+                let message = pop(bus, crate::play::PREROLL_SECONDS * 1_000_000_000, MESSAGE_ASYNC_DONE | MESSAGE_ERROR);
+                if message.is_null() { return Err(format!("decoder did not preroll within {} s", crate::play::PREROLL_SECONDS)); }
                 let kind = (*message).kind;
                 if kind == MESSAGE_ERROR {
                     let mut detail = ptr::null_mut();

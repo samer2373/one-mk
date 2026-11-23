@@ -139,6 +139,8 @@ pub struct Paired {
 pub struct Config {
     pub dir_exists: bool,
     pub has_identity: bool,
+    /// Why the identity files there cannot be used (a mismatched or damaged pair), when they cannot.
+    pub identity_problem: Option<String>,
     /// The paired computers, or why `devices.toml` could not be read.
     pub paired: Result<Vec<Paired>, String>,
     /// Whether `settings.toml` (if there is one) can be read in full.
@@ -291,6 +293,10 @@ pub fn config_checks(c: &Config, dir: &Path) -> Vec<Check> {
         )
     };
     let identity = match (c.dir_exists, c.has_identity) {
+        _ if c.identity_problem.is_some() => Outcome::fail(
+            format!("The identity files cannot be used: {}.", c.identity_problem.as_deref().unwrap_or_default()),
+            "Restore the matching key and certificate from a backup. With no copy, move both `identity.key.der` and `identity.cert.der` out of the settings folder to make a new identity, then pair the computers again.",
+        ),
         (_, true) => Outcome::pass("This computer has its identity (key and certificate)."),
         (false, false) => Outcome::skip("No identity yet; it is created the first time one-mk starts."),
         (true, false) => Outcome::skip("No identity yet; it is created automatically when sharing starts."),
@@ -1216,9 +1222,14 @@ fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
             else { "Some saved settings could not be read and are left out; everything else is used." },
             if good { None } else { Some("Review your preferences in Settings.") }),
         "identity" => {
-            shown.outcome.status = Status::Pass;
-            ("Secure identity", if good { "This computer is ready to connect securely." }
-                else { "A secure identity will be created automatically when sharing starts." }, None)
+            if status != Status::Fail { shown.outcome.status = Status::Pass; }
+            if status == Status::Fail {
+                ("Secure identity", "This computer's secure identity is damaged, so sharing cannot start.",
+                    Some("Restore the matching key and certificate from a backup, or move both identity files out of the settings folder and pair again."))
+            } else {
+                ("Secure identity", if good { "This computer is ready to connect securely." }
+                    else { "A secure identity will be created automatically when sharing starts." }, None)
+            }
         }
         "pairing" => {
             if status == Status::Skip { action = Some("Pair"); }
@@ -1387,7 +1398,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
                 let dir = dir.to_owned();
                 move || probe_config(&dir)
             },
-            Config { dir_exists: false, has_identity: false, paired: Err("probe failed".into()), settings: Ok(()), ignored: Vec::new() },
+            Config { dir_exists: false, has_identity: false, identity_problem: None, paired: Err("probe failed".into()), settings: Ok(()), ignored: Vec::new() },
         )
     );
     let paired = config.paired.clone().unwrap_or_default();
@@ -1520,10 +1531,18 @@ fn probe_config(dir: &Path) -> Config {
         t.devices().iter().map(|d| Paired { id: d.short_id(), name: t.display(d), addrs: d.addrs.clone() }).collect()
     });
     let settings = Settings::load(dir);
+    // Only regular files are opened (a FIFO there would block the read); anything else in the
+    // place of one is reported without being touched.
+    let (cert, key) = (dir.join("identity.cert.der"), dir.join("identity.key.der"));
+    let identity = match [&cert, &key].into_iter().find(|p| p.symlink_metadata().is_ok() && !p.is_file()) {
+        Some(p) => Err(anyhow::anyhow!("{} is not a file", p.display())),
+        None => Identity::check(dir),
+    };
     let ignored = if settings.is_err() { Settings::load_lenient(dir).map(|s| s.problems).unwrap_or_default() } else { Vec::new() };
     Config {
         dir_exists: dir.is_dir(),
-        has_identity: dir.join("identity.key.der").is_file() && dir.join("identity.cert.der").is_file(),
+        has_identity: identity.as_ref().is_ok_and(|ok| *ok),
+        identity_problem: identity.err().map(|e| one_line(&format!("{e:#}"))),
         paired,
         settings: settings.map(|_| ()).map_err(|e| one_line(&format!("{e:#}"))),
         ignored,
@@ -2044,7 +2063,7 @@ mod tests {
     }
 
     fn cfg(dir: bool, id: bool, paired: Result<Vec<Paired>, String>) -> Vec<Check> {
-        config_checks(&Config { dir_exists: dir, has_identity: id, paired, settings: Ok(()), ignored: Vec::new() }, Path::new("/x/one-mk"))
+        config_checks(&Config { dir_exists: dir, has_identity: id, identity_problem: None, paired, settings: Ok(()), ignored: Vec::new() }, Path::new("/x/one-mk"))
     }
 
     fn paired(id: &str) -> Paired {
@@ -2069,7 +2088,7 @@ mod tests {
     #[test]
     fn a_settings_file_that_does_not_parse_is_reported() {
         let c = |settings| {
-            let cfg = Config { dir_exists: true, has_identity: true, paired: Ok(vec![]), settings, ignored: Vec::new() };
+            let cfg = Config { dir_exists: true, has_identity: true, identity_problem: None, paired: Ok(vec![]), settings, ignored: Vec::new() };
             config_checks(&cfg, Path::new("/x/one-mk")).remove(0)
         };
         assert_eq!(st(&c(Ok(()))), Status::Pass);
@@ -2078,6 +2097,33 @@ mod tests {
         assert!(bad.outcome.detail.contains("TOML parse error at line 1"), "{}", bad.outcome.detail);
         let fix = bad.outcome.fix.unwrap();
         assert!(fix.contains("delete") && fix.contains("settings.toml"), "{fix}");
+    }
+
+    /// A key and certificate that exist but do not belong together are not "has its identity".
+    #[test]
+    fn a_mismatched_identity_is_not_certified() {
+        let dir = std::env::temp_dir().join(format!("one-mk-doctor-identity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let none = probe_config(&dir);
+        assert!(!none.has_identity && none.identity_problem.is_none());
+        Identity::load_or_create(&dir).unwrap();
+        let good = probe_config(&dir);
+        assert!(good.has_identity && good.identity_problem.is_none());
+        let other = std::env::temp_dir().join(format!("one-mk-doctor-identity-other-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&other);
+        Identity::load_or_create(&other).unwrap();
+        std::fs::copy(other.join("identity.key.der"), dir.join("identity.key.der")).unwrap();
+        let bad = probe_config(&dir);
+        assert!(!bad.has_identity && bad.identity_problem.as_deref().is_some_and(|p| p.contains("damaged")), "{:?}", bad.identity_problem);
+        let check = config_checks(&bad, &dir).remove(1);
+        assert_eq!(st(&check), Status::Fail);
+        assert!(window_check(&check).0.outcome.status == Status::Fail);
+        // Garbage bytes are no different.
+        std::fs::write(dir.join("identity.cert.der"), b"nonsense").unwrap();
+        assert!(probe_config(&dir).identity_problem.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
     }
 
     /// The real probe: a corrupt file in a real folder.

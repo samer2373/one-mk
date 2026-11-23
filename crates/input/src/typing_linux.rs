@@ -16,6 +16,12 @@ impl State {
     }
 }
 
+/// Backspace, Tab, Enter and the keypad's Enter: the keys that, after a dead key, commit the
+/// accent and then act. (Escape is left to cancel the sequence without typing anything.)
+fn flushes_accent(code: u32) -> bool {
+    matches!(code, 14 | 15 | 28 | 96)
+}
+
 pub(super) struct Keyboard {
     keyboard: Option<X11Keyboard>,
     snapshot: Option<X11LayoutSnapshot>,
@@ -92,6 +98,9 @@ impl Keyboard {
                 let pending = std::mem::take(&mut self.composer.pending);
                 if one_mk_proto::typing::character_key_code(code) {
                     Self::cancelled(&snapshot.resolver, &mut self.composer, &pending, code, masks)
+                } else if flushes_accent(code) {
+                    // Enter, Tab or Backspace after a dead key: the accent is typed, then the key does its job.
+                    Self::accent(&snapshot.resolver, &pending).map_or(Resolution::Physical, Resolution::TextThenKey)
                 } else { Resolution::Physical }
             }
             Composition::Physical => {
@@ -192,6 +201,19 @@ mod tests {
         assert_eq!(source.resolve(40, Mods::default()), Resolution::Pending);
         assert_eq!(source.resolve(1, Mods::default()), Resolution::Physical);
         assert_eq!(source.resolve(18, Mods::default()), Resolution::Text("e".into()));
+    }
+
+    #[test]
+    fn typing_a_dead_key_before_enter_or_backspace_keeps_the_accent() {
+        let Some(source) = layout("us(intl)") else { return };
+        for code in [28, 14, 15, 96] {
+            assert_eq!(source.resolve(40, Mods::default()), Resolution::Pending);
+            assert_eq!(source.resolve(code, Mods::default()), Resolution::TextThenKey("'".into()), "key {code}");
+            // The sequence is over: e is plain again.
+            assert_eq!(source.resolve(18, Mods::default()), Resolution::Text("e".into()));
+        }
+        // Without a dead key before it Enter is just Enter.
+        assert_eq!(source.resolve(28, Mods::default()), Resolution::Physical);
     }
 
     #[test]

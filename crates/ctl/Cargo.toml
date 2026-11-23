@@ -43,7 +43,7 @@ windows = { version = "0.62.2", features = ["Foundation", "Security_Authorizatio
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
-tokio = { version = "1.54.1", features = ["rt", "sync", "macros"] }
+tokio = { version = "1.54.1", features = ["rt", "sync", "macros", "time"] }
 futures-util = { version = "0.3.34", default-features = false }
 
 [dev-dependencies]

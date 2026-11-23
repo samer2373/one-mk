@@ -476,8 +476,11 @@ pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<on
         let snapshot = root.join("previous.json");
         if !snapshot.exists() { atomic_write(&snapshot, &serde_json::to_vec(&gnome_snapshot(root)?)?)?; }
         let uri = file_uri(&path)?;
-        for key in ["picture-uri", "picture-uri-dark"] { settings("set", key, Some(&uri))?; }
-        settings("set", "picture-options", Some("spanned"))?;
+        // What the desktop shows now, so that a write that fails half way does not leave it half changed.
+        let before = GNOME_KEYS.into_iter().map(|key| Ok((key, settings("get", key, None)?.trim().to_owned()))).collect::<Result<Vec<_>>>()?;
+        let wanted = [("picture-uri", uri.as_str()), ("picture-uri-dark", uri.as_str()), ("picture-options", "spanned")];
+        // The new picture file stays (the next change or Off prunes what nothing refers to).
+        set_or_roll_back(&before, &wanted, &mut |key, value| settings("set", key, Some(value)).map(drop))?;
         atomic_write(&root.join("current.json"), &serde_json::to_vec(&[&path])?)?;
         prune_pictures(root, &[path])?;
         Ok(one_mk_wallpaper::picture::Mode::Native)
@@ -504,6 +507,19 @@ pub fn restore(root: &Path) -> Result<()> {
     for entry in std::fs::read_dir(root)? {
         let path = entry?.path();
         if path.extension().is_some_and(|extension| extension == "png") { let _ = std::fs::remove_file(path); }
+    }
+    Ok(())
+}
+
+/// Writes `wanted` in order; if one fails, every key is put back to its value in `before` (the
+/// snapshot for `Off` is kept either way) and the first failure is returned.
+#[cfg(target_os = "linux")]
+fn set_or_roll_back(before: &[(&str, String)], wanted: &[(&str, &str)], set: &mut impl FnMut(&str, &str) -> Result<()>) -> Result<()> {
+    for (key, value) in wanted {
+        if let Err(error) = set(key, value) {
+            for (key, value) in before { let _ = set(key, value); }
+            return Err(error);
+        }
     }
     Ok(())
 }
@@ -571,6 +587,25 @@ mod tests {
         assert_eq!(native_or_overlay(Ok(()), |_| { writes.set(1); Ok(()) }).unwrap(), Mode::Native);
         assert_eq!(writes.get(), 1);
         assert!(native_or_overlay(Ok(()), |_| anyhow::bail!("OS write failed")).unwrap_err().to_string().contains("OS write failed"));
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_picture_write_that_fails_half_way_puts_the_desktop_back() {
+        let before = [("picture-uri", "'file:///old.png'".to_owned()), ("picture-uri-dark", "'file:///old-dark.png'".to_owned()), ("picture-options", "'zoom'".to_owned())];
+        let wanted = [("picture-uri", "file:///new.png"), ("picture-uri-dark", "file:///new.png"), ("picture-options", "spanned")];
+        let mut desktop: std::collections::BTreeMap<String, String> = before.iter().map(|(key, value)| ((*key).to_owned(), value.clone())).collect();
+        // The dark key is locked: the light one was already written when it fails.
+        let error = set_or_roll_back(&before, &wanted, &mut |key, value| {
+            anyhow::ensure!(key != "picture-uri-dark" || value.starts_with('\''), "locked");
+            desktop.insert(key.to_owned(), value.to_owned());
+            Ok(())
+        }).unwrap_err();
+        assert_eq!(error.to_string(), "locked");
+        assert!(before.iter().all(|(key, value)| desktop[*key] == *value), "{desktop:?}");
+        // Without a failure everything is written, in order.
+        let mut written = Vec::new();
+        set_or_roll_back(&before, &wanted, &mut |key, _| { written.push(key.to_owned()); Ok(()) }).unwrap();
+        assert_eq!(written, ["picture-uri", "picture-uri-dark", "picture-options"]);
     }
     #[test]
     fn macos_guard_refuses_opaque_dynamic_and_per_space_settings() {

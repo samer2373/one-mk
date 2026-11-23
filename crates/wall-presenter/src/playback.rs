@@ -418,9 +418,9 @@ impl<Reader: Read + AsRawFd> Read for DeadlineReader<'_, Reader> {
 const INTERRUPTED: &str = "worker start interrupted by a newer command";
 
 /// The worker writes its header only once its decoder has prerolled, which it
-/// allows up to 30 s for (`play.rs`, `gstreamer`), after reading and checking the
+/// allows up to `PREROLL_SECONDS` (`play.rs`) for, after reading and checking the
 /// source; wait that long plus a margin for starting the sandbox.
-const WORKER_START: Duration = Duration::from_secs(40);
+const WORKER_START: Duration = Duration::from_secs(one_mk_wall_import::play::PREROLL_SECONDS + 10);
 
 #[cfg(test)]
 fn read_header(reader: &mut (impl Read + AsRawFd), timeout: Duration) -> Result<StreamHeader> {
@@ -775,7 +775,7 @@ mod tests {
 
     #[test]
     fn the_header_wait_covers_the_workers_thirty_second_preroll() {
-        assert!(WORKER_START > Duration::from_secs(30));
+        assert!(WORKER_START > Duration::from_secs(one_mk_wall_import::play::PREROLL_SECONDS));
     }
 
     #[test]

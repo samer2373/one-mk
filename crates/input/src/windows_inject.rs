@@ -135,6 +135,11 @@ pub(crate) fn key(vk: u16, scan: u16, flags: u32) -> INPUT {
     }
 }
 
+/// Some mice (and the computers sending them) call the thumb buttons BTN_BACK and BTN_FORWARD
+/// instead of BTN_SIDE and BTN_EXTRA; they are the same two buttons, as on Linux and macOS.
+const BTN_FORWARD: u32 = 0x115;
+const BTN_BACK: u32 = 0x116;
+
 /// `rel` keeps the fraction of a physical pixel that relative moves (in
 /// logical pixels) did not use yet, so scaling never drifts.
 fn build(out: &mut Vec<INPUT>, m: Inject, space: &Space, scroll: &mut SmoothScroll, rel: &mut (f64, f64)) {
@@ -164,10 +169,10 @@ fn build(out: &mut Vec<INPUT>, m: Inject, space: &Space, scroll: &mut SmoothScro
                 (BTN_RIGHT, false) => (MOUSEEVENTF_RIGHTUP, 0),
                 (BTN_MIDDLE, true) => (MOUSEEVENTF_MIDDLEDOWN, 0),
                 (BTN_MIDDLE, false) => (MOUSEEVENTF_MIDDLEUP, 0),
-                (BTN_SIDE, true) => (MOUSEEVENTF_XDOWN, u32::from(XBUTTON1)),
-                (BTN_SIDE, false) => (MOUSEEVENTF_XUP, u32::from(XBUTTON1)),
-                (BTN_EXTRA, true) => (MOUSEEVENTF_XDOWN, u32::from(XBUTTON2)),
-                (BTN_EXTRA, false) => (MOUSEEVENTF_XUP, u32::from(XBUTTON2)),
+                (BTN_SIDE | BTN_BACK, true) => (MOUSEEVENTF_XDOWN, u32::from(XBUTTON1)),
+                (BTN_SIDE | BTN_BACK, false) => (MOUSEEVENTF_XUP, u32::from(XBUTTON1)),
+                (BTN_EXTRA | BTN_FORWARD, true) => (MOUSEEVENTF_XDOWN, u32::from(XBUTTON2)),
+                (BTN_EXTRA | BTN_FORWARD, false) => (MOUSEEVENTF_XUP, u32::from(XBUTTON2)),
                 _ => {
                     tracing::debug!(button, "no Windows equivalent for mouse button");
                     return;
