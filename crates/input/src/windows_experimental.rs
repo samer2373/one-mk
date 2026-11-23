@@ -67,7 +67,7 @@ use windows_sys::Win32::UI::HiDpi::{
     MDT_EFFECTIVE_DPI, SetProcessDpiAwarenessContext, SetThreadDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, INPUT, INPUT_0, MAPVK_VK_TO_VSC_EX, MapVirtualKeyW, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+    GetAsyncKeyState, GetKeyboardLayout, INPUT, INPUT_0, MAPVK_VK_TO_VSC_EX, MapVirtualKeyExW, MapVirtualKeyW, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
     KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
     MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput,
@@ -83,7 +83,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_CLOSE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
     WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
     WM_SETTINGCHANGE, WM_INPUT, WM_INPUT_DEVICE_CHANGE, WM_TIMER, WM_WTSSESSION_CHANGE, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WTS_CONSOLE_DISCONNECT, WTS_REMOTE_CONNECT,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WTS_CONSOLE_CONNECT, WTS_CONSOLE_DISCONNECT, WTS_REMOTE_CONNECT, WTS_REMOTE_DISCONNECT,
     WTS_SESSION_LOCK, WTS_SESSION_LOGOFF, WTS_SESSION_UNLOCK,
 };
 
@@ -321,10 +321,17 @@ fn async_held() -> Held {
     // SAFETY: plain call.
     let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
     let mut held = Held::default();
+    // The layout the user is typing in: this thread has none of its own, and a letter's scan code
+    // depends on the layout (Z and Y on a German one), while the hook later reports the real scan.
+    // SAFETY: plain calls.
+    let layout = unsafe { GetKeyboardLayout(GetWindowThreadProcessId(GetForegroundWindow(), std::ptr::null_mut())) };
     for vk in 1u16..=0xFE {
         if async_down(vk) {
             // SAFETY: plain call.
-            let scan = unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC_EX) };
+            let scan = unsafe {
+                if layout.is_null() { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC_EX) }
+                else { MapVirtualKeyExW(u32::from(vk), MAPVK_VK_TO_VSC_EX, layout) }
+            };
             if let Some(code) = vk_to_evdev(vk, scan, swapped) {
                 held.set(code, true);
             }
@@ -1004,7 +1011,14 @@ impl State {
             return (false, Effect::None);
         }
         let Some(code) = code else {
-            // Unmapped, or AltGr's fake Ctrl: keep it from both machines.
+            // Unmapped, or AltGr's fake Ctrl: keep it from both machines. If AltGr was held at
+            // activation, GetAsyncKeyState counted that fake Ctrl as held (`local`, `Event::Modifiers`),
+            // and no other path would tell the daemon it is up.
+            const LEFT_CTRL: u32 = 29;
+            if !down && info.scanCode & 0x200 != 0 && self.local.has(LEFT_CTRL) {
+                self.local.set(LEFT_CTRL, false);
+                let _ = self.tx.send(Event::LocalKeyUp { code: LEFT_CTRL });
+            }
             return (true, Effect::None);
         };
         if let Some(swallow) = self.local_rules.as_mut().and_then(|local| local.shortcut(code, down)) {
@@ -1033,8 +1047,10 @@ impl State {
         if self.local_rules.as_mut().is_some_and(|local| local.remote_key(code, down)) {
             return (true, Effect::None);
         }
-        // Auto-repeat (Caps Lock's too) is dropped; the peer repeats.
-        if !self.fwd.forward(code, down) {
+        // The protocol drops held-key repeats but keeps standalone text repeats, and a second
+        // keyboard's press of a held key looks like a repeat here (Raw Input has not said which
+        // device it was yet). Only keys that never auto-repeat (modifiers, Caps Lock, ...) are dropped.
+        if !self.fwd.forward(code, down) && !is_repeatable(code) {
             return (true, Effect::None);
         }
         (true, self.send(Event::Key { code, down, device: None }))
@@ -1254,6 +1270,23 @@ fn reinstall_hooks(old: Hooks) -> bool {
     }
 }
 
+/// Puts the hooks back while nothing is captured. Windows drops a low-level hook whose callback
+/// was too slow, with no word to anyone, and the guard timer that notices only runs while
+/// captured: with the hooks gone, no edge hit could ever start a capture. Called where that is
+/// likely (waking up, coming back to the console or unlocking), when nothing is in flight.
+fn refresh_idle_hooks() {
+    let Some(hooks) = with_state(|s| s.captured.is_none().then_some(s.hooks)).flatten() else { return };
+    if !reinstall_hooks(hooks) {
+        with_state(|s| {
+            let _ = s.tx.send(Event::Error(
+                "Windows no longer lets one-mk watch this PC's mouse and keyboard, so it \
+                 can't control other computers until it is restarted."
+                    .into(),
+            ));
+        });
+    }
+}
+
 pub(crate) unsafe extern "system" fn desktop_changed(
     _hook: windows_sys::Win32::UI::Accessibility::HWINEVENTHOOK, event: u32, _hwnd: HWND,
     _object: i32, _child: i32, _thread: u32, _time: u32,
@@ -1284,6 +1317,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_APP_LOCAL_DESKTOP | 0x218 if msg == WM_APP_LOCAL_DESKTOP || matches!(wparam, 4 | 7 | 18) => {
+            if msg == 0x218 && matches!(wparam, 7 | 18) { refresh_idle_hooks(); }
             if let Some(effect) = with_state(|state| {
                 if msg == 0x218 && wparam == 4 { state.awake = false; }
                 if msg == 0x218 && matches!(wparam, 7 | 18) { state.awake = true; }
@@ -1419,7 +1453,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_WTSSESSION_CHANGE => {
             unsafe { PostMessageW(hwnd, WM_APP_LOCAL, 0, 0) };
             with_state(|state| {
-                if wparam as u32 == WTS_SESSION_UNLOCK {
+                // Coming back to the console is its own notification and need not be followed by an
+                // unlock (no lock screen). A locked desktop is still held back by `desktop_active()`.
+                if matches!(wparam as u32, WTS_SESSION_UNLOCK | WTS_CONSOLE_CONNECT | WTS_REMOTE_DISCONNECT) {
                     state.session_active = true;
                     if let Some(recovery) = &state.local_recovery { recovery.retry(); }
                     let held = async_held();
@@ -1432,6 +1468,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     state.session_active = false;
                 }
             });
+            if matches!(wparam as u32, WTS_SESSION_UNLOCK | WTS_CONSOLE_CONNECT | WTS_REMOTE_DISCONNECT) {
+                refresh_idle_hooks();
+            }
             match wparam as u32 {
                 WTS_SESSION_LOCK => with_state(|s| s.tx.send(Event::ScreenLocked(true)).ok()),
                 WTS_SESSION_UNLOCK => with_state(|s| s.tx.send(Event::ScreenLocked(false)).ok()),

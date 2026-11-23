@@ -24,7 +24,7 @@ use windows_sys::Win32::UI::Input::{
     RAWINPUTHEADER, RID_INPUT, RIDEV_DEVNOTIFY, RIDEV_INPUTSINK, RIDEV_REMOVE, RIDI_DEVICENAME, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
     RegisterRawInputDevices,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{RI_KEY_BREAK, RI_KEY_E0, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, RI_KEY_BREAK, RI_KEY_E0, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL, SM_SWAPBUTTON};
 
 /// Generic desktop page: mouse (2) and keyboard (6).
 const USAGES: [(u16, u16); 2] = [(1, 2), (1, 6)];
@@ -132,11 +132,16 @@ impl RawDevices {
                 if m.lLastX != 0 || m.lLastY != 0 {
                     self.corr.device_motion(device, now);
                 }
+                // Raw Input reports the physical buttons, the hook the logical ones: with the buttons
+                // swapped, the hook's left click is the right bit here.
+                // SAFETY: plain call.
+                let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
                 // Down and up bits per button: left, right, middle, 4, 5.
                 for b in 0..5u32 {
+                    let logical = if swapped && b < 2 { 1 - b } else { b };
                     for (bit, down) in [(1 << (2 * b), true), (1 << (2 * b + 1), false)] {
                         if flags & bit != 0
-                            && let Some(code) = hid_button_to_evdev(b + 1)
+                            && let Some(code) = hid_button_to_evdev(logical + 1)
                         {
                             self.corr.device_event(Token::Press { code, down }, device, now, out);
                         }

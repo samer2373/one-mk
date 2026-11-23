@@ -86,7 +86,8 @@ impl Keyboard {
         state[usize::from(VK_NUMLOCK)] = unsafe { GetKeyState(i32::from(VK_NUMLOCK)) } as u8 & 1;
         state[virtual_key as usize] = 0x80;
         let mut text = [0u16; 16];
-        let count = unsafe { ToUnicodeEx(virtual_key, scan, state.as_ptr(), text.as_mut_ptr(), text.len() as i32, 0x4, layout) };
+        // Only the low byte is the scan code here: the 0xe0 prefix of an extended key sets bit 15, which ToUnicodeEx reads as "key up".
+        let count = unsafe { ToUnicodeEx(virtual_key, scan & 0xff, state.as_ptr(), text.as_mut_ptr(), text.len() as i32, 0x4, layout) };
         if count == 0 { self.reset(); return Resolution::Physical; }
         let length = count.unsigned_abs() as usize;
         if length > text.len() { self.reset(); return Resolution::Physical; }
