@@ -821,27 +821,79 @@ fn open(cb: &mut Option<arboard::Clipboard>) -> Result<&mut arboard::Clipboard> 
 /// daemon started at login keeps the first file's name in `XAUTHORITY`, so
 /// after XWayland has restarted every X11 connection is refused
 /// ("Authorization required") and the clipboard stops for the rest of the
-/// session. Before the clipboard is opened this points `XAUTHORITY` at the
-/// newest such file when it names another one.
+/// session. Before the clipboard is opened this makes `XAUTHORITY` lead to the
+/// newest such file.
+///
+/// arboard and x11rb take their X11 authority only from that variable, and changing
+/// the environment of a running process is not sound against a thread that reads it
+/// at the same moment, so it is changed at most once in the life of the process: to
+/// a file of ours (see [`sync_xauthority`]) whose contents are replaced, atomically,
+/// at each later restart of XWayland. The variable then names the same file for good
+/// and no thread can see it change.
 #[cfg(target_os = "linux")]
 fn refresh_xauthority() {
     let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from) else { return };
     // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
-    let Some(newest) = newest_xwayland_auth(&dir, uid) else { return };
-    // One writer at a time: the clipboard worker and the history watcher both come here.
+    // One at a time: the clipboard worker and the history watcher both come here.
     static CHANGING: Mutex<()> = Mutex::new(());
     let _one_at_a_time = CHANGING.lock().unwrap_or_else(|error| error.into_inner());
-    if std::env::var_os("XAUTHORITY").as_deref() != Some(newest.as_os_str()) {
-        tracing::debug!(file = %newest.display(), "XWayland has a new auth file; using it for the clipboard");
-        // SAFETY: not sound against a thread that reads the environment at the
-        // same moment (another X11 connection opening reads this variable): arboard
-        // and x11rb take their X11 authority only from it, so there is no way to hand
-        // them the file instead. It is reached only when XWayland has restarted
-        // and changed the file, which is rare, and it replaces the value of a
-        // variable that is already set.
-        unsafe { std::env::set_var("XAUTHORITY", &newest) };
+    let current = std::env::var_os("XAUTHORITY");
+    let point_at = match sync_xauthority(&dir, uid, current.as_deref()) {
+        Ok(None) => return,
+        Ok(Some(file)) => file,
+        Err(error) => {
+            // No file of ours (a full or read-only runtime directory): name Mutter's own, as
+            // this once did at every restart.
+            tracing::debug!("keeping the X11 authority in a file of our own failed: {error}");
+            match newest_xwayland_auth(&dir, uid) {
+                Some(newest) if current.as_deref() != Some(newest.as_os_str()) => newest,
+                _ => return,
+            }
+        }
+    };
+    tracing::debug!(file = %point_at.display(), "XWayland has a new auth file; using it for the clipboard");
+    // SAFETY: this is not sound against a thread that reads the environment at the same
+    // moment (C code calling getenv; Rust's own std::env readers are locked against
+    // this). It is reached only when XWayland has restarted since the process began (or
+    // the variable named neither of its files), once for a file of ours, and it replaces
+    // the value of a variable that is already set (the case in which libc swaps the
+    // pointer in place). The daemon links no X11 or other C library that reads it (only
+    // libc, which reads other variables): the window is another process.
+    unsafe { std::env::set_var("XAUTHORITY", &point_at) };
+}
+
+/// The name of our copy of Mutter's XWayland auth file, in `$XDG_RUNTIME_DIR`.
+#[cfg(target_os = "linux")]
+const OWN_XAUTHORITY: &str = ".one-mk-xauthority";
+
+/// Brings our copy of the newest Mutter auth file in `dir` up to date and says which
+/// file `XAUTHORITY` has to name, when it names neither the newest Mutter file nor
+/// our copy; `None` when it needs no change (the copy is rewritten in place when it
+/// differs). `current` is `XAUTHORITY` now.
+#[cfg(target_os = "linux")]
+fn sync_xauthority(dir: &std::path::Path, uid: u32, current: Option<&std::ffi::OsStr>) -> std::io::Result<Option<std::path::PathBuf>> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let Some(newest) = newest_xwayland_auth(dir, uid) else { return Ok(None) };
+    if current == Some(newest.as_os_str()) {
+        return Ok(None);
     }
+    let copy = dir.join(OWN_XAUTHORITY);
+    let wanted = std::fs::read(&newest)?;
+    if std::fs::read(&copy).ok().as_deref() != Some(wanted.as_slice()) {
+        // Written beside it and moved over it: a reader sees the old file or the new, whole.
+        let temporary = dir.join(format!("{OWN_XAUTHORITY}.{}", std::process::id()));
+        let _ = std::fs::remove_file(&temporary);
+        let written = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)
+            .and_then(|mut file| file.write_all(&wanted).and_then(|()| file.sync_all()))
+            .and_then(|()| std::fs::rename(&temporary, &copy));
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+    }
+    Ok((current != Some(copy.as_os_str())).then_some(copy))
 }
 
 /// The most recently written Mutter XWayland auth file in `dir` that `uid` owns.
@@ -1133,6 +1185,51 @@ mod tests {
     /// XWayland restarts with a new auth file and deletes the old one: the
     /// clipboard must follow to the newest, never to another user's or an
     /// unrelated file.
+    /// XAUTHORITY is changed once, to a file of ours; the restarts of XWayland after that
+    /// rewrite that file and leave the variable alone.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn xwayland_restarts_rewrite_our_copy_and_change_the_variable_once() {
+        use std::ffi::OsStr;
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        let dir = tempfile::tempdir().unwrap();
+        let auth = |name: &str, contents: &str, age: u64| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, contents).unwrap();
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(age)).unwrap();
+            path
+        };
+        let copy = dir.path().join(OWN_XAUTHORITY);
+        assert_eq!(sync_xauthority(dir.path(), uid, None).unwrap(), None, "no Mutter file, nothing to do");
+        // The daemon started when XWayland had the first file; it is deleted by the restart.
+        let first = auth(".mutter-Xwaylandauth.AAA111", "cookie one", 100);
+        assert_eq!(sync_xauthority(dir.path(), uid, Some(first.as_os_str())).unwrap(), None, "it names the file that is there");
+        std::fs::remove_file(&first).unwrap();
+        let second = auth(".mutter-Xwaylandauth.BBB222", "cookie two", 50);
+        // The variable names a file that is gone: it has to name ours, once.
+        assert_eq!(sync_xauthority(dir.path(), uid, Some(first.as_os_str())).unwrap(), Some(copy.clone()));
+        assert_eq!(std::fs::read(&copy).unwrap(), b"cookie two");
+        assert_eq!(std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o600);
+        // The next restart: the variable names ours already, only the file changes.
+        std::fs::remove_file(&second).unwrap();
+        auth(".mutter-Xwaylandauth.CCC333", "cookie three", 10);
+        assert_eq!(sync_xauthority(dir.path(), uid, Some(copy.as_os_str())).unwrap(), None, "the variable is not touched again");
+        assert_eq!(std::fs::read(&copy).unwrap(), b"cookie three");
+        // Nothing left over beside them, and another account's files are not copied.
+        let mut names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, [".mutter-Xwaylandauth.CCC333", ".one-mk-xauthority"]);
+        assert_eq!(sync_xauthority(dir.path(), uid.wrapping_add(1), Some(OsStr::new("/gone"))).unwrap(), None);
+        // A directory that can't be written to is an error (the caller then names Mutter's own file).
+        std::fs::remove_file(&copy).unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let denied = if uid == 0 { true } else { sync_xauthority(dir.path(), uid, Some(OsStr::new("/gone"))).is_err() };
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(denied);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn the_newest_xwayland_auth_file_is_found() {
