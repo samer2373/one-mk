@@ -650,19 +650,63 @@ fn wayland_data_control() -> bool {
     *KNOWN.get_or_init(|| std::env::var_os("WAYLAND_DISPLAY").is_some() && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok())
 }
 
-/// Refuses text or HTML larger than an X11 clipboard can hand over (see
-/// [`Clipboard::write_limit`]), instead of setting a clipboard nothing can
-/// paste. Images are encoded by arboard, so their size is not known here.
+/// Refuses text, HTML or a picture larger than an X11 clipboard can hand over
+/// (see [`Clipboard::write_limit`]), instead of setting a clipboard nothing can
+/// paste.
 #[cfg(target_os = "linux")]
 fn check_x11_size(raw: &Raw) -> Result<()> {
+    x11_size_error(raw, x11_write_limit())
+}
+
+#[cfg(target_os = "linux")]
+fn x11_size_error(raw: &Raw, limit: Option<usize>) -> Result<()> {
+    let Some(limit) = limit else { return Ok(()) };
     let largest = raw.text.as_ref().map_or(0, String::len).max(raw.html.as_ref().map_or(0, String::len));
-    match x11_write_limit() {
-        Some(limit) if largest > limit => bail!(
-            "{} MB of text is more than this computer's X11 clipboard can hand over ({} MB at most)",
-            largest >> 20, limit >> 20
-        ),
-        _ => Ok(()),
+    if largest > limit {
+        bail!("{} MB of text is more than this computer's X11 clipboard can hand over ({} MB at most)", largest >> 20, limit >> 20);
     }
+    // arboard encodes a picture again before it offers it (see `served_png_len`), so
+    // the size of what came over the wire says little about what has to fit.
+    if raw.text.is_none() && raw.html.is_none() && let Some(image) = &raw.image {
+        let served = served_png_len(image, limit)?;
+        if served > limit {
+            bail!("a {} MB picture is more than this computer's X11 clipboard can hand over ({} MB at most)", served >> 20, limit >> 20);
+        }
+    }
+    Ok(())
+}
+
+/// The size of the PNG that arboard offers for `image`: it encodes the picture again,
+/// as `image`'s PngEncoder does by default (fast compression, adaptive filtering),
+/// not as [`encode_png`] does for the wire (fast compression, the default filter).
+/// The same `png` crate does the work, so the size is the one it will make. Pictures that cannot get over `limit`
+/// even when nothing compresses (the common case) are not encoded at all.
+#[cfg(target_os = "linux")]
+fn served_png_len(image: &Image, limit: usize) -> Result<usize> {
+    // The least that fits, whatever the encoder does: stored blocks add 5 bytes per
+    // 64 KB, a filter byte per row, chunk headers and a trailer; this adds 0.2 %.
+    let worst = image.rgba.len().saturating_add(image.rgba.len() / 512).saturating_add(image.height).saturating_add(4096);
+    if worst <= limit {
+        return Ok(worst);
+    }
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let mut count = Count(0);
+    let mut encoder = png::Encoder::new(&mut count, image.width as u32, image.height as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    encoder.set_filter(png::Filter::Adaptive);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(&image.rgba)?;
+    writer.finish()?;
+    Ok(count.0)
 }
 
 impl Backend {
@@ -777,27 +821,79 @@ fn open(cb: &mut Option<arboard::Clipboard>) -> Result<&mut arboard::Clipboard> 
 /// daemon started at login keeps the first file's name in `XAUTHORITY`, so
 /// after XWayland has restarted every X11 connection is refused
 /// ("Authorization required") and the clipboard stops for the rest of the
-/// session. Before the clipboard is opened this points `XAUTHORITY` at the
-/// newest such file when it names another one.
+/// session. Before the clipboard is opened this makes `XAUTHORITY` lead to the
+/// newest such file.
+///
+/// arboard and x11rb take their X11 authority only from that variable, and changing
+/// the environment of a running process is not sound against a thread that reads it
+/// at the same moment, so it is changed at most once in the life of the process: to
+/// a file of ours (see [`sync_xauthority`]) whose contents are replaced, atomically,
+/// at each later restart of XWayland. The variable then names the same file for good
+/// and no thread can see it change.
 #[cfg(target_os = "linux")]
 fn refresh_xauthority() {
     let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from) else { return };
     // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
-    let Some(newest) = newest_xwayland_auth(&dir, uid) else { return };
-    // One writer at a time: the clipboard worker and the history watcher both come here.
+    // One at a time: the clipboard worker and the history watcher both come here.
     static CHANGING: Mutex<()> = Mutex::new(());
     let _one_at_a_time = CHANGING.lock().unwrap_or_else(|error| error.into_inner());
-    if std::env::var_os("XAUTHORITY").as_deref() != Some(newest.as_os_str()) {
-        tracing::debug!(file = %newest.display(), "XWayland has a new auth file; using it for the clipboard");
-        // SAFETY: not sound against a thread that reads the environment at the
-        // same moment (another X11 connection opening reads this variable): arboard
-        // and x11rb take their X11 authority only from it, so there is no way to hand
-        // them the file instead. It is reached only when XWayland has restarted
-        // and changed the file, which is rare, and it replaces the value of a
-        // variable that is already set.
-        unsafe { std::env::set_var("XAUTHORITY", &newest) };
+    let current = std::env::var_os("XAUTHORITY");
+    let point_at = match sync_xauthority(&dir, uid, current.as_deref()) {
+        Ok(None) => return,
+        Ok(Some(file)) => file,
+        Err(error) => {
+            // No file of ours (a full or read-only runtime directory): name Mutter's own, as
+            // this once did at every restart.
+            tracing::debug!("keeping the X11 authority in a file of our own failed: {error}");
+            match newest_xwayland_auth(&dir, uid) {
+                Some(newest) if current.as_deref() != Some(newest.as_os_str()) => newest,
+                _ => return,
+            }
+        }
+    };
+    tracing::debug!(file = %point_at.display(), "XWayland has a new auth file; using it for the clipboard");
+    // SAFETY: this is not sound against a thread that reads the environment at the same
+    // moment (C code calling getenv; Rust's own std::env readers are locked against
+    // this). It is reached only when XWayland has restarted since the process began (or
+    // the variable named neither of its files), once for a file of ours, and it replaces
+    // the value of a variable that is already set (the case in which libc swaps the
+    // pointer in place). The daemon links no X11 or other C library that reads it (only
+    // libc, which reads other variables): the window is another process.
+    unsafe { std::env::set_var("XAUTHORITY", &point_at) };
+}
+
+/// The name of our copy of Mutter's XWayland auth file, in `$XDG_RUNTIME_DIR`.
+#[cfg(target_os = "linux")]
+const OWN_XAUTHORITY: &str = ".one-mk-xauthority";
+
+/// Brings our copy of the newest Mutter auth file in `dir` up to date and says which
+/// file `XAUTHORITY` has to name, when it names neither the newest Mutter file nor
+/// our copy; `None` when it needs no change (the copy is rewritten in place when it
+/// differs). `current` is `XAUTHORITY` now.
+#[cfg(target_os = "linux")]
+fn sync_xauthority(dir: &std::path::Path, uid: u32, current: Option<&std::ffi::OsStr>) -> std::io::Result<Option<std::path::PathBuf>> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let Some(newest) = newest_xwayland_auth(dir, uid) else { return Ok(None) };
+    if current == Some(newest.as_os_str()) {
+        return Ok(None);
     }
+    let copy = dir.join(OWN_XAUTHORITY);
+    let wanted = std::fs::read(&newest)?;
+    if std::fs::read(&copy).ok().as_deref() != Some(wanted.as_slice()) {
+        // Written beside it and moved over it: a reader sees the old file or the new, whole.
+        let temporary = dir.join(format!("{OWN_XAUTHORITY}.{}", std::process::id()));
+        let _ = std::fs::remove_file(&temporary);
+        let written = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)
+            .and_then(|mut file| file.write_all(&wanted).and_then(|()| file.sync_all()))
+            .and_then(|()| std::fs::rename(&temporary, &copy));
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+    }
+    Ok((current != Some(copy.as_os_str())).then_some(copy))
 }
 
 /// The most recently written Mutter XWayland auth file in `dir` that `uid` owns.
@@ -885,6 +981,9 @@ impl Worker {
         let owner = if matches!(self.backend, Backend::System(_)) && std::env::var_os("WAYLAND_DISPLAY").is_none() { Some(sensitivity::owner()?) } else { None };
         #[cfg(any(windows, target_os = "macos"))]
         let generation = sensitivity::generation();
+        // Before the sensitivity query: a copy made between it and the read is caught (see `sensitivity::Guard`).
+        #[cfg(target_os = "linux")]
+        let guard = if matches!(self.backend, Backend::System(_)) { Some(sensitivity::Guard::begin()?) } else { None };
         let concealed = if matches!(self.backend, Backend::System(_)) {
             let apps = self.history_apps.lock().unwrap_or_else(|error| error.into_inner());
             #[cfg(target_os = "linux")]
@@ -900,6 +999,8 @@ impl Worker {
         });
         #[cfg(target_os = "linux")]
         if let Some(owner) = owner && sensitivity::owner()? != owner { bail!("clipboard owner changed during read; retry"); }
+        #[cfg(target_os = "linux")]
+        if let Some(guard) = guard && r.is_ok() { guard.finish()?; }
         #[cfg(any(windows, target_os = "macos"))]
         if matches!(self.backend, Backend::System(_)) && sensitivity::generation() != generation { bail!("clipboard changed during sensitivity check; retry"); }
         if r.is_err()
@@ -1084,6 +1185,51 @@ mod tests {
     /// XWayland restarts with a new auth file and deletes the old one: the
     /// clipboard must follow to the newest, never to another user's or an
     /// unrelated file.
+    /// XAUTHORITY is changed once, to a file of ours; the restarts of XWayland after that
+    /// rewrite that file and leave the variable alone.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn xwayland_restarts_rewrite_our_copy_and_change_the_variable_once() {
+        use std::ffi::OsStr;
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        let dir = tempfile::tempdir().unwrap();
+        let auth = |name: &str, contents: &str, age: u64| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, contents).unwrap();
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(age)).unwrap();
+            path
+        };
+        let copy = dir.path().join(OWN_XAUTHORITY);
+        assert_eq!(sync_xauthority(dir.path(), uid, None).unwrap(), None, "no Mutter file, nothing to do");
+        // The daemon started when XWayland had the first file; it is deleted by the restart.
+        let first = auth(".mutter-Xwaylandauth.AAA111", "cookie one", 100);
+        assert_eq!(sync_xauthority(dir.path(), uid, Some(first.as_os_str())).unwrap(), None, "it names the file that is there");
+        std::fs::remove_file(&first).unwrap();
+        let second = auth(".mutter-Xwaylandauth.BBB222", "cookie two", 50);
+        // The variable names a file that is gone: it has to name ours, once.
+        assert_eq!(sync_xauthority(dir.path(), uid, Some(first.as_os_str())).unwrap(), Some(copy.clone()));
+        assert_eq!(std::fs::read(&copy).unwrap(), b"cookie two");
+        assert_eq!(std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o600);
+        // The next restart: the variable names ours already, only the file changes.
+        std::fs::remove_file(&second).unwrap();
+        auth(".mutter-Xwaylandauth.CCC333", "cookie three", 10);
+        assert_eq!(sync_xauthority(dir.path(), uid, Some(copy.as_os_str())).unwrap(), None, "the variable is not touched again");
+        assert_eq!(std::fs::read(&copy).unwrap(), b"cookie three");
+        // Nothing left over beside them, and another account's files are not copied.
+        let mut names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, [".mutter-Xwaylandauth.CCC333", ".one-mk-xauthority"]);
+        assert_eq!(sync_xauthority(dir.path(), uid.wrapping_add(1), Some(OsStr::new("/gone"))).unwrap(), None);
+        // A directory that can't be written to is an error (the caller then names Mutter's own file).
+        std::fs::remove_file(&copy).unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let denied = if uid == 0 { true } else { sync_xauthority(dir.path(), uid, Some(OsStr::new("/gone"))).is_err() };
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(denied);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn the_newest_xwayland_auth_file_is_found() {
@@ -1340,6 +1486,86 @@ mod tests {
     fn image() -> Image {
         let rgba = (0..4 * 3 * 4).map(|i| (i * 7) as u8).collect();
         Image { width: 4, height: 3, rgba }
+    }
+
+    /// A picture of pixels with a lot of order in them, and the PNG of it that a program
+    /// squeezing the file (not oneMK, which sends the fast encoder's) would write.
+    #[cfg(target_os = "linux")]
+    fn gradient(width: usize, height: usize) -> Image {
+        let rgba = (0..width * height * 4).map(|i| ((i / 4) % width + (i / 4) / width + i % 4) as u8).collect();
+        Image { width, height, rgba }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn squeezed_png(image: &Image) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut encoder = png::Encoder::new(&mut out, image.width as u32, image.height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::High);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&image.rgba).unwrap();
+        writer.finish().unwrap();
+        out
+    }
+
+    /// Random pixels, which no encoder makes smaller than they are.
+    #[cfg(target_os = "linux")]
+    fn noise(width: usize, height: usize) -> Image {
+        let mut seed = 12345u64;
+        let rgba = (0..width * height * 4).map(|_| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as u8
+        }).collect();
+        Image { width, height, rgba }
+    }
+
+    /// The picture the peer sent fits what the X11 clipboard can hand over, but arboard
+    /// encodes it again, and the new PNG does not: it is refused, not set unpasteable.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_picture_that_is_too_big_once_arboard_encodes_it_again_is_refused() {
+        let image = gradient(512, 512);
+        let wire = squeezed_png(&image).len();
+        let served = served_png_len(&image, 0).unwrap();
+        assert!(served > wire * 10, "the scenario needs a squeezed file much smaller than the new one ({served} vs {wire})");
+        let raw = Raw { image: Some(image.clone()), ..Raw::default() };
+        // The wire's size fits, the served one does not.
+        let error = x11_size_error(&raw, Some(wire + 10)).unwrap_err();
+        assert!(format!("{error:#}").contains("picture is more than this computer's X11 clipboard can hand over"), "{error:#}");
+        x11_size_error(&raw, Some(served)).unwrap();
+        x11_size_error(&raw, None).unwrap();
+        // Text next to it is what is written then, not the picture.
+        x11_size_error(&Raw { text: Some("a".into()), image: Some(image), ..Raw::default() }, Some(wire + 10)).unwrap();
+    }
+
+    /// A picture that cannot reach the limit however it is encoded is not encoded to be
+    /// measured, and text and HTML are checked as before.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn small_pictures_pass_without_being_measured_and_big_text_is_still_refused() {
+        let image = noise(64, 64);
+        assert!(served_png_len(&image, 1 << 24).unwrap() >= image.rgba.len());
+        x11_size_error(&Raw { image: Some(image), ..Raw::default() }, Some(1 << 24)).unwrap();
+        assert!(x11_size_error(&Raw { text: Some("x".repeat(101)), ..Raw::default() }, Some(100)).is_err());
+        assert!(x11_size_error(&Raw { html: Some("x".repeat(101)), ..Raw::default() }, Some(100)).is_err());
+        x11_size_error(&Raw { text: Some("x".repeat(100)), ..Raw::default() }, Some(100)).unwrap();
+    }
+
+    /// What arboard really serves has the size `served_png_len` says.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires an explicitly private X11 display and xclip"]
+    async fn real_x11_serves_the_picture_at_the_predicted_size() {
+        assert_eq!(std::env::var("ONE_MK_PRIVATE_X11").as_deref(), Ok("1"));
+        assert!(std::env::var_os("WAYLAND_DISPLAY").is_none());
+        let clipboard = Clipboard::system();
+        for image in [noise(300, 200), noise(1, 1), gradient(300, 200), Image { width: 64, height: 64, rgba: vec![7; 64 * 64 * 4] }] {
+            let expected = served_png_len(&image, 0).unwrap();
+            clipboard.write(ClipData { png: Some(encode_png(&image).unwrap()), ..Default::default() }).await.unwrap();
+            let out = std::process::Command::new("xclip").args(["-selection", "clipboard", "-o", "-t", "image/png"]).output().unwrap();
+            assert_eq!(out.stdout.len(), expected, "{}x{}", image.width, image.height);
+        }
     }
 
     #[test]

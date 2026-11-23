@@ -19,7 +19,12 @@ one-mk clipboard --allow-fetch on|off     # default off
   asks for your clipboard. The mark is read on X11 (the KDE password-manager
   hint) and has been tried there. Reading it on Wayland, Windows and macOS is
   built but has not been tried on real desktops. A password that no program
-  marked cannot be recognised.
+  marked cannot be recognised. The mark and the content are read as separate
+  requests; on X11 (and XWayland, which GNOME's Wayland session uses) any copy
+  made between the two makes the read fail and run again, so a password copied
+  at that moment is never read as ordinary text. On the Wayland data-control
+  protocol the offered types are asked for again after the read and must be the
+  same (built, but not tried on a real compositor).
 - **Sending one yourself is refused by default.** `one-mk clip-send` of a
   marked copy says so and sends nothing. `one-mk clip-send --allow-sensitive`
   sends it anyway; the other computer then puts it on its clipboard but never
@@ -74,7 +79,12 @@ notifications yet.
 
 A switched-off kind is neither sent nor accepted; a clipboard over the limit (default
 25 MB, at most 256) is not sent, and a bigger one that arrives is refused before it is
-read. `one-mk run --no-clipboard` turns clipboard sharing off for one run.
+read. An X11 clipboard (also XWayland's) can hand over one request's worth, about
+16 MB: a text, HTML or picture that arrives larger than that is refused with a
+reason instead of being set where nothing can paste it. For a picture the size
+checked is that of the PNG this computer will offer (it encodes the picture again
+before offering it), which can differ from the size that arrived.
+`one-mk run --no-clipboard` turns clipboard sharing off for one run.
 
 ## History settings
 
