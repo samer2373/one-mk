@@ -414,8 +414,12 @@ impl App {
             }
             ButtonResult::Pass => {}
         }
-        let out = &mut t.out;
-        t.mapper.key_from(code, down, device, now, &mut |e| out.push(e));
+        // A release went to the mapper above, once: a second call would find the key
+        // held by another device (as `release_of` falls back to) and release that too.
+        if down {
+            let out = &mut t.out;
+            t.mapper.key_from(code, down, device, now, &mut |e| out.push(e));
+        }
         // Held here from any device: what shortcuts and focus watching see.
         if down || !t.mapper.held_anywhere(code) {
             r.held.update(code, down);

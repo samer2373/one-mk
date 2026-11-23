@@ -3263,6 +3263,7 @@ impl App {
             // Already capturing: the visit moves to the new peer.
             Some(activation) => self.enter_peer_at_center(activation, fp),
             None => {
+                self.forget_late_broadcast_capture();
                 self.switching = Some((fp, Instant::now() + SWITCH_TIMEOUT));
                 self.update_sides(); // arms `side` even while the pointer is locked
                 let _ = self.capture.send(CaptureCmd::Activate { side });
