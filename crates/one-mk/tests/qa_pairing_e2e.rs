@@ -276,6 +276,38 @@ fn a_peer_that_never_takes_part_in_the_exchange_is_let_go_in_the_step_time() {
     drop(quiet);
 }
 
+/// A computer that connects to the pairing listener and says nothing must not hold up the real
+/// one behind it: before, each connection was handled to its end one after the other, so the
+/// real computer waited out the quiet one's step (30 s in use; here 20 s).
+#[test]
+fn a_quiet_connection_does_not_hold_up_the_computer_that_pairs() {
+    if !isolated("a_quiet_connection_does_not_hold_up_the_computer_that_pairs") {
+        return;
+    }
+    let lab = Lab::new();
+    let (alpha, beta) = (quick(&lab.node("alpha"), 20_000, 30_000), quick(&lab.node("beta"), 20_000, 30_000));
+    let mut host = Proc::spawn(Lab::command(&alpha, &["pair", "--machine", "--no-discovery"]));
+    let me = host.expect("me\t", 20);
+    let port: u16 = me.split('\t').nth(3).unwrap().parse().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let quiet = runtime.block_on(async {
+        let mut held = Vec::new();
+        for _ in 0..3 {
+            let identity = std::sync::Arc::new(one_mk_net::Identity::ephemeral().unwrap());
+            let node = one_mk_net::Node::bind(identity, "127.0.0.1:0".parse().unwrap()).unwrap();
+            let peer = node.connect(format!("127.0.0.1:{port}").parse().unwrap()).await.unwrap();
+            held.push((node, peer));
+        }
+        held
+    });
+    let started = Instant::now();
+    let mut joiner = Proc::spawn(Lab::command(&beta, &["pair", "--machine", "--no-discovery", "--connect", &format!("127.0.0.1:{port}")]));
+    host.expect("code\t", 15);
+    joiner.expect("code\t", 15);
+    assert!(started.elapsed() < Duration::from_secs(15), "{:?}", started.elapsed());
+    drop(quiet);
+}
+
 fn invite_link(host: &mut Proc) -> String {
     host.expect("invitation\t", 20).trim_start_matches("invitation\t").to_owned()
 }

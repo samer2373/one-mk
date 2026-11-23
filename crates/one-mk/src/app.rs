@@ -1863,7 +1863,7 @@ impl App {
         let peer = &self.peers[&fp];
         let epoch = r.cursor.epoch();
         if wants_relative(self.settings.gaming, peer.caps, false) && r.cursor.set_relative(true) {
-            peer.ctl.send(Control::PointerMode { epoch, relative: true });
+            peer.ctl.send(Control::PointerMode { epoch, relative: true, base: r.cursor.relative_base() });
         }
         tracing::debug!(peer = %peer.name, side = %peer.side, relative = r.cursor.is_relative(), "pointer moved to peer");
         self.remote = Some(r);
@@ -1936,7 +1936,7 @@ impl App {
         }
         let want = wants_relative(self.settings.gaming, p.caps, r.peer_fullscreen);
         if r.cursor.set_relative(want) {
-            p.ctl.send(Control::PointerMode { epoch: r.cursor.epoch(), relative: want });
+            p.ctl.send(Control::PointerMode { epoch: r.cursor.epoch(), relative: want, base: r.cursor.relative_base() });
             tracing::debug!(peer = %p.name, relative = want, "pointer mode changed");
             if r.acked {
                 r.send_motion(&self.peers, r.cursor.current());
@@ -2542,9 +2542,12 @@ impl App {
                     }
                 }
             }
-            Control::PointerMode { epoch, relative } => {
+            Control::PointerMode { epoch, relative, base } => {
                 if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id && o.epoch == epoch) {
                     o.relative = relative;
+                    if let Some(base) = base.filter(|_| relative) {
+                        o.motion.relative_from(epoch, base);
+                    }
                 }
             }
             Control::Focus { epoch, fullscreen, apps } => {

@@ -63,6 +63,12 @@ and does not protect, in [SECURITY.md](../SECURITY.md). A daily update check con
 `api.github.com` once at startup; switch it off with `one-mk update --check-on-start off` (or in
 Settings). The Windows installer is not Authenticode-signed yet, so SmartScreen warns about it.
 
+Replay protection is kept per settings folder, but the executable is shared: if two settings
+folders update the same executable, the updater that takes the executable's update lock second
+reads the installed version again under the lock and does nothing when that version is the same
+as or newer than its release, so an older signed release never goes over a newer one (portable,
+AppImage and Windows installs; a `.deb` root step keeps its own record).
+
 ## Known limits
 
 - **X11 is not a protection boundary.** Any program that can talk to your X server can read keys

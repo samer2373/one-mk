@@ -36,7 +36,7 @@ pub use edge::{
 pub use geometry::{Desktop, Edge, Pos, Rect, Side, touching};
 pub use keys::{HeldKeys, swap_ctrl_meta};
 pub use lock::{CAUSE_WINDOW, LockSync, OnRemote};
-pub use motion::{HOME_INSET, MotionReceiver, Received, RelReceived, RemoteCursor, Step};
+pub use motion::{HOME_INSET, MotionReceiver, Received, RelReceived, RelativeBase, RemoteCursor, Step};
 pub use sleep::{OnRemoteSleep, SleepSync};
 pub use transfer::{Batch, ClipAck, ClipFormat, ClipHeader, FileMsg};
 pub use wrap::{free_edges, wrap_point};
