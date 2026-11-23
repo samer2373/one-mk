@@ -61,6 +61,9 @@ pub struct SeenDevice {
     pub keyboard: bool,
     pub pointer: bool,
     pub connected: bool,
+    /// Another device here has exactly this identity (two of one model
+    /// without serial numbers): a rule for it applies to all of them.
+    pub twins: bool,
 }
 
 /// Why keys can't be changed for one keyboard or mouse here, in plain words.
@@ -100,7 +103,8 @@ impl SeenDevice {
             "internal" => "Built-in ".into(),
             _ => format!("{} ", self.connection),
         };
-        format!("{state} · {how}{kind}")
+        let twins = if self.twins { " · Same ID as another" } else { "" };
+        format!("{state} · {how}{kind}{twins}")
     }
 
     /// Made by software (X's XTEST devices): no one's keyboard or mouse.
@@ -2491,6 +2495,8 @@ to = "f1"
         let d = SeenDevice { bus: "internal".into(), connection: "built in".into(), keyboard: true, pointer: true, connected: true, ..Default::default() };
         assert_eq!(d.about(), "Connected · Built-in keyboard and mouse");
         assert!(SeenDevice { bus: "virtual".into(), ..Default::default() }.is_virtual());
+        let twin = SeenDevice { bus: "usb".into(), connection: "USB".into(), pointer: true, connected: true, twins: true, ..Default::default() };
+        assert_eq!(twin.about(), "Connected · USB mouse · Same ID as another");
     }
 
 }
