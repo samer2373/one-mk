@@ -376,17 +376,19 @@ fn is_our_bundle(path: &Path) -> bool {
 /// The name a Quick Action is built under before it is moved to its own: nothing else has it.
 const STAGING: &str = "Send ~one-mk-staging-";
 
-/// What an interrupted write leaves behind: a real folder holding only folders and empty files
-/// (nothing of anyone's is empty), or one of our staging folders. Neither is anything to protect.
+/// What an interrupted write of an earlier version leaves behind: a real folder with nothing in it
+/// but the shape we write (`Contents/` and its two files) with every file empty, or one of our
+/// staging folders. Anything else, even empty, might be someone's own and is left alone.
 fn is_unfinished_bundle(path: &Path) -> bool {
-    fn only_empty(path: &Path, depth: usize) -> bool {
-        let Ok(meta) = std::fs::symlink_metadata(path) else { return false };
-        if meta.file_type().is_file() { return meta.len() == 0; }
-        if !meta.file_type().is_dir() || depth == 0 { return false; }
-        std::fs::read_dir(path).is_ok_and(|rd| rd.flatten().all(|e| only_empty(&e.path(), depth - 1)))
-    }
-    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir())
-        && (path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(STAGING)) || only_empty(path, 3))
+    let is_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_dir());
+    // Only the names we write, and nothing in them (a missing file is as unfinished as an empty one).
+    let only_ours = |dir: &Path, names: &[&str], check: &dyn Fn(&Path) -> bool| {
+        std::fs::read_dir(dir).is_ok_and(|rd| rd.flatten().all(|e| e.file_name().to_str().is_some_and(|n| names.contains(&n)) && check(&e.path())))
+    };
+    let empty_file = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file() && m.len() == 0);
+    is_dir(path)
+        && (path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(STAGING))
+            || only_ours(path, &["Contents"], &|contents| is_dir(contents) && only_ours(contents, &["Info.plist", "document.wflow"], &empty_file)))
 }
 
 /// What generated entries are in `t`: files for the first three kinds,
@@ -623,7 +625,8 @@ fn owned_by(t: &Target, home: Option<&Path>) -> bool {
                     Kind::KdeMenu => exec_word(&h),
                     Kind::SendTo => format!("\"{}\"", h.replace('%', "%%")),
                 };
-                text.contains(&format!(" --home {word}"))
+                // The word is always followed by `send`: an unquoted path is not a prefix of a longer one.
+                text.contains(&format!(" --home {word} send "))
             }
         }
     })
@@ -917,6 +920,13 @@ echo mine
         std::fs::create_dir_all(&zero).unwrap();
         assert_eq!(clear(&t).unwrap(), 2);
         assert!(!empty.exists() && !zero.exists());
+        // Empty files under names we never write are someone's: not ours to take either.
+        let other = t.dir.join("Send to Archive.workflow");
+        std::fs::create_dir_all(other.join("Contents")).unwrap();
+        std::fs::write(other.join("Contents/Info.plist"), "").unwrap();
+        std::fs::write(other.join("Contents/placeholder.txt"), "").unwrap();
+        assert!(!generated(&t).contains(&other));
+        std::fs::remove_dir_all(&other).unwrap();
         // A folder with anything in it that is not empty is not ours to take.
         std::fs::create_dir_all(empty.join("Contents")).unwrap();
         std::fs::write(empty.join("Contents/Info.plist"), "<plist>mine</plist>").unwrap();
@@ -986,6 +996,18 @@ echo mine
             assert!(!owned_by(&t, Some(Path::new("/tmp/other"))), "{kind:?}");
             write_target(&t, &setup(&[(A, "Laptop"), (B, "Desk")])).unwrap();
             assert!(owned_by(&t, None) && !owned_by(&t, custom.home.as_deref()), "{kind:?}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_home_that_is_the_start_of_another_homes_path_is_not_that_home() {
+        let root = tmp("prefix");
+        for kind in [Kind::Scripts, Kind::KdeMenu, Kind::SendTo, Kind::Services] {
+            let t = Target { dir: root.join(format!("{kind:?}")), kind };
+            write_target(&t, &Setup { home: Some("/tmp/office-backup".into()), ..setup(&[(A, "Laptop")]) }).unwrap();
+            assert!(owned_by(&t, Some(Path::new("/tmp/office-backup"))), "{kind:?}");
+            assert!(!owned_by(&t, Some(Path::new("/tmp/office"))), "{kind:?}");
         }
         let _ = std::fs::remove_dir_all(root);
     }

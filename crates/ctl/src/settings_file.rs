@@ -59,7 +59,15 @@ fn update(dir: &Path, wait: Duration, change: impl FnOnce(&mut toml::Table) -> R
         bail!("{} would be too large to load as settings with this change; fix or remove it, then choose again", path.display());
     }
     static N: AtomicU32 = AtomicU32::new(0);
-    let tmp = dir.join(format!("{FILE}.{}.{}.window.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    // Through a symlink (a settings file kept in a dotfiles repo) the file it points to is replaced,
+    // not the link, as the daemon and the commands do; the new file is made beside that one so the
+    // rename stays on one file system.
+    let target = match std::fs::symlink_metadata(&path) {
+        Ok(meta) if meta.file_type().is_symlink() => std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone()),
+        _ => path.clone(),
+    };
+    let folder = target.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(dir).to_owned();
+    let tmp = folder.join(format!("{FILE}.{}.{}.window.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
     let write = || -> Result<()> {
         use std::io::Write;
         let mut file = crate::private::create_new(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
@@ -67,8 +75,8 @@ fn update(dir: &Path, wait: Duration, change: impl FnOnce(&mut toml::Table) -> R
         // On disk before it replaces the old file: a crash leaves one or the other.
         file.sync_all().with_context(|| format!("flushing {}", tmp.display()))?;
         drop(file);
-        std::fs::rename(&tmp, &path).with_context(|| format!("saving {}", path.display()))?;
-        sync_dir(dir);
+        std::fs::rename(&tmp, &target).with_context(|| format!("saving {}", target.display()))?;
+        sync_dir(&folder);
         Ok(())
     };
     write().inspect_err(|_| {
@@ -126,6 +134,24 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(home.join(FILE)).unwrap().permissions().mode() & 0o777, 0o600);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_settings_symlink_is_kept_and_its_target_updated() {
+        let d = dir();
+        let (home, repo) = (d.path().join("home"), d.path().join("dotfiles"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("settings.toml"), "gaming = \"auto\"\n").unwrap();
+        std::os::unix::fs::symlink(repo.join("settings.toml"), home.join(FILE)).unwrap();
+        set_window_appearance(&home, "dark").unwrap();
+        assert!(std::fs::symlink_metadata(home.join(FILE)).unwrap().file_type().is_symlink());
+        let table: toml::Table = toml::from_str(&std::fs::read_to_string(repo.join("settings.toml")).unwrap()).unwrap();
+        assert_eq!(table["window"]["appearance"].as_str(), Some("dark"));
+        assert_eq!(table["gaming"].as_str(), Some("auto"));
+        let stray = |d: &Path| std::fs::read_dir(d).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with(".tmp"));
+        assert!(!stray(&home) && !stray(&repo));
     }
 
     #[test]
