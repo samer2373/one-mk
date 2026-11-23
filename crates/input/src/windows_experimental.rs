@@ -1254,17 +1254,18 @@ impl State {
     }
 }
 
-/// Replaces the hooks (they may have been removed by Windows already).
+/// Replaces the hooks (they may have been removed by Windows already). The new pair is installed
+/// before the old one is removed, so a failure to install leaves whatever still works in place
+/// instead of leaving nothing. Both run on this thread, so no event is seen by both.
 fn reinstall_hooks(old: Hooks) -> bool {
-    old.remove();
     match Hooks::install() {
         Ok(h) => {
+            old.remove();
             with_state(|s| s.hooks = h);
             true
         }
         Err(err) => {
             tracing::warn!(err, "reinstalling input hooks failed");
-            with_state(|s| s.hooks = Hooks { mouse: std::ptr::null_mut(), keyboard: std::ptr::null_mut() });
             false
         }
     }
