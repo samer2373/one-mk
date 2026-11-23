@@ -584,7 +584,7 @@ impl ClipSync {
     /// one takes seconds), so ours is kept and goes to `fp` when it leaves.
     async fn read_snapshot(&self, fp: Fingerprint, name: &str, header: &ClipHeader, recv: &mut quinn::RecvStream, pushed: bool) -> anyhow::Result<Received> {
         // The visit this arrives in, if one is running: it may be over when the
-        // payload has arrived (see `copied_during_visit`).
+        // payload has arrived (see `visit_baseline`).
         let visit = if pushed { self.state().sessions.get(&fp).map(|session| session.baseline) } else { None };
         let filter = self.cb.filter();
         let wanted = |f: ClipFormat| match f {
@@ -640,13 +640,21 @@ impl ClipSync {
         if data.has_no_content() {
             return Ok(Received::Nothing);
         }
-        if pushed && self.copied_during_visit(fp, visit).await {
-            tracing::debug!(peer = %name, "something was copied here since it took control; kept that newer copy");
-            return Ok(Received::KeptNewer);
-        }
         let (bytes, what) = (data.len(), describe(&data));
         // Sensitive content the sender chose to send: on the clipboard, but never in the history.
-        let digest = if header.concealed { self.cb.write_concealed(data).await? } else { self.cb.write_from(data, name.into(), true).await? };
+        // During a visit the write itself checks, on the clipboard thread and
+        // after the picture is decoded, that nothing was copied here since
+        // it began: a check made earlier would leave the decode as a gap.
+        let baseline = if pushed { self.visit_baseline(fp, visit) } else { None };
+        let digest = match baseline {
+            Some(baseline) => self.cb.write_if_unchanged(data, name.into(), true, header.concealed, baseline).await?,
+            None if header.concealed => Some(self.cb.write_concealed(data).await?),
+            None => Some(self.cb.write_from(data, name.into(), true).await?),
+        };
+        let Some(digest) = digest else {
+            tracing::debug!(peer = %name, "something was copied here since it took control; kept that newer copy");
+            return Ok(Received::KeptNewer);
+        };
         let mut s = self.state();
         s.known.insert(fp, digest);
         // What it sent is no copy made here.
@@ -656,22 +664,19 @@ impl ClipSync {
         Ok(Received::Stored { bytes, what })
     }
 
-    /// Whether `fp` controls us and our clipboard changed since it took control.
+    /// What our clipboard held when `fp` took control, if it controls us:
+    /// what arrives is newer than that only if nothing was copied here since.
     /// `started`: the baseline of the visit that was running when the snapshot
     /// began to arrive. If that visit has ended since (a large copy takes
     /// seconds, and `left` removes the session), the copy made during it is
     /// still newer than what arrives.
-    async fn copied_during_visit(&self, fp: Fingerprint, started: Option<Option<Option<Digest>>>) -> bool {
-        let baseline = {
-            let s = self.state();
-            match (s.sessions.get(&fp), started) {
-                (Some(session), _) => session.baseline,
-                (None, Some(baseline)) => baseline,
-                (None, None) => None,
-            }
-        };
-        let Some(baseline) = baseline else { return false };
-        self.cb.digest().await.is_ok_and(|now| now != baseline)
+    fn visit_baseline(&self, fp: Fingerprint, started: Option<Option<Option<Digest>>>) -> Option<Option<Digest>> {
+        let s = self.state();
+        match (s.sessions.get(&fp), started) {
+            (Some(session), _) => session.baseline,
+            (None, Some(baseline)) => baseline,
+            (None, None) => None,
+        }
     }
 
     fn peer_name(&self, fp: Fingerprint) -> String {
