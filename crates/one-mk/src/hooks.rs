@@ -1166,7 +1166,8 @@ pub async fn run_command(dir: &Path, mut args: HooksArgs) -> Result<()> {
             // Saved, but nothing runs: "Applied right away" would say it works.
             let running = crate::control::request(dir, crate::control::Request::Reload).await?.is_some();
             println!("Saved, but these hooks do not run until the permissions problem above is fixed{}.", if running { "" } else { " (one-mk is not running)" });
-        } else if crate::control::request(dir, crate::control::Request::Reload).await?.is_some() {
+        } else if let Some(reply) = crate::control::request(dir, crate::control::Request::Reload).await.map_err(crate::control::NotAnswering::saved)? {
+            crate::manage::reload_confirmed(&reply)?;
             println!("Applied right away.");
         } else {
             println!("one-mk is not running; this takes effect the next time it starts.");

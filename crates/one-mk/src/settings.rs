@@ -1036,7 +1036,6 @@ impl Settings {
     /// can be one the strict read refuses; the flag must still be saved, or
     /// the next reload grabs the keyboard again. Only this key is changed;
     /// everything else stays as it is.
-    #[allow(dead_code)] // the daemon's emergency path (app.rs) is to call it
     pub fn local_rules_off_within(dir: &Path, wait: std::time::Duration) -> Result<()> {
         create_settings_dir(dir)?;
         let _lock = one_mk_net::lock_file(&dir.join(LOCK_FILE), wait)?;
@@ -1243,7 +1242,9 @@ impl EdgeArgs {
 
 /// Asks a running daemon to apply the saved settings.
 pub(crate) async fn apply(dir: &Path) -> Result<()> {
-    if control::request(dir, Request::Reload).await.map_err(control::NotAnswering::saved)?.is_some() {
+    let reply = control::request(dir, Request::Reload).await.map_err(control::NotAnswering::saved)?;
+    if let Some(reply) = &reply { crate::manage::reload_confirmed(reply)?; }
+    if reply.is_some() {
         println!("Applied right away.");
     } else {
         println!("one-mk is not running; this takes effect the next time it starts.");
