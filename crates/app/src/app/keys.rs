@@ -2490,9 +2490,19 @@ impl App {
         let capture = Rect::from_min_size(pos2(left + width - 80.0, top), vec2(80.0, 28.0));
         let started = button(ui, capture, Id::unique("gesture-record"), if recording { "Cancel" } else { "Record" }, Look::Quiet, true, Some("Press a key or shortcut for this gesture")).clicked();
         if started { recording = !recording; }
-        if recording && !started && let Some(result) = super::settings_controls::recorded(&ui.input(|input| input.events.clone()), false) {
-            if let Ok(chord) = result { value = chord; }
-            recording = false;
+        // A Super key is pressed and let go in different frames: it is kept between them.
+        let held = Id::unique("gesture-super");
+        if recording && !started {
+            let (events, focused) = ui.input(|input| (input.events.clone(), input.focused));
+            let mut super_down = focused && ui.ctx().data(|data| data.get_temp::<bool>(held)).unwrap_or(false);
+            let result = super::settings_controls::recorded_holding(&events, false, &mut super_down);
+            ui.ctx().data_mut(|data| data.insert_temp(held, super_down && result.is_none()));
+            if let Some(result) = result {
+                if let Ok(chord) = result { value = chord; }
+                recording = false;
+            }
+        } else {
+            ui.ctx().data_mut(|data| data.remove::<bool>(held));
         }
         ui.ctx().data_mut(|data| data.insert_temp(capture_id, recording));
         self.drafts.insert("gesture-output".into(), value.clone());

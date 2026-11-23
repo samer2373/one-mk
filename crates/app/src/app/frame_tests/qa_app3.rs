@@ -218,3 +218,128 @@ fn turning_off_automatic_updates_is_not_raced_by_the_install() {
     win.quiet();
     assert!(!fake.calls_with(&["update"]).is_empty(), "{:?}", fake.calls());
 }
+
+#[test]
+fn a_stopped_onemk_does_not_say_no_computer_is_paired() {
+    let mut win = Win::light(1200.0, 1400.0);
+    win.status(None);
+    win.go(Tab::Settings);
+    win.app.settings_cat = settings_page::Cat::Typing;
+    win.settle();
+    assert!(win.has_text("Start oneMK to choose how Ctrl and Cmd work"), "{}", win.texts_joined());
+    assert!(!win.has_text("Pair a computer to choose how Ctrl and Cmd work"));
+    win.status(Some(alone()));
+    assert!(win.has_text("Pair a computer to choose how Ctrl and Cmd work"), "{}", win.texts_joined());
+}
+
+#[test]
+fn keys_for_a_computer_with_a_shown_id_name_it_by_its_id() {
+    let mut win = Win::light(1200.0, 780.0);
+    win.status(Some(with(vec![
+        peer("ab12-cd34", "Studio (ab12-cd34)", Side::Right, os::WINDOWS, true),
+        peer("ee00-ff11", "Studio (ee00-ff11)", Side::Left, os::LINUX, true),
+    ])));
+    let tile = win.find_containing("Studio (ab12-cd34), Windows").unwrap_or_else(|| panic!("{:#?}", win.names()));
+    win.click_at(tile.rect.center());
+    win.settle();
+    let keys = win.find_containing("Keys for this PC").unwrap_or_else(|| panic!("{:#?}", win.names()));
+    win.click_at(keys.rect.center());
+    assert_eq!(win.app.tab, Tab::Keys);
+    assert_eq!(win.app.keys.scope, crate::tune::Scope::Peer("ab12-cd34".into()));
+}
+
+#[test]
+fn health_names_what_its_update_button_does_where_it_cannot_install() {
+    let check = crate::view::Check {
+        id: "updates".into(),
+        title: "Updates".into(),
+        verdict: crate::view::Verdict::Warn,
+        detail: "A new version is out.".into(),
+        fix: Some("update-now".into()),
+        action: None,
+    };
+    for (can, move_first, label) in [(true, false, "Update now"), (false, false, "Download"), (false, true, "Open Settings")] {
+        let (mut win, _fake) = updates_window(UpdateStatus { can_update: can, move_to_applications: move_first, ..can_update() });
+        win.go(Tab::Health);
+        win.health_check_ends();
+        win.send(Event::Doctor(Ok(vec![check.clone()])));
+        assert!(win.find(label).is_some(), "can_update {can}, move first {move_first}: {:#?}", win.names());
+        assert!(win.find("Update now").is_some() == (label == "Update now"));
+    }
+}
+
+#[test]
+fn layout_changes_reach_one_mk_in_the_order_they_were_asked() {
+    let (win, fake) = settings_on(settings_page::Cat::General);
+    let sides = [Side::Left, Side::Right, Side::Top, Side::Bottom];
+    for n in 0..24 {
+        win.app.link.set_side("p1", "Office PC", sides[n % 4], None);
+        win.app.link.set_swap("p1", "Office PC", if n % 2 == 0 { "on" } else { "off" });
+    }
+    for _ in 0..400 {
+        if fake.calls_with(&["layout"]).len() >= 48 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let calls = fake.calls_with(&["layout"]);
+    assert_eq!(calls.len(), 48, "{calls:?}");
+    for (n, pair) in calls.chunks(2).enumerate() {
+        assert_eq!(pair[0][2], sides[n % 4].to_string(), "call {n}: {calls:?}");
+        assert_eq!(pair[1][2], "--swap-ctrl-cmd", "call {n}: {calls:?}");
+        assert_eq!(pair[1][3], if n % 2 == 0 { "on" } else { "off" }, "call {n}: {calls:?}");
+    }
+}
+
+#[test]
+fn connecting_to_a_name_looks_it_up_beside_the_window() {
+    let (mut win, fake) = settings_on(settings_page::Cat::General);
+    win.app.pairing = Some(PairUi { proc: None, step: Step::Searching { me: "Studio".into(), port: None }, since: win.t, opened: win.t - 1.0, hint: false, retry: None, me: "Studio".into(), port: None });
+    let now = win.t;
+    win.app.begin_pairing(crate::pairing::Method::Connect("localhost:32123".into()), now);
+    assert!(win.app.pair_lookup.is_some(), "the name is being looked up, not waited for");
+    assert!(win.app.pairing.as_ref().is_some_and(|pair| pair.proc.is_none()));
+    for _ in 0..300 {
+        win.frames(2);
+        if !fake.calls_with(&["pair"]).is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let calls = fake.calls_with(&["pair"]);
+    assert_eq!(calls.len(), 1, "{:?}", fake.calls());
+    assert_eq!(calls[0][..3], ["pair", "--machine", "--connect"], "{calls:?}");
+    assert!(calls[0][3].ends_with(":32123") && !calls[0][3].contains("localhost"), "the address it found: {calls:?}");
+    assert!(win.app.pair_lookup.is_none());
+}
+
+#[test]
+fn a_name_that_cannot_be_found_ends_pairing_with_a_message() {
+    let (mut win, fake) = settings_on(settings_page::Cat::General);
+    win.app.pairing = Some(PairUi { proc: None, step: Step::Searching { me: "Studio".into(), port: None }, since: win.t, opened: win.t - 1.0, hint: false, retry: None, me: "Studio".into(), port: None });
+    let now = win.t;
+    win.app.begin_pairing(crate::pairing::Method::Connect("no-such-host.invalid:32123".into()), now);
+    for _ in 0..400 {
+        win.frames(2);
+        if matches!(win.app.pairing.as_ref().map(|pair| &pair.step), Some(Step::Ended(_))) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(matches!(win.app.pairing.as_ref().map(|pair| &pair.step), Some(Step::Ended(_))), "{:?}", win.app.pairing.as_ref().map(|pair| &pair.step));
+    assert!(fake.calls_with(&["pair"]).is_empty(), "{:?}", fake.calls());
+    assert!(win.app.toast.as_ref().is_some_and(|toast| toast.error));
+}
+
+#[test]
+fn an_older_layout_failure_keeps_the_newer_place_on_the_desk() {
+    let mut win = Win::light(1200.0, 780.0);
+    win.status(Some(two()));
+    let (left, top) = (Job::Layout { id: "p1".into(), name: "Office PC".into(), side: Side::Left }, Job::Layout { id: "p1".into(), name: "Office PC".into(), side: Side::Top });
+    win.app.busy.extend([left.clone(), top.clone()]);
+    win.app.pending_side.insert("p1".into(), (Side::Top, None, win.t));
+    win.send(Event::Done { what: left, error: Some("busy".into()) });
+    assert_eq!(win.app.side_shown("p1", Side::Right), Side::Top, "the newer change is still on its way");
+    win.send(Event::Done { what: top, error: Some("busy".into()) });
+    assert_eq!(win.app.side_shown("p1", Side::Right), Side::Right, "the last one failed: the desk goes back");
+}

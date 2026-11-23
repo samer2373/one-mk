@@ -174,26 +174,83 @@ impl Method {
                 vec!["join".into(), "--machine".into(), "--service-port".into(), port.to_string()]
             }
             Self::Connect(address) => {
-                use std::net::ToSocketAddrs;
-                let address = address.trim();
-                if address.is_empty() { return Err(std::io::Error::other("Enter the other computer's address.")); }
-                let address = if let Ok(ip) = address.parse::<std::net::IpAddr>() { std::net::SocketAddr::new(ip, one_mk_proto::DEFAULT_PORT).to_string() }
-                    else if address.contains(':') { address.to_owned() } else { format!("{address}:{}", one_mk_proto::DEFAULT_PORT) };
-                // A name needs a lookup, which can hang on a broken network:
-                // it runs beside the window, which waits 1.5 s at most.
-                let (tx, rx) = std::sync::mpsc::channel();
-                let lookup = address.clone();
-                std::thread::spawn(move || {
-                    let _ = tx.send(lookup.to_socket_addrs().map(|mut a| a.next()));
-                });
-                let target = match rx.recv_timeout(std::time::Duration::from_millis(1500)) {
-                    Ok(found) => found?.ok_or_else(|| std::io::Error::other("That computer's address could not be found."))?,
-                    Err(_) => return Err(std::io::Error::other("That computer's name took too long to look up. Try its IP address.")),
+                let target = match connect_target(address)? {
+                    Target::Ready(target) => target,
+                    // The window looks a name up beside itself (`Lookup`) and
+                    // connects to the answer; this waits, for any other caller.
+                    Target::Name(name) => Lookup::start(name, None).wait(LOOKUP_WAIT)?,
                 };
                 vec!["pair".into(), "--machine".into(), "--connect".into(), target.to_string()]
             }
         })
     }
+}
+
+/// How long a name may take to look up.
+pub const LOOKUP_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Lookups still running: one that times out keeps its thread until the
+/// system's resolver gives up, so only a few are allowed at once.
+static LOOKUPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+const LOOKUPS_AT_MOST: usize = 4;
+
+/// Where Connect goes: an address as it is, or a name that needs a lookup.
+#[derive(Debug, PartialEq)]
+pub enum Target {
+    Ready(std::net::SocketAddr),
+    Name(String),
+}
+
+/// What Connect's text means, with the default port where it names none.
+pub fn connect_target(address: &str) -> std::io::Result<Target> {
+    let address = address.trim();
+    if address.is_empty() { return Err(std::io::Error::other("Enter the other computer's address.")); }
+    let address = if let Ok(ip) = address.parse::<std::net::IpAddr>() { std::net::SocketAddr::new(ip, one_mk_proto::DEFAULT_PORT).to_string() }
+        else if address.contains(':') { address.to_owned() } else { format!("{address}:{}", one_mk_proto::DEFAULT_PORT) };
+    Ok(match address.parse::<std::net::SocketAddr>() {
+        Ok(target) => Target::Ready(target),
+        Err(_) => Target::Name(address),
+    })
+}
+
+/// A name being looked up on a thread of its own: a broken network can keep
+/// it waiting far longer than the window may.
+pub struct Lookup {
+    rx: Receiver<std::io::Result<std::net::SocketAddr>>,
+}
+
+impl Lookup {
+    /// Starts looking `address` (`name:port`) up; `ctx` is woken when it ends.
+    pub fn start(address: String, ctx: Option<egui::Context>) -> Self {
+        let (tx, rx) = channel();
+        if LOOKUPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= LOOKUPS_AT_MOST {
+            LOOKUPS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = tx.send(Err(std::io::Error::other("Other name lookups are still running. Try the IP address.")));
+            return Self { rx };
+        }
+        std::thread::spawn(move || {
+            use std::net::ToSocketAddrs;
+            let found = address.to_socket_addrs().and_then(|mut found| found.next().ok_or_else(|| std::io::Error::other("That computer's address could not be found.")));
+            LOOKUPS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = tx.send(found);
+            if let Some(ctx) = ctx { ctx.request_repaint(); }
+        });
+        Self { rx }
+    }
+
+    /// `None` while it is still looking.
+    pub fn poll(&self) -> Option<std::io::Result<std::net::SocketAddr>> {
+        self.rx.try_recv().ok()
+    }
+
+    fn wait(self, limit: std::time::Duration) -> std::io::Result<std::net::SocketAddr> {
+        self.rx.recv_timeout(limit).unwrap_or_else(|_| Err(too_slow()))
+    }
+}
+
+/// What a lookup that outlasts its limit says.
+pub fn too_slow() -> std::io::Error {
+    std::io::Error::other("That computer's name took too long to look up. Try its IP address.")
 }
 
 impl Drop for Pairing {
@@ -226,6 +283,28 @@ mod tests {
         }
         assert!(Method::Connect("localhost:32123".into()).args(1).is_ok());
         for address in ["", "127.0.0.1:99999", "127.0.0.1:bad"] { assert!(Method::Connect(address.into()).args(1).is_err()); }
+    }
+
+    #[test]
+    fn only_a_name_needs_a_lookup() {
+        let port = one_mk_proto::DEFAULT_PORT;
+        assert_eq!(connect_target("10.0.0.5").unwrap(), Target::Ready(format!("10.0.0.5:{port}").parse().unwrap()));
+        assert_eq!(connect_target(" [::1]:32123 ").unwrap(), Target::Ready("[::1]:32123".parse().unwrap()));
+        assert_eq!(connect_target("studio.local").unwrap(), Target::Name(format!("studio.local:{port}")));
+        assert_eq!(connect_target("studio:32123").unwrap(), Target::Name("studio:32123".into()));
+        assert!(connect_target("  ").is_err());
+    }
+
+    #[test]
+    fn a_lookup_answers_without_the_caller_waiting_for_it() {
+        let lookup = Lookup::start("127.0.0.1:32123".into(), None);
+        let started = std::time::Instant::now();
+        let found = loop {
+            if let Some(found) = lookup.poll() { break found; }
+            assert!(started.elapsed() < std::time::Duration::from_secs(5), "no answer");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(found.unwrap(), "127.0.0.1:32123".parse().unwrap());
     }
 
     #[test]

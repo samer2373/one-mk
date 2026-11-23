@@ -693,6 +693,7 @@ pub fn parse_input_devices(text: &str) -> Option<crate::tune::InputDevices> {
                 keyboard: b(d, "keyboard"),
                 pointer: b(d, "pointer"),
                 connected: b(d, "connected"),
+                twins: b(d, "twins"),
             })
         })
         .collect();
@@ -1208,6 +1209,9 @@ name = "Café, 2nd floor"
         assert!(d.available && d.note.is_none());
         assert_eq!(d.devices.len(), 1, "an entry without a fingerprint is skipped");
         assert_eq!((d.devices[0].name.as_str(), d.devices[0].pointer, d.devices[0].connected), ("Mouse \"M\"", true, true));
+        assert!(!d.devices[0].twins);
+        let twins = parse_input_devices(r#"{"available":true,"devices":[{"fingerprint":"usb/1:2//M","name":"M","twins":true}]}"#).unwrap();
+        assert!(twins.devices[0].twins, "a shared identity is kept");
         let off = parse_input_devices(r#"{"available":false,"note":"merged","devices":[]}"#).unwrap();
         assert_eq!((off.available, off.note.as_deref()), (false, Some("merged")));
         assert_eq!(parse_input_devices("one-mk: error"), None);

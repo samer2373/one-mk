@@ -403,7 +403,7 @@ impl App {
             "swaps-note" => meta("Auto swaps them only between a Mac and a PC.") + 20.0,
             "swaps" => {
                 let peers = self.running().map_or(0, |s| s.peers.len());
-                if peers == 0 { para_h(ui, "Pair a computer to choose how Ctrl and Cmd work when you type on it.", regular(T_BODY), w) + 24.0 } else { super::swap_row_h(w) * peers as f32 + 16.0 }
+                if peers == 0 { para_h(ui, self.swaps_empty_text(), regular(T_BODY), w) + 24.0 } else { super::swap_row_h(w) * peers as f32 + 16.0 }
             }
             k if k.starts_with("hotkey-") => k["hotkey-".len()..].parse::<usize>().ok().filter(|i| *i < self.prefs.hotkeys.len()).map_or(0.0, |_| SHORTCUT_ROW),
             k if k.starts_with("hook-") && k != "hook-shell" => HOOK_ROW,

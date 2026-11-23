@@ -246,6 +246,8 @@ pub struct App {
     /// The computer whose right-click menu is open (by id: the scene's list closes up).
     menu_for: Option<String>,
     pairing: Option<PairUi>,
+    /// A name Connect was given, being looked up (and when it began).
+    pair_lookup: Option<(crate::pairing::Lookup, f64)>,
     /// Files dropped where it wasn't clear which computer they were for, and when.
     pending_drop: Option<(Vec<PathBuf>, f64)>,
     /// The frame (its time) in which files let go over the window were taken:
@@ -514,6 +516,7 @@ impl App {
             drag_side: None,
             menu_for: None,
             pairing: None,
+            pair_lookup: None,
             pending_drop: None,
             drop_taken: None,
             removing: None,
@@ -652,7 +655,7 @@ impl App {
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
                 self.link.set(&what, &args);
             }
-            Job::Wallpaper(command) => self.link.wallpaper(command),
+            Job::Wallpaper(command) => self.wallpaper_command(command),
             Job::Open => {
                 self.busy.push(job);
                 self.link.open_downloads();
@@ -780,6 +783,7 @@ impl App {
             self.pending_broadcast = None;
         }
         self.pairing_steps(now);
+        self.pairing_lookup_step(now);
         // A side the daemon never confirmed: show what it really has.
         let before = self.pending_side.len();
         self.pending_side.retain(|_, (_, _, t)| now - *t < 5.0);
@@ -836,7 +840,10 @@ impl App {
                 self.failed_measure.insert(id);
             }
             Job::Layout { id, name, side } => {
-                self.pending_side.remove(&id);
+                // A newer change for it is still on its way: the desk keeps showing that one.
+                if !self.busy.iter().any(|job| matches!(job, Job::Layout { id: other, .. } if *other == id)) {
+                    self.pending_side.remove(&id);
+                }
                 self.sync_scene();
                 self.toast_error(format!("Couldn't move {name} {}. The desk went back to where it was; try again.", to_side(side)), e, now);
             }
@@ -844,7 +851,9 @@ impl App {
                 self.toast_error(format!("Couldn't send {} to {to}. Check that {to} is online, then drop the files again.", items(count)), e, now);
             }
             Job::Swap { id, name, .. } => {
-                self.pending_swap.remove(&id);
+                if !self.busy.iter().any(|job| matches!(job, Job::Swap { id: other, .. } if *other == id)) {
+                    self.pending_swap.remove(&id);
+                }
                 self.sync_scene();
                 self.toast_error(format!("Couldn't change Ctrl and Cmd for {name}. Try again."), e, now);
             }
@@ -1852,12 +1861,22 @@ impl App {
         }
     }
 
+    /// What stands where Ctrl and Cmd's rows would: computers are listed only
+    /// while oneMK runs, so a stopped oneMK does not say none are paired.
+    pub(super) fn swaps_empty_text(&self) -> &'static str {
+        if self.off() {
+            "Start oneMK to choose how Ctrl and Cmd work on the computers you paired."
+        } else {
+            "Pair a computer to choose how Ctrl and Cmd work when you type on it."
+        }
+    }
+
     /// Ctrl and Cmd for every paired computer, a row each, from the top of
     /// `c` (the Settings card sizes itself to fit them).
     pub(super) fn swaps(&mut self, ui: &mut Ui, c: Rect) {
         let peers: Vec<_> = self.running().map(|s| s.peers.clone()).unwrap_or_default();
         if peers.is_empty() {
-            para(ui, c.left_top(), c.width(), "Pair a computer to choose how Ctrl and Cmd work when you type on it.", regular(T_BODY), pal().ink2);
+            para(ui, c.left_top(), c.width(), self.swaps_empty_text(), regular(T_BODY), pal().ink2);
             return;
         }
         let arrowed = self.arrowed;

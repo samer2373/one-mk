@@ -821,13 +821,20 @@ impl Link {
     pub fn set_side(&self, peer: &str, name: &str, side: one_mk_proto::Side, offset: Option<(i32, i32)>) {
         let (id, word) = (peer.to_owned(), side.to_string());
         let at = offset.map_or_else(|| "--offset=none".to_owned(), |(x, y)| format!("--offset={x},{y}"));
-        self.job(Job::Layout { id: peer.into(), name: name.into(), side }, move |l| l.one_mk(&["layout", &id, &word, &at]).map(drop));
+        self.layout_job(Job::Layout { id: peer.into(), name: name.into(), side }, vec!["layout".into(), id, word, at]);
     }
 
     pub fn set_swap(&self, peer: &str, name: &str, swap: &str) {
         let (id, value) = (peer.to_owned(), swap.to_owned());
         let what = Job::Swap { id: peer.into(), name: name.into(), swap: swap.into() };
-        self.job(what, move |l| l.one_mk(&["layout", &id, "--swap-ctrl-cmd", &value]).map(drop));
+        self.layout_job(what, vec!["layout".into(), id, "--swap-ctrl-cmd".into(), value]);
+    }
+
+    /// Runs a layout or swap change after every change asked before it, one
+    /// at a time: separate processes started together finish in any order,
+    /// and the one asked first could land last and win.
+    fn layout_job(&self, what: Job, args: Vec<String>) {
+        self.tuning_send(Tuning::Run { job: what, cmds: vec![args], key: None });
     }
 
     /// `one-mk profile use|save|delete <name>`.
@@ -1206,7 +1213,7 @@ impl one_mk_ctl::setup::Host for Link {
             // Pairing refreshes the entries for each computer it adds.
             computers: vec![],
         };
-        one_mk_ctl::integrate::install(&setup).map(|o| o.found).map_err(|e| format!("{e:#}"))
+        one_mk_ctl::integrate::install(&setup).map_err(|e| format!("{e:#}")).and_then(integration_result)
     }
 
     fn running(&self) -> bool {
@@ -1674,4 +1681,24 @@ fn mode(m: &std::fs::Metadata) -> u32 {
     return std::os::unix::fs::PermissionsExt::mode(&m.permissions());
     #[cfg(not(unix))]
     return u32::from(m.permissions().readonly());
+}
+
+/// What first-run setup is told of the file manager entries: skipped entries
+/// (something else is in the way) are a failure with the reason, not "done".
+fn integration_result(outcome: one_mk_ctl::integrate::Outcome) -> Result<bool, String> {
+    if outcome.skipped > 0 { Err(outcome.message) } else { Ok(outcome.found) }
+}
+
+#[cfg(test)]
+mod integration_result_tests {
+    use super::*;
+    use one_mk_ctl::integrate::Outcome;
+
+    #[test]
+    fn skipped_entries_fail_setup_with_the_reason() {
+        let outcome = |skipped, found| Outcome { message: "something else is in the way".into(), skipped, found };
+        assert_eq!(integration_result(outcome(0, true)), Ok(true));
+        assert_eq!(integration_result(outcome(0, false)), Ok(false));
+        assert_eq!(integration_result(outcome(2, true)), Err("something else is in the way".into()));
+    }
 }
