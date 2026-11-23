@@ -1,7 +1,10 @@
 #!/bin/sh
 # Writes the Flatpak manifest and everything it names, packs them as one
-# self-contained source bundle, and builds the Flatpak if flatpak-builder is
-# installed. UNTESTED end to end (no flatpak-builder here).
+# self-contained source bundle, and builds the Flatpak when that can work here:
+# flatpak-builder is installed, this is an x86-64 machine (the release's
+# programs are x86-64) and the manifest's tarball exists now (not the
+# release workflow's file-plus-URL case, where the URL is not public yet).
+# UNTESTED end to end (no flatpak-builder here).
 #   sh scripts/package-flatpak.sh [URL_OR_FILE_OF_THE_TARBALL [URL]]
 # Without an argument it uses dist/one-mk-x86_64-unknown-linux-gnu.tar.gz
 # (the plain Linux archive the release workflow's "Package" step makes and
@@ -20,6 +23,8 @@
 
 arg=${1:-$OUT_DIR/one-mk-x86_64-unknown-linux-gnu.tar.gz}
 url=${2:-}
+# Whether the manifest's tarball can be fetched by a local build right now.
+can_build=1
 dir=$OUT_DIR/flatpak
 rm -rf "$dir"
 mkdir -p "$dir/sources"
@@ -34,7 +39,7 @@ case "$arg" in
     *)
         [ -f "$arg" ] || die "$arg not found; build the release tarball first (see docs/PACKAGING.md)"
         case "$url" in
-            http://*|https://*) key=url ref=$url ;;
+            http://*|https://*) key=url ref=$url can_build=0 ;;
             '') cp "$arg" "$dir/sources/$(basename "$arg")"
                 key=path ref=sources/$(basename "$arg") ;;
             *) die "$url is not a URL" ;;
@@ -61,7 +66,7 @@ if grep -q '@[A-Z0-9_]*@' "$dir/io.github.onemk.OneMk.yml"; then die "a placehol
 
 cat > "$dir/README.txt" <<README
 one-mk $VERSION, Flatpak source bundle: the manifest and every file it names.
-Build with:
+Build with (on an x86-64 machine: the programs in the release tarball are x86-64):
   flatpak-builder --force-clean --user --install-deps-from=flathub --repo=repo build io.github.onemk.OneMk.yml
 Every source in the manifest has a sha256; paths are relative to the manifest.
 README
@@ -81,7 +86,11 @@ fi
 (cd "$work" && tar "$@" -cf - "one-mk-flatpak-$VERSION" | gzip -9n > "$bundle")
 echo "$bundle"
 
-if command -v flatpak-builder >/dev/null; then
+if [ "$can_build" = 0 ]; then
+    echo "not building the Flatpak here: the manifest names $ref, which is not published yet. Build it from the bundle once it is." >&2
+elif [ "$(uname -m)" != x86_64 ]; then
+    echo "not building the Flatpak here: the release's programs are x86-64 and this is $(uname -m)." >&2
+elif command -v flatpak-builder >/dev/null; then
     (cd "$dir" && flatpak-builder --force-clean --user --install-deps-from=flathub \
         --repo="$dir/repo" "$dir/build" "$dir/io.github.onemk.OneMk.yml")
     flatpak build-bundle "$dir/repo" "$OUT_DIR/one-mk-x86_64-unknown-linux-gnu.flatpak" io.github.onemk.OneMk

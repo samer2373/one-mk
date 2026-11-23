@@ -1,8 +1,10 @@
 # Homebrew formula that builds one-mk from the release's source tarball
 # (UNTESTED: written without a Mac). The cask is the normal way to install;
 # this is for people who prefer to build. `sh scripts/package-homebrew.sh`
-# fills it in.
-class OneMk < Formula
+# fills it in. It is published as one-mk-source.rb: Homebrew takes the class
+# name from the file name (one-mk-source gives OneMkSource), so keep the two
+# the same.
+class OneMkSource < Formula
   desc "Share one mouse and keyboard between computers"
   homepage "https://github.com/samer2373/one-mk"
   url "https://github.com/samer2373/one-mk/archive/refs/tags/v@VERSION@.tar.gz"

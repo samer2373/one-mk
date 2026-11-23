@@ -1,7 +1,7 @@
 #!/bin/sh
 # Wraps the built programs in one-mk.app and zips it, on macOS:
-#   sh scripts/bundle-mac.sh <release dir, e.g. target/release> <out.zip>
-# Also writes the matching .dmg next to the zip: with dmgbuild a designed
+#   sh scripts/bundle-mac.sh <release dir, e.g. target/release> <NAME.app.zip>
+# Also writes the matching NAME.dmg next to the zip: with dmgbuild a designed
 # installer window (scripts/dmg/), otherwise a plain image with the app and an
 # Applications link (see "Disk image" below and docs/PACKAGING.md).
 # With SIGN_IDENTITY set (a Developer ID Application certificate) the app is
@@ -13,6 +13,13 @@ set -eu
 umask 022
 
 dir=$1
+# The disk image is named from the zip's name (NAME.app.zip -> NAME.dmg): any
+# other name would give both the same path and the disk image would replace
+# the zip.
+case "$2" in
+  *.app.zip) ;;
+  *) echo "bundle-mac.sh: the output must be named NAME.app.zip (got '$2'); the .dmg is written next to it as NAME.dmg" >&2; exit 1 ;;
+esac
 out=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 tmp=$(mktemp -d)
