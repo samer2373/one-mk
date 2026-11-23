@@ -739,6 +739,10 @@ impl Runtime {
                 let detail: String = log.lines().next().unwrap_or_default().chars().take(300).collect();
                 if !detail.is_empty() { state.status.message = detail; }
             }
+            // Said by the state too, not only by the words: whoever reads the
+            // state (`one-mk doctor`) must not take a player that is gone for a ready one.
+            let (computer, message) = (state.computer.clone(), state.status.message.clone());
+            if !matches!(state.status.computers.get(&computer), Some(Playback::Error(_))) { state.status.computers.insert(computer, Playback::Error(message)); }
         }
         let mut status = state.status.clone();
         // Counted from what each computer said, not from the plan alone.
@@ -2020,6 +2024,23 @@ mod tests {
         runtime.reconcile(directory.path().to_owned(), two_monitor_layout(&plan, true), vec![remote()], node);
         let state = runtime.state.lock().unwrap();
         assert!(state.worker.is_some() && state.connections.contains(&peer.fingerprint));
+    }
+
+    /// A player that exited and left a line in its log is an error for this computer, whatever the
+    /// line says, so what reads the state sees a player that is gone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_exited_player_is_an_error_state_with_the_log_line_as_its_message() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(cache(directory.path())).unwrap();
+        std::fs::write(cache(directory.path()).join("player.log"), "no display\nmore\n").unwrap();
+        let runtime = Runtime::default();
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        { let mut state = runtime.state.lock().unwrap(); state.player = Some(child); state.computer = "host".into(); state.directory = Some(directory.path().to_owned()); state.status.computers.insert("host".into(), Playback::Ready); }
+        let status = runtime.status();
+        assert_eq!(status.message, "no display");
+        assert_eq!(status.computers.get("host"), Some(&Playback::Error("no display".into())));
     }
 
     /// A copy that failed is asked again once the pause is over without any
