@@ -33,6 +33,15 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 const FETCH_DISABLED: u32 = 0x434c4950;
+// Reset codes of the answering side of a clipboard stream. They add to the
+// one-byte acknowledgements without a new protocol value: an older sender that
+// does not know them reads a reset as "no answer", as before.
+/// The receiver failed to store (or, for a pull, to read) the clipboard.
+const FAILED: u32 = 0x434c4946;
+/// The receiver is busy with another clipboard from this computer.
+const BUSY: u32 = 0x434c4942;
+/// The receiver kept a newer copy of its own instead (see `read_snapshot`).
+const KEPT_NEWER: u32 = 0x434c4b4e;
 pub const FETCH_DISABLED_MESSAGE: &str = "does not allow fetching its clipboard";
 /// What `clip-send` says about a copy a password manager marked as sensitive.
 pub const SENSITIVE_REFUSED: &str = "your clipboard is marked sensitive (a password manager copied it), so it was not sent; to send it anyway run: one-mk clip-send --allow-sensitive";
@@ -63,6 +72,26 @@ pub struct Moved {
     pub what: String,
     /// What the receiver said it did; `None` if it didn't say (an older version).
     pub ack: Option<ClipAck>,
+}
+
+/// The answer to a snapshot: the receiver kept a copy made there meanwhile.
+#[derive(Debug)]
+struct KeptNewerAnswer;
+
+impl std::fmt::Display for KeptNewerAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("it kept a newer copy that was made there meanwhile, so yours was not put on its clipboard")
+    }
+}
+
+impl std::error::Error for KeptNewerAnswer {}
+
+/// The code a stream was reset with, if the error says so.
+fn reset_code(error: &anyhow::Error) -> Option<u32> {
+    error.chain().find_map(|cause| match cause.downcast_ref::<quinn::ReadExactError>() {
+        Some(quinn::ReadExactError::ReadError(quinn::ReadError::Reset(code))) => u32::try_from(code.into_inner()).ok(),
+        _ => None,
+    })
 }
 
 fn describe(data: &ClipData) -> String {
@@ -97,8 +126,9 @@ pub fn mb(bytes: usize) -> String {
 
 /// A peer controlling us.
 struct Session {
-    /// Resolved with the peer's address when it leaves.
-    leave: oneshot::Sender<SocketAddr>,
+    /// Resolved with the peer's address when it leaves, and the baseline as
+    /// it stood then (a push the peer made during the visit moves it).
+    leave: oneshot::Sender<(SocketAddr, Option<Option<Digest>>)>,
     id: u64,
     /// Our clipboard's digest when it took control (`None` until read;
     /// `Some(None)`: it was empty). A change since then is a copy made
@@ -148,6 +178,7 @@ impl ClipSync {
 
     /// Applies the user's clipboard settings, from now on.
     pub fn apply(&self, s: &crate::settings::ClipSettings) {
+        let before = self.cb.filter();
         self.cb.set_filter(s.filter());
         self.cb.history_skip_apps(s.history_skip_apps.clone());
         let path = self.history_dir.lock().unwrap_or_else(|error| error.into_inner()).as_ref().map(|dir| dir.join("clipboard-history.bin"));
@@ -159,8 +190,13 @@ impl ClipSync {
         );
         self.cb.refresh_history_watch();
         self.allow_pull.store(s.allow_pull, Ordering::Relaxed);
-        // What was skipped (too large, sensitive) may be sendable now.
-        self.state().known.clear();
+        // What was skipped (too large, sensitive) may be sendable now. Every
+        // settings reload comes here, though: only a changed filter says what
+        // each peer has, or may be sent, differently. Forgetting it at every
+        // reload would echo clipboards back and send ours over a newer copy.
+        if before != s.filter() {
+            self.state().known.clear();
+        }
     }
 
     fn state(&self) -> std::sync::MutexGuard<'_, State> {
@@ -190,8 +226,10 @@ impl ClipSync {
             if let Some(session) = this.state().sessions.get_mut(&fp).filter(|s| s.id == id) {
                 session.baseline = Some(baseline);
             }
-            if let Ok(addr) = rx.await {
-                this.spawn_push(fp, name, addr, baseline);
+            if let Ok((addr, now)) = rx.await {
+                // What the peer pushed here during the visit is not a copy made here
+                // (`read_snapshot` moved the baseline to it): it must not go back.
+                this.spawn_push(fp, name, addr, now.unwrap_or(baseline));
             }
         });
     }
@@ -199,7 +237,7 @@ impl ClipSync {
     /// `fp` (reachable at `addr`) stopped controlling us.
     pub fn left(&self, fp: Fingerprint, addr: SocketAddr) {
         if let Some(session) = self.state().sessions.remove(&fp) {
-            let _ = session.leave.send(addr);
+            let _ = session.leave.send((addr, session.baseline));
         }
     }
 
@@ -243,19 +281,21 @@ impl ClipSync {
 
     async fn push_once(&self, fp: Fingerprint, name: &str, addr: SocketAddr, also_skip: Option<Digest>) {
         let skip: Vec<Digest> = self.state().known.get(&fp).copied().into_iter().chain(also_skip).collect();
-        match self.cb.read(skip).await {
-            Ok(Read::Changed { digest, data }) => {
-                match self.send(fp, addr, &data, true, false).await {
-                    Ok(None | Some(ClipAck::Stored)) => {
+        // With sensitive content shared (`--skip-sensitive off`) a plain read does not
+        // say that a copy was marked; the explicit read does, and the mark must travel.
+        let read = if self.cb.filter().skip_concealed { self.cb.read(skip).await } else { self.cb.read_explicit(skip).await };
+        match read {
+            Ok(Read::Changed { digest, data }) => self.push_data(fp, name, addr, digest, &data, false).await,
+            Ok(Read::Sensitive { digest, data }) => {
+                // Only to a receiver that promises to keep it out of its history and not pass it on.
+                match self.keeps_private(fp, addr).await {
+                    Ok(true) => self.push_data(fp, name, addr, digest, &data, true).await,
+                    Ok(false) => {
+                        tracing::debug!(peer = %name, "clipboard is marked sensitive and the peer would not keep it private; not shared");
                         self.state().known.insert(fp, digest);
-                        tracing::debug!(peer = %name, bytes = data.len(), "sent clipboard");
-                    }
-                    Ok(Some(ack)) => {
-                        self.state().known.remove(&fp);
-                        tracing::debug!(peer = %name, ?ack, "clipboard rejected; will retry on the next crossing");
                     }
                     Err(e) => {
-                        tracing::debug!(peer = %name, "sending clipboard: {e:#}");
+                        tracing::debug!(peer = %name, "asking whether the peer keeps sensitive copies private: {e:#}");
                         self.state().known.remove(&fp);
                     }
                 }
@@ -266,12 +306,36 @@ impl ClipSync {
                     (raise the limit with `one-mk clipboard --max-mb`)");
                 self.state().known.insert(fp, digest);
             }
-            Ok(Read::Concealed(digest) | Read::Sensitive { digest, .. }) => {
+            Ok(Read::Concealed(digest)) => {
                 tracing::debug!(peer = %name, "clipboard is marked sensitive; not shared");
                 self.state().known.insert(fp, digest);
             }
             Ok(Read::Unchanged(_) | Read::Empty) => {}
             Err(e) => tracing::warn!("reading the clipboard: {e:#}"),
+        }
+    }
+
+    /// Sends `data` for the automatic push and remembers what became of it.
+    async fn push_data(&self, fp: Fingerprint, name: &str, addr: SocketAddr, digest: Digest, data: &ClipData, concealed: bool) {
+        match self.send(fp, addr, data, true, concealed).await {
+            Ok(None | Some(ClipAck::Stored)) => {
+                self.state().known.insert(fp, digest);
+                tracing::debug!(peer = %name, bytes = data.len(), "sent clipboard");
+            }
+            Ok(Some(ack)) => {
+                self.state().known.remove(&fp);
+                tracing::debug!(peer = %name, ?ack, "clipboard rejected; will retry on the next crossing");
+            }
+            // Superseded rather than refused: sending it again would not help, and the
+            // newer copy comes here when it leaves.
+            Err(e) if e.is::<KeptNewerAnswer>() => {
+                self.state().known.insert(fp, digest);
+                tracing::debug!(peer = %name, "the peer kept a newer copy of its own");
+            }
+            Err(e) => {
+                tracing::debug!(peer = %name, "sending clipboard: {e:#}");
+                self.state().known.remove(&fp);
+            }
         }
     }
 
@@ -303,10 +367,27 @@ impl ClipSync {
         }
         // A receiver that refuses early stops our stream, and still answers.
         let mut ack = [0u8; 1];
-        // A closed stream with nothing on it is an older receiver, which never answers.
         match tokio::time::timeout(ACK_TIMEOUT, recv.read_exact(&mut ack)).await {
             Ok(Ok(())) => ClipAck::from_u8(ack[0]).map(Some).ok_or_else(|| anyhow::anyhow!("unknown clipboard acknowledgement {}", ack[0])),
-            Ok(Err(_)) | Err(_) => wrote.map(|()| None),
+            // A closed stream with nothing on it is an older receiver, which never answers.
+            Ok(Err(quinn::ReadExactError::FinishedEarly(0))) => wrote.map(|()| None),
+            Ok(Err(e)) => {
+                let e = anyhow::Error::new(e);
+                match reset_code(&e) {
+                    Some(KEPT_NEWER) => Err(KeptNewerAnswer.into()),
+                    Some(FAILED) => bail!("it could not put the clipboard on its own clipboard (see its log; the clipboard may be unavailable there)"),
+                    Some(BUSY) => bail!("it is busy receiving a clipboard from this computer; try again in a moment"),
+                    // Neither delivered nor refused as far as we can tell: not "delivered".
+                    _ => {
+                        wrote?;
+                        Err(e.context("the other computer did not confirm that it got the clipboard"))
+                    }
+                }
+            }
+            Err(_) => {
+                wrote?;
+                bail!("the other computer did not confirm that it got the clipboard within {} s", ACK_TIMEOUT.as_secs())
+            }
         }
     }
 
@@ -372,12 +453,11 @@ impl ClipSync {
         send.write_all(&buf).await?;
         send.finish()?;
         let got = tokio::time::timeout(RECEIVE_TIMEOUT, async {
-            let header = read_clip_header(&mut recv).await.map_err(|error| {
-                if error.chain().any(|cause| cause.downcast_ref::<quinn::ReadExactError>().is_some_and(|error| matches!(error, quinn::ReadExactError::ReadError(quinn::ReadError::Reset(code)) if *code == quinn::VarInt::from_u32(FETCH_DISABLED)))) {
-                    anyhow::anyhow!(FETCH_DISABLED_MESSAGE)
-                } else {
-                    anyhow::anyhow!("it did not answer: it may be running an older one-mk, or not sharing its clipboard ({error:#})")
-                }
+            let header = read_clip_header(&mut recv).await.map_err(|error| match reset_code(&error) {
+                Some(FETCH_DISABLED) => anyhow::anyhow!(FETCH_DISABLED_MESSAGE),
+                Some(BUSY) => anyhow::anyhow!("it is busy receiving a clipboard from this computer; try again in a moment"),
+                Some(FAILED) => anyhow::anyhow!("it could not read its clipboard (see its log)"),
+                _ => anyhow::anyhow!("it did not answer: it may be running an older one-mk, or not sharing its clipboard ({error:#})"),
             })?;
             self.read_snapshot(fp, &self.peer_name(fp), &header, &mut recv, false).await
         })
@@ -407,6 +487,8 @@ impl ClipSync {
         if !self.state().receiving.insert(fp) {
             tracing::debug!(peer = %name, "clipboard already arriving; refused another");
             let _ = recv.stop(1u32.into());
+            // Say so, so a fetch is not blamed on an older one-mk.
+            let _ = send.reset(BUSY.into());
             return;
         }
         let res = tokio::time::timeout(RECEIVE_TIMEOUT, self.try_receive(fp, name, &mut send, &mut recv)).await;
@@ -417,6 +499,8 @@ impl ClipSync {
             Err(e) => {
                 tracing::debug!(peer = %name, "receiving clipboard: {e:#}");
                 let _ = recv.stop(1u32.into());
+                // Not stored (or not read): no acknowledgement would read as an older receiver.
+                let _ = send.reset(FAILED.into());
             }
         }
     }
@@ -443,8 +527,12 @@ impl ClipSync {
         let (ack, stored) = match self.read_snapshot(fp, name, &header, recv, true).await? {
             Received::Stored { bytes, .. } => (Some(ClipAck::Stored), Some(bytes)),
             // Superseded rather than refused: sending it again would not
-            // help, and ours goes to it when it leaves.
-            Received::KeptNewer => (Some(ClipAck::Stored), None),
+            // help, and ours goes to it when it leaves. Said as a reset, which
+            // an older sender reads as no answer, rather than as Stored.
+            Received::KeptNewer => {
+                let _ = send.reset(KEPT_NEWER.into());
+                return Ok(None);
+            }
             Received::FormatsOff => (Some(ClipAck::FormatsOff), None),
             Received::TooLarge { .. } => (Some(ClipAck::TooLarge), None),
             Received::Nothing => (None, None),
@@ -460,26 +548,31 @@ impl ClipSync {
 
     /// `name` asked for our clipboard: send it back on this stream, or an
     /// empty snapshot if there is nothing we may share (or sharing is off).
-    /// Sensitive content is never handed out this way: only we can decide to
-    /// send that.
+    /// A copy marked sensitive is handed out only when the user switched
+    /// `--skip-sensitive` off, and then with the mark, so the asker keeps it out
+    /// of its history and does not pass it on.
     async fn answer_pull(&self, name: &str, send: &mut quinn::SendStream) -> anyhow::Result<()> {
         if !self.allow_pull.load(Ordering::Relaxed) {
             send.reset(FETCH_DISABLED.into())?;
             return Ok(());
         }
-        let data = if self.allow_pull.load(Ordering::Relaxed) {
-            match self.cb.read(Vec::new()).await? {
-                Read::Changed { data, .. } => Some(data),
-                _ => None,
-            }
-        } else {
-            None
+        let read = if self.cb.filter().skip_concealed { self.cb.read(Vec::new()).await? } else { self.cb.read_explicit(Vec::new()).await? };
+        // The read may have taken a while (a slow clipboard owner): fetching may
+        // have been switched off meanwhile, and then nothing is sent.
+        if !self.allow_pull.load(Ordering::Relaxed) {
+            send.reset(FETCH_DISABLED.into())?;
+            return Ok(());
+        }
+        let (data, concealed) = match read {
+            Read::Changed { data, .. } => (Some(data), false),
+            Read::Sensitive { data, .. } => (Some(data), true),
+            _ => (None, false),
         };
         match &data {
             Some(d) => println!("{name} fetched this computer's clipboard ({}).", describe(d)),
             None => tracing::debug!(peer = %name, "pull answered with nothing"),
         }
-        write_snapshot(send, data.as_deref().unwrap_or(&ClipData::default()), false).await
+        write_snapshot(send, data.as_deref().unwrap_or(&ClipData::default()), concealed).await
     }
 
     /// Reads the payloads `header` announces and puts what the settings
@@ -490,6 +583,9 @@ impl ClipSync {
     /// pushes (copied before it crossed, and maybe still arriving: a large
     /// one takes seconds), so ours is kept and goes to `fp` when it leaves.
     async fn read_snapshot(&self, fp: Fingerprint, name: &str, header: &ClipHeader, recv: &mut quinn::RecvStream, pushed: bool) -> anyhow::Result<Received> {
+        // The visit this arrives in, if one is running: it may be over when the
+        // payload has arrived (see `copied_during_visit`).
+        let visit = if pushed { self.state().sessions.get(&fp).map(|session| session.baseline) } else { None };
         let filter = self.cb.filter();
         let wanted = |f: ClipFormat| match f {
             ClipFormat::Text => filter.text,
@@ -544,7 +640,7 @@ impl ClipSync {
         if data.has_no_content() {
             return Ok(Received::Nothing);
         }
-        if pushed && self.copied_during_visit(fp).await {
+        if pushed && self.copied_during_visit(fp, visit).await {
             tracing::debug!(peer = %name, "something was copied here since it took control; kept that newer copy");
             return Ok(Received::KeptNewer);
         }
@@ -561,8 +657,20 @@ impl ClipSync {
     }
 
     /// Whether `fp` controls us and our clipboard changed since it took control.
-    async fn copied_during_visit(&self, fp: Fingerprint) -> bool {
-        let Some(baseline) = self.state().sessions.get(&fp).and_then(|session| session.baseline) else { return false };
+    /// `started`: the baseline of the visit that was running when the snapshot
+    /// began to arrive. If that visit has ended since (a large copy takes
+    /// seconds, and `left` removes the session), the copy made during it is
+    /// still newer than what arrives.
+    async fn copied_during_visit(&self, fp: Fingerprint, started: Option<Option<Option<Digest>>>) -> bool {
+        let baseline = {
+            let s = self.state();
+            match (s.sessions.get(&fp), started) {
+                (Some(session), _) => session.baseline,
+                (None, Some(baseline)) => baseline,
+                (None, None) => None,
+            }
+        };
+        let Some(baseline) = baseline else { return false };
         self.cb.digest().await.is_ok_and(|now| now != baseline)
     }
 
@@ -803,6 +911,34 @@ mod tests {
                 }
             });
             seen
+        }
+
+        /// Reads each snapshot, then resets the answering side with `code`, as
+        /// a receiver that failed to store it does.
+        fn serve_reset(&self, code: u32) {
+            let node = self.node.clone();
+            tokio::spawn(async move {
+                while let Some(Ok(peer)) = node.accept().await {
+                    tokio::spawn(async move {
+                        while let Ok((_, mut send, mut recv)) = peer.accept_stream().await {
+                            if let Ok(h) = read_clip_header(&mut recv).await {
+                                let _ = read_exact(&mut recv, h.total() as usize).await;
+                                let _ = send.reset(code.into());
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        /// Opens a clipboard stream to `to` and writes only its header.
+        async fn raw_stream(&self, to: &Pc, header: &ClipHeader) -> (quinn::SendStream, quinn::RecvStream) {
+            let conn = self.clip.bulk(to.fp(), to.addr()).await.unwrap();
+            let (mut send, recv) = open_stream(&conn, StreamKind::Clipboard).await.unwrap();
+            let mut buf = Vec::new();
+            header.encode_frame(&mut buf);
+            send.write_all(&buf).await.unwrap();
+            (send, recv)
         }
 
         fn serve_ack(&self, acknowledgement: Option<u8>) {
@@ -1082,6 +1218,156 @@ mod tests {
         a.mem.set_concealed(true);
         a.clip.send_now(b.fp(), b.addr(), true).await.unwrap();
         assert_eq!(b.mem.text().as_deref(), Some("my wifi password"));
+    }
+
+    /// A receiver that could not store the snapshot says so; no answer used
+    /// to read as an older receiver and the sender counted it as delivered.
+    #[tokio::test]
+    async fn a_receiver_that_fails_to_store_is_not_counted_as_delivered() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve_reset(FAILED);
+        text(&a.mem, "never arrives");
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert!(!a.clip.state().known.contains_key(&b.fp()), "a failed store must be retried on the next crossing");
+        let e = format!("{:#}", a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err());
+        assert!(e.contains("could not put the clipboard"), "{e}");
+        assert!(!a.clip.state().known.contains_key(&b.fp()));
+
+        // A receiver that gives no answer at all, and is not an older one that closes cleanly, is no delivery either.
+        let c = Pc::new();
+        c.serve_reset(7);
+        let e = format!("{:#}", a.clip.send_now(c.fp(), c.addr(), false).await.unwrap_err());
+        assert!(e.contains("did not confirm"), "{e}");
+    }
+
+    /// The real receiver resets with the failure code when the snapshot cannot be stored.
+    #[tokio::test]
+    async fn the_receiver_answers_a_failed_store_with_the_failure_code() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve();
+        let header = ClipHeader { items: vec![(ClipFormat::Png, 8)], pull: false, concealed: false };
+        let (mut send, mut recv) = a.raw_stream(&b, &header).await;
+        send.write_all(b"not a png").await.unwrap();
+        let _ = send.finish();
+        let mut ack = [0u8; 1];
+        let e = anyhow::Error::new(recv.read_exact(&mut ack).await.unwrap_err());
+        assert_eq!(reset_code(&e), Some(FAILED), "{e:#}");
+        assert_eq!(b.mem.writes(), 0);
+    }
+
+    /// An explicit send into a visit that has a newer copy says so; the
+    /// receiver kept its copy and "Sent your clipboard" would be untrue.
+    #[tokio::test]
+    async fn an_explicit_send_is_told_when_the_receiver_kept_its_newer_copy() {
+        let (a, b) = (Pc::new(), Pc::new());
+        a.serve();
+        b.serve();
+        text(&b.mem, "on b before the visit");
+        b.clip.entered(a.fp(), "a");
+        eventually("baseline read", || b.clip.state().sessions.get(&a.fp()).is_some_and(|s| s.baseline.is_some())).await;
+        text(&b.mem, "newer, copied on b during the visit");
+        text(&a.mem, "sent by a");
+        let e = format!("{:#}", a.clip.send_now(b.fp(), b.addr(), false).await.unwrap_err());
+        assert!(e.contains("kept a newer copy"), "{e}");
+        assert_eq!(b.mem.text().as_deref(), Some("newer, copied on b during the visit"));
+    }
+
+    /// A fetch that meets a receiver busy with another stream is not blamed on an older one-mk.
+    #[tokio::test]
+    async fn a_busy_peer_is_not_called_an_older_one_mk() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve();
+        b.settings(ClipSettings { allow_pull: true, ..Default::default() });
+        text(&b.mem, "from b");
+        let header = ClipHeader { items: vec![(ClipFormat::Text, 100)], pull: false, concealed: false };
+        let (_send, _recv) = a.raw_stream(&b, &header).await; // still arriving
+        eventually("the first stream to be taken", || b.clip.state().receiving.contains(&a.fp())).await;
+        let e = format!("{:#}", a.clip.pull(b.fp(), b.addr()).await.unwrap_err());
+        assert!(e.contains("busy") && !e.contains("older"), "{e}");
+    }
+
+    /// A big automatic push still arriving when the visit ends must not replace a
+    /// copy made during it (the session is gone by then).
+    #[tokio::test]
+    async fn a_push_that_outlives_its_visit_does_not_replace_a_newer_copy() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve();
+        text(&b.mem, "before the visit");
+        b.clip.entered(a.fp(), "a");
+        eventually("baseline read", || b.clip.state().sessions.get(&a.fp()).is_some_and(|s| s.baseline.is_some())).await;
+        let header = ClipHeader { items: vec![(ClipFormat::Text, 10)], pull: false, concealed: false };
+        let (mut send, mut recv) = a.raw_stream(&b, &header).await;
+        send.write_all(b"older").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        text(&b.mem, "newer");
+        b.clip.left(a.fp(), a.addr());
+        send.write_all(b" text").await.unwrap();
+        send.finish().unwrap();
+        let mut ack = [0u8; 1];
+        let _ = recv.read_exact(&mut ack).await;
+        assert_eq!(b.mem.text().as_deref(), Some("newer"));
+        assert_eq!(b.mem.writes(), 0);
+    }
+
+    /// Reloading settings that do not touch the clipboard filter keeps what each
+    /// peer is known to have: nothing is echoed back or sent again over a newer copy.
+    #[tokio::test]
+    async fn an_unchanged_settings_reload_keeps_what_peers_have() {
+        let (a, b) = (Pc::new(), Pc::new());
+        a.serve();
+        b.serve();
+        text(&a.mem, "x from a");
+        b.clip.entered(a.fp(), "a");
+        eventually("baseline read", || b.clip.state().sessions.get(&a.fp()).is_some_and(|s| s.baseline.is_some())).await;
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert_eq!(b.mem.text().as_deref(), Some("x from a"));
+        let writes = a.mem.writes();
+        b.settings(ClipSettings::default());
+        b.clip.left(a.fp(), a.addr());
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(a.mem.writes(), writes, "A's own copy was echoed back to it");
+        // ... and A, reloaded too, does not push it over what B copies meanwhile.
+        a.settings(ClipSettings::default());
+        text(&b.mem, "w, copied on b");
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert_eq!(b.mem.text().as_deref(), Some("w, copied on b"));
+    }
+
+    /// With `--skip-sensitive off` a copy a password manager marked still travels
+    /// marked, so the receiver keeps it out of its history and does not pass it on.
+    #[tokio::test]
+    async fn a_pushed_sensitive_copy_keeps_its_mark_when_skipping_is_off() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve();
+        a.settings(ClipSettings { skip_sensitive: false, ..Default::default() });
+        b.settings(ClipSettings { history_max: 20, ..Default::default() });
+        text(&a.mem, "hunter2");
+        a.mem.set_concealed(true);
+        a.clip.push_once(b.fp(), "b", b.addr(), None).await;
+        assert_eq!(b.mem.text().as_deref(), Some("hunter2"));
+        assert!(b.clip.clipboard().history().lock().unwrap().is_empty(), "never recorded");
+        assert!(matches!(b.clip.clipboard().read(vec![]).await.unwrap(), Read::Concealed(_)), "and not passed on");
+
+        // An older receiver, which would record it, is never sent it.
+        let old = Pc::new();
+        let seen = old.serve_recording(None);
+        a.clip.push_once(old.fp(), "old", old.addr(), None).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(seen.lock().unwrap().iter().all(|h| h.items.is_empty()), "only the probe reached it");
+    }
+
+    /// The same for a fetch: what is handed out carries the mark.
+    #[tokio::test]
+    async fn a_fetch_handed_out_with_the_mark_when_skipping_is_off() {
+        let (a, b) = (Pc::new(), Pc::new());
+        b.serve();
+        b.settings(ClipSettings { allow_pull: true, skip_sensitive: false, ..Default::default() });
+        a.settings(ClipSettings { history_max: 20, ..Default::default() });
+        text(&b.mem, "hunter2");
+        b.mem.set_concealed(true);
+        a.clip.pull(b.fp(), b.addr()).await.unwrap();
+        assert_eq!(a.mem.text().as_deref(), Some("hunter2"));
+        assert!(a.clip.clipboard().history().lock().unwrap().is_empty(), "the asker must not record it");
     }
 
     #[test]

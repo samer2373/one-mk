@@ -286,3 +286,27 @@ fn receiver_budget_never_blocks_matching_release_or_accepts_shortcut_text() {
     assert_eq!(receiver.try_recv().unwrap(), Inject::Key { code: 29, down: false });
     assert!(owner.source_kinds.is_empty());
 }
+
+/// The press of a character key was let in while the receiver knew its keyboard
+/// layout. The receiver then loses the layout; the release must still reach the
+/// key the press holds down.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn losing_the_layout_does_not_strand_a_pressed_character_key() {
+    let mut duo = Duo::start_typing("typing-layout-lost", "de", "us").await;
+    let mut controller = RawPeer::connect("typing-layout-lost-peer", &duo.db, duo.pb).await;
+    controller.send(Control::Caps(caps::TEXT | caps::TEXT_SOURCE)).await;
+    controller.send(Control::Enter { epoch: 21, pos: Pos::new(1.0, 1.0) }).await;
+    while controller.next().await != (Control::EnterAck { epoch: 21 }) {}
+    controller.send(Control::CharacterKey { code: 21, down: true, character: 'z' }).await;
+    let key = loop {
+        if let Inject::Key { code, down: true } = next_inject(&mut duo.hb).await { break code }
+    };
+    duo.hb.events.send(Event::KeyboardLayoutUnavailable).unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    controller.send(Control::CharacterKey { code: 21, down: false, character: 'z' }).await;
+    // At once: not when something else ends the visit later.
+    let released = tokio::time::timeout(Duration::from_millis(400), next_non_move(&mut duo.hb)).await;
+    assert_eq!(released.ok(), Some(Inject::Key { code: key, down: false }), "the release was dropped with the layout");
+    duo.stop().await;
+}

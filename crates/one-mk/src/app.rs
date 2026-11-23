@@ -94,6 +94,27 @@ const REMOVED_RETRY: Duration = Duration::from_secs(600);
 const RECENTLY_PAIRED: Duration = Duration::from_secs(30);
 /// How often a paired computer that stays unreachable is mentioned in the log.
 const DIAL_LOG_EVERY: Duration = Duration::from_secs(600);
+/// Most addresses remembered as already mentioned in the log. Discovery
+/// announcements are not authenticated, so a host on the network can offer new
+/// addresses forever for a computer that is paired.
+const DIAL_LOGGED_KEPT: usize = 256;
+
+/// Whether a failed dial to `addr` is to be mentioned now: not if it was
+/// within [`DIAL_LOG_EVERY`], and not once [`DIAL_LOGGED_KEPT`] other
+/// addresses are waiting out their time. What is recorded is pruned as it
+/// grows, so a stream of new addresses cannot make it grow without end.
+fn first_to_say(logged: &mut HashMap<SocketAddr, Instant>, addr: SocketAddr) -> bool {
+    if logged.get(&addr).is_some_and(|at| at.elapsed() <= DIAL_LOG_EVERY) {
+        return false;
+    }
+    logged.retain(|_, at| at.elapsed() <= DIAL_LOG_EVERY);
+    if logged.len() >= DIAL_LOGGED_KEPT {
+        return false;
+    }
+    logged.insert(addr, Instant::now());
+    true
+}
+
 /// How long a peer that connected to us may take to open its first stream.
 const FIRST_STREAM_TIMEOUT: Duration = Duration::from_secs(10);
 /// Discovery announcements from unknown devices re-read the trusted device
@@ -462,6 +483,22 @@ struct Owner {
 }
 
 impl Owner {
+    /// The release of a character key whose press was let in while a keyboard layout was
+    /// known, with none to translate by now: it ends what that press holds, by whichever
+    /// route it took (the chord it was typed as, or the key itself).
+    fn character_release(&mut self, code: u32, character: char, inject: &InjectTx) {
+        if !matches!(self.source_kinds.get(&code), Some(Some(original)) if *original == character) { return }
+        self.source_kinds.remove(&code);
+        let events = self.keys.key(code, false, || one_mk_proto::typing::Chord { code, modifiers: Vec::new() });
+        self.key_events(events, inject);
+        if self.held.update(code, false) {
+            let _ = inject.send(Inject::CharacterKey { code, down: false, character });
+        }
+        let now = Instant::now();
+        self.last_rx = now;
+        self.last_input = now;
+    }
+
     fn character_input(&mut self, input: Control, keyboard: &one_mk_input::typing::KeyboardLayout, inject: &InjectTx) {
         use one_mk_proto::typing::{Chord, printable};
         let now = Instant::now();
@@ -1117,8 +1154,18 @@ async fn establish(
     services: Services,
     permit: Option<PendingPermit>,
 ) {
-    // Re-read the store so devices paired while we run are accepted.
-    let device = TrustStore::load(dir).ok().and_then(|t| t.get(&peer.fingerprint).map(|d| d.name.clone()));
+    // Re-read the store so devices paired while we run are accepted. A file
+    // that cannot be read now (a hand edit left a mistake, a sharing lock) says
+    // nothing about this peer: the daemon's own paired set decides, as it keeps
+    // its copy when a reload fails, rather than telling a paired computer that
+    // it was removed.
+    let device = match TrustStore::load(dir) {
+        Ok(store) => store.get(&peer.fingerprint).map(|d| d.name.clone()),
+        Err(e) => {
+            tracing::warn!("cannot read the paired computers, going by the ones already known: {e:#}");
+            services.trusted.borrow().contains(&peer.fingerprint).then(|| peer.fingerprint.short())
+        }
+    };
     let Some(device_name) = device else {
         tracing::info!(peer = %peer.fingerprint.short(), "rejecting unpaired device");
         let ip = peer.conn.remote_address().ip().to_canonical();
@@ -1144,12 +1191,7 @@ async fn establish(
                 // only; the link (and its rank) is not involved.
                 tracing::debug!(peer = %device_name, %addr, "probe connection");
                 drop(permit);
-                while let Ok(b) = peer.conn.read_datagram().await {
-                    if let Ok(Datagram::Probe { id, sent_ns }) = Datagram::decode(&b) {
-                        let (e, n) = Datagram::ProbeEcho { id, sent_ns }.encode();
-                        let _ = peer.conn.send_datagram(bytes::Bytes::copy_from_slice(&e[..n]));
-                    }
-                }
+                serve_probe(peer.conn, peer.fingerprint, &device_name, &services).await;
                 return;
             }
             Ok(Ok((kind, ..))) => Err(anyhow::anyhow!("unexpected first stream {kind:?}")),
@@ -1174,6 +1216,55 @@ async fn establish(
             let _ = tx.send(AppEvent::Removed(fingerprint));
         }
         Err(e) => tracing::warn!(%addr, "handshake failed: {e:#}"),
+    }
+}
+
+/// How long a probe connection may go without a probe before it is closed.
+const PROBE_IDLE: Duration = Duration::from_secs(60);
+
+/// Echoes the probes a peer sends on `conn` (`one-mk bench --peer`). Unlike a
+/// setup in progress this is open-ended, so it is held to the limits the other
+/// bulk connections have: the per-device count ([`Inbox::admit`]), an idle
+/// limit, and the end of the peer's trust (it is closed as `forgotten`).
+async fn serve_probe(conn: quinn::Connection, fp: Fingerprint, name: &str, services: &Services) {
+    let mut trusted = services.trusted.subscribe();
+    if !trusted.borrow_and_update().contains(&fp) {
+        conn.close(3u32.into(), b"forgotten");
+        return;
+    }
+    let _permit = match services.inbox.admit(fp) {
+        Ok(permit) => permit,
+        Err(reason) => {
+            tracing::warn!(peer = %name, "{reason}");
+            conn.close(3u32.into(), reason.as_bytes());
+            return;
+        }
+    };
+    loop {
+        tokio::select! {
+            read = tokio::time::timeout(PROBE_IDLE, conn.read_datagram()) => match read {
+                Ok(Ok(b)) => {
+                    if let Ok(Datagram::Probe { id, sent_ns }) = Datagram::decode(&b) {
+                        let (e, n) = Datagram::ProbeEcho { id, sent_ns }.encode();
+                        let _ = conn.send_datagram(bytes::Bytes::copy_from_slice(&e[..n]));
+                    }
+                }
+                Ok(Err(_)) => break,
+                Err(_) => {
+                    conn.close(0u32.into(), b"idle");
+                    break;
+                }
+            },
+            changed = trusted.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                if !trusted.borrow_and_update().contains(&fp) {
+                    conn.close(3u32.into(), b"forgotten");
+                    break;
+                }
+            }
+        }
     }
 }
 
@@ -1456,6 +1547,10 @@ impl App {
                 if self.remote.as_ref().is_some_and(|r| r.activation == id) {
                     tracing::info!("capture ended by the system; pointer is home");
                     self.end_visit();
+                    // Keys go up unseen once capture ends, and the edges and file-drop
+                    // zones are those of a computer at home again (as `go_home_at` leaves them).
+                    self.mods = Mods::default();
+                    self.update_sides();
                 }
             }
             Event::Error(msg) => tracing::error!("{msg}"),
@@ -1992,6 +2087,22 @@ impl App {
             peer.ctl.send(Control::Busy { epoch });
             return;
         }
+        // The same the other way round: a computer that is controlling another one (or
+        // is about to, or broadcasts) does not also hand its keyboard and pointer to a
+        // controller, or both would think they are away and obey each other.
+        // Two computers that enter each other at the same moment (neither has been
+        // accepted yet) must not both refuse and both go home: the one with the
+        // higher fingerprint gives up its visit and takes the other's.
+        let yields = self.remote.as_ref().is_some_and(|r| r.peer == fp && !r.acked && self.node.identity().fingerprint > fp);
+        if yields {
+            tracing::info!(peer = %peer.name, "both computers entered each other at once; this one gives way");
+            self.go_home();
+        } else if self.remote.is_some() || self.switching.is_some() || self.broadcasting() {
+            tracing::info!(peer = %peer.name, "refused control: this computer is controlling another one");
+            peer.ctl.send(Control::Busy { epoch });
+            return;
+        }
+        let peer = &self.peers[&fp];
         if let Some(mut old) = self.owner.take() {
             old.release_all(&self.inject); // same controller, new visit
         }
@@ -2150,11 +2261,11 @@ impl App {
                     // Said once, then every ten minutes: a computer that is
                     // asleep must not fill the log, but "it never connects"
                     // must have a reason in it.
-                    Some(why) if self.dial_logged.get(&addr).is_none_or(|at| at.elapsed() > DIAL_LOG_EVERY) => {
-                        self.dial_logged.insert(addr, Instant::now());
-                        tracing::info!(%addr, "can't connect to a paired computer: {why}");
+                    Some(why) => {
+                        if first_to_say(&mut self.dial_logged, addr) {
+                            tracing::info!(%addr, "can't connect to a paired computer: {why}");
+                        }
                     }
-                    Some(_) => {}
                     None => { self.dial_logged.remove(&addr); }
                 }
             }
@@ -2398,12 +2509,18 @@ impl App {
                 }
             }
             input @ (Control::Text { .. } | Control::CharacterKey { .. }) => {
-                if (matches!(input, Control::CharacterKey { down: false, .. }) || self.peers.get(&fp).is_some_and(|peer| peer.caps & (caps::TEXT | caps::TEXT_SOURCE) != 0))
-                    && let Some(keyboard) = &self.keyboard
-                    && keyboard.can_inject()
+                let release = matches!(input, Control::CharacterKey { down: false, .. });
+                if (release || self.peers.get(&fp).is_some_and(|peer| peer.caps & (caps::TEXT | caps::TEXT_SOURCE) != 0))
                     && let Some(owner) = self.owner.as_mut().filter(|owner| owner.peer == fp && owner.link == id)
                 {
-                    owner.character_input(input, keyboard, &self.inject);
+                    match &self.keyboard {
+                        Some(keyboard) if keyboard.can_inject() => owner.character_input(input, keyboard, &self.inject),
+                        // The layout was lost after the press was let in: the release must
+                        // still reach the key that press holds down here.
+                        _ => if let Control::CharacterKey { code, down: false, character } = input {
+                            owner.character_release(code, character, &self.inject);
+                        },
+                    }
                 }
             }
             Control::PointerMode { epoch, relative } => {
@@ -3146,6 +3263,7 @@ impl App {
             // Already capturing: the visit moves to the new peer.
             Some(activation) => self.enter_peer_at_center(activation, fp),
             None => {
+                self.forget_late_broadcast_capture();
                 self.switching = Some((fp, Instant::now() + SWITCH_TIMEOUT));
                 self.update_sides(); // arms `side` even while the pointer is locked
                 let _ = self.capture.send(CaptureCmd::Activate { side });
@@ -3338,16 +3456,18 @@ impl App {
                         mine = whole();
                     }
                 }
-                let overlaps = |a: &Edge| mine.iter().any(|m| m.side == a.side && m.at == a.at && m.lo < a.hi && a.lo < m.hi);
-                if let Some((_, first)) = edges.iter().find(|(e, _)| overlaps(e)) {
-                    let used = self.name_for(*first);
+                // Only the part another peer's edge already covers is lost; the rest of
+                // this peer's edges (beside it, or on other monitors) is still armed.
+                let (rest, first) = unclaimed(mine, &edges);
+                if let Some(first) = first {
+                    let used = self.name_for(first);
                     conflicts.push(format!(
-                        "{} and {} are both {} and their edges overlap, so only {} is reached there; \
+                        "{} and {} are both {} and their edges overlap, so only {} is reached where they do; \
                          move the other with `one-mk layout {} <left|right|top|bottom> [--offset DX,DY]`",
                         used, self.name_for(fp), on_your(side), used, self.arg_for(fp)
                     ));
-                    continue;
                 }
+                let mine = rest;
                 edges.extend(mine.into_iter().map(|e| (e, fp)));
             }
         }
@@ -3483,6 +3603,35 @@ impl App {
             });
         }
     }
+}
+
+/// What of `mine` no edge in `taken` (armed for peers earlier in the order)
+/// covers, and the first of those peers whose edge overlapped it. Where two
+/// peers' edges overlap, the earlier one keeps the shared stretch, and the later
+/// one keeps what is left of each of its edges on either side of it.
+fn unclaimed(mine: Vec<Edge>, taken: &[(Edge, Fingerprint)]) -> (Vec<Edge>, Option<Fingerprint>) {
+    let mut first = None;
+    let mut kept = Vec::new();
+    for edge in mine {
+        let mut pieces = vec![edge];
+        for (other, owner) in taken.iter().filter(|(other, _)| other.side == edge.side && other.at == edge.at) {
+            pieces = pieces
+                .into_iter()
+                .flat_map(|piece| {
+                    if piece.lo < other.hi && other.lo < piece.hi {
+                        first.get_or_insert(*owner);
+                        let before = (piece.lo < other.lo).then_some(Edge { hi: other.lo, ..piece });
+                        let after = (other.hi < piece.hi).then_some(Edge { lo: other.hi, ..piece });
+                        before.into_iter().chain(after).collect::<Vec<_>>()
+                    } else {
+                        vec![piece]
+                    }
+                })
+                .collect();
+        }
+        kept.extend(pieces);
+    }
+    (kept, first)
 }
 
 /// The warning for a peer on our `side` placed where none of its screens
@@ -5527,6 +5676,189 @@ mod tests {
         assert_eq!(ask(&duo.da, Request::LockPointer(Toggle::Toggle)).await, "ok\noff\n");
         assert_eq!(next_capture(&mut duo.ha).await, armed(Side::Right));
         assert!(!status(&duo.da).await.pointer_locked);
+        duo.stop().await;
+    }
+
+    /// B enters C (above it) while C enters B: B must not accept control while it
+    /// controls. Once C has accepted B's visit, B refuses C's whatever the
+    /// fingerprints; while neither has been accepted yet, exactly one of the two
+    /// gives way (the higher fingerprint), so the visits do not cancel each other.
+    #[tokio::test]
+    async fn a_computer_that_controls_another_refuses_to_be_controlled() {
+        for case in ["accepted", "simultaneous, this one lower", "simultaneous, this one higher"] {
+            let duo = Duo::start(&format!("mutual-{}", case.len()), None).await;
+            // C above B, with a fingerprint on the wanted side of B's.
+            let dir = loop {
+                let dir = temp_dir("mutual-c");
+                let c = Identity::load_or_create(&dir).unwrap().fingerprint.to_string();
+                if case != "simultaneous, this one higher" && c > duo.fb || case == "simultaneous, this one higher" && c < duo.fb {
+                    break dir;
+                }
+            };
+            let mut c = RawPeer::connect_in(dir, &duo.db, duo.pb, |_| {}).await;
+            c.send(Control::Screens(vec![Rect::new(0, 0, 1920, 1080)])).await;
+            let db = duo.db.clone();
+            eventually_async("C's screens", || async { status(&db).await.peers.iter().any(|p| !p.screens.is_empty()) }).await;
+            duo.hb.events.send(Event::Activated { id: 1, side: Side::Top, pos: Pos::new(960.0, 0.0) }).unwrap();
+            let epoch = loop {
+                if let Control::Enter { epoch, .. } = c.next().await {
+                    break epoch;
+                }
+            };
+            if case == "accepted" {
+                c.send(Control::EnterAck { epoch }).await;
+                eventually_async("B's visit accepted", || async { status(&db).await.controlling.is_some() }).await;
+            }
+            c.send(Control::Enter { epoch: 9, pos: Pos::new(5.0, 5.0) }).await;
+            let answer = loop {
+                match c.next().await {
+                    Control::Busy { epoch: 9 } => break "busy",
+                    Control::EnterAck { epoch: 9 } => break "ack",
+                    _ => {}
+                }
+            };
+            if case == "simultaneous, this one higher" {
+                assert_eq!(answer, "ack", "{case}: the higher one gives way");
+                assert!(status(&db).await.controlling.is_none(), "{case}: and its own visit is over");
+            } else {
+                assert_eq!(answer, "busy", "{case}");
+                assert!(status(&db).await.controlling.is_some(), "{case}: its visit stands");
+            }
+            duo.stop().await;
+        }
+    }
+
+    /// Two peers on the right of a tall desktop, the second overlapping the first only
+    /// partly: the second keeps the rest of its edge instead of losing all of it.
+    #[test]
+    fn a_partly_overlapped_edge_keeps_its_free_part() {
+        let edge = |lo, hi| Edge { side: Side::Right, at: 1920, lo, hi };
+        let (first, second) = (Fingerprint([1; 32]), Fingerprint([2; 32]));
+        let taken = [(edge(0, 600), first)];
+        let (rest, overlapped) = unclaimed(vec![edge(500, 1100)], &taken);
+        assert_eq!(rest, vec![edge(600, 1100)]);
+        assert_eq!(overlapped, Some(first));
+        // In the middle of a longer edge: both ends stay.
+        let (rest, _) = unclaimed(vec![edge(0, 1000)], &[(edge(300, 400), second)]);
+        assert_eq!(rest, vec![edge(0, 300), edge(400, 1000)]);
+        // Other monitors' edges of the same peer, and another line, are not touched.
+        let other = Edge { at: 0, ..edge(0, 600) };
+        let (rest, overlapped) = unclaimed(vec![other, edge(700, 900)], &taken);
+        assert_eq!((rest, overlapped), (vec![other, edge(700, 900)], None));
+        // Wholly covered: nothing is left.
+        assert_eq!(unclaimed(vec![edge(100, 200)], &taken).0, vec![]);
+    }
+
+    /// A devices.toml that cannot be read must not make every paired computer
+    /// look unpaired: it would be closed as "not paired", told it was removed,
+    /// and stop dialing for ten minutes, and this computer would blame a forget.
+    #[tokio::test]
+    async fn an_unreadable_devices_file_does_not_unpair_a_connecting_computer() {
+        let node = |_: u8| Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let (a, b) = (node(0), node(1));
+        let addr = a.local_addr().unwrap();
+        let dir = temp_dir("unreadable-devices");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("devices.toml"), "[[device]\nname = = broken").unwrap();
+        assert!(TrustStore::load(&dir).is_err(), "the premise: the file cannot be read");
+        let (_screens_tx, screens) = watch::channel(Vec::new());
+        let (tx, mut events) = mpsc::unbounded_channel();
+        let services = Services {
+            wallpaper: None,
+            clip: None,
+            inbox: Inbox::new(temp_dir("unreadable-devices-inbox")),
+            trusted: watch::channel(HashSet::from([b.identity().fingerprint])).0,
+        };
+        let (dialed, accepted) = tokio::join!(b.connect(addr), a.accept());
+        let dialed = dialed.unwrap();
+        let accepted = accepted.unwrap().unwrap();
+        let conn = dialed.conn.clone();
+        let handled = tokio::spawn({
+            let (a, dir) = (a.clone(), dir.clone());
+            async move { establish(accepted, &a, &dir, &screens, &tx, services, None).await }
+        });
+        dialed.open_stream(StreamKind::Probe).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(conn.close_reason().is_none(), "closed: {:?}", conn.close_reason());
+        assert!(events.try_recv().is_err(), "no unrecognised-computer note");
+        conn.close(0u32.into(), b"done");
+        let _ = tokio::time::timeout(Duration::from_secs(5), handled).await;
+    }
+
+    /// A probe connection is held to the bulk-connection count of its device
+    /// and ends when the device is forgotten, as a bulk connection does.
+    #[tokio::test]
+    async fn probe_connections_are_limited_and_end_when_the_device_is_forgotten() {
+        let node = || Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let (a, b) = (node(), node());
+        let fp = b.identity().fingerprint;
+        let services = Services {
+            wallpaper: None,
+            clip: None,
+            inbox: Inbox::new(temp_dir("probe-limits-inbox")),
+            trusted: watch::channel(HashSet::from([fp])).0,
+        };
+        let addr = a.local_addr().unwrap();
+        let mut dialed = Vec::new();
+        for n in 0..crate::transfer::MAX_CONNS_PER_PEER + 1 {
+            let (peer, accepted) = tokio::join!(b.connect(addr), a.accept());
+            let (peer, accepted) = (peer.unwrap(), accepted.unwrap().unwrap());
+            peer.open_stream(StreamKind::Probe).await.unwrap();
+            let services = services.clone();
+            tokio::spawn(async move { serve_probe(accepted.conn, fp, "b", &services).await });
+            dialed.push((n, peer));
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let (_, last) = dialed.pop().unwrap();
+        assert!(last.conn.close_reason().is_some(), "a probe connection over the device's limit is refused");
+        // The ones within it echo.
+        for (_, peer) in &dialed {
+            assert!(peer.conn.close_reason().is_none());
+            let (bytes, n) = Datagram::Probe { id: 1, sent_ns: 5 }.encode();
+            peer.conn.send_datagram(bytes::Bytes::copy_from_slice(&bytes[..n])).unwrap();
+            let echo = tokio::time::timeout(Duration::from_secs(5), peer.conn.read_datagram()).await.unwrap().unwrap();
+            assert!(matches!(Datagram::decode(&echo), Ok(Datagram::ProbeEcho { id: 1, sent_ns: 5 })));
+        }
+        // Forgetting the device closes them.
+        services.trusted.send_replace(HashSet::new());
+        for (_, peer) in &dialed {
+            tokio::time::timeout(Duration::from_secs(5), peer.conn.closed()).await.expect("a probe connection outlived the trust");
+        }
+    }
+
+    /// The record of addresses already mentioned in the log does not grow
+    /// without bound when new addresses keep failing.
+    #[test]
+    fn failed_dials_to_ever_new_addresses_keep_the_log_record_bounded() {
+        let mut logged = HashMap::new();
+        let said = (0..5_000u32)
+            .filter(|n| first_to_say(&mut logged, SocketAddr::from(([10, (n >> 16) as u8, (n >> 8) as u8, *n as u8], 4000))))
+            .count();
+        assert_eq!(said, DIAL_LOGGED_KEPT);
+        assert!(logged.len() <= DIAL_LOGGED_KEPT);
+        // The same address is said once, then not again within the time.
+        let addr = SocketAddr::from(([10, 0, 0, 1], 4000));
+        assert!(!first_to_say(&mut logged, addr));
+        logged.insert(addr, Instant::now() - DIAL_LOG_EVERY - Duration::from_secs(1));
+        assert!(first_to_say(&mut logged, addr), "said again after the time");
+    }
+
+    /// A visit whose capture the system ends (a stolen grab, a lost session)
+    /// leaves the edges as a computer at home has them: with the pointer
+    /// locked, the edge kept armed for the visit goes with it.
+    #[tokio::test]
+    async fn capture_ended_by_the_system_arms_the_edges_of_a_computer_at_home() {
+        let mut duo = Duo::start("deactivated-edges", None).await;
+        assert_eq!(ask(&duo.da, Request::LockPointer(Toggle::On)).await, "ok\non\n");
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetEdges(vec![]));
+        let fb = duo.fb.clone();
+        assert!(ask(&duo.da, switch_to(&fb)).await.starts_with("ok\n"));
+        assert_eq!(next_capture(&mut duo.ha).await, armed(Side::Right));
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::Activate { side: Side::Right });
+        duo.ha.events.send(Event::Activated { id: 2, side: Side::Right, pos: Pos::new(1919.0, 500.0) }).unwrap();
+        assert_eq!(next_inject(&mut duo.hb).await, Inject::MoveTo(CENTER));
+        duo.ha.events.send(Event::Deactivated { id: 2 }).unwrap();
+        assert_eq!(next_capture(&mut duo.ha).await, CaptureCmd::SetEdges(vec![]), "the visit's edge is not left armed");
         duo.stop().await;
     }
 

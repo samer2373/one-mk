@@ -499,6 +499,63 @@ async fn idle_let_go_enters_again_with_the_next_input() {
     t.stop().await;
 }
 
+/// A broadcast stopped before its capture started leaves a marker that hands
+/// that late capture back. A switch asked for meanwhile must not have its own
+/// capture taken for it: the visit to the computer opens.
+#[tokio::test]
+async fn a_switch_right_after_a_cancelled_broadcast_start_is_not_handed_back() {
+    let mut t = Trio::start("late-capture", Swap::Auto, |_| {}).await;
+    let da = t.a.dir.clone();
+    let asked = tokio::spawn({ let da = da.clone(); async move { ask(&da, Request::Broadcast(Toggle::On)).await } });
+    assert!(matches!(next_capture_skipping_edges(&mut t.a.h).await, CaptureCmd::Activate { .. }));
+    // Stopped before the capture started.
+    ask(&da, Request::Broadcast(Toggle::Off)).await;
+    assert!(asked.await.unwrap().starts_with("error"));
+    let fb = t.b.fp.clone();
+    assert!(ask(&da, Request::Switch(SwitchTo::Device(fb[..8].to_owned()))).await.starts_with("ok\n"));
+    let side = loop {
+        if let CaptureCmd::Activate { side } = next_capture(&mut t.a.h).await {
+            break side;
+        }
+    };
+    // One capture starts: it is the switch's.
+    t.a.send(Event::Activated { id: 5, side, pos: Pos::new(1919.0, 3.0) });
+    assert_eq!(next_inject(&mut t.b.h).await, Inject::MoveTo(CENTER_B));
+    t.stop().await;
+}
+
+/// The last computer of a broadcast, resting after its idle rule, loses its
+/// screens: nobody is left to enter again, so the broadcast ends and the pointer
+/// is released instead of being captured for nobody.
+#[tokio::test]
+async fn a_resting_last_computer_that_loses_its_screens_ends_the_broadcast() {
+    let mut t = Trio::start("rest-no-screens", Swap::Auto, |_| {}).await;
+    testing::set(&t.a.dir, Some(None), None);
+    // A third computer, played by hand, that can say it let go and that it has no screens.
+    let mut raw = RawPeer::connect_in(temp_dir("rest-no-screens-raw"), &t.a.dir, t.a.port, |_| {}).await;
+    raw.send(Control::Screens(vec![Rect::new(0, 0, 1920, 1080)])).await;
+    t.settle(3).await;
+    let reply = t.ask_on(1).await;
+    assert!(reply.starts_with("ok"), "{reply}");
+    let epoch = loop {
+        if let Control::Enter { epoch, .. } = raw.next().await {
+            break epoch;
+        }
+    };
+    raw.send(Control::EnterAck { epoch }).await;
+    // The two daemons are taken back, leaving only the computer played by hand.
+    assert!(ask(&t.b.dir, Request::TakeBack).await.starts_with("ok\n"));
+    assert!(ask(&t.c.dir, Request::TakeBack).await.starts_with("ok\n"));
+    eventually_async("only the raw computer in", || async { status(&t.a.dir).await.broadcast.len() == 1 }).await;
+    raw.send(Control::IdleRevoked { epoch }).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(status(&t.a.dir).await.broadcast.len(), 1, "resting, still in");
+    raw.send(Control::Screens(vec![])).await;
+    eventually_async("broadcast to end", || async { status(&t.a.dir).await.broadcast.is_empty() }).await;
+    assert!(matches!(next_capture_skipping_edges(&mut t.a.h).await, CaptureCmd::Release { id: 1, .. }));
+    t.stop().await;
+}
+
 /// A user who takes control back stays out, whenever they do it: the next
 /// input of the broadcast does not enter that computer again.
 #[tokio::test]

@@ -318,6 +318,15 @@ impl App {
         }
     }
 
+    /// A switch asks for a capture of its own: one that a stopped broadcast was
+    /// still waiting for is no longer to be handed back, or it would swallow the
+    /// switch's activation (the backend gives no sign of which request it answers).
+    pub(super) fn forget_late_broadcast_capture(&mut self) {
+        if matches!(self.broadcast, Some(Broadcast::Cancelled { .. })) {
+            self.broadcast = None;
+        }
+    }
+
     /// Capture `id` started. True if it was for broadcast (it is now on,
     /// or handed straight back).
     pub(super) fn broadcast_activated(&mut self, id: u32) -> bool {
@@ -452,6 +461,11 @@ impl App {
             self.mods.update(code, down);
         }
         self.rejoin_resting();
+        // Nobody left to enter again (they lost their screens while resting): it is over.
+        if self.on_ref().is_some_and(|on| on.visits.is_empty() && on.resting.is_empty()) {
+            self.stop_broadcast(End::NoneLeft);
+            return;
+        }
         if let Some(on) = self.on_mut() {
             on.last_input = Instant::now();
         }
@@ -572,7 +586,15 @@ impl App {
     pub(super) fn broadcast_control(&mut self, fp: Fingerprint, msg: Control) -> Option<Control> {
         let now = Instant::now();
         let Some(Broadcast::On(on)) = self.broadcast.as_mut() else { return Some(msg) };
-        let Some(r) = on.visits.iter_mut().find(|r| r.peer == fp) else { return Some(msg) };
+        let Some(r) = on.visits.iter_mut().find(|r| r.peer == fp) else {
+            // A computer resting after its idle rule has no visit, but losing its
+            // screens ends its part all the same (and the broadcast if it was the last).
+            let rests = on.resting.iter().any(|(rested, _)| *rested == fp);
+            if rests && matches!(&msg, Control::Screens(screens) if screens.is_empty()) {
+                self.broadcast_drop(fp, Out::Leave, "it has no screens");
+            }
+            return Some(msg);
+        };
         let epoch = r.cursor.epoch();
         let out = match msg {
             Control::EnterAck { epoch: e } if e == epoch => {

@@ -58,13 +58,14 @@ impl ClipboardCommand {
         }
         if matches!(operation, Some(Operation::On | Operation::Off)) {
             let enabled = matches!(operation, Some(Operation::On));
-            crate::settings::Settings::update(dir, |settings| {
-                settings.clipboard.history_max = if enabled { 20 } else { 0 };
-                Ok(())
+            let note = crate::settings::Settings::update(dir, |settings| {
+                turn(&mut settings.clipboard, enabled);
+                Ok(no_room(&settings.clipboard))
             })?;
             if enabled { crate::settings::apply(dir).await?; } else { apply_and_wait_for_delete(dir).await?; }
             if json { println!("{{\"enabled\":{enabled}}}"); }
             else { println!("Clipboard history is {}.", if enabled { "on; retained in memory unless persistence is explicitly enabled" } else { "off" }); }
+            if let Some(note) = note.filter(|_| enabled) { eprintln!("{note}"); }
             return Ok(());
         }
         let action = match operation.unwrap_or(Operation::List) {
@@ -84,6 +85,24 @@ impl ClipboardCommand {
     }
 }
 
+/// What `history on` adds when the size cap in `settings.toml` is 0: nothing
+/// could be kept.
+const NO_ROOM: &str = "Warning: history_max_mb is 0 in settings.toml, so nothing will be kept; set it above 0 (16 is the default).";
+
+fn no_room(clipboard: &crate::settings::ClipSettings) -> Option<&'static str> {
+    (clipboard.history_max_mb == 0).then_some(NO_ROOM)
+}
+
+/// `history on` or `off`. The number of items is the user's own setting
+/// (`history_max`, up to 1000): `on` only gives it a value (20) when it is 0.
+fn turn(clipboard: &mut crate::settings::ClipSettings, on: bool) {
+    if !on {
+        clipboard.history_max = 0;
+    } else if clipboard.history_max == 0 {
+        clipboard.history_max = 20;
+    }
+}
+
 /// Where saved history lives (see `ClipSync::apply`).
 fn saved_file(dir: &Path) -> std::path::PathBuf {
     dir.join("clipboard-history.bin")
@@ -99,7 +118,14 @@ fn saved_file(dir: &Path) -> std::path::PathBuf {
 /// is deleted here, holding the daemon's own lock so none starts meanwhile.
 async fn apply_and_wait_for_delete(dir: &Path) -> Result<()> {
     let file = saved_file(dir);
-    let running = control::request(dir, Request::Reload).await?.is_some();
+    // `Settings`, not `Reload`: a reload answers ok even when the settings file
+    // could not be read and the old settings stay in force, and then nothing
+    // below would have switched anything off.
+    let applied = control::request(dir, Request::Settings).await?;
+    if let Some(reply) = applied.as_deref() && !reply.starts_with("ok") {
+        bail!("one-mk could not apply it, so history may still be kept: {}", reply.trim().trim_start_matches("error "));
+    }
+    let running = applied.is_some();
     if !running {
         let Some(_instance) = control::InstanceLock::try_acquire(dir)? else {
             bail!("one-mk is starting; run this command again in a moment");
@@ -111,6 +137,10 @@ async fn apply_and_wait_for_delete(dir: &Path) -> Result<()> {
         }
         if dir.exists() && let Err(error) = one_mk_clipboard::history::clean_unfinished(dir) {
             bail!("Could not delete an unfinished saved clipboard history in {}: {error}", dir.display());
+        }
+        // The deletions themselves must survive a power loss, as the daemon's own do.
+        if dir.exists() {
+            one_mk_net::sync_dir(dir).map_err(|error| anyhow::anyhow!("Could not flush the deletion of the saved clipboard history in {}: {error:#}", dir.display()))?;
         }
         println!("one-mk is not running; the change takes effect the next time it starts.");
         return Ok(());
@@ -144,6 +174,16 @@ pub async fn handle(cb: &Clipboard, action: HistoryAction, json: bool) -> Result
         let entry = cb.history().lock().unwrap_or_else(|error| error.into_inner()).get(id)
             .ok_or_else(|| anyhow::anyhow!("Clipboard item {id} is no longer in history; run one-mk clipboard history list"))?;
         if entry.data.len() > cb.filter().max_bytes() { bail!("This item is over the clipboard size limit; raise it with one-mk clipboard --max-mb N"); }
+        // More than this computer's clipboard can hand over to a program that pastes
+        // (X11): set, it would fail every paste. Received copies are refused the same way.
+        if let Some(limit) = cb.write_limit() {
+            let d = &entry.data;
+            let largest = [d.text.as_ref().map(String::len), d.html.as_ref().map(String::len), d.png.as_ref().map(Vec::len)].into_iter().flatten().max().unwrap_or(0);
+            if largest > limit {
+                let (size, limit) = crate::clip::over(largest, limit);
+                bail!("This item is {size}, more than this computer's clipboard can hold ({limit} at most on X11), so it would not paste anywhere");
+            }
+        }
         cb.write_from((*entry.data).clone(), entry.origin, false).await
             .map_err(|_| anyhow::anyhow!("Could not restore the clipboard; check clipboard access and try again"))?;
         return Ok(if json { "{\"copied\":true}\n".into() } else { "Copied the item to this computer only.\n".into() });
@@ -218,6 +258,7 @@ fn terminal_text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn lists_are_masked_until_explicit_show() {
@@ -290,6 +331,74 @@ mod tests {
         ClipboardCommand::History { operation: Some(Operation::Persist { enabled: false }), json: false }.run(dir.path()).await.unwrap();
         assert!(!dir.path().join(".clipboard-history-AbC123").exists());
         assert!(dir.path().join("notes.txt").exists());
+    }
+
+    /// `history on` keeps the user's own number of items (and `off` is the
+    /// one thing that sets it to 0); with no room for anything it says so.
+    #[test]
+    fn history_on_keeps_the_users_own_item_count() {
+        let mut c = crate::settings::ClipSettings { history_max: 200, ..Default::default() };
+        turn(&mut c, true);
+        assert_eq!(c.history_max, 200);
+        turn(&mut c, false);
+        assert_eq!(c.history_max, 0);
+        turn(&mut c, true);
+        assert_eq!(c.history_max, 20);
+    }
+
+    #[tokio::test]
+    async fn history_on_keeps_the_count_and_notes_a_zero_size_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        crate::settings::Settings::update(dir.path(), |s| { s.clipboard.history_max_mb = 0; s.clipboard.history_max = 150; Ok(()) }).unwrap();
+        ClipboardCommand::History { operation: Some(Operation::On), json: false }.run(dir.path()).await.unwrap();
+        let saved = crate::settings::Settings::load_or_default(dir.path()).clipboard;
+        assert_eq!(saved.history_max, 150, "the user's own count survives `on`");
+        assert_eq!(saved.history_max_mb, 0);
+        assert_eq!(no_room(&saved), Some(NO_ROOM));
+        assert_eq!(no_room(&crate::settings::ClipSettings::default()), None);
+    }
+
+    /// Restoring an item that no paste could read on this computer's clipboard
+    /// (X11: one request) is refused, as a received copy of that size is.
+    #[tokio::test]
+    async fn copy_refuses_what_the_clipboard_cannot_hand_over() {
+        let (clipboard, _) = Clipboard::memory();
+        let clipboard = clipboard.with_write_limit(1000);
+        let history = clipboard.history().clone();
+        history.lock().unwrap().configure(20, one_mk_clipboard::history::DEFAULT_BYTES, one_mk_clipboard::CEILING_BYTES, None);
+        history.lock().unwrap().record(Arc::new(one_mk_clipboard::ClipData { text: Some("x".repeat(2000)), ..Default::default() }), false, "peer");
+        history.lock().unwrap().record(Arc::new(one_mk_clipboard::ClipData { text: Some("small".into()), ..Default::default() }), false, "peer");
+        let list = history.lock().unwrap().list();
+        let id_of = |text: usize| list.iter().find(|e| e.data.text.as_ref().is_some_and(|t| t.len() == text)).unwrap().id;
+        let error = handle(&clipboard, HistoryAction::Copy(id_of(2000)), false).await.unwrap_err().to_string();
+        assert!(error.contains("more than this computer's clipboard can hold"), "{error}");
+        assert!(handle(&clipboard, HistoryAction::Copy(id_of(5)), false).await.is_ok());
+    }
+
+    /// With no daemon the deletion is made durable: the folder is flushed.
+    #[cfg(all(unix, debug_assertions))]
+    #[tokio::test]
+    async fn offline_deletion_flushes_the_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(saved_file(dir.path()), b"secret history").unwrap();
+        ClipboardCommand::History { operation: Some(Operation::Persist { enabled: false }), json: false }.run(dir.path()).await.unwrap();
+        assert!(one_mk_net::was_synced(dir.path()));
+    }
+
+    /// A daemon that cannot read the new settings keeps the old ones: the command
+    /// must say history may still be kept, not that it is off.
+    #[tokio::test]
+    async fn history_off_reports_a_daemon_that_could_not_apply_it() {
+        let dir = crate::testdir::scratch("history-off");
+        let mut server = control::Server::start(&dir).await.unwrap();
+        let task = tokio::spawn(async move {
+            while let Some((_, reply)) = server.recv().await {
+                let _ = reply.send("error settings.toml is not valid\n".into());
+            }
+        });
+        let error = ClipboardCommand::History { operation: Some(Operation::Off), json: false }.run(&dir).await.unwrap_err().to_string();
+        assert!(error.contains("could not apply") && error.contains("settings.toml is not valid"), "{error}");
+        task.abort();
     }
 
     /// "Persist off" must not report success while a plain-text copy of the

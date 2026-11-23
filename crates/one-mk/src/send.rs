@@ -57,7 +57,11 @@ pub async fn dropped(dir: &Path, paths: Vec<PathBuf>, peer: String) -> Result<()
 }
 
 async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>) -> Result<(usize, String)> {
-    let (files, skipped) = transfer::collect_noted(&paths)?;
+    // Walking a folder (up to 10000 files, maybe on a slow disk) and reading
+    // the identity and trust files are blocking work: the daemon runs the
+    // edge-drop send on its one thread, where the pointer and keyboard
+    // forwarding would stand still meanwhile.
+    let (files, skipped) = tokio::task::spawn_blocking(move || transfer::collect_noted(&paths)).await.context("listing the files to send")??;
     if let Some(line) = skipped_line(&skipped) {
         eprintln!("{line}");
     }
@@ -68,8 +72,11 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
     if files.len() > 10_000 || total > 1 << 40 {
         bail!("file batch exceeds the limit of 10000 files or 1 TiB");
     }
-    let identity = Arc::new(Identity::load_or_create(dir)?);
-    let trust = TrustStore::load(dir)?;
+    let owned = dir.to_owned();
+    let (identity, trust) = tokio::task::spawn_blocking(move || -> Result<_> { Ok((Identity::load_or_create(&owned)?, TrustStore::load(&owned)?)) })
+        .await
+        .context("reading the identity and the paired computers")??;
+    let identity = Arc::new(identity);
     let device = pick(&trust, to.as_deref())?.clone();
     let shown = trust.display(&device);
     let fp = device.fingerprint().context("corrupt fingerprint in devices.toml")?;
@@ -484,6 +491,66 @@ mod tests {
         let sent = send(&home, vec![file], None, vec![]).await;
         let why = format!("{:#}", sent.unwrap_err());
         assert!(why.contains("1 file was not sent"), "{why}");
+    }
+
+    /// A receiver at its connection limit refuses every stream of the first try;
+    /// the whole batch is asked again once, not only the first four files.
+    #[tokio::test]
+    async fn a_busy_receiver_gets_the_whole_batch_again() {
+        let rx = receiver("busybatch");
+        let (home, me) = sender_home("busybatch", &rx);
+        let src = temp("busybatch-src");
+        for n in 0..12 {
+            std::fs::write(src.join(format!("f{n:02}.txt")), format!("file {n}\n")).unwrap();
+        }
+        let mut held: Vec<_> = (0..MAX_CONNS_PER_PEER).map(|_| rx.inbox.admit(me).unwrap()).collect();
+        let free = tokio::spawn(async move {
+            tokio::time::sleep(BUSY_RETRY / 3).await;
+            held.pop();
+            held
+        });
+        let sent = send(&home, vec![src.clone()], None, vec![]).await;
+        assert!(sent.is_ok(), "{sent:?}");
+        let arrived = std::fs::read_dir(rx.root.join(src.file_name().unwrap())).unwrap().flatten().count();
+        assert_eq!(arrived, 12);
+        drop(free.await.unwrap());
+    }
+
+    /// Listing a big folder for an edge drop must not hold the one thread the
+    /// daemon's input forwarding runs on.
+    #[tokio::test(flavor = "current_thread")]
+    async fn listing_files_to_send_does_not_stall_the_runtime() {
+        let src = temp("walk-src");
+        for d in 0..100 {
+            let dir = src.join(format!("d{d:03}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            for f in 0..100 {
+                std::fs::write(dir.join(format!("f{f:03}")), []).unwrap();
+            }
+        }
+        let home = temp("walk-home");
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ticker = {
+            let stop = stop.clone();
+            tokio::spawn(async move {
+                let mut worst = Duration::ZERO;
+                let mut last = Instant::now();
+                while !stop.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(2)).await;
+                    worst = worst.max(last.elapsed());
+                    last = Instant::now();
+                }
+                worst
+            })
+        };
+        tokio::task::yield_now().await;
+        // No paired computer: the send ends right after the listing.
+        let result = send(&home, vec![src], None, vec![]).await;
+        assert!(format!("{:#}", result.unwrap_err()).contains("no paired computers"));
+        stop.store(true, Ordering::Relaxed);
+        let worst = ticker.await.unwrap();
+        eprintln!("worst gap while listing: {worst:?}");
+        assert!(worst < Duration::from_millis(25), "the runtime stood still for {worst:?}");
     }
 
     /// The same path twice used to make two concurrent streams for one

@@ -60,9 +60,14 @@ impl TypingSettings {
 }
 
 /// What `mode` will do toward one paired computer, as its own words for it:
-/// letters are only ever typed by Windows and Mac receivers.
+/// letters are only ever typed by Windows and Mac receivers, and then only
+/// if that computer runs a version that can (it says so when it connects; this
+/// command does not know) and this one can read its own keyboard layout. So the
+/// line says what is asked for and when it applies, and "Right now" below it
+/// says what is in effect.
 pub fn receiver_line(name: &str, os: u8, mode: Mode) -> String {
     use one_mk_proto::os;
+    const WHEN: &str = "when that computer runs a version that supports it and this one can read its keyboard layout; otherwise the same physical keys";
     let (system, what) = match os {
         os::WINDOWS => ("Windows", true),
         os::MACOS => ("Mac", true),
@@ -71,8 +76,8 @@ pub fn receiver_line(name: &str, os: u8, mode: Mode) -> String {
     };
     match (mode, what) {
         (Mode::Physical, _) => format!("{name} ({system}): the same physical keys, so letters follow its own keyboard layout."),
-        (Mode::Characters, true) => format!("{name} ({system}): types the letters printed on your keys (experimental: not yet tested on a real {system} computer; shortcuts still use the keys)."),
-        (Mode::Auto, true) => format!("{name} ({system}): types the letters printed on your keys only when your two keyboard layouts differ, otherwise the same keys (experimental: not yet tested on a real {system} computer)."),
+        (Mode::Characters, true) => format!("{name} ({system}): asks to type the letters printed on your keys, {WHEN} (experimental: not yet tested on a real {system} computer; shortcuts still use the keys)."),
+        (Mode::Auto, true) => format!("{name} ({system}): asks to type the letters printed on your keys only when your two keyboard layouts differ, otherwise the same keys; it applies {WHEN} (experimental: not yet tested on a real {system} computer)."),
         (_, false) if os == os::LINUX => format!("{name} (Linux): keeps using the same physical keys: Linux computers can't type letters yet, so this changes nothing for it."),
         _ => format!("{name}: its system is not known yet, so it keeps using the same physical keys until it connects."),
     }
@@ -166,6 +171,19 @@ mod tests {
         assert!(receiver_line("Air", os::MACOS, Mode::Auto).contains("only when your two keyboard layouts differ"));
         assert!(receiver_line("Box", os::WINDOWS, Mode::Physical).contains("physical keys"));
         assert!(receiver_line("New", os::UNKNOWN, Mode::Characters).contains("not known"));
+    }
+
+    /// A Windows or Mac computer may run a version without letter typing, and
+    /// the sender may not read its own layout: the per-computer line must not
+    /// promise letters, only ask for them and say when they apply.
+    #[test]
+    fn a_windows_or_mac_line_does_not_promise_letters() {
+        use one_mk_proto::os;
+        for (system, mode) in [(os::WINDOWS, Mode::Characters), (os::MACOS, Mode::Characters), (os::WINDOWS, Mode::Auto)] {
+            let line = receiver_line("Desk", system, mode);
+            assert!(line.contains("asks to type") && line.contains("version that supports it") && line.contains("otherwise the same physical keys"), "{line}");
+            assert!(!line.contains(": types the letters"), "{line}");
+        }
     }
 
     #[test]
