@@ -12,7 +12,7 @@
 //! image. Profiles (`profiles.rs`) go through it too.
 
 use crate::control::{self, Request};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use one_mk_net::{Device, Fingerprint, PlacedBy, Swap, TrustStore};
 use one_mk_proto::Side;
 pub use one_mk_ctl::status::{LayoutStatus, LinkStats, PeerStatus, Status, on_your, placement, takeback_hint};
@@ -36,12 +36,15 @@ pub fn not_found(trust: &TrustStore, device: &str) -> anyhow::Error {
 /// (or, with `reset`, takes it away). The computer keeps calling itself
 /// what it did; a running one-mk shows the new name after `Reload`.
 pub fn rename(dir: &Path, device: &str, new_name: &str, reset: bool) -> Result<String> {
+    // sanitize_name answers "unnamed device" for a name with nothing left in it; the same words
+    // typed on purpose are a name. Behind a letter, nothing left is just that letter.
+    let blank = one_mk_proto::sanitize_name(&format!("a{new_name}")) == "a";
     let new_name = one_mk_proto::sanitize_name(new_name);
     TrustStore::update(dir, |trust| {
         let Some(found) = trust.find(device) else { return Err(not_found(trust, device)) };
         let (fp, own, before) = (found.fingerprint.clone(), one_mk_proto::sanitize_name(&found.name), trust.display(found));
         if !reset {
-            if new_name == "unnamed device" && !device.is_empty() {
+            if blank && !device.is_empty() {
                 bail!("say the new name after the computer, for example: one-mk rename {device} \"Office PC\"");
             }
             if let Some(other) = trust.devices().iter().find(|d| d.fingerprint != fp && d.label().trim().eq_ignore_ascii_case(&new_name)) {
@@ -138,14 +141,17 @@ pub fn partials_text(count: usize, bytes: u64, age: u64) -> Option<String> {
 /// works then too (in `downloads`, or the usual received-files folder),
 /// unless a one-mk holds the settings folder without answering yet.
 pub async fn partials(dir: &Path, clear: bool, downloads: Option<std::path::PathBuf>) -> Result<()> {
+    let mut offline = false;
     let answer = match partials_of(dir, clear).await? {
         Some(answer) => answer,
         None => {
+            offline = true;
             // No daemon answered: only go on if none holds the folder (one that
             // is still starting, or stuck, must not be raced for the files).
-            if control::InstanceLock::try_acquire(dir)?.is_none() {
+            // The lock is held while deleting, so none can start meanwhile.
+            let Some(_instance) = control::InstanceLock::try_acquire(dir)? else {
                 bail!("one-mk is starting or busy with this settings folder and did not answer; try again in a moment");
-            }
+            };
             let root = match downloads {
                 Some(root) => root,
                 None => crate::default_downloads()?,
@@ -159,12 +165,28 @@ pub async fn partials(dir: &Path, clear: bool, downloads: Option<std::path::Path
     let (count, bytes, age, removed) = answer;
     if clear {
         println!("Deleted {removed} unfinished received file{}.", if removed == 1 { "" } else { "s" });
+        // Offline nothing is being received: what is left could not be deleted.
+        ensure!(!(offline && count > 0), "{count} unfinished received file{} could not be deleted; check that the folder can be written by your account", if count == 1 { "" } else { "s" });
         if count > 0 { println!("{count} left alone because {} still being received (try again in 30 seconds if that sender stopped).", if count == 1 { "it is" } else { "they are" }); }
         return Ok(());
     }
     match partials_text(count, bytes, age) {
         Some(text) => println!("{text}"),
         None => println!("No unfinished received files are kept."),
+    }
+    Ok(())
+}
+
+/// A running one-mk's answer to `Reload`, for a change already saved. An empty
+/// answer is what it gives when it ran out of time, and "error ..." when it
+/// could not read the settings: neither is "Applied right away".
+pub(crate) fn reload_confirmed(reply: &str) -> Result<()> {
+    let reply = reply.trim();
+    if let Some(error) = reply.strip_prefix("error") {
+        bail!("saved, but the running one-mk could not apply it: {}", error.trim());
+    }
+    if reply.is_empty() {
+        return Err(control::NotAnswering::saved(control::NotAnswering.into()));
     }
     Ok(())
 }
@@ -347,7 +369,9 @@ pub async fn layout(dir: &Path, device: &str, side: Option<Side>, offset: Option
         Some(Swap::Auto) => println!("Ctrl and Cmd are swapped for keys sent to {name} only between a Mac and another computer."),
         None => {}
     }
-    if control::request(dir, Request::Reload).await.map_err(control::NotAnswering::saved)?.is_some() {
+    let reply = control::request(dir, Request::Reload).await.map_err(control::NotAnswering::saved)?;
+    if let Some(reply) = &reply { reload_confirmed(reply)?; }
+    if reply.is_some() {
         println!("Applied right away.{}", if moved { " Its computer picks up the change too." } else { "" });
         // Only the running one-mk knows the other computer's screens.
         if moved && let Some(status) = control::request(dir, Request::Status).await.ok().flatten().as_deref().and_then(Status::decode) {
@@ -451,8 +475,37 @@ mod tests {
         assert!(rename(&dir, "Office PC", "", true).unwrap().contains("name it gave itself"));
         assert!(TrustStore::load(&dir).unwrap().devices()[0].alias.is_none());
         assert!(!std::fs::read_to_string(dir.join("devices.toml")).unwrap().contains("alias"));
+        // Nothing left of a name is refused; the same words typed on purpose are a name.
+        assert!(rename(&dir, &a, " \x1b ", false).unwrap_err().to_string().contains("say the new name"));
+        assert!(rename(&dir, &a, "unnamed device", false).unwrap().contains("\"unnamed device\""));
         assert!(rename(&dir, "nobody", "x", false).unwrap_err().to_string().starts_with("no paired computer called"));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Offline, a partial that could not be deleted is an error naming that, not a receive in progress.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn offline_clear_reports_a_file_it_could_not_delete() {
+        use std::os::unix::fs::PermissionsExt;
+        let (home, root) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let staging = root.path().join(crate::transfer::PARTIAL_DIR);
+        std::fs::create_dir(&staging).unwrap();
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let name = format!("{}.{}.part", "a".repeat(16), "b".repeat(32));
+        std::fs::write(staging.join(&name), b"x").unwrap();
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let result = partials(home.path(), true, Some(root.path().to_owned())).await;
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if std::fs::remove_file(staging.join(&name)).is_err() { return; }
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("could not be deleted"), "{error}");
+    }
+
+    #[test]
+    fn a_reload_answer_is_checked_before_applied_right_away() {
+        assert!(reload_confirmed("ok\n").is_ok());
+        assert!(reload_confirmed("").unwrap_err().to_string().starts_with("saved, but the running one-mk did not confirm it"));
+        assert!(reload_confirmed("error settings.toml: bad\n").unwrap_err().to_string().contains("could not apply it: settings.toml: bad"));
     }
 
     #[test]
