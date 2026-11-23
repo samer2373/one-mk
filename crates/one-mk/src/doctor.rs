@@ -191,15 +191,55 @@ pub struct Firewall {
     pub ufw_active: Option<bool>,
     /// `/etc/ufw/user.rules`, when this user may read it (usually not).
     pub ufw_rules: Option<String>,
-    pub firewalld: Option<Firewalld>,
+    /// The zones whose rules apply to the paired computers' traffic (or the default
+    /// zone, where that could not be found out); empty when firewalld is not running.
+    pub firewalld: Vec<Firewalld>,
     pub mac_enabled: Option<bool>,
     pub mac_blocked: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Firewalld {
+    /// The zone these rules belong to; `None` when its name could not be had (they
+    /// are then those of the default zone).
+    pub zone: Option<String>,
+    pub why: ZoneWhy,
     pub ports: String,
     pub services: String,
+}
+
+/// Why a firewalld zone's rules are the ones checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ZoneWhy {
+    /// Nothing better is known: the default zone, which an interface without a zone of its own is in.
+    Default,
+    /// The zone of the interface that the route to a paired computer leaves by.
+    Interface { interface: String, peer: String },
+    /// A source (an address range) that the paired computer's address is in, which firewalld
+    /// matches before any interface.
+    Source { source: String, peer: String },
+}
+
+impl Firewalld {
+    /// Where the rules are, as part of a sentence: "in ...".
+    fn place(&self) -> String {
+        let zone = self.zone.as_deref();
+        match (&self.why, zone) {
+            (ZoneWhy::Default, Some(zone)) => format!("in its default zone (`{zone}`)"),
+            (ZoneWhy::Default, None) => "in its default zone".to_owned(),
+            (ZoneWhy::Interface { interface, peer }, zone) => {
+                format!("in the zone of {interface}, the interface that reaches {peer}{}", zone.map(|z| format!(" (`{z}`)")).unwrap_or_default())
+            }
+            (ZoneWhy::Source { source, peer }, zone) => {
+                format!("in the zone that holds the source {source}, which {peer} is in{}", zone.map(|z| format!(" (`{z}`)")).unwrap_or_default())
+            }
+        }
+    }
+
+    /// `--zone=...` for a firewall-cmd that has to act on these rules.
+    fn zone_flag(&self) -> String {
+        self.zone.as_deref().map(|zone| format!(" --zone={zone}")).unwrap_or_default()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -490,23 +530,25 @@ fn linux_firewall(f: &Firewall, port: u16, discovery: bool) -> Outcome {
             )),
         }
     }
-    if let Some(fw) = &f.firewalld {
+    for fw in &f.firewalld {
         active = true;
         let mdns = !discovery || fw.services.split_whitespace().any(|s| s == "mdns") || port_listed(&fw.ports, MDNS_PORT);
         let mut missing = Vec::new();
         let mut fix = Vec::new();
+        let flag = fw.zone_flag();
         if !port_listed(&fw.ports, port) {
             missing.push(format!("UDP {port}"));
-            fix.push(format!("`sudo firewall-cmd --permanent --add-port={port}/udp`"));
+            fix.push(format!("`sudo firewall-cmd --permanent{flag} --add-port={port}/udp`"));
         }
         if !mdns {
             missing.push(format!("mDNS (UDP {MDNS_PORT})"));
-            fix.push("`sudo firewall-cmd --permanent --add-service=mdns`".to_owned());
+            fix.push(format!("`sudo firewall-cmd --permanent{flag} --add-service=mdns`"));
         }
         if !missing.is_empty() {
             blocked.push(format!(
-                "firewalld does not allow {} in its default zone: {} then `sudo firewall-cmd --reload`",
+                "firewalld does not allow {} {}: {} then `sudo firewall-cmd --reload`",
                 missing.join(" and "),
+                fw.place(),
                 fix.join(" and "),
             ));
         }
@@ -1424,7 +1466,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         async { if daemon.status().is_some_and(|status| status.discovery == Some(false)) {
             MdnsFacts { join: Ok(()), seen: Ok(Vec::new()) }
         } else { probe_mdns(wanted).await } },
-        probe_firewall(os),
+        probe_firewall(os, paired.iter().map(|p| (p.name.clone(), p.addrs.clone())).collect()),
         async { if non_portal.is_some() { None } else { probe_portals(os, dir.to_owned()).await } },
         blocking(probe_addrs, Vec::new()),
         probe_shortcuts(os),
@@ -1678,7 +1720,8 @@ async fn probe_mdns(wanted: Vec<String>) -> MdnsFacts {
     MdnsFacts { join, seen }
 }
 
-async fn probe_firewall(os: Os) -> Firewall {
+/// `peers`: the paired computers, by name, with the addresses they were last seen at.
+async fn probe_firewall(os: Os, peers: Vec<(String, Vec<String>)>) -> Firewall {
     if os == Os::Mac {
         return blocking(|| {
             let global = run_with_timeout("/usr/libexec/ApplicationFirewall/socketfilterfw", &["--getglobalstate"]);
@@ -1693,7 +1736,7 @@ async fn probe_firewall(os: Os) -> Firewall {
         return Firewall::default();
     }
     blocking(
-        || {
+        move || {
             let ufw_active = match std::fs::read_to_string("/etc/ufw/ufw.conf") {
                 Ok(c) => Some(c.lines().any(|l| l.trim().eq_ignore_ascii_case("ENABLED=yes"))),
                 // No such file: ufw is not installed, so it is not on. Anything
@@ -1703,15 +1746,113 @@ async fn probe_firewall(os: Os) -> Firewall {
             };
             let ufw_rules =
                 (ufw_active == Some(true)).then(|| std::fs::read_to_string("/etc/ufw/user.rules").ok()).flatten();
-            let firewalld = run_with_timeout("firewall-cmd", &["--state"])
-                .filter(|s| s.trim() == "running")
-                .and_then(|_| run_with_timeout("firewall-cmd", &["--list-all"]))
-                .map(|all| Firewalld { ports: field(&all, "ports:"), services: field(&all, "services:") });
+            let firewalld = firewalld_facts(&run_with_timeout, &peers);
             Firewall { ufw_active, ufw_rules, firewalld, ..Firewall::default() }
         },
         Firewall::default(),
     )
     .await
+}
+
+/// What firewalld allows where the paired computers' traffic comes in. A firewalld
+/// firewall has zones, and an interface (or a source address range) belongs to one;
+/// what `--list-all` shows without `--zone` is the default zone only. So for each
+/// paired computer the interface its route leaves by (`ip route get`) is looked up in
+/// `--get-active-zones` (a source range that holds its address comes first, as in
+/// firewalld; an interface in no zone is in the default zone), and the rules of those
+/// zones are read. Where no computer is paired, or none can be placed, the default
+/// zone is what is checked, and is said to be.
+fn firewalld_facts(run: &dyn Fn(&str, &[&str]) -> Option<String>, peers: &[(String, Vec<String>)]) -> Vec<Firewalld> {
+    if run("firewall-cmd", &["--state"]).is_none_or(|state| state.trim() != "running") {
+        return Vec::new();
+    }
+    let default = run("firewall-cmd", &["--get-default-zone"]).map(|zone| zone.trim().to_owned()).filter(|zone| !zone.is_empty());
+    let active = run("firewall-cmd", &["--get-active-zones"]).map(|text| parse_active_zones(&text)).unwrap_or_default();
+    let mut wanted: Vec<(Option<String>, ZoneWhy)> = Vec::new();
+    for (name, addrs) in peers {
+        for ip in addrs.iter().filter_map(|addr| addr.parse::<std::net::SocketAddr>().map(|a| a.ip()).ok().or_else(|| addr.parse().ok())).filter(|ip| !ip.is_loopback()) {
+            let peer = if name.is_empty() { ip.to_string() } else { name.clone() };
+            let found = active.iter().find_map(|zone| zone.sources.iter().find(|source| source_holds(source, ip)).map(|source| (zone.name.clone(), ZoneWhy::Source { source: source.clone(), peer: peer.clone() })))
+                .or_else(|| {
+                    let route = run("ip", &["-o", "route", "get", &ip.to_string()])?;
+                    let interface = route_interface(&route).filter(|interface| interface != "lo")?;
+                    let zone = active.iter().find(|zone| zone.interfaces.contains(&interface)).map(|zone| zone.name.clone()).or_else(|| default.clone());
+                    Some((zone?, ZoneWhy::Interface { interface, peer: peer.clone() }))
+                });
+            if let Some((zone, why)) = found && !wanted.iter().any(|(known, _)| known.as_deref() == Some(zone.as_str())) {
+                wanted.push((Some(zone), why));
+            }
+        }
+    }
+    if wanted.is_empty() {
+        wanted.push((default, ZoneWhy::Default));
+    }
+    let zones: Vec<Firewalld> = wanted.into_iter().filter_map(|(zone, why)| {
+        let all = match &zone {
+            Some(zone) => run("firewall-cmd", &["--list-all", &format!("--zone={zone}")])?,
+            None => run("firewall-cmd", &["--list-all"])?,
+        };
+        Some(Firewalld { zone, why, ports: field(&all, "ports:"), services: field(&all, "services:") })
+    }).collect();
+    if !zones.is_empty() {
+        return zones;
+    }
+    // A zone could not be read: what firewalld says without being asked for one.
+    run("firewall-cmd", &["--list-all"]).map(|all| Firewalld { zone: None, why: ZoneWhy::Default, ports: field(&all, "ports:"), services: field(&all, "services:") }).into_iter().collect()
+}
+
+/// A zone of `firewall-cmd --get-active-zones` with what is assigned to it.
+#[derive(Debug, PartialEq, Eq)]
+struct ActiveZone {
+    name: String,
+    interfaces: Vec<String>,
+    sources: Vec<String>,
+}
+
+/// `public (default)` / `  interfaces: eth0 wlan0` / `  sources: 10.0.0.0/8`, a zone after another.
+fn parse_active_zones(text: &str) -> Vec<ActiveZone> {
+    let mut zones: Vec<ActiveZone> = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        if !line.starts_with(char::is_whitespace) {
+            zones.push(ActiveZone { name: line.split_whitespace().next().unwrap_or_default().to_owned(), interfaces: Vec::new(), sources: Vec::new() });
+        } else if let Some(zone) = zones.last_mut() {
+            let line = line.trim();
+            if let Some(list) = line.strip_prefix("interfaces:") {
+                zone.interfaces.extend(list.split_whitespace().map(str::to_owned));
+            } else if let Some(list) = line.strip_prefix("sources:") {
+                zone.sources.extend(list.split_whitespace().map(str::to_owned));
+            }
+        }
+    }
+    zones
+}
+
+/// The interface of `ip -o route get <address>`: `192.168.1.5 dev eth0 src ...`.
+fn route_interface(route: &str) -> Option<String> {
+    let mut words = route.split_whitespace();
+    words.find(|word| *word == "dev")?;
+    words.next().map(str::to_owned)
+}
+
+/// Whether a firewalld source (`10.0.0.0/8`, `fe80::/10`, one address) holds `ip`. Other
+/// kinds (`ipset:...`, `mac:...`) are not known to.
+fn source_holds(source: &str, ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    let (net, bits) = match source.split_once('/') {
+        Some((net, bits)) => match bits.parse::<u32>() { Ok(bits) => (net, Some(bits)), Err(_) => return false },
+        None => (source, None),
+    };
+    match (net.parse::<IpAddr>(), ip) {
+        (Ok(IpAddr::V4(net)), IpAddr::V4(ip)) => {
+            let bits = bits.unwrap_or(32);
+            bits <= 32 && (u32::from(net) ^ u32::from(ip)).checked_shr(32 - bits).unwrap_or(0) == 0
+        }
+        (Ok(IpAddr::V6(net)), IpAddr::V6(ip)) => {
+            let bits = bits.unwrap_or(128);
+            bits <= 128 && (u128::from(net) ^ u128::from(ip)).checked_shr(128 - bits).unwrap_or(0) == 0
+        }
+        _ => false,
+    }
 }
 
 fn mac_firewall_enabled(text: &str) -> Option<bool> {
@@ -2382,7 +2523,7 @@ mod tests {
         Firewall {
             ufw_active: ufw,
             ufw_rules: rules.map(str::to_owned),
-            firewalld: firewalld.map(|(p, s)| Firewalld { ports: p.into(), services: s.into() }),
+            firewalld: firewalld.into_iter().map(|(p, s)| Firewalld { zone: None, why: ZoneWhy::Default, ports: p.into(), services: s.into() }).collect(),
             ..Firewall::default()
         }
     }
@@ -2429,6 +2570,100 @@ mod tests {
         let nothing = firewall_check(Os::Linux, &fw(Some(false), None, Some(("", ""))), 24900);
         let fix = nothing.outcome.fix.unwrap();
         assert!(fix.contains("--add-port=24900/udp") && fix.contains("--add-service=mdns"));
+    }
+
+    /// A firewalld whose answers come from a table: `(arguments joined, answer)`.
+    fn firewalld_says(answers: &'static [(&'static str, &'static str)]) -> impl Fn(&str, &[&str]) -> Option<String> {
+        move |program, args| {
+            let asked = format!("{program} {}", args.join(" "));
+            answers.iter().find(|(question, _)| *question == asked).map(|(_, answer)| (*answer).to_owned())
+        }
+    }
+
+    const ZONES: &[(&str, &str)] = &[
+        ("firewall-cmd --state", "running\n"),
+        ("firewall-cmd --get-default-zone", "home\n"),
+        ("firewall-cmd --get-active-zones", "home (default)\n  interfaces: wlan0\nwork\n  interfaces: eth0\ndocker\n  sources: 172.17.0.0/16\n"),
+        ("firewall-cmd --list-all --zone=home", "home (default, active)\n  ports: 24900/udp\n  services: mdns\n"),
+        ("firewall-cmd --list-all --zone=work", "work (active)\n  ports: \n  services: ssh\n"),
+        ("firewall-cmd --list-all --zone=docker", "docker (active)\n  ports: \n  services: \n"),
+        ("firewall-cmd --list-all", "home (default, active)\n  ports: 24900/udp\n  services: mdns\n"),
+        ("ip -o route get 192.168.1.20", "192.168.1.20 dev eth0 src 192.168.1.2 uid 1000 \\    cache\n"),
+        ("ip -o route get 192.168.7.9", "192.168.7.9 dev wlan0 src 192.168.7.2 uid 1000 \\    cache\n"),
+    ];
+
+    /// The default zone opens the ports, but the interface the other computer is reached
+    /// by is in another zone that does not: the verdict is about that zone.
+    #[test]
+    fn firewalld_is_checked_in_the_zone_of_the_interface_facing_the_peer() {
+        let peers = vec![("Desk".to_owned(), vec!["192.168.1.20:24900".to_owned()])];
+        let zones = firewalld_facts(&firewalld_says(ZONES), &peers);
+        assert_eq!(zones.len(), 1);
+        assert_eq!(zones[0].zone.as_deref(), Some("work"));
+        assert_eq!(zones[0].why, ZoneWhy::Interface { interface: "eth0".into(), peer: "Desk".into() });
+        let check = firewall_check(Os::Linux, &Firewall { ufw_active: Some(false), firewalld: zones, ..Firewall::default() }, 24900);
+        assert_eq!(st(&check), Status::Fail, "the default zone's open port said otherwise");
+        let (detail, fix) = (check.outcome.detail.clone(), check.outcome.fix.clone().unwrap());
+        assert!(detail.contains("blocks") || fix.contains("work"), "{detail} / {fix}");
+        assert!(fix.contains("the zone of eth0, the interface that reaches Desk (`work`)"), "{fix}");
+        assert!(fix.contains("--permanent --zone=work --add-port=24900/udp"), "{fix}");
+        assert!(!fix.contains("default zone"), "{fix}");
+
+        // The peer on the wlan0, whose zone is the open default one: fine.
+        let on_wlan = vec![("Mac".to_owned(), vec!["192.168.7.9:24900".to_owned()])];
+        let zones = firewalld_facts(&firewalld_says(ZONES), &on_wlan);
+        assert_eq!(zones[0].zone.as_deref(), Some("home"));
+        assert_eq!(st(&firewall_check(Os::Linux, &Firewall { ufw_active: Some(false), firewalld: zones, ..Firewall::default() }, 24900)), Status::Pass);
+
+        // Two computers in two zones: both zones are checked, once each.
+        let both = vec![peers[0].clone(), on_wlan[0].clone(), ("Other".to_owned(), vec!["192.168.1.20:24900".to_owned()])];
+        let zones = firewalld_facts(&firewalld_says(ZONES), &both);
+        assert_eq!(zones.iter().map(|z| z.zone.clone().unwrap()).collect::<Vec<_>>(), ["work", "home"]);
+    }
+
+    /// Nobody is paired, or no route is known: the default zone is checked, and said to be.
+    #[test]
+    fn firewalld_falls_back_to_the_default_zone_and_says_so() {
+        for peers in [vec![], vec![("Gone".to_owned(), vec!["10.9.9.9:24900".to_owned()])], vec![("Lo".to_owned(), vec!["127.0.0.1:1".to_owned()])]] {
+            let zones = firewalld_facts(&firewalld_says(ZONES), &peers);
+            assert_eq!((zones.len(), zones[0].zone.as_deref(), &zones[0].why), (1, Some("home"), &ZoneWhy::Default));
+        }
+        let closed = [Firewalld { zone: Some("home".into()), why: ZoneWhy::Default, ports: String::new(), services: String::new() }];
+        let check = firewall_check(Os::Linux, &Firewall { ufw_active: Some(false), firewalld: closed.to_vec(), ..Firewall::default() }, 24900);
+        assert!(check.outcome.fix.unwrap().contains("in its default zone (`home`)"));
+        // firewalld without a name for the default zone: the rules are read without one, as before.
+        let nameless: &'static [(&str, &str)] = &[("firewall-cmd --state", "running"), ("firewall-cmd --list-all", "public\n  ports: 24900/udp\n  services: mdns\n")];
+        let zones = firewalld_facts(&firewalld_says(nameless), &[]);
+        assert_eq!((zones[0].zone.clone(), zones[0].ports.as_str()), (None, "24900/udp"));
+        assert!(firewalld_facts(&firewalld_says(&[]), &[]).is_empty(), "not running");
+    }
+
+    /// A zone that holds the computer's address as a source wins over the interface's zone.
+    #[test]
+    fn firewalld_source_zones_come_before_interface_zones() {
+        let peers = vec![("Box".to_owned(), vec!["172.17.0.5:24900".to_owned()])];
+        let answers: &'static [(&str, &str)] = ZONES;
+        let zones = firewalld_facts(&firewalld_says(answers), &peers);
+        assert_eq!(zones[0].zone.as_deref(), Some("docker"));
+        assert_eq!(zones[0].why, ZoneWhy::Source { source: "172.17.0.0/16".into(), peer: "Box".into() });
+        assert!(zones[0].place().contains("zone that holds the source 172.17.0.0/16, which Box is in"));
+    }
+
+    #[test]
+    fn firewalld_zone_and_route_parsing() {
+        let zones = parse_active_zones("home (default)\n  interfaces: wlan0 wlan1\n  sources: 10.0.0.0/8\ndocker\n  interfaces: docker0\n");
+        assert_eq!(zones, [
+            ActiveZone { name: "home".into(), interfaces: vec!["wlan0".into(), "wlan1".into()], sources: vec!["10.0.0.0/8".into()] },
+            ActiveZone { name: "docker".into(), interfaces: vec!["docker0".into()], sources: vec![] },
+        ]);
+        assert_eq!(route_interface("10.0.0.5 via 10.0.0.1 dev enp3s0 src 10.0.0.2 uid 1000 \\ cache"), Some("enp3s0".into()));
+        assert_eq!(route_interface("RTNETLINK answers: Network is unreachable"), None);
+        let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+        assert!(source_holds("10.0.0.0/8", ip("10.200.1.1")) && !source_holds("10.0.0.0/8", ip("11.0.0.1")));
+        assert!(source_holds("192.168.1.7", ip("192.168.1.7")) && !source_holds("192.168.1.7", ip("192.168.1.8")));
+        assert!(source_holds("0.0.0.0/0", ip("8.8.8.8")) && source_holds("fe80::/10", ip("fe80::1")));
+        assert!(!source_holds("fe80::/10", ip("fd00::1")) && !source_holds("10.0.0.0/8", ip("fe80::1")));
+        assert!(!source_holds("ipset:lan", ip("10.0.0.1")) && !source_holds("10.0.0.0/33", ip("10.0.0.1")));
     }
 
     #[test]
