@@ -422,6 +422,7 @@ const INTERRUPTED: &str = "worker start interrupted by a newer command";
 /// source; wait that long plus a margin for starting the sandbox.
 const WORKER_START: Duration = Duration::from_secs(40);
 
+#[cfg(test)]
 fn read_header(reader: &mut (impl Read + AsRawFd), timeout: Duration) -> Result<StreamHeader> {
     read_header_unless(reader, timeout, &mut || false)
 }
