@@ -2000,58 +2000,24 @@ fn describe_pointer(s: &TuningSettings, unavailable: bool) {
     }
 }
 
-/// The pointer rule for exactly `scope` and `app`, to edit (`None`: there is
-/// none). Several tables for one place (written by hand) all count, later
-/// fields over earlier ones, so they are folded into the first: an edit
-/// then changes what is in force instead of a setting a later table hides.
-fn fold_pointer_rules(rules: &mut Vec<PointerRule>, scope: &Scope, app: &Option<String>) -> Option<usize> {
-    let here = |r: &PointerRule| r.scope == *scope && same_app(&r.app, app);
-    let first = rules.iter().position(here)?;
-    let mut i = first + 1;
-    while i < rules.len() {
-        if !here(&rules[i]) {
-            i += 1;
-            continue;
-        }
-        let later = rules.remove(i);
-        let r = &mut rules[first];
-        r.speed = later.speed.or(r.speed);
-        r.acceleration = later.acceleration.or(r.acceleration);
-        r.accel_gain = later.accel_gain.or(r.accel_gain);
-        r.accel_exp = later.accel_exp.or(r.accel_exp);
-        r.accel_cap = later.accel_cap.or(r.accel_cap);
-    }
-    Some(first)
+/// Where an edit of the pointer rule for exactly `scope` and `app` goes: the
+/// last table for that place, with the earlier ones (several tables for one
+/// place may be written by hand; later fields win over earlier ones) listed
+/// to have the edited fields cleared, so a setting a table before it set
+/// cannot come back. Nothing else is moved or merged: rules for other
+/// patterns that overlap (`edit*` and `*pro`) keep their order between
+/// them, and with it what wins where they overlap. `None`: there is no table.
+fn edit_pointer_rules(rules: &[PointerRule], scope: &Scope, app: &Option<String>) -> Option<(usize, Vec<usize>)> {
+    let mut here: Vec<usize> = (0..rules.len()).filter(|&i| rules[i].scope == *scope && same_app(&rules[i].app, app)).collect();
+    let last = here.pop()?;
+    Some((last, here))
 }
 
-/// [`fold_pointer_rules`] for scroll tables (of one kind of device).
-fn fold_scroll_rules(rules: &mut Vec<ScrollRule>, scope: &Scope, kind: Option<Device>, app: &Option<String>) -> Option<usize> {
-    let here = |r: &ScrollRule| r.scope == *scope && r.device == kind && same_app(&r.app, app);
-    let first = rules.iter().position(here)?;
-    let mut i = first + 1;
-    while i < rules.len() {
-        if !here(&rules[i]) {
-            i += 1;
-            continue;
-        }
-        let later = rules.remove(i);
-        let r = &mut rules[first];
-        r.reverse_vertical = later.reverse_vertical.or(r.reverse_vertical);
-        r.reverse_horizontal = later.reverse_horizontal.or(r.reverse_horizontal);
-        r.natural = later.natural.or(r.natural);
-        // A plain speed resets the axes set before it, as when resolving.
-        if later.speed.is_some() {
-            (r.speed_x, r.speed_y) = (None, None);
-        }
-        r.speed = later.speed.or(r.speed);
-        r.speed_x = later.speed_x.or(r.speed_x);
-        r.speed_y = later.speed_y.or(r.speed_y);
-        r.mode = later.mode.or(r.mode);
-        for (name, what) in later.modifiers {
-            set_modifier(&mut r.modifiers, &name, Some(&what));
-        }
-    }
-    Some(first)
+/// [`edit_pointer_rules`] for scroll tables (of one kind of device).
+fn edit_scroll_rules(rules: &[ScrollRule], scope: &Scope, kind: Option<Device>, app: &Option<String>) -> Option<(usize, Vec<usize>)> {
+    let mut here: Vec<usize> = (0..rules.len()).filter(|&i| rules[i].scope == *scope && rules[i].device == kind && same_app(&rules[i].app, app)).collect();
+    let last = here.pop()?;
+    Some((last, here))
 }
 
 /// Sets (`Some`) or removes (`None`) the scroll modifier `name` in a rule's
@@ -2094,23 +2060,25 @@ pub async fn pointer_command(dir: &Path, args: PointerArgs) -> Result<()> {
             rules.retain(|r| !(r.scope == scope && same_app(&r.app, &app)));
             return Ok(s.input.clone());
         }
-        let at = fold_pointer_rules(rules, &scope, &app);
+        let at = edit_pointer_rules(rules, &scope, &app);
         let blank = PointerRule { scope: scope.clone(), app: app.clone(), ..Default::default() };
-        let i = at.unwrap_or_else(|| {
+        let (i, earlier) = at.unwrap_or_else(|| {
             rules.push(blank.clone());
-            rules.len() - 1
+            (rules.len() - 1, Vec::new())
         });
         // The defaults matter only where they override something.
         let overrides = !scope.is_global() || app.is_some();
         if let Some(v) = args.speed {
+            for &e in &earlier { rules[e].speed = None; }
             rules[i].speed = (v != 1.0 || overrides).then_some(v);
         }
         if let Some(a) = args.accel {
+            for &e in &earlier { rules[e].acceleration = None; }
             rules[i].acceleration = (a != AccelMode::System || overrides).then_some(a);
         }
-        if rules[i] == blank {
-            rules.remove(i);
-        }
+        // Tables the edit left with nothing in them go.
+        let here = |r: &PointerRule| r.scope == scope && same_app(&r.app, &app);
+        rules.retain(|r| !here(r) || *r != PointerRule { scope: r.scope.clone(), app: r.app.clone(), ..Default::default() });
         Ok(s.input.clone())
     })?;
     describe_pointer(&s, devices_unavailable(dir).await);
@@ -2234,12 +2202,22 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
             rules.retain(|r| !(r.scope == scope && r.device == args.kind && same_app(&r.app, &app)));
             return Ok(s.input.clone());
         }
-        let at = fold_scroll_rules(rules, &scope, args.kind, &app);
+        let at = edit_scroll_rules(rules, &scope, args.kind, &app);
         let blank = ScrollRule { scope: scope.clone(), device: args.kind, app: app.clone(), ..Default::default() };
-        let i = at.unwrap_or_else(|| {
+        let (i, earlier) = at.unwrap_or_else(|| {
             rules.push(blank.clone());
-            rules.len() - 1
+            (rules.len() - 1, Vec::new())
         });
+        // What is edited is taken out of the tables before the last one, which hold it now.
+        for &e in &earlier {
+            let r = &mut rules[e];
+            if args.reverse_vertical.is_some() { r.reverse_vertical = None; }
+            if args.reverse_horizontal.is_some() { r.reverse_horizontal = None; }
+            if args.speed.is_some() { (r.speed, r.speed_x, r.speed_y) = (None, None, None); }
+            if args.mode.is_some() { r.mode = None; }
+            if args.natural.is_some() { r.natural = None; }
+            for (name, _) in &mods { set_modifier(&mut r.modifiers, name, None); }
+        }
         let r = &mut rules[i];
         r.reverse_vertical = args.reverse_vertical.or(r.reverse_vertical);
         r.reverse_horizontal = args.reverse_horizontal.or(r.reverse_horizontal);
@@ -2252,9 +2230,9 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
             // Whatever way the group was written (`alt`, `option`): one entry.
             set_modifier(&mut r.modifiers, name, what.as_deref());
         }
-        if *r == blank {
-            rules.remove(i);
-        }
+        // Tables the edit left with nothing in them go.
+        let here = |r: &ScrollRule| r.scope == scope && r.device == args.kind && same_app(&r.app, &app);
+        rules.retain(|r| !here(r) || *r != ScrollRule { scope: r.scope.clone(), device: r.device, app: r.app.clone(), ..Default::default() });
         Ok(s.input.clone())
     })?;
     describe_scroll(&s, devices_unavailable(dir).await, None);
@@ -3508,6 +3486,33 @@ scope = { device = "usb/0001:0002//Pad" }
         let dir = settings_dir("scroll-duplicates-reset", scroll);
         scroll_command(&dir, ScrollArgs { reset: true, ..Default::default() }).await.unwrap();
         assert!(saved(&dir).scroll.is_empty());
+    }
+
+    /// Editing one property of an app's rule does not reorder it against another pattern that
+    /// matches the same app: the later table keeps winning where they overlap.
+    #[tokio::test]
+    async fn edits_keep_the_order_of_overlapping_app_patterns() {
+        let apps = vec!["EditorPro".to_owned()];
+        let app = || ScopeArgs { app: Some("edit*".into()), ..Default::default() };
+        let at = |dir: &Path| { let input = saved(dir); input.resolve(&PeerFacts { apps: &apps, ..facts(os::LINUX) }, false) };
+
+        let pointer = "[[input.pointer]]\napp = \"edit*\"\nspeed = 2.0\n[[input.pointer]]\napp = \"*pro\"\nspeed = 3.0\n[[input.pointer]]\napp = \"edit*\"\nspeed = 5.0\n";
+        let dir = settings_dir("overlap-pointer", pointer);
+        assert_eq!(at(&dir).pointer.speed(), 5.0);
+        pointer_command(&dir, PointerArgs { accel: Some(AccelMode::System), scope: app(), ..Default::default() }).await.unwrap();
+        assert_eq!(at(&dir).pointer.speed(), 5.0, "the last edit* table still wins over *pro");
+        // The property that is edited is the one that changes, wherever it was set before.
+        pointer_command(&dir, PointerArgs { speed: Some(4.0), scope: app(), ..Default::default() }).await.unwrap();
+        assert_eq!(at(&dir).pointer.speed(), 4.0);
+
+        let scroll = "[[input.scroll]]\napp = \"edit*\"\nspeed = 2.0\n[[input.scroll]]\napp = \"*pro\"\nspeed = 3.0\n[[input.scroll]]\napp = \"edit*\"\nspeed = 5.0\n";
+        let dir = settings_dir("overlap-scroll", scroll);
+        assert_eq!(at(&dir).scroll.wheel.speed_y, 5.0);
+        scroll_command(&dir, ScrollArgs { reverse_vertical: Some(true), scope: app(), ..Default::default() }).await.unwrap();
+        let resolved = at(&dir).scroll;
+        assert_eq!((resolved.wheel.speed_y, resolved.wheel.reverse_y), (5.0, true), "the last edit* table still wins over *pro");
+        scroll_command(&dir, ScrollArgs { speed: Some(4.0), scope: app(), ..Default::default() }).await.unwrap();
+        assert_eq!(at(&dir).scroll.wheel.speed_y, 4.0);
     }
 
     /// `alt` and `option` are one modifier: setting or removing it replaces
