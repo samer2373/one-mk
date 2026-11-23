@@ -144,3 +144,61 @@ fn decoded_pixel_budget_is_rejected_before_decoding() {
     let error = inspect(&bytes).unwrap_err();
     assert!(error.contains("pixel budget") && error.contains("convert first"), "{error}");
 }
+
+/// An APNG of `count` 2x2 frames, each shown for `numerator / denominator` seconds.
+fn apng_with_delay(count: u32, numerator: u16, denominator: u16) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, 2, 2);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_animated(count, 1).unwrap();
+        encoder.set_frame_delay(numerator, denominator).unwrap();
+        let mut writer = encoder.write_header().unwrap();
+        for index in 0..count {
+            writer.write_image_data(&[index as u8, 16, 32, 255].repeat(4)).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+    bytes
+}
+
+#[test]
+fn apng_delays_keep_their_fractions_of_a_millisecond() {
+    // 240 frames of 1/24 s loop in 10 s, not 240 x 41 ms = 9.84 s.
+    let (media, durations) = one_mk_wall_import::timeline(&apng_with_delay(240, 1, 24)).unwrap();
+    let total: u64 = durations.iter().map(|&value| u64::from(value)).sum();
+    assert!(total.abs_diff(10_000_000) < 5_000, "{total}");
+    assert!(media.duration_ms.abs_diff(10_000) <= 5, "{}", media.duration_ms);
+    assert!(durations.iter().all(|&value| value == 41_667), "{durations:?}");
+}
+
+/// A WebM with frames at the given block times (ms), a declared `duration` (ms) and an optional DefaultDuration (ns).
+fn webm_at(times: &[u8], duration: f64, default_duration: Option<u64>) -> Vec<u8> {
+    let header = ebml(&[0x1a, 0x45, 0xdf, 0xa3], &ebml(&[0x42, 0x82], b"webm"));
+    let mut track = ebml(&[0x83], &[1]);
+    track.extend(ebml(&[0xd7], &[1]));
+    track.extend(ebml(&[0x86], b"V_VP9"));
+    if let Some(nanoseconds) = default_duration { track.extend(ebml(&[0x23, 0xe3, 0x83], &nanoseconds.to_be_bytes())); }
+    track.extend(ebml(&[0xe0], &[ebml(&[0xb0], &[2]), ebml(&[0xba], &[2])].concat()));
+    let tracks = ebml(&[0x16, 0x54, 0xae, 0x6b], &ebml(&[0xae], &track));
+    let mut cluster = vec![ebml(&[0xe7], &[0])];
+    for &time in times { cluster.push(ebml(&[0xa3], &[0x81, 0, time, 0x80, 0])); }
+    let cluster = ebml(&[0x1f, 0x43, 0xb6, 0x75], &cluster.concat());
+    let info = ebml(&[0x15, 0x49, 0xa9, 0x66], &ebml(&[0x44, 0x89], &duration.to_be_bytes()));
+    let mut bytes = header;
+    bytes.extend(ebml(&[0x18, 0x53, 0x80, 0x67], &[info, tracks, cluster].concat()));
+    bytes
+}
+
+#[test]
+fn webm_last_frame_lasts_as_long_as_the_default_duration_says() {
+    // Frames at 0, 40 and 100 ms; the last one is a normal 40 ms frame, so the clip is 140 ms.
+    let (media, durations) = one_mk_wall_import::timeline(&webm_at(&[0, 40, 100], 140.0, Some(40_000_000))).unwrap();
+    assert_eq!(media.duration_ms, 140);
+    assert_eq!(durations, [40_000, 60_000, 40_000]);
+    // Without a DefaultDuration the last frame is guessed from the gap before it (60 ms), as before.
+    assert!(one_mk_wall_import::timeline(&webm_at(&[0, 40, 100], 160.0, None)).is_ok());
+    assert!(one_mk_wall_import::timeline(&webm_at(&[0, 40, 100], 140.0, None)).is_err());
+    // A DefaultDuration that contradicts the declared duration does not make it pass either.
+    assert!(one_mk_wall_import::timeline(&webm_at(&[0, 40, 100], 300.0, Some(40_000_000))).is_err());
+}

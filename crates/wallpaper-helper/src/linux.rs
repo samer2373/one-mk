@@ -209,13 +209,15 @@ fn uri(path: &Path) -> Result<String> {
 fn snapshot(gst: &Gst, path: &Path, output: &Path, width: u32) -> Result<()> {
     let pipeline = gst.pipeline(&format!("uridecodebin uri={} caps=video/x-raw name=source source. ! queue ! videoconvert ! videoscale ! video/x-raw,width={width},pixel-aspect-ratio=1/1 ! pngenc snapshot=true ! filesink location={}", quoted(&uri(path)?), quoted(&output.to_string_lossy())))?;
     unsafe {
-        (gst.state)(pipeline.raw, 4);
+        ensure!((gst.state)(pipeline.raw, 4) != 0, "The video's first frame could not be read");
         let bus = (gst.bus)(pipeline.raw);
+        // The snapshot is written once the pipeline reaches the end of stream (the only other
+        // message asked for is an error); a timeout is a failure, not a finished file.
         let message = (gst.pop)(bus, 15_000_000_000, 1 | 2);
-        let failed = !message.is_null() && (gst.has_name)(message, c"GstMessageError".as_ptr()) != 0;
+        let finished = !message.is_null() && (gst.has_name)(message, c"GstMessageError".as_ptr()) == 0;
         if !message.is_null() { (gst.mini_unref)(message); }
         (gst.unref)(bus);
-        ensure!(!failed, "The video's first frame could not be read");
+        ensure!(finished, "The video's first frame could not be read");
     }
     Ok(())
 }

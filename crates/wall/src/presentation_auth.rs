@@ -321,6 +321,14 @@ impl Session {
         if !reply.enabled || reply.revision == 0 || self.revision.is_some_and(|revision| revision != reply.revision) {
             return self.end(Teardown::Revoked);
         }
+        // No outputs: nothing can be shown and the Gate admits no plan without monitors. That is
+        // not the authority's fault, so it is no refusal; the session stays up (inactive, still
+        // authenticating every reply, watching consent and the owner) until a layout returns.
+        if self.monitors.is_empty() {
+            self.revision.get_or_insert(reply.revision);
+            self.refusals = 0;
+            return Outcome::Unchanged;
+        }
         if self.admitted.as_ref().is_some_and(|(bytes, _)| bytes == reply.payload) {
             self.refusals = 0;
             return Outcome::Unchanged;

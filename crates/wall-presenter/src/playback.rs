@@ -107,7 +107,9 @@ pub fn resolve(config: &Config, media: &[u8; 32]) -> Result<Media> {
     let record: one_mk_wall_import::ImportRecord = serde_json::from_slice(&private_file(&directory.join("record.json"), MAX_RECORD)?)
         .map_err(|error| format!("import record: {error}"))?;
     if record.schema != 1 || record.source_blake3 != name { return Err("import record does not name this media".into()); }
-    let source = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+    // Nonblocking, so that a FIFO or device in place of the source fails the file-type check below
+    // instead of blocking this thread (which owns every command and the shutdown) in open().
+    let source = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(directory.join("source")).map_err(|error| format!("imported source: {error}"))?;
     let metadata = source.metadata().map_err(|error| error.to_string())?;
     if !metadata.is_file() || metadata.uid() != uid() || metadata.mode() & 0o022 != 0
@@ -379,7 +381,12 @@ type Frame = std::result::Result<Vec<u32>, String>;
 struct DeadlineReader<'a, Reader> {
     reader: &'a mut Reader,
     deadline: Instant,
+    /// Asked between short waits; true abandons the wait (a newer command is pending).
+    interrupted: &'a mut dyn FnMut() -> bool,
 }
+
+/// How often a wait for the worker looks for a newer command.
+const INTERRUPT_POLL: Duration = Duration::from_millis(50);
 
 impl<Reader: Read + AsRawFd> Read for DeadlineReader<'_, Reader> {
     fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
@@ -388,7 +395,8 @@ impl<Reader: Read + AsRawFd> Read for DeadlineReader<'_, Reader> {
             let remaining = self.deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() { return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "worker header deadline exceeded")); }
             let mut descriptor = libc::pollfd { fd: self.reader.as_raw_fd(), events: libc::POLLIN, revents: 0 };
-            let timeout = remaining.as_millis().saturating_add(1).min(i32::MAX as u128) as i32;
+            if (self.interrupted)() { return Err(std::io::Error::other(INTERRUPTED)); }
+            let timeout = remaining.min(INTERRUPT_POLL).as_millis().saturating_add(1).min(i32::MAX as u128) as i32;
             // SAFETY: one live descriptor and a finite millisecond timeout.
             let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
             if ready < 0 {
@@ -406,8 +414,21 @@ impl<Reader: Read + AsRawFd> Read for DeadlineReader<'_, Reader> {
     }
 }
 
+/// The message of the error that ends a header wait because a newer command arrived.
+const INTERRUPTED: &str = "worker start interrupted by a newer command";
+
+/// The worker writes its header only once its decoder has prerolled, which it
+/// allows up to 30 s for (`play.rs`, `gstreamer`), after reading and checking the
+/// source; wait that long plus a margin for starting the sandbox.
+const WORKER_START: Duration = Duration::from_secs(40);
+
+#[cfg(test)]
 fn read_header(reader: &mut (impl Read + AsRawFd), timeout: Duration) -> Result<StreamHeader> {
-    StreamHeader::read(&mut DeadlineReader { reader, deadline: Instant::now() + timeout })
+    read_header_unless(reader, timeout, &mut || false)
+}
+
+fn read_header_unless(reader: &mut (impl Read + AsRawFd), timeout: Duration, interrupted: &mut dyn FnMut() -> bool) -> Result<StreamHeader> {
+    StreamHeader::read(&mut DeadlineReader { reader, deadline: Instant::now() + timeout, interrupted })
 }
 
 /// One playback: its worker, frame reader and schedule.
@@ -460,14 +481,22 @@ impl Running {
     }
 }
 
-fn start(config: &Config, generation: u64, request: &Request, state: &mut State, handle: &QueueHandle<State>, wake: &std::sync::Arc<Wake>) -> Result<Running> {
+/// Starts a playback. `Ok(None)` means `interrupted` reported a newer command
+/// while the worker was starting: the worker is gone and the command is next.
+fn start(config: &Config, generation: u64, request: &Request, state: &mut State, handle: &QueueHandle<State>, wake: &std::sync::Arc<Wake>,
+    interrupted: &mut dyn FnMut() -> bool) -> Result<Option<Running>> {
     let requested = Instant::now();
     let media = resolve(config, &request.plan.media_id)?;
     let format = media.record.media.format;
     let mut worker = one_mk_wall_import::sandbox::spawn_playback(PlaybackOptions {
         runtime: &config.runtime, cgroup_root: &config.cgroup_root, worker: &config.worker, input: media.source })?;
     let mut pipe = worker.take_frames().ok_or("no frame stream")?;
-    let header = read_header(&mut pipe, Duration::from_secs(3)).map_err(|error| format!("worker: {error}"))?;
+    let mut abandoned = false;
+    let header = match read_header_unless(&mut pipe, WORKER_START, &mut || { abandoned |= interrupted(); abandoned }) {
+        Ok(header) => header,
+        Err(_) if abandoned => return Ok(None),
+        Err(error) => return Err(format!("worker: {error}")),
+    };
     let record = &media.record.media;
     if header.format != format || header.width != record.width || header.height != record.height
         || header.durations.len() != record.frames as usize {
@@ -494,9 +523,9 @@ fn start(config: &Config, generation: u64, request: &Request, state: &mut State,
         &hex(&request.plan.media_id)[..16], header.pixels, header.width, header.height, header.durations.len(), header.loop_micros() / 1000,
         layout.width, layout.height, worker.pid()));
     let yuv = match header.pixels { Pixels::I420 { bt709, full_range } => Some(Yuv::new(bt709, full_range)), Pixels::Bgrx => None };
-    Ok(Running { worker, header, layout, yuv, frames, recycle, reader: Some(reader), pending: None, requested, generation,
+    Ok(Some(Running { worker, header, layout, yuv, frames, recycle, reader: Some(reader), pending: None, requested, generation,
         holding: false, next: 0, due: None, last_commit: None, loops: 0, presented: 0, late: 0, starved: 0, finished: false,
-        waiting: false })
+        waiting: false }))
 }
 
 /// The Shell's damage watchdog stops a renderer that shows nothing new for
@@ -626,13 +655,20 @@ fn run(connection: Connection, config: Config, commands: mpsc::Receiver<Command>
     let mut state = State::default();
     queue.roundtrip(&mut state).map_err(|error| format!("Wayland registry: {error}"))?;
     let mut running: Option<Running> = None;
+    // A command that arrived while a worker was starting; handled before the rest.
+    let mut held: Option<Command> = None;
     let result = (|| loop {
-        while let Ok(command) = commands.try_recv() {
+        while let Some(command) = held.take().or_else(|| commands.try_recv().ok()) {
             match command {
                 Command::Play(generation, request) => {
                     if let Some(mut previous) = running.take() { previous.stop("replaced"); }
                     state.window = None;
-                    running = Some(start(&config, generation, &request, &mut state, &handle, wake)?);
+                    let mut newer = None;
+                    running = start(&config, generation, &request, &mut state, &handle, wake, &mut || {
+                        if newer.is_none() { newer = commands.try_recv().ok(); }
+                        newer.is_some()
+                    })?;
+                    held = newer;
                 }
                 Command::Stop => {
                     if let Some(mut previous) = running.take() { previous.stop("plan"); }
@@ -723,6 +759,49 @@ mod tests {
         assert_eq!(read_header(&mut reader, Duration::from_secs(1)).unwrap(), header);
         drop(writer);
         assert!(read_header(&mut reader, Duration::from_secs(1)).unwrap_err().contains("failed to fill whole buffer"));
+    }
+
+    #[test]
+    fn a_newer_command_ends_the_wait_for_the_worker_header() {
+        let (mut reader, _writer) = UnixStream::pair().unwrap();
+        let started = Instant::now();
+        let mut asked = 0;
+        let error = read_header_unless(&mut reader, Duration::from_secs(30), &mut || { asked += 1; asked > 2 }).unwrap_err();
+        assert!(error.contains(INTERRUPTED), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(5), "the wait must be interruptible");
+        // The deadline is still what ends a wait nothing interrupts.
+        assert!(read_header_unless(&mut reader, Duration::from_millis(10), &mut || false).unwrap_err().contains("deadline"));
+    }
+
+    #[test]
+    fn the_header_wait_covers_the_workers_thirty_second_preroll() {
+        assert!(WORKER_START > Duration::from_secs(30));
+    }
+
+    #[test]
+    fn a_fifo_in_place_of_the_source_is_refused_instead_of_blocking() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::PermissionsExt;
+        let media = [7_u8; 32];
+        let name = hex(&media);
+        let library = std::env::temp_dir().join(format!("one-mk-presenter-fifo-{}", std::process::id()));
+        let directory = library.join(&name);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let record = one_mk_wall_import::ImportRecord { schema: 1, source_blake3: name, source_bytes: 4,
+            media: one_mk_wall_import::Media { format: one_mk_wall_import::Format::Gif, width: 2, height: 2, frames: 2, duration_ms: 200 },
+            poster_blake3: String::new(), poster_file: "poster".into(), timeline: "timeline".into() };
+        std::fs::write(directory.join("record.json"), serde_json::to_vec(&record).unwrap()).unwrap();
+        std::fs::set_permissions(directory.join("record.json"), std::fs::Permissions::from_mode(0o600)).unwrap();
+        let fifo = std::ffi::CString::new(directory.join("source").as_os_str().as_bytes()).unwrap();
+        // SAFETY: a valid NUL-terminated path.
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        let config = Config { library: library.clone(), runtime: "/runtime".into(), cgroup_root: "/cgroup".into(), worker: "/worker".into() };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || { let _ = sender.send(resolve(&config, &media).map(|_| ())); });
+        let result = receiver.recv_timeout(Duration::from_secs(5));
+        if result.is_ok() { std::fs::remove_dir_all(&library).unwrap(); }
+        assert!(result.expect("resolve blocked on the FIFO").unwrap_err().contains("does not match its record"));
     }
 
     #[test]

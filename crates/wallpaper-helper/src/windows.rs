@@ -13,6 +13,12 @@ static ON_BATTERY: AtomicBool = AtomicBool::new(false);
 static ENERGY_SAVER: AtomicBool = AtomicBool::new(false);
 static LOCKED: AtomicBool = AtomicBool::new(false);
 static ASLEEP: AtomicBool = AtomicBool::new(false);
+/// Explorer was restarted: the desktop windows our pictures sit in are gone, and a new one is coming.
+static SHELL_RESTARTED: AtomicBool = AtomicBool::new(false);
+/// The registered message Explorer broadcasts to top-level windows when it has created its taskbar again.
+static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
+/// The most handles `MsgWaitForMultipleObjectsEx` accepts (one less than `MAXIMUM_WAIT_OBJECTS`): the input event and the frame events.
+const MAX_WAIT_HANDLES: usize = 63;
 fn input_event() -> HANDLE { HANDLE(*INPUT_EVENT.get_or_init(|| unsafe { CreateEventW(None, false, false, None).expect("wallpaper command event").0 as usize }) as *mut _) }
 pub fn wake() { unsafe { let _ = SetEvent(input_event()); } }
 unsafe extern "system" fn foreground_changed(_: HWINEVENTHOOK, event: u32, window: HWND, object: i32, _: i32, _: u32, _: u32) {
@@ -26,6 +32,7 @@ struct Notifications { window: HWND, hooks: Vec<HWINEVENTHOOK>, power: Vec<HPOWE
 impl Notifications {
     unsafe fn new() -> Result<Self> {
         unsafe {
+            TASKBAR_CREATED.get_or_init(|| RegisterWindowMessageW(w!("TaskbarCreated")));
             let window = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, w!("oneMKWallpaper"), w!("oneMK Wallpaper events"), WS_POPUP, 0, 0, 0, 0, None, None, None, None)?;
             let hooks = [EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, EVENT_OBJECT_SHOW, EVENT_OBJECT_HIDE, EVENT_OBJECT_DESTROY].into_iter().map(|event|
                 SetWinEventHook(event, event, None, Some(foreground_changed), 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS)).collect();
@@ -107,6 +114,13 @@ impl Drop for Engine {
 }
 
 pub fn probe(path: &Path, poster: Option<&Path>) -> Result<Media> {
+    let result = probe_video(path, poster);
+    // A refused video keeps no link (and so no disk space of its own).
+    if result.is_err() { crate::playable::forget(path); }
+    result
+}
+
+fn probe_video(path: &Path, poster: Option<&Path>) -> Result<Media> {
     let engine = unsafe { Engine::new(path)? };
     let mut media = engine.metadata()?;
     media.frame_rate = frame_rate(path).unwrap_or(60.0).round() as u32;
@@ -165,6 +179,7 @@ unsafe extern "system" fn find_worker(window: HWND, parameter: LPARAM) -> BOOL {
 
 unsafe extern "system" fn window_proc(window: HWND, message: u32, first: WPARAM, second: LPARAM) -> LRESULT {
     if message == WM_DISPLAYCHANGE || message == WM_DPICHANGED { DISPLAYS_CHANGED.store(true, Ordering::Relaxed); }
+    if TASKBAR_CREATED.get() == Some(&message) { SHELL_RESTARTED.store(true, Ordering::Relaxed); wake(); }
     if message == WM_WTSSESSION_CHANGE {
         if first.0 == WTS_SESSION_LOCK as usize { LOCKED.store(true, Ordering::Relaxed); }
         if first.0 == WTS_SESSION_UNLOCK as usize { LOCKED.store(false, Ordering::Relaxed); }
@@ -201,7 +216,7 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, first: WPARAM,
 
 struct Chain { swap: IDXGISwapChain2, latency: HANDLE }
 impl Drop for Chain { fn drop(&mut self) { unsafe { let _ = CloseHandle(self.latency); } } }
-struct Desktop { windows: Vec<HWND>, chains: Vec<Chain>, destinations: Vec<RECT>, sources: Vec<MFVideoNormalizedRect> }
+struct Desktop { host: HWND, windows: Vec<HWND>, chains: Vec<Chain>, destinations: Vec<RECT>, sources: Vec<MFVideoNormalizedRect> }
 impl Desktop {
     unsafe fn new(device: Option<&ID3D11Device>, config: &PlayerConfig) -> Result<Self> {
         unsafe {
@@ -218,7 +233,7 @@ impl Desktop {
             }).transpose()?;
             let local: Vec<_> = config.plan.canvas.monitors.iter().filter(|monitor| monitor.computer == config.computer).collect();
             ensure!(!local.is_empty(), "No monitors selected on this computer");
-            let mut desktop = Self { windows: Vec::new(), chains: Vec::new(), destinations: Vec::new(), sources: Vec::new() };
+            let mut desktop = Self { host: worker, windows: Vec::new(), chains: Vec::new(), destinations: Vec::new(), sources: Vec::new() };
             for monitor in local {
                 let width = (monitor.rect.width * monitor.scale).round() as u32;
                 let height = (monitor.rect.height * monitor.scale).round() as u32;
@@ -266,6 +281,13 @@ unsafe fn covered(desktop: &Desktop) -> bool {
             let mut rect = RECT::default();
             GetWindowRect(*window, &mut rect).is_ok() && foreground_rect.left <= rect.left && foreground_rect.top <= rect.top && foreground_rect.right >= rect.right && foreground_rect.bottom >= rect.bottom
         })
+    }
+}
+impl Desktop {
+    /// Whether the windows still exist: they are children of one of Explorer's desktop windows, which
+    /// disappear (and take them along) when Explorer is restarted.
+    fn alive(&self) -> bool {
+        unsafe { IsWindow(Some(self.host)).as_bool() && self.windows.iter().all(|window| IsWindow(Some(*window)).as_bool()) }
     }
 }
 impl Drop for Desktop { fn drop(&mut self) { for window in &self.windows { unsafe { let _ = DestroyWindow(*window); } } } }
@@ -372,9 +394,22 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
             }
             let pending: Vec<_> = desktop.chains.iter().enumerate().filter(|(index, _)| !latency_ready[*index]).collect();
             let mut handles = vec![input_event()];
-            if playing { handles.extend(pending.iter().map(|(_, chain)| chain.latency)); }
-            let timeout = if playing && latency_ready.iter().all(|ready| *ready) { next_frame.saturating_duration_since(Instant::now()).as_millis().max(1) as u32 } else { INFINITE };
+            let mut unwaited = false;
+            if playing {
+                for (index, chain) in &pending {
+                    // The wait takes a bounded number of handles (up to 64 screens are allowed): the rest
+                    // are looked at without waiting, and the wait is short while there are any.
+                    if handles.len() < MAX_WAIT_HANDLES { handles.push(chain.latency); }
+                    else {
+                        unwaited = true;
+                        if WaitForSingleObject(chain.latency, 0) == WAIT_OBJECT_0 { latency_ready[*index] = true; }
+                    }
+                }
+            }
+            let mut timeout = if playing && latency_ready.iter().all(|ready| *ready) { next_frame.saturating_duration_since(Instant::now()).as_millis().max(1) as u32 } else { INFINITE };
+            if unwaited { timeout = timeout.min(2); }
             let result = MsgWaitForMultipleObjectsEx(Some(&handles), timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE).0;
+            ensure!(result != WAIT_FAILED.0, "Windows could not wait for the next video frame: {}", std::io::Error::last_os_error());
             if result > WAIT_OBJECT_0.0 && (result as usize) < handles.len() { latency_ready[pending[result as usize - 1].0] = true; }
         }
     }
@@ -400,19 +435,26 @@ fn run_picture(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()
     let mut picture = picture_desktop(&config, &crate::picture::player_source(&config)?)?;
     let _notifications = unsafe { Notifications::new()? };
     let mut visible = false;
+    let mut hosted = true;
     let mut last = None;
     loop {
         while let Ok(input) = receiver.try_recv() { if matches!(input, Input::End) { return Ok(()); } }
         unsafe {
             let mut message = MSG::default();
             while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() { DispatchMessageW(&message); }
-            if DISPLAYS_CHANGED.swap(false, Ordering::Relaxed) {
-                refresh_displays(&mut config)?;
-                let replacement = picture_desktop(&config, &crate::picture::player_source(&config)?)?;
-                picture = replacement;
-                visible = false;
+            let changed = DISPLAYS_CHANGED.swap(false, Ordering::Relaxed);
+            // Explorer restarting takes the windows with it, with no display change to say so.
+            let lost = SHELL_RESTARTED.swap(false, Ordering::Relaxed) | !hosted | !picture.desktop.alive();
+            if changed || lost {
+                if changed { refresh_displays(&mut config)?; }
+                match picture_desktop(&config, &crate::picture::player_source(&config)?) {
+                    Ok(replacement) => { picture = replacement; visible = false; hosted = true; }
+                    // No desktop window to sit in yet (Explorer is starting): report that, and look again.
+                    Err(_) if lost && !changed => hosted = false,
+                    Err(error) => return Err(error),
+                }
             }
-            let show = !LOCKED.load(Ordering::Relaxed) && !ASLEEP.load(Ordering::Relaxed);
+            let show = hosted && !LOCKED.load(Ordering::Relaxed) && !ASLEEP.load(Ordering::Relaxed);
             if show != visible {
                 for window in &picture.desktop.windows {
                     let _ = ShowWindow(*window, if show { SW_SHOWNOACTIVATE } else { SW_HIDE });
@@ -421,11 +463,14 @@ fn run_picture(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()
                 visible = show;
             }
             let playback = if show { one_mk_wallpaper::Playback::Picture }
+                else if !hosted { one_mk_wallpaper::Playback::Paused("Waiting for the Windows desktop to come back".into()) }
                 else { one_mk_wallpaper::Playback::Paused("Paused while this computer is locked or asleep".into()) };
             if last.as_ref() != Some(&playback) { one_mk_wallpaper::event(playback.clone()); last = Some(playback); }
             // GDI repaints only damaged windows. There is no swapchain,
-            // media engine, frame pacing or idle polling for a still image.
-            MsgWaitForMultipleObjectsEx(Some(&[input_event()]), INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            // media engine, frame pacing or idle polling for a still image;
+            // only while the Windows desktop is missing is it asked for again every second.
+            let result = MsgWaitForMultipleObjectsEx(Some(&[input_event()]), if hosted { INFINITE } else { 1000 }, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            ensure!(result != WAIT_FAILED, "Windows could not wait for wallpaper events: {}", std::io::Error::last_os_error());
         }
     }
 }
