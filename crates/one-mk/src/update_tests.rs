@@ -210,6 +210,38 @@ fn local_download_replace_rollback_and_failures() -> Result<()> {
     Ok(())
 }
 
+/// Two updaters (separate settings folders) on one executable: the one that got the older
+/// release goes second. What is on disk is read again under the lock, so it does not go over
+/// the newer one, and nothing is downloaded for it.
+#[test]
+fn an_update_never_goes_over_the_same_or_a_newer_version_found_under_the_lock() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new()?;
+    let target = scratch.0.join("one-mk");
+    // No server at all: a download would fail, so none is attempted.
+    let origin = Url::parse("http://127.0.0.1:9/latest")?;
+    let release = Release { tag_name: "v0.1.13".into(), assets: vec![] };
+    for (installed, skipped) in [("0.1.14", true), ("0.1.13", true), ("0.1.12", false), ("0.1.13-rc.1", false)] {
+        let content = format!("#!/bin/sh\necho 'one-mk {installed}'\n");
+        fs::write(&target, &content)?;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
+        let result = apply(&fixture(b"x"), &release, &origin, &target, InstallKind::Portable);
+        if skipped {
+            assert_eq!(result?, Some(installed.to_owned()));
+            assert!(!scratch.0.join("one-mk.old").exists());
+        } else {
+            assert!(result.is_err(), "{installed} is older, so the update goes on (to the download)");
+        }
+        assert_eq!(fs::read_to_string(&target)?, content, "{installed}: nothing was replaced");
+    }
+    // An executable that can't say its version is what an update repairs: it goes on.
+    fs::write(&target, "#!/bin/sh\nexit 1\n")?;
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o700))?;
+    let err = apply(&fixture(b"x"), &release, &origin, &target, InstallKind::Portable).unwrap_err();
+    assert!(!format!("{err:#}").contains("already"), "{err:#}");
+    Ok(())
+}
+
 #[test]
 fn two_appimages_in_one_folder_each_roll_back_to_their_own_previous_version() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -310,7 +342,7 @@ fn subprocess_apply() -> Result<()> {
     let origin = Url::parse(&std::env::var("ONE_MK_UPDATE_TEST_URL")?)?;
     ensure!(origin.host_str() == Some("127.0.0.1"), "test server must be loopback");
     let release = Release { tag_name: "v0.1.13".into(), assets: vec![ReleaseAsset { name: "portable.bin".into(), browser_download_url: origin.join("/binary")?.to_string() }] };
-    apply(&fixture(&[0; 100]), &release, &origin, &target, InstallKind::Portable)
+    apply(&fixture(&[0; 100]), &release, &origin, &target, InstallKind::Portable).map(|_| ())
 }
 
 #[test]

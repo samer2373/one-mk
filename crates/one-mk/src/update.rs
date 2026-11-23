@@ -500,6 +500,13 @@ impl Drop for VersionProbe {
 }
 
 fn version_check(path: &Path, expected: Option<&str>) -> Result<()> {
+    let found = probe_version(path)?;
+    ensure!(expected.is_none_or(|expected| expected == found), "new executable version does not match its signed manifest; old executable was not replaced");
+    Ok(())
+}
+
+/// The version the executable at `path` reports for `--version`.
+fn probe_version(path: &Path) -> Result<String> {
     // Never beside the executable of a Mac app: a file added inside the app
     // while it starts makes macOS kill it as "damaged", so the probe goes next to the app.
     let mut probe_dir = path.parent().context("executable has no directory")?;
@@ -543,8 +550,7 @@ fn version_check(path: &Path, expected: Option<&str>) -> Result<()> {
     ensure!(status.success(), "new executable rejected --version; old executable was not replaced");
     let found = output.trim().strip_prefix("one-mk ").context("new executable returned an invalid version; old executable was not replaced")?;
     policy::version(found)?;
-    ensure!(expected.is_none_or(|expected| expected == found), "new executable version does not match its signed manifest; old executable was not replaced");
-    Ok(())
+    Ok(found.to_owned())
 }
 
 fn regular(path: &Path) -> Result<()> {
@@ -628,10 +634,25 @@ fn download(asset: &policy::Asset, release: &Release, origin: &Url, parent: &Pat
     Ok(temporary)
 }
 
-fn apply(manifest: &Manifest, release: &Release, origin: &Url, target: &Path, kind: InstallKind) -> Result<()> {
+/// Installs the release over `target`. `Some(version)`: nothing was done,
+/// because that version, the same or newer, is on disk already.
+///
+/// The choice to update was made from the version of the program that
+/// checked, before the lock. Another updater (another settings folder, the
+/// same executable) may have installed a release since, maybe a newer one
+/// than this one found: the version on disk is read again under the lock, so
+/// the older release never goes over the newer one.
+fn apply(manifest: &Manifest, release: &Release, origin: &Url, target: &Path, kind: InstallKind) -> Result<Option<String>> {
     refuse_root()?;
     let _lock = target_lock(target, "This app's folder can't be changed by your account. Choose Download instead")?;
     regular(target)?;
+    // An executable that can't say its version (broken, or still being written) is what an
+    // update repairs, so only a version that is there stops it.
+    if let Ok(installed) = probe_version(target)
+        && policy::compare(&installed, &manifest.version).is_ok_and(|order| order != std::cmp::Ordering::Less)
+    {
+        return Ok(Some(installed));
+    }
     let asset = policy::select_install(manifest, std::env::consts::OS, std::env::consts::ARCH, kind)?;
     let parent = target.parent().context("update target has no directory")?;
     let mut temporary = download(asset, release, origin, parent)?;
@@ -647,7 +668,7 @@ fn apply(manifest: &Manifest, release: &Release, origin: &Url, target: &Path, ki
     version_check(&candidate, Some(&manifest.version))?;
     println!("Installing…");
     replace(&candidate, target)?;
-    Ok(())
+    Ok(None)
 }
 
 /// A Linux package: the update is downloaded and checked against the signed
@@ -1059,7 +1080,10 @@ fn run_inner(home: &Path, options: Options) -> Result<()> {
     }
     #[cfg(target_os = "macos")]
     if kind == InstallKind::MacApp { return installation_result(home, bundle::apply_bundle(&manifest, &release, &origin, &target, home)); }
-    installation_result(home, apply(&manifest, &release, &origin, &target, kind))?;
+    if let Some(installed) = installation_result(home, apply(&manifest, &release, &origin, &target, kind))? {
+        println!("one-mk {installed} is already installed there (another update just put it there), so nothing was changed.");
+        return Ok(());
+    }
     restarting(&format!("oneMK {} installed", manifest.version), "Quit oneMK and open it again to use it");
     Ok(())
 }
@@ -1134,7 +1158,17 @@ pub fn doctor(home: &Path) -> (bool, String) {
 #[path = "update_tests.rs"]
 mod tests;
 
-fn installation_result(home: &Path, result: Result<()>) -> Result<()> {
-    crate::analytics::result(home, crate::analytics::Event::UpdateInstallFinished, crate::analytics::Origin::Cli, &result);
-    result
+fn installation_result<T>(home: &Path, result: Result<T>) -> Result<T> {
+    let event = crate::analytics::Event::UpdateInstallFinished;
+    match result {
+        Ok(value) => {
+            crate::analytics::result(home, event, crate::analytics::Origin::Cli, &Ok(()));
+            Ok(value)
+        }
+        Err(error) => {
+            let failed: Result<()> = Err(error);
+            crate::analytics::result(home, event, crate::analytics::Origin::Cli, &failed);
+            failed.map(|()| unreachable!("the result was an error"))
+        }
+    }
 }
