@@ -32,6 +32,12 @@ use std::time::Duration;
 /// How long a notification's "Show in folder" stays live.
 #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
 const ACTION_WAIT: Duration = Duration::from_secs(5 * 60);
+/// The longest a notification service gets to answer one step (connecting,
+/// subscribing, `Notify`, the `notify-send` fallback). One that stays connected
+/// but stops answering would otherwise hold a task, a connection and (for a
+/// failure message) a drop-job slot for ever.
+#[cfg(all(unix, not(target_os = "macos")))]
+const CALL_WAIT: Duration = Duration::from_secs(10);
 
 /// One finished transfer: everything that arrived from one send.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,6 +259,7 @@ mod sys {
                 .await?;
             anyhow::Ok(())
         };
+        let shown = async { tokio::time::timeout(CALL_WAIT, shown).await.map_err(|_| anyhow::anyhow!("the notification service did not answer"))? };
         let Err(e) = shown.await else { return true };
         tracing::debug!("notification over D-Bus failed ({e:#}); trying notify-send");
         let status = Command::new("notify-send")
@@ -262,44 +269,50 @@ mod sys {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .await;
-        status.is_ok_and(|s| s.success())
+            .kill_on_drop(true)
+            .status();
+        tokio::time::timeout(CALL_WAIT, status).await.is_ok_and(|status| status.is_ok_and(|s| s.success()))
     }
 
     async fn via_dbus(n: &FilesReceived) -> anyhow::Result<()> {
-        via_bus(&zbus::Connection::session().await?, n, ACTION_WAIT).await
+        let conn = tokio::time::timeout(CALL_WAIT, zbus::Connection::session()).await.map_err(|_| anyhow::anyhow!("no answer connecting to the session bus"))??;
+        via_bus(&conn, n, ACTION_WAIT, CALL_WAIT).await
     }
 
     /// Shows the notification on `conn` and, if "Show in folder" is clicked
-    /// within `wait`, opens the file manager.
-    pub(super) async fn via_bus(conn: &zbus::Connection, n: &FilesReceived, wait: Duration) -> anyhow::Result<()> {
-        let proxy = zbus::Proxy::new(
-            conn,
-            "org.freedesktop.Notifications",
-            "/org/freedesktop/Notifications",
-            "org.freedesktop.Notifications",
-        )
-        .await?;
-        // Subscribe first: the click can't come before the answer to Notify, but
-        // the stream must exist by then.
-        let mut signals = proxy.receive_all_signals().await?;
-        let hints: HashMap<&str, Value> = HashMap::from([("category", Value::from("transfer.complete"))]);
-        let id: u32 = proxy
-            .call(
-                "Notify",
-                &(
-                    "one-mk",
-                    0u32,
-                    "folder-download",
-                    n.title(),
-                    escape_markup(&n.body()),
-                    vec!["show", "Show in folder"],
-                    hints,
-                    -1i32,
-                ),
+    /// within `wait`, opens the file manager. The service gets `call_wait` to
+    /// answer the setup and `Notify`.
+    pub(super) async fn via_bus(conn: &zbus::Connection, n: &FilesReceived, wait: Duration, call_wait: Duration) -> anyhow::Result<()> {
+        let setup = async {
+            let proxy = zbus::Proxy::new(
+                conn,
+                "org.freedesktop.Notifications",
+                "/org/freedesktop/Notifications",
+                "org.freedesktop.Notifications",
             )
             .await?;
+            // Subscribe first: the click can't come before the answer to Notify, but
+            // the stream must exist by then.
+            let signals = proxy.receive_all_signals().await?;
+            let hints: HashMap<&str, Value> = HashMap::from([("category", Value::from("transfer.complete"))]);
+            let id: u32 = proxy
+                .call(
+                    "Notify",
+                    &(
+                        "one-mk",
+                        0u32,
+                        "folder-download",
+                        n.title(),
+                        escape_markup(&n.body()),
+                        vec!["show", "Show in folder"],
+                        hints,
+                        -1i32,
+                    ),
+                )
+                .await?;
+            anyhow::Ok((signals, id))
+        };
+        let (mut signals, id) = tokio::time::timeout(call_wait, setup).await.map_err(|_| anyhow::anyhow!("the notification service did not answer"))??;
         let wait_for_click = async {
             while let Some(msg) = signals.next().await {
                 let header = msg.header();
@@ -348,6 +361,8 @@ mod sys {
         };
         if let Err(e) = shown.await {
             tracing::debug!("FileManager1 is not available ({e}); using xdg-open");
+            let path = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
+            let path = path.as_path();
             let folder = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
             // An absolute path, so it can't be read as an option.
             let _ = Command::new("xdg-open").arg(folder).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
@@ -358,6 +373,8 @@ mod sys {
     pub(super) fn file_uri(path: &Path) -> String {
         use std::os::unix::ffi::OsStrExt;
         let mut out = String::from("file://");
+        // A relative path would put its first folder where the URL has its host.
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
         for &b in path.as_os_str().as_bytes() {
             if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~') {
                 out.push(b as char);
@@ -382,8 +399,9 @@ mod sys {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .await?;
+            .kill_on_drop(true)
+            .status();
+        let status = tokio::time::timeout(CALL_WAIT, status).await.map_err(|_| anyhow::anyhow!("notify-send did not finish"))??;
         anyhow::ensure!(status.success(), "notify-send: {status}");
         Ok(())
     }
@@ -634,7 +652,7 @@ mod tests {
         let client = zbus::connection::Builder::address(addr).unwrap().build().await.unwrap();
 
         let n = got("desk", &["my report.pdf"], 2_500_000);
-        sys::via_bus(&client, &n, Duration::from_secs(5)).await.unwrap();
+        sys::via_bus(&client, &n, Duration::from_secs(5), Duration::from_secs(5)).await.unwrap();
 
         let (summary, body, actions) = seen.try_recv().expect("a notification was sent");
         assert_eq!(summary, "my report.pdf received from desk");
@@ -659,6 +677,47 @@ mod tests {
     #[test]
     fn file_uris_are_percent_encoded() {
         assert_eq!(sys::file_uri(std::path::Path::new("/home/u/a b/ü#1.txt")), "file:///home/u/a%20b/%C3%BC%231.txt");
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn a_relative_folder_still_makes_a_file_url_with_an_empty_host() {
+        let uri = sys::file_uri(std::path::Path::new("incoming/file.txt"));
+        assert!(uri.starts_with("file:///"), "{uri}");
+        assert!(uri.ends_with("/incoming/file.txt"), "{uri}");
+    }
+
+    /// A notification service that stays connected but never answers `Notify`
+    /// does not hold the caller for ever.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[tokio::test]
+    async fn a_service_that_never_answers_is_given_up_on() {
+        use std::process::Stdio;
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        struct Silent;
+        #[zbus::interface(name = "org.freedesktop.Notifications")]
+        impl Silent {
+            #[allow(clippy::too_many_arguments)]
+            async fn notify(&self, _app: String, _replaces: u32, _icon: String, _summary: String, _body: String, _actions: Vec<String>,
+                _hints: std::collections::HashMap<String, zbus::zvariant::OwnedValue>, _timeout: i32) -> u32 {
+                std::future::pending().await
+            }
+        }
+        let Ok(mut bus) = tokio::process::Command::new("dbus-daemon").args(["--session", "--nofork", "--print-address=1"])
+            .stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).spawn() else {
+            eprintln!("skipped: no dbus-daemon");
+            return;
+        };
+        let mut addr = String::new();
+        BufReader::new(bus.stdout.take().unwrap()).read_line(&mut addr).await.unwrap();
+        let addr = addr.trim();
+        let _server = zbus::connection::Builder::address(addr).unwrap().name("org.freedesktop.Notifications").unwrap()
+            .serve_at("/org/freedesktop/Notifications", Silent).unwrap().build().await.unwrap();
+        let client = zbus::connection::Builder::address(addr).unwrap().build().await.unwrap();
+        let n = got("desk", &["a.txt"], 1);
+        let done = tokio::time::timeout(Duration::from_secs(5),
+            sys::via_bus(&client, &n, Duration::from_secs(60), Duration::from_millis(300))).await;
+        assert!(done.expect("gave up by itself").is_err());
     }
 
     #[test]
