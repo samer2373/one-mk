@@ -211,6 +211,10 @@ pub struct MotionReceiver {
     epoch: Option<u16>,
     last_seq: u32,
     rel: RelativeSum,
+    /// An absolute position was applied after the last relative sum: the
+    /// next sum is the new baseline, not a distance from the old one (what
+    /// the old one missed is already in that position).
+    rebase: bool,
 }
 
 /// Turns the sender's running sums into whole-pixel moves. What has been
@@ -247,6 +251,7 @@ impl MotionReceiver {
         self.epoch = Some(epoch);
         self.last_seq = 0;
         self.rel = RelativeSum::default();
+        self.rebase = false;
     }
 
     pub fn leave(&mut self) {
@@ -262,6 +267,7 @@ impl MotionReceiver {
             Received::Stale
         } else if newer(seq, self.last_seq) {
             self.last_seq = seq;
+            self.rebase = true;
             Received::Move(pos)
         } else if seq == self.last_seq {
             Received::Repeat
@@ -276,6 +282,9 @@ impl MotionReceiver {
             RelReceived::Stale
         } else if newer(seq, self.last_seq) {
             self.last_seq = seq;
+            if std::mem::take(&mut self.rebase) {
+                self.rel.last = sum;
+            }
             let (dx, dy) = self.rel.apply(sum);
             RelReceived::MoveBy { dx, dy }
         } else if seq == self.last_seq {
@@ -600,6 +609,30 @@ mod tests {
         assert!(c.set_relative(false));
         assert!(matches!(c.current(), Datagram::Motion { pos, seq: s, .. } if pos == Pos::new(0.0, 540.0) && s > seq));
         assert!(matches!(c.motion(-1.0, 0.0), Step::Leave { .. }));
+    }
+
+    #[test]
+    fn relative_motion_dropped_before_absolute_mode_is_not_replayed() {
+        let mut c = enter(desk(), 0.5, 1);
+        let mut r = MotionReceiver::default();
+        r.enter(1);
+        c.set_relative(true);
+        let rel = |c: &RemoteCursor, r: &mut MotionReceiver| {
+            let Datagram::MotionBy { epoch, seq, sum_x, sum_y } = c.current() else { panic!() };
+            r.accept_relative(epoch, seq, (sum_x, sum_y))
+        };
+        let Step::Move(Datagram::MotionBy { epoch, seq, sum_x, sum_y }) = c.motion(10.0, 0.0) else { panic!() };
+        assert_eq!(r.accept_relative(epoch, seq, (sum_x, sum_y)), RelReceived::MoveBy { dx: 10, dy: 0 });
+        // The last relative packet is lost; absolute mode takes over.
+        assert!(matches!(c.motion(7.0, 0.0), Step::Move(_)));
+        c.set_relative(false);
+        let Datagram::Motion { epoch, seq, pos } = c.current() else { panic!() };
+        assert_eq!(r.accept(epoch, seq, pos), Received::Move(pos));
+        // Relative again without moving: nothing to apply.
+        c.set_relative(true);
+        assert_eq!(rel(&c, &mut r), RelReceived::MoveBy { dx: 0, dy: 0 });
+        let Step::Move(Datagram::MotionBy { epoch, seq, sum_x, sum_y }) = c.motion(3.0, 0.0) else { panic!() };
+        assert_eq!(r.accept_relative(epoch, seq, (sum_x, sum_y)), RelReceived::MoveBy { dx: 3, dy: 0 });
     }
 
     #[test]
