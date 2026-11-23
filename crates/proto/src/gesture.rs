@@ -61,7 +61,14 @@ impl<T> Gesture<T> {
                 if !press.holders.contains(&source) { press.holders.push(source); }
                 return ButtonResult::Swallow;
             }
-            press.holders.retain(|holder| *holder != source);
+            // A release from a device that never pressed it (or whose id was not known
+            // at the press) ends one hold instead of leaving the press stuck.
+            match press.holders.iter().position(|holder| *holder == source)
+                .or_else(|| press.holders.iter().position(Option::is_none))
+                .or_else(|| source.is_none().then_some(0)) {
+                Some(held) => { press.holders.remove(held); }
+                None => return ButtonResult::Swallow,
+            }
             if !press.holders.is_empty() { return ButtonResult::Swallow; }
             let press = self.presses.remove(index);
             return if press.fired || press.moved { ButtonResult::Swallow } else { ButtonResult::Replay(button) };
@@ -136,6 +143,25 @@ mod tests {
         state.button_from(0x113, true, a);
         state.button_from(0x113, true, b);
         assert_eq!(state.button_from(0x113, false, b), ButtonResult::Swallow);
+        assert_eq!(state.button_from(0x113, false, a), ButtonResult::Replay(0x113));
+    }
+
+    #[test]
+    fn a_release_that_names_no_holder_does_not_leave_the_press_stuck() {
+        let (a, other) = (Some(DeviceRef(1)), Some(DeviceRef(9)));
+        let mut state = state();
+        // Pressed without a device id, released with one: still one press.
+        state.button_from(0x113, true, None);
+        assert_eq!(state.button_from(0x113, false, a), ButtonResult::Replay(0x113));
+        assert!(!state.active());
+        // Pressed by a device, released without an id.
+        state.button_from(0x113, true, a);
+        assert_eq!(state.button_from(0x113, false, None), ButtonResult::Replay(0x113));
+        assert!(!state.active());
+        // A device that never pressed it cannot end another's hold.
+        state.button_from(0x113, true, a);
+        assert_eq!(state.button_from(0x113, false, other), ButtonResult::Swallow);
+        assert!(state.active());
         assert_eq!(state.button_from(0x113, false, a), ButtonResult::Replay(0x113));
     }
 
