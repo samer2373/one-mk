@@ -532,6 +532,8 @@ mod pages;
 #[cfg(unix)]
 mod qa;
 #[cfg(unix)]
+mod qa_app3;
+#[cfg(unix)]
 mod qa_files;
 #[cfg(unix)]
 mod qa_settings;
