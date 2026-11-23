@@ -151,7 +151,7 @@ impl X11Keyboard {
 
     /// Whether the server said the keymap changed since it was last looked at. Reads what has
     /// arrived, without waiting.
-    fn keymap_changed(&mut self) -> bool {
+    fn keymap_changed(&self) -> bool {
         let Some(base_event) = self.events else { return true };
         let native = self.connection.as_ptr();
         let mut changed = false;
@@ -229,9 +229,11 @@ impl X11Keyboard {
                 (library.keymap_unref)(keymap);
                 return None;
             }
-            // Events that arrived while it was loaded are about what is loaded now.
-            drop(grab);
+            // Events that arrived while it was loaded are about what is loaded now. They are read
+            // before the grab ends: nothing else changes the map until then, so a change applied
+            // right after the ungrab is still queued for the next snapshot, not taken as covered.
             self.keymap_changed();
+            drop(grab);
             if self.events.is_some() { self.keymap = Some(Loaded { keymap, device }); } else { (library.keymap_unref)(keymap); }
             Some(Self::snapshot_of(state))
         }
