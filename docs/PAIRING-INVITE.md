@@ -179,11 +179,10 @@ transitions without a configured hook. Still-pending events for that peer
 cannot be overtaken by an earlier due time. Hooks and key actions have separate
 eight-process budgets, so neither consumes the other's capacity.
 
-When the Linux network watcher has never connected to the system bus, five
-consecutive identical connection failures stop automatic retries entirely.
-Manual `profile use` remains available; restart the daemon after fixing an
-initially absent bus to rearm automatic watching. A previously working bus
-continues reconnecting with the bounded 1–60 second backoff.
+When the Linux network watcher cannot reach the system bus (or NetworkManager
+is not running), it keeps retrying with the bounded 1–60 second backoff and says
+so once in the log, so a bus that starts late is picked up without restarting
+the daemon. Manual `profile use` works meanwhile.
 
 Windows startup removal reads the Run value through the wide-character
 registry API rather than decoding `reg query` output. Non-ASCII paths remain
