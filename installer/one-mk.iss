@@ -226,6 +226,25 @@ begin
     '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
+{ True while any program that runs from the install folder (compared by full
+  path, like EndRunningPrograms) is there. When it cannot be told, True: the
+  caller then acts as it always did. }
+function InstallRunning: Boolean;
+var
+  Folder, Script: string;
+  Code: Integer;
+begin
+  Result := True;
+  Folder := ExpandConstant('{app}');
+  StringChangeEx(Folder, '''', '''''', True);
+  { By program name, as EndRunningPrograms does: the uninstaller itself runs from this folder. }
+  Script := 'if (@(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and (@(''one-mk.exe'',''one-mk-tray.exe'',''one-mk-app.exe'',''one-mk-wallpaper.exe'') -contains $_.Name.ToLower()) -and $_.ExecutablePath.StartsWith(''' + Folder +
+    '\'', [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) { exit 1 } else { exit 0 }';
+  if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"', '', SW_HIDE, ewWaitUntilTerminated, Code) then
+    Result := Code <> 0;
+end;
+
 { `one-mk uninstall` took the start-at-sign-in entry out already; this is for
   when it could not run. Only a value that starts a program from this folder
   goes. }
@@ -252,7 +271,10 @@ end;
      person's own back. It asks the running oneMK, so it goes first.
   2. The tray and window end (nothing starts the daemon again), the daemon is
      asked to stop, and whatever still runs from this folder is ended, so no
-     file stays in use and is left behind.
+     file stays in use and is left behind. The daemon is asked only when a
+     program from this folder was running when the uninstall began: `stop`
+     reaches whichever copy owns the default settings, and a portable copy
+     elsewhere that is sharing must not be stopped by removing this one.
   3. The start-at-sign-in entry, if one is still there, and the PATH entry.
   The settings folder (pairings, keys) is kept, so installing again keeps the
   computer paired. }
@@ -260,14 +282,16 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Code: Integer;
   Exe: string;
+  Ours: Boolean;
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
   Exe := ExpandConstant('{app}\one-mk.exe');
+  Ours := InstallRunning;
   if FileExists(Exe) then
     Exec(Exe, 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code);
   EndRunningPrograms(True);
-  if FileExists(Exe) then
+  if Ours and FileExists(Exe) then
     Exec(Exe, 'stop', '', SW_HIDE, ewWaitUntilTerminated, Code);
   EndRunningPrograms(False);
   RemoveStartAtSignIn;
