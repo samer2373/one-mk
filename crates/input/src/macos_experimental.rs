@@ -200,6 +200,8 @@ pub(crate) enum Msg {
     Local,
     Session(bool),
     RestoreSystem,
+    /// macOS says the Accessibility permission list changed.
+    Permissions,
     Quit,
 }
 
@@ -473,6 +475,10 @@ fn capture_thread(
         for (name, callback) in [
             ("com.apple.screenIsLocked", on_screen_locked as Callback),
             ("com.apple.screenIsUnlocked", on_screen_unlocked),
+            // Posted when an app is added to or removed from the Accessibility list, or its
+            // switch is flipped: the permission timer is off while idle, and nothing else would
+            // notice a permission taken away then (the window's guide trusts the daemon's status).
+            ("com.apple.accessibility.api", on_permissions_changed),
         ] {
             let name = CFString::from_static_str(name);
             // SAFETY: the callback matches the signature; `inbox_ptr` is never
@@ -971,6 +977,11 @@ impl Ctx {
                 }
             }
             Msg::Displays => st.refresh_desktop(&self.tx),
+            // Have the next check look, even when idle (the 1 s timer then runs once and stops).
+            Msg::Permissions => {
+                st.recheck = true;
+                self.update_timer(&mut st);
+            }
             Msg::Locked => {
                 st.session_paused = true;
                 self.local_pause(&mut st, "inactive: screen locked; unlock and release all keys to resume automatically");
@@ -1364,6 +1375,18 @@ unsafe extern "C-unwind" fn on_screen_unlocked(
     // SAFETY: `observer` is a leaked `Arc<Inbox>`; `Inbox` is Sync.
     let inbox = unsafe { &*(observer as *const Inbox) };
     inbox.post(Msg::Unlocked);
+}
+
+unsafe extern "C-unwind" fn on_permissions_changed(
+    _center: *mut CFNotificationCenter,
+    observer: *mut c_void,
+    _name: *const CFNotificationName,
+    _object: *const c_void,
+    _info: *const CFDictionary,
+) {
+    // SAFETY: `observer` is a leaked `Arc<Inbox>`; `Inbox` is Sync.
+    let inbox = unsafe { &*(observer as *const Inbox) };
+    inbox.post(Msg::Permissions);
 }
 
 unsafe extern "C-unwind" fn on_screen_locked(
