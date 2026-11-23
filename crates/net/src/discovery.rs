@@ -47,7 +47,7 @@ impl Discovery {
         let name = one_mk_proto::sanitize_name(&id.name);
         let info = ServiceInfo::new(
             SERVICE,
-            &format!("{name} ({}{})", id.fingerprint.short(), if pairing { " pairing" } else { "" }),
+            &instance_label(&name, &id.fingerprint.short(), pairing),
             &host_name(&id.fingerprint),
             "",
             port,
@@ -123,6 +123,20 @@ impl Discovery {
     }
 }
 
+/// The service instance name, `NAME (SHORT)` or `NAME (SHORT pairing)`. It is the first label
+/// of the service's DNS name, and a label is at most 63 bytes: a longer one is dropped from
+/// every announcement without a word, so a long device name is cut (at a character boundary)
+/// to leave room for the rest. The `name` property keeps the whole name.
+fn instance_label(name: &str, short: &str, pairing: bool) -> String {
+    const MAX_LABEL: usize = 63;
+    let tail = format!(" ({short}{})", if pairing { " pairing" } else { "" });
+    let mut cut = name.len().min(MAX_LABEL.saturating_sub(tail.len()));
+    while !name.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}{tail}", name[..cut].trim_end())
+}
+
 /// `one-mk-<short fingerprint>.local.`: unique per device, unlike the
 /// machine's host name (two "MacBook-Pro"s) and always valid ASCII.
 fn host_name(fp: &Fingerprint) -> String {
@@ -168,6 +182,21 @@ mod tests {
         let a = host_name(&Fingerprint([0xab; 32]));
         assert_eq!(a, "one-mk-abab-abab.local.");
         assert_ne!(a, host_name(&Fingerprint([0xcd; 32])));
+    }
+
+    #[test]
+    fn the_instance_label_fits_a_dns_label() {
+        for pairing in [false, true] {
+            for name in ["Mac", &"x".repeat(64), &"界".repeat(64), &format!("{} {}", "a".repeat(40), "b".repeat(23)), &"😀".repeat(64)] {
+                let label = instance_label(name, "abcd-1234", pairing);
+                assert!(label.len() <= 63, "{} bytes: {label}", label.len());
+                assert!(label.ends_with(if pairing { "(abcd-1234 pairing)" } else { "(abcd-1234)" }), "{label}");
+            }
+        }
+        assert_eq!(instance_label("Mac", "abcd-1234", false), "Mac (abcd-1234)");
+        assert_eq!(instance_label("Mac", "abcd-1234", true), "Mac (abcd-1234 pairing)");
+        // Cut where a space would be left dangling.
+        assert_eq!(instance_label(&format!("{} z", "a".repeat(50)), "abcd-1234", false), format!("{} (abcd-1234)", "a".repeat(50)));
     }
 
     #[test]
