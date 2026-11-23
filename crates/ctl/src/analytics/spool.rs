@@ -209,7 +209,7 @@ mod tests {
     fn retry_identity_timestamp_and_error_contract() {
         let home = tempfile::tempdir().unwrap(); set_enabled(home.path(), true).unwrap();
         let config = config(); let id = identity(home.path()).unwrap();
-        append(home.path(), &config, &id, Event::TransferFinished, Origin::Cli, Outcome::Failed, ErrorCode::Io).unwrap();
+        after_transient_lock(|| append(home.path(), &config, &id, Event::TransferFinished, Origin::Cli, Outcome::Failed, ErrorCode::Io));
         let items = read(home.path()); assert_eq!(items.len(), 2);
         let mut retry = items[1].clone(); retry.attempts += 1; retry.next = now() + 10;
         assert_eq!(items[1].payload(&config), retry.payload(&config));
