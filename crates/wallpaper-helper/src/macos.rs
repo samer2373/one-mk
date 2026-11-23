@@ -304,7 +304,14 @@ fn outputs(surface: Surface<'_>, config: &PlayerConfig, mtm: MainThreadMarker) -
     Ok(outputs)
 }
 
-pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
+/// The command-line helper pumps AppKit by hand instead of entering `NSApplication.run`, which would
+/// provide autorelease pools: everything Cocoa and AVFoundation autorelease here is drained by these
+/// (one around startup, one per pass of each loop below), not left until the process ends.
+pub fn run(config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
+    objc2::rc::autoreleasepool(|_| run_in_pool(config, receiver))
+}
+
+fn run_in_pool(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     let mtm = MainThreadMarker::new().context("The wallpaper must start on the main thread")?;
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
@@ -348,58 +355,64 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     let mut ready = false;
     let mut preparing_since = Instant::now();
     loop {
-        while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(objc2_app_kit::NSEventMask::Any, Some(&NSDate::distantPast()), unsafe { NSDefaultRunLoopMode }, true) { app.sendEvent(&event); }
-        while let Ok(input) = receiver.try_recv() {
-            match input { Input::End => {
-                unsafe { player.pause(); looper.disableLooping(); center.removeObserver(&observer); workspace.removeObserver(&observer); distributed.removeObserver(&observer); }
-                return Ok(());
-            }, Input::Offset(offset) => config.clock_offset_ms = offset, Input::Pause(paused) => config.plan.paused = paused }
-        }
-        let flags = notification_flags(&observer);
-        if flags & 4 != 0 {
-            refresh_displays(&mut config, mtm);
-            retiring.extend(std::mem::replace(&mut outputs, self::outputs(Surface::Video(&player), &config, mtm)?));
-            ready = false;
-            preparing_since = Instant::now();
-        }
-        if flags & 8 != 0 {
-            holds.set(Hold::Battery, config.plan.pause_on_battery && battery());
-            let process = NSProcessInfo::processInfo();
-            let low_power: bool = unsafe { process.respondsToSelector(sel!(isLowPowerModeEnabled)) && msg_send![&*process, isLowPowerModeEnabled] };
-            holds.set(Hold::LowPower, low_power);
-        }
-        holds.set(Hold::Locked, flags & 1 != 0);
-        holds.set(Hold::Asleep, flags & 2 != 0);
-        holds.set(Hold::User, config.plan.paused);
-        holds.set(Hold::Occluded, outputs.is_empty() || ready && outputs.iter().all(|output| !output.window.occlusionState().contains(NSWindowOcclusionState::Visible)));
-        if holds.message() != last_message { one_mk_wallpaper::report(&config, &holds); last_message = holds.message(); }
-        if playing != holds.playing() {
-            playing = holds.playing();
-            unsafe {
-                if playing { preparing_since = Instant::now(); player.seekToTime(time(position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms))); player.setRate(1.0); if ready { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Ready); } }
-                else { player.pause(); }
+        // One pool per pass: the events and AVFoundation values made here are autoreleased, and this
+        // thread never leaves the loop, so nothing else would ever drain them.
+        let interval = objc2::rc::autoreleasepool(|_| -> Result<Option<f64>> {
+            while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(objc2_app_kit::NSEventMask::Any, Some(&NSDate::distantPast()), unsafe { NSDefaultRunLoopMode }, true) { app.sendEvent(&event); }
+            while let Ok(input) = receiver.try_recv() {
+                match input { Input::End => {
+                    unsafe { player.pause(); looper.disableLooping(); center.removeObserver(&observer); workspace.removeObserver(&observer); distributed.removeObserver(&observer); }
+                    return Ok(None);
+                }, Input::Offset(offset) => config.clock_offset_ms = offset, Input::Pause(paused) => config.plan.paused = paused }
             }
-        }
-        ensure!(unsafe { player.error().is_none() && item.error().is_none() }, "macOS could not keep playing this video. Try an H.264 MP4 video.");
-        ensure!(ready || !playing || preparing_since.elapsed() < Duration::from_secs(40), "macOS could not show the first video frame. Try another video.");
-        if playing && last_sync.elapsed() >= Duration::from_secs(2) {
-            let expected = position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms);
-            unsafe {
-                match correction(millis(player.currentTime()), expected, config.plan.media.duration_ms) {
-                    Correction::None => player.setRate(1.0),
-                    Correction::Rate(rate) => player.setRate(rate as f32),
-                    Correction::Seek(target) => player.seekToTime(time(target)),
+            let flags = notification_flags(&observer);
+            if flags & 4 != 0 {
+                refresh_displays(&mut config, mtm);
+                retiring.extend(std::mem::replace(&mut outputs, self::outputs(Surface::Video(&player), &config, mtm)?));
+                ready = false;
+                preparing_since = Instant::now();
+            }
+            if flags & 8 != 0 {
+                holds.set(Hold::Battery, config.plan.pause_on_battery && battery());
+                let process = NSProcessInfo::processInfo();
+                let low_power: bool = unsafe { process.respondsToSelector(sel!(isLowPowerModeEnabled)) && msg_send![&*process, isLowPowerModeEnabled] };
+                holds.set(Hold::LowPower, low_power);
+            }
+            holds.set(Hold::Locked, flags & 1 != 0);
+            holds.set(Hold::Asleep, flags & 2 != 0);
+            holds.set(Hold::User, config.plan.paused);
+            holds.set(Hold::Occluded, outputs.is_empty() || ready && outputs.iter().all(|output| !output.window.occlusionState().contains(NSWindowOcclusionState::Visible)));
+            if holds.message() != last_message { one_mk_wallpaper::report(&config, &holds); last_message = holds.message(); }
+            if playing != holds.playing() {
+                playing = holds.playing();
+                unsafe {
+                    if playing { preparing_since = Instant::now(); player.seekToTime(time(position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms))); player.setRate(1.0); if ready { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Ready); } }
+                    else { player.pause(); }
                 }
             }
-            last_sync = Instant::now();
-        }
-        if !ready && !outputs.is_empty() && outputs.iter().all(|output| unsafe { output.video.as_ref().is_some_and(|layer| layer.isReadyForDisplay()) }) {
-            for output in &outputs { output.window.setAlphaValue(1.0); output.window.orderFrontRegardless(); }
-            retiring.clear();
-            if playing { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Ready); }
-            ready = true;
-        }
-        NSRunLoop::mainRunLoop().runMode_beforeDate(unsafe { NSDefaultRunLoopMode }, &NSDate::dateWithTimeIntervalSinceNow(if playing { if ready { 2.0 } else { 0.02 } } else { 1.0e10 }));
+            ensure!(unsafe { player.error().is_none() && item.error().is_none() }, "macOS could not keep playing this video. Try an H.264 MP4 video.");
+            ensure!(ready || !playing || preparing_since.elapsed() < Duration::from_secs(40), "macOS could not show the first video frame. Try another video.");
+            if playing && last_sync.elapsed() >= Duration::from_secs(2) {
+                let expected = position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms);
+                unsafe {
+                    match correction(millis(player.currentTime()), expected, config.plan.media.duration_ms) {
+                        Correction::None => player.setRate(1.0),
+                        Correction::Rate(rate) => player.setRate(rate as f32),
+                        Correction::Seek(target) => player.seekToTime(time(target)),
+                    }
+                }
+                last_sync = Instant::now();
+            }
+            if !ready && !outputs.is_empty() && outputs.iter().all(|output| unsafe { output.video.as_ref().is_some_and(|layer| layer.isReadyForDisplay()) }) {
+                for output in &outputs { output.window.setAlphaValue(1.0); output.window.orderFrontRegardless(); }
+                retiring.clear();
+                if playing { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Ready); }
+                ready = true;
+            }
+            Ok(Some(if playing { if ready { 2.0 } else { 0.02 } } else { 1.0e10 }))
+        })?;
+        let Some(interval) = interval else { return Ok(()) };
+        NSRunLoop::mainRunLoop().runMode_beforeDate(unsafe { NSDefaultRunLoopMode }, &NSDate::dateWithTimeIntervalSinceNow(interval));
     }
 }
 
@@ -415,27 +428,32 @@ fn run_picture(mut config: PlayerConfig, receiver: Receiver<Input>, mtm: MainThr
     let mut last = None;
     let mut visible = false;
     loop {
-        while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(objc2_app_kit::NSEventMask::Any, Some(&NSDate::distantPast()), unsafe { NSDefaultRunLoopMode }, true) { app.sendEvent(&event); }
-        while let Ok(input) = receiver.try_recv() { if matches!(input, Input::End) { return Ok(()); } }
-        let flags = notification_flags(observer);
-        if flags & 4 != 0 {
-            refresh_displays(&mut config, mtm);
-            let replacement = self::outputs(Surface::Picture(&bitmap), &config, mtm)?;
-            outputs = replacement;
-            visible = false;
-        }
-        let show = flags & 3 == 0;
-        if show != visible {
-            for output in &outputs {
-                if show { output.window.setAlphaValue(1.0); output.window.orderFrontRegardless(); }
-                else { output.window.orderOut(None); }
+        // One pool per pass (see `run`).
+        let running = objc2::rc::autoreleasepool(|_| -> Result<bool> {
+            while let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(objc2_app_kit::NSEventMask::Any, Some(&NSDate::distantPast()), unsafe { NSDefaultRunLoopMode }, true) { app.sendEvent(&event); }
+            while let Ok(input) = receiver.try_recv() { if matches!(input, Input::End) { return Ok(false); } }
+            let flags = notification_flags(observer);
+            if flags & 4 != 0 {
+                refresh_displays(&mut config, mtm);
+                let replacement = self::outputs(Surface::Picture(&bitmap), &config, mtm)?;
+                outputs = replacement;
+                visible = false;
             }
-            visible = show;
-        }
-        let playback = if !show { one_mk_wallpaper::Playback::Paused("Paused while this computer is locked or asleep".into()) }
-            else if outputs.is_empty() { one_mk_wallpaper::Playback::Paused("No connected screens selected".into()) }
-            else { one_mk_wallpaper::Playback::Picture };
-        if last.as_ref() != Some(&playback) { one_mk_wallpaper::event(playback.clone()); last = Some(playback); }
+            let show = flags & 3 == 0;
+            if show != visible {
+                for output in &outputs {
+                    if show { output.window.setAlphaValue(1.0); output.window.orderFrontRegardless(); }
+                    else { output.window.orderOut(None); }
+                }
+                visible = show;
+            }
+            let playback = if !show { one_mk_wallpaper::Playback::Paused("Paused while this computer is locked or asleep".into()) }
+                else if outputs.is_empty() { one_mk_wallpaper::Playback::Paused("No connected screens selected".into()) }
+                else { one_mk_wallpaper::Playback::Picture };
+            if last.as_ref() != Some(&playback) { one_mk_wallpaper::event(playback.clone()); last = Some(playback); }
+            Ok(true)
+        })?;
+        if !running { return Ok(()); }
         // Wake only for AppKit/workspace notifications or a command on stdin.
         NSRunLoop::mainRunLoop().runMode_beforeDate(unsafe { NSDefaultRunLoopMode }, &NSDate::distantFuture());
     }
