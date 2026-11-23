@@ -65,8 +65,19 @@ impl Identity {
         let cert_path = dir.join("identity.cert.der");
         let key_path = dir.join("identity.key.der");
         secure_dir(dir)?;
-        let (cert, key) = match (std::fs::read(&cert_path), std::fs::read(&key_path)) {
-            (Ok(c), Ok(k)) => {
+        // Only a file that is not there counts as missing: any other failure to read (a sharing
+        // violation, a permission, a directory in its place) is reported and nothing is written,
+        // so a passing error can't replace the identity every paired computer knows.
+        let mut pair = read_pair(&cert_path, &key_path)?;
+        // Making the pair takes the lock, so that two commands starting on a fresh folder make
+        // one identity between them, not a key of one and a certificate of the other.
+        let mut _making = None;
+        if pair.is_none() {
+            _making = Some(crate::files::lock_file(&dir.join("identity.lock"), crate::files::COMMAND_LOCK_WAIT)?);
+            pair = read_pair(&cert_path, &key_path)?;
+        }
+        let (cert, key) = match pair {
+            Some((c, k)) => {
                 restrict_file(&key_path)?;
                 restrict_file(&cert_path)?;
                 usable(&c, &k).with_context(|| {
@@ -81,7 +92,7 @@ impl Identity {
                 })?;
                 (c, k)
             }
-            _ => {
+            None => {
                 // One of the two is gone (a first run has neither): the pair is made again, and
                 // every computer paired with the old one will refuse this one until paired anew.
                 if cert_path.exists() || key_path.exists() {
@@ -119,6 +130,17 @@ impl Identity {
     pub fn key(&self) -> PrivateKeyDer<'static> {
         PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(self.key.clone()))
     }
+}
+
+/// Both files, or `None` if either is not there. Any other failure to read one is an error.
+fn read_pair(cert_path: &Path, key_path: &Path) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+    let read = |path: &Path| match std::fs::read(path) {
+        Ok(data) => Ok(Some(data)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("reading {} (this computer's identity is left as it is)", path.display())),
+    };
+    let (cert, key) = (read(cert_path)?, read(key_path)?);
+    Ok(cert.zip(key))
 }
 
 /// Whether `cert` and `key` can be used together for connections: what a
@@ -195,27 +217,29 @@ fn tighten(path: &Path, max: u32) -> Result<()> {
     Ok(())
 }
 
+/// Writes `data` to a private file that appears whole: a reader sees the old file or the new
+/// one, never half of it.
 pub(crate) fn write_private(path: &Path, data: &[u8]) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .with_context(|| format!("writing {}", path.display()))?;
+    use std::io::Write;
+    let mut name = path.file_name().unwrap_or_default().to_owned();
+    name.push(format!(".{}.tmp", std::process::id()));
+    let tmp = path.with_file_name(name);
+    let _ = std::fs::remove_file(&tmp);
+    let write = || -> Result<()> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut f = options.open(&tmp).with_context(|| format!("writing {}", path.display()))?;
         f.write_all(data).with_context(|| format!("writing identity file {}", path.display()))?;
-        // `mode` only applies to new files; an existing one keeps its bits.
+        f.sync_all().with_context(|| format!("writing identity file {}", path.display()))?;
+        drop(f);
+        std::fs::rename(&tmp, path).with_context(|| format!("writing identity file {}", path.display()))?;
         restrict_file(path)
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, data).with_context(|| format!("writing identity file {}", path.display()))?;
-        Ok(())
-    }
+    };
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 #[cfg(all(test, unix))]
@@ -301,6 +325,41 @@ mod damage_tests {
         assert!(dir.join("identity.cert.der").exists() && dir.join("identity.key.der").exists());
         assert_eq!(Identity::load_or_create(&dir).unwrap().fingerprint, second);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A read that fails for a reason other than "not there" is no reason to make a new identity.
+    #[test]
+    fn a_read_error_leaves_the_identity_alone() {
+        let dir = temp();
+        Identity::load_or_create(&dir).unwrap();
+        let key = std::fs::read(dir.join("identity.key.der")).unwrap();
+        // A directory where the certificate was: reading it fails, but it is not missing.
+        std::fs::remove_file(dir.join("identity.cert.der")).unwrap();
+        std::fs::create_dir(dir.join("identity.cert.der")).unwrap();
+        let error = Identity::load_or_create(&dir).err().expect("a read error was taken for a missing file");
+        assert!(format!("{error:#}").contains("identity.cert.der"), "{error:#}");
+        assert_eq!(std::fs::read(dir.join("identity.key.der")).unwrap(), key, "the key was overwritten");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Commands starting together on a fresh folder end up with one identity.
+    #[test]
+    fn concurrent_first_use_makes_one_identity() {
+        for _ in 0..20 {
+            let dir = temp();
+            let prints: Vec<_> = (0..6)
+                .map(|_| {
+                    let dir = dir.clone();
+                    std::thread::spawn(move || Identity::load_or_create(&dir).map(|i| i.fingerprint))
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|t| t.join().unwrap().unwrap())
+                .collect();
+            assert!(prints.iter().all(|p| *p == prints[0]), "{prints:?}");
+            assert_eq!(Identity::load_or_create(&dir).unwrap().fingerprint, prints[0]);
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
     }
 }
 
