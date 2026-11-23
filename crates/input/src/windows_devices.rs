@@ -14,7 +14,7 @@
 
 use crate::common_logic::now_ms;
 use crate::devcorr::{Correlated, Correlator, Token, hid_button_to_evdev, windows_path};
-use crate::win_logic::hook_key_to_evdev;
+use crate::win_logic::{ProbeBook, hook_key_to_evdev};
 use crate::{Bus, DeviceRef, Fingerprint, InputDevice, Kinds};
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{HidD_GetProductString, HidD_GetSerialNumberString};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM};
@@ -50,15 +50,14 @@ pub(crate) struct RawDevices {
 /// flaky USB one it can take seconds, and the thread that owns the low-level hooks must not wait
 /// that long (Windows drops a hook whose thread is slow). A device is announced once its answer
 /// is in; until then its input counts as coming from an unknown device, which only the rules
-/// without a device apply to.
+/// without a device apply to. Only a few workers are waiting on drivers at a time: a device that
+/// finds no free one stays unknown until a worker returns (which asks again), and a worker that
+/// never returns costs a thread, not the hooks.
 struct Probes {
     window: usize,
     /// Finished probes, filled by the workers.
     done: Arc<Mutex<Vec<(isize, Fingerprint)>>>,
-    /// Handles being asked for.
-    asking: Vec<isize>,
-    /// Answers waiting for their device to be added.
-    known: Vec<(isize, Fingerprint)>,
+    book: ProbeBook<Fingerprint>,
 }
 
 impl RawDevices {
@@ -81,48 +80,50 @@ impl RawDevices {
     /// From now on a new device's HID strings are asked for on a worker thread, which posts
     /// [`WM_IDENTITY`] to `window` when it is done. Without this, they are asked for in
     /// [`enumerate`](Self::enumerate) itself.
-    #[cfg_attr(not(feature = "native-local-remap"), allow(dead_code))]
     pub(crate) fn probe_in_background(&mut self, window: HWND) {
-        self.probes = Some(Probes { window: window as usize, done: Arc::default(), asking: Vec::new(), known: Vec::new() });
+        self.probes = Some(Probes { window: window as usize, done: Arc::default(), book: ProbeBook::default() });
     }
 
     /// Who the device `h` is, or `None` while that is being asked for.
     fn fingerprint(&mut self, h: isize, kinds: Kinds) -> Option<Fingerprint> {
         let Some(probes) = &mut self.probes else { return Some(identity(h as HANDLE, kinds)) };
-        if let Some(at) = probes.known.iter().position(|(x, _)| *x == h) {
-            return Some(probes.known.swap_remove(at).1);
+        if let Some(fingerprint) = probes.book.take(h) {
+            return Some(fingerprint);
         }
-        if probes.asking.contains(&h) {
+        // Being asked for, or no worker to ask with: unknown for now, asked again next time.
+        if probes.book.asking(h) || !probes.book.has_room() {
             return None;
         }
         let (done, window) = (Arc::clone(&probes.done), probes.window);
-        let worker = std::thread::Builder::new().name("one-mk-hid-probe".into()).spawn(move || {
-            let fingerprint = identity(h as HANDLE, kinds);
-            if let Ok(mut done) = done.lock() {
-                done.push((h, fingerprint));
+        let running = probes.book.started(h);
+        let worker = std::thread::Builder::new().name("one-mk-hid-probe".into()).spawn({
+            let running = Arc::clone(&running);
+            move || {
+                let fingerprint = identity(h as HANDLE, kinds);
+                if let Ok(mut done) = done.lock() {
+                    done.push((h, fingerprint));
+                }
+                ProbeBook::<Fingerprint>::returned(&running);
+                // SAFETY: posting to a window handle is safe even if it is gone.
+                unsafe { PostMessageW(window as HWND, WM_IDENTITY, 0, 0) };
             }
-            // SAFETY: posting to a window handle is safe even if it is gone.
-            unsafe { PostMessageW(window as HWND, WM_IDENTITY, 0, 0) };
         });
-        match worker {
-            Ok(_) => {
-                probes.asking.push(h);
-                None
-            }
-            // No thread to ask on: wait for the driver here, as before.
-            Err(_) => Some(identity(h as HANDLE, kinds)),
+        if worker.is_err() {
+            // No thread to ask on: unknown, as while it is asked for (never wait for the driver here).
+            ProbeBook::<Fingerprint>::returned(&running);
+            probes.book.retire(|x| x != h);
         }
+        None
     }
 
-    /// Takes in the probes that finished, and forgets what no device is waiting for.
+    /// Takes in the probes that finished, and forgets what no connected device is waiting for.
     fn collect_probes(&mut self, listed: &[(isize, u32)]) {
         let Some(probes) = &mut self.probes else { return };
         let finished = probes.done.lock().map(|mut done| std::mem::take(&mut *done)).unwrap_or_default();
         for (h, fingerprint) in finished {
-            probes.asking.retain(|x| *x != h);
-            probes.known.push((h, fingerprint));
+            probes.book.answered(h, fingerprint);
         }
-        probes.known.retain(|(h, _)| listed.iter().any(|(x, _)| x == h));
+        probes.book.retire(|h| listed.iter().any(|(x, _)| *x == h));
     }
 
     /// Stops reading Raw Input (capture ends); what waits goes to `out`.

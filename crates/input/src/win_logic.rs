@@ -766,6 +766,70 @@ pub(crate) fn is_fullscreen(class: &str, style: u32, rect: Ltrb, monitor: Ltrb) 
     covers && !captioned && !maximized && !SHELL_CLASSES.contains(&class)
 }
 
+/// Which devices' HID strings are being asked for on worker threads, and their answers. The
+/// driver may leave a read blocked for good, so the number of threads left waiting on it is
+/// bounded (a flaky device that reconnects over and over must not pile them up), and an answer
+/// that comes after its device went away is thrown out.
+pub(crate) struct ProbeBook<T> {
+    asking: Vec<isize>,
+    known: Vec<(isize, T)>,
+    /// Workers started and not yet returned: also those whose device is gone.
+    running: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl<T> Default for ProbeBook<T> {
+    fn default() -> Self {
+        Self { asking: Vec::new(), known: Vec::new(), running: Default::default() }
+    }
+}
+
+impl<T> ProbeBook<T> {
+    /// How many workers may be waiting on drivers at once.
+    pub(crate) const MAX_RUNNING: usize = 4;
+
+    /// The answer for `h`, once, if it is in.
+    pub(crate) fn take(&mut self, h: isize) -> Option<T> {
+        let at = self.known.iter().position(|(x, _)| *x == h)?;
+        Some(self.known.swap_remove(at).1)
+    }
+
+    pub(crate) fn asking(&self, h: isize) -> bool {
+        self.asking.contains(&h)
+    }
+
+    /// Whether another worker may be started.
+    pub(crate) fn has_room(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::Relaxed) < Self::MAX_RUNNING
+    }
+
+    /// A worker is started for `h`. The returned counter is the worker's to count down when it
+    /// returns ([`ProbeBook::returned`]).
+    pub(crate) fn started(&mut self, h: isize) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        self.running.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.asking.push(h);
+        std::sync::Arc::clone(&self.running)
+    }
+
+    /// A worker is done (or was never started): it no longer counts.
+    pub(crate) fn returned(running: &std::sync::atomic::AtomicUsize) {
+        running.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The answer for `h` arrived; ignored unless `h` is still being asked for.
+    pub(crate) fn answered(&mut self, h: isize, answer: T) {
+        if let Some(at) = self.asking.iter().position(|x| *x == h) {
+            self.asking.swap_remove(at);
+            self.known.push((h, answer));
+        }
+    }
+
+    /// Forgets the devices `listed` does not say are connected, with what was asked of them.
+    pub(crate) fn retire(&mut self, listed: impl Fn(isize) -> bool) {
+        self.asking.retain(|h| listed(*h));
+        self.known.retain(|(h, _)| listed(*h));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1295,5 +1359,29 @@ mod tests {
         assert!(!owed.any_due());
         owed.sent(&1);
         assert!(owed.due().is_empty());
+    }
+
+    #[test]
+    fn probes_are_bounded_and_forget_devices_that_went_away() {
+        let mut book = ProbeBook::<u8>::default();
+        let mut running = Vec::new();
+        for h in 1..=ProbeBook::<u8>::MAX_RUNNING as isize {
+            assert!(book.has_room());
+            running.push(book.started(h));
+        }
+        assert!(!book.has_room(), "four drivers are already being waited for");
+        assert!(book.asking(1));
+        // Device 1 goes away while its read stays blocked: its worker still counts, its answer is
+        // never taken, and the others are untouched.
+        book.retire(|h| h != 1);
+        assert!(!book.asking(1) && book.asking(2));
+        assert!(!book.has_room());
+        book.answered(1, 7);
+        assert_eq!(book.take(1), None, "a late answer from a connection that is gone is thrown out");
+        book.answered(2, 9);
+        assert_eq!(book.take(2), Some(9));
+        assert_eq!(book.take(2), None, "taken once");
+        ProbeBook::<u8>::returned(&running[0]);
+        assert!(book.has_room(), "a worker that returned frees its place");
     }
 }
