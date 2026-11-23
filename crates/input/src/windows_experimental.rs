@@ -987,6 +987,11 @@ impl State {
             }
             if !injected {
                 self.local_input();
+                // A button pressed while the local rules were still handing over for an edge: what
+                // follows is a drag here, not a crossing, even if it stays on that edge.
+                if down && button.is_some() {
+                    self.cancel_edge_request();
+                }
             }
             if msg != WM_MOUSEMOVE {
                 return (false, Effect::None);

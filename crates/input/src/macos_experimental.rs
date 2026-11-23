@@ -1112,6 +1112,10 @@ impl Ctx {
                     st.set_local_key(kc, down);
                 }
             }
+            // A button pressed, or a drag, while the local rules were still handing over for an
+            // edge: what follows is a drag here, not a crossing.
+            CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown
+            | CGEventType::LeftMouseDragged | CGEventType::RightMouseDragged | CGEventType::OtherMouseDragged => self.cancel_edge_request(st),
             // Only plain moves: never switch in the middle of a drag.
             CGEventType::MouseMoved => {
                 let Some(desktop) = &st.desktop else { return true };
