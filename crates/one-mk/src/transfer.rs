@@ -1272,14 +1272,10 @@ fn place(root: &Path, parts: &[String], part: &Path) -> Result<String> {
     for n in 0..10_000 {
         let candidate = if n == 0 { name.clone() } else { numbered(name, n) };
         let dest = long(&dir.join(&candidate));
+        let mut linked = false;
         let done = match fs::hard_link(long(part), &dest) {
-            Ok(()) => {
-                // The file is in place now. A partial name that cannot be
-                // unlinked (a scanner has it open on Windows) is not a
-                // failure of the save; the sweep deletes it later.
-                let _ = fs::remove_file(long(part));
-                true
-            }
+            // The partial name goes once the new one is durable (below).
+            Ok(()) => { linked = true; true }
             Err(e) if e.kind() == ErrorKind::AlreadyExists => false,
             // Filesystems without hard links (FAT, some network shares).
             // The name is claimed first (create_new never replaces and never
@@ -1299,6 +1295,25 @@ fn place(root: &Path, parts: &[String], part: &Path) -> Result<String> {
             },
         };
         if done {
+            // Saved lets the sender delete its copy: the new name, and the
+            // folders made for it, must survive a power loss, not only the
+            // bytes. Where they cannot be made to, the sender keeps its file.
+            let mut synced = one_mk_net::sync_dir(&dir);
+            let mut parent = root.to_path_buf();
+            for folder in std::iter::once(None).chain(folders.iter().map(Some)) {
+                if let Some(folder) = folder { parent.push(folder); }
+                if synced.is_ok() && parent != dir { synced = one_mk_net::sync_dir(&parent); }
+            }
+            if let Err(e) = synced {
+                let _ = fs::remove_file(&dest);
+                return Err(e.context("flushing the received file's folder"));
+            }
+            if linked {
+                // A partial name that cannot be unlinked (a scanner has it
+                // open on Windows) is not a failure of the save; the sweep
+                // deletes it later.
+                let _ = fs::remove_file(long(part));
+            }
             let mut rel: Vec<&str> = folders.iter().map(String::as_str).collect();
             rel.push(&candidate);
             return Ok(rel.join("/"));
@@ -2362,6 +2377,22 @@ mod tests {
         fs::write(root.join(&long), "file").unwrap();
         let placed = place(&root, &[long.clone(), "y.txt".into()], &part("y")).unwrap();
         assert!(placed.ends_with("/y.txt") && placed.split('/').next().unwrap().len() <= 255 && placed.starts_with(&long[..200]), "{placed}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Saved is only sent once the new name and the folders made for it are
+    /// flushed, not only the bytes.
+    #[cfg(all(unix, debug_assertions))]
+    #[test]
+    fn a_placed_file_and_its_new_folders_are_flushed() {
+        let root = temp("place-durable");
+        let part = root.join("p.part");
+        fs::write(&part, "x").unwrap();
+        assert_eq!(place(&root, &["album".into(), "sub".into(), "x.txt".into()], &part).unwrap(), "album/sub/x.txt");
+        for dir in [root.clone(), root.join("album"), root.join("album/sub")] {
+            assert!(one_mk_net::was_synced(&dir), "{dir:?} was not flushed");
+        }
+        assert!(!part.exists());
         let _ = fs::remove_dir_all(&root);
     }
 
