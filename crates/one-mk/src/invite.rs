@@ -111,18 +111,49 @@ pub async fn run(dir: &Path, mut args: InviteArgs) -> Result<()> {
     result
 }
 
+/// The application close code that means "busy, try again" (see `is_busy`).
+const BUSY_CODE: u32 = 4;
+
+/// The proof admission found too many attempts in flight.
+#[derive(Debug)]
+struct Busy;
+
+impl std::fmt::Display for Busy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("invitation busy") }
+}
+
+impl std::error::Error for Busy {}
+
+/// How the host closes an attempt that did not become a session: busy (the joiner retries) or failed.
+fn rejection<T, E>(exchange: &Result<Result<T>, E>) -> (u32, &'static [u8]) {
+    match exchange {
+        Ok(Err(error)) if error.downcast_ref::<Busy>().is_some() => (BUSY_CODE, b"invitation busy"),
+        _ => (1, b"invitation failed"),
+    }
+}
+
+/// The endpoints a wildcard listener on `local` can be reached at: the usable unicast addresses of
+/// the computer (`interfaces`), of the family the socket receives (an IPv4 socket cannot take an
+/// IPv6 endpoint), at most eight.
+fn listener_addresses(local: SocketAddr, interfaces: impl Iterator<Item = std::net::IpAddr>) -> Vec<SocketAddr> {
+    let mut addrs: Vec<_> = interfaces
+        .filter(|ip| local.is_ipv6() || ip.is_ipv4())
+        .map(|ip| SocketAddr::new(ip, local.port()))
+        .filter(|a| !a.ip().is_unspecified() && !a.ip().is_multicast() && !matches!(a.ip(), std::net::IpAddr::V6(ip) if ip.is_unicast_link_local()))
+        .collect();
+    addrs.sort();
+    addrs.dedup();
+    addrs.truncate(8);
+    addrs
+}
+
 async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &Node, control: &mut crate::control::Server) -> Result<()> {
     let local = node.local_addr()?;
     let addrs = if !local.ip().is_unspecified() { vec![local] } else {
-        let mut addrs: Vec<_> = if_addrs::get_if_addrs()?.into_iter()
+        let interfaces = if_addrs::get_if_addrs()?.into_iter()
             .filter(|i| !i.is_loopback() && !one_mk_net::is_virtual_interface(&i.name))
-            .map(|i| SocketAddr::new(i.ip(), local.port()))
-            .filter(|a| !a.ip().is_unspecified() && !a.ip().is_multicast() && !matches!(a.ip(), std::net::IpAddr::V6(ip) if ip.is_unicast_link_local()))
-            .collect();
-        addrs.sort();
-        addrs.dedup();
-        addrs.truncate(8);
-        addrs
+            .map(|i| i.ip());
+        listener_addresses(local, interfaces)
     };
     let invitation = Invitation::new(identity.fingerprint, addrs, args.service_port.unwrap_or(DEFAULT_PORT), args.expires)?;
     let state = Arc::new(InvitationState::new(&invitation));
@@ -195,8 +226,9 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                         }?;
                         break Ok(());
                     }
-                    _ => {
-                        peer.conn.close(1u32.into(), b"invitation failed");
+                    other => {
+                        let (code, reason) = rejection(&other);
+                        peer.conn.close(code.into(), reason);
                         eprintln!("Invitation attempt rejected.");
                         if !state.active() && attempts.is_empty() { break Err(anyhow::anyhow!("invitation burned or expired; create a new one")); }
                     }
@@ -210,12 +242,12 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                     continue;
                 }
                 if !sources.admit(peer.conn.remote_address().ip()) {
-                    peer.conn.close(4u32.into(), b"invitation busy");
+                    peer.conn.close(BUSY_CODE.into(), b"invitation busy");
                     continue;
                 }
                 let source = peer.conn.remote_address().ip().to_canonical();
                 let Some(slot) = slots.acquire(source, attempts.len(), sources.subnet_limited(source), handshake) else {
-                    peer.conn.close(4u32.into(), b"busy");
+                    peer.conn.close(BUSY_CODE.into(), b"busy");
                     continue;
                 };
                 let (identity, state) = (identity.clone(), state.clone());
@@ -225,7 +257,7 @@ async fn serve(dir: &Path, args: &InviteArgs, identity: &Arc<Identity>, node: &N
                     let mut slot = Some(slot);
                     let exchange = tokio::time::timeout(step_timeout(), InviteSession::accept_with_admission(&peer, identity.fingerprint, &identity.name, service_port, &state, || {
                         slot.take();
-                        pending.admit(peer.fingerprint).context("invitation busy")
+                        pending.admit(peer.fingerprint).ok_or_else(|| anyhow::Error::new(Busy))
                     })).await;
                     (peer, exchange)
                 });
@@ -267,6 +299,7 @@ async fn approve_and_save_within(dir: &Path, peer: &Peer, mut session: InviteSes
     let end = expiry.min(tokio::time::Instant::now() + Duration::from_secs(120));
     let accept = if confirm {
         if machine { println!("code\t{}\t{}", sanitize_name(&name), session.code); }
+        discard_typed_ahead();
         println!("Does the other computer show {}? Trust it with your keyboard, mouse and shared clipboard? [y/N]", grouped_code(&session.code));
         std::io::stdout().flush()?;
         read_approval(end, Some(wall_expiry)).await
@@ -305,7 +338,7 @@ pub async fn join(dir: &Path, args: JoinArgs) -> Result<()> {
     };
     let mut result = join_inner(dir, &node, &identity, &invitation, service_port, args.yes, deadline, args.machine).await;
     for _ in 0..3 {
-        if !result.as_ref().is_err_and(|error| format!("{error:#}").contains("busy")) { break; }
+        if !result.as_ref().is_err_and(is_busy) { break; }
         let wait = Duration::from_millis(300 + u64::from(rand::random::<u16>()) % 601);
         if tokio::time::Instant::now() + wait >= deadline { break; }
         tokio::time::sleep(wait).await;
@@ -325,7 +358,7 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
         let end = deadline.min(tokio::time::Instant::now() + Duration::from_secs(2));
         match tokio::time::timeout_at(end, node.connect_pinned(*addr, invitation.fingerprint)).await {
             Ok(Ok(peer)) => { connected = Some(peer); break; }
-            Ok(Err(error)) if format!("{error:#}").contains("busy") => return Err(error),
+            Ok(Err(error)) if is_busy(&error) => return Err(error),
             _ => {}
         }
         if tokio::time::Instant::now() >= deadline { break; }
@@ -342,7 +375,7 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
                 let attempt_end = end.min(tokio::time::Instant::now() + Duration::from_secs(2));
                 match tokio::time::timeout_at(attempt_end, node.connect_pinned(addr, invitation.fingerprint)).await {
                     Ok(Ok(peer)) => { connected = Some(peer); break 'browse; }
-                    Ok(Err(error)) if format!("{error:#}").contains("busy") => { discovery.stop().await; return Err(error); }
+                    Ok(Err(error)) if is_busy(&error) => { discovery.stop().await; return Err(error); }
                     _ => {}
                 }
             }
@@ -361,12 +394,13 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
         println!("WARNING: --yes skips the host trust prompt; verify the code on the host unless it uses --no-confirm.");
         true
     } else {
+        discard_typed_ahead();
         println!("Trust {name} ({})? [y/N]", grouped(peer.fingerprint));
         std::io::stdout().flush()?;
         read_approval(end, None).await
     };
     std::io::stdout().flush()?;
-    let agreed = tokio::time::timeout_at(end, session.confirm(accept)).await.context("invitation approval expired")?;
+    let agreed = send_decision(&mut session, accept, end, step_timeout()).await;
     // The host says no by closing the invitation, often before this side
     // has answered: that is a refusal, not a network fault.
     let agreed = agreed.map_err(|error| if closed_by_peer(&error) {
@@ -383,17 +417,42 @@ async fn join_inner(dir: &Path, node: &Node, identity: &Identity, invitation: &I
     Ok(())
 }
 
+/// The connection errors in `error`'s chain, however they are wrapped.
+fn connection_errors(error: &anyhow::Error) -> Vec<&one_mk_net::quinn::ConnectionError> {
+    use one_mk_net::quinn::{ConnectionError, ReadError, ReadExactError, WriteError};
+    error.chain().filter_map(|cause| {
+        cause.downcast_ref::<ConnectionError>()
+            .or_else(|| match cause.downcast_ref::<ReadExactError>() { Some(ReadExactError::ReadError(ReadError::ConnectionLost(c))) => Some(c), _ => None })
+            .or_else(|| match cause.downcast_ref::<ReadError>() { Some(ReadError::ConnectionLost(c)) => Some(c), _ => None })
+            .or_else(|| match cause.downcast_ref::<WriteError>() { Some(WriteError::ConnectionLost(c)) => Some(c), _ => None })
+    }).collect()
+}
+
+/// The host refused because it was busy (it closed with [`BUSY_CODE`]): worth asking again. Decided
+/// by the close code and never by the words, which can carry the host's own name.
+fn is_busy(error: &anyhow::Error) -> bool {
+    use one_mk_net::quinn::ConnectionError;
+    connection_errors(error).into_iter().any(|c| matches!(c, ConnectionError::ApplicationClosed(close) if close.error_code.into_inner() == u64::from(BUSY_CODE)))
+}
+
+/// Sends this computer's answer and, for a yes, waits for the host's. The human answer was due by
+/// `end`; the host answers after its own person has, so the wait for it runs `wire` past that (the
+/// host allows its joiner the same). A no ends here: the refusal goes out and the host's answer is
+/// of no interest, so a person who said no is not kept waiting for the other one.
+async fn send_decision(session: &mut InviteSession, accept: bool, end: tokio::time::Instant, wire: Duration) -> Result<bool> {
+    if !accept {
+        let _ = tokio::time::timeout(Duration::from_millis(300), session.confirm(false)).await;
+        return Ok(false);
+    }
+    tokio::time::timeout_at(end + wire, session.confirm(true)).await.context("invitation approval expired")?
+}
+
 /// The other end closed the connection on purpose (as opposed to it
 /// timing out or the network failing).
 fn closed_by_peer(error: &anyhow::Error) -> bool {
-    use one_mk_net::quinn::{ConnectionError, ReadError, ReadExactError, WriteError};
-    let closed = |c: &ConnectionError| matches!(c, ConnectionError::ApplicationClosed(_) | ConnectionError::ConnectionClosed(_));
-    error.chain().any(|cause| {
-        cause.downcast_ref::<ConnectionError>().is_some_and(closed)
-            || cause.downcast_ref::<ReadExactError>().is_some_and(|e| matches!(e, ReadExactError::ReadError(ReadError::ConnectionLost(c)) if closed(c)))
-            || cause.downcast_ref::<ReadError>().is_some_and(|e| matches!(e, ReadError::ConnectionLost(c) if closed(c)))
-            || cause.downcast_ref::<WriteError>().is_some_and(|e| matches!(e, WriteError::ConnectionLost(c) if closed(c)))
-    }) || format!("{error:#}").contains("closed by peer")
+    use one_mk_net::quinn::ConnectionError;
+    connection_errors(error).into_iter().any(|c| matches!(c, ConnectionError::ApplicationClosed(_) | ConnectionError::ConnectionClosed(_)))
+        || format!("{error:#}").contains("closed by peer")
 }
 
 async fn withdraw(discovery: &mut Option<Discovery>) {
@@ -534,6 +593,20 @@ async fn save_marked(dir: &Path, peer: &Peer, name: &str, port: u16, initiator: 
     Ok(placement)
 }
 
+/// Throws away what was typed on the terminal but not yet read, so an Enter pressed while waiting
+/// (or a second one after pasting the link) is not taken as the answer to a question not asked yet.
+/// Nothing to throw away when input is not a terminal.
+fn discard_typed_ahead() {
+    #[cfg(unix)]
+    discard_pending_input(0);
+}
+
+#[cfg(unix)]
+fn discard_pending_input(fd: std::os::fd::RawFd) {
+    // SAFETY: tcflush takes only a descriptor; on one that is not a terminal it fails and does nothing.
+    unsafe { libc::tcflush(fd, libc::TCIFLUSH); }
+}
+
 async fn read_stdin(limit: usize) -> Result<Zeroizing<String>> {
     // A dedicated OS thread can be abandoned at process exit; tokio stdin
     // would keep runtime shutdown blocked when an invitation expires.
@@ -541,8 +614,10 @@ async fn read_stdin(limit: usize) -> Result<Zeroizing<String>> {
     std::thread::spawn(move || {
         let result = (|| -> Result<Zeroizing<String>> {
             let mut bytes = Zeroizing::new(Vec::with_capacity(limit));
+            // Descriptor 0 itself, whatever it is (a pipe, a file, a socket, a terminal): reopening
+            // /dev/stdin fails on a socket. Read a byte at a time, so nothing beyond the line is taken.
             #[cfg(unix)]
-            let mut input = std::fs::File::open("/dev/stdin")?;
+            let mut input = std::fs::File::from(std::os::fd::AsFd::as_fd(&std::io::stdin()).try_clone_to_owned()?);
             #[cfg(not(unix))]
             let mut input = std::io::stdin().lock();
             let mut byte = Zeroizing::new([0]);
@@ -701,6 +776,111 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
         drop((host_session, incoming, outgoing));
         host.close(); joiner.close();
+    }
+
+    #[test]
+    fn an_ipv4_listener_advertises_only_ipv4_endpoints() {
+        let interfaces = || ["192.168.1.5", "fe80::1", "2001:db8::5", "224.0.0.1", "10.0.0.7"].map(|ip| ip.parse::<std::net::IpAddr>().unwrap()).into_iter();
+        let v4 = listener_addresses("0.0.0.0:5000".parse().unwrap(), interfaces());
+        assert_eq!(v4, ["10.0.0.7:5000".parse::<SocketAddr>().unwrap(), "192.168.1.5:5000".parse().unwrap()]);
+        let dual = listener_addresses("[::]:5000".parse().unwrap(), interfaces());
+        assert_eq!(dual.len(), 3, "{dual:?}");
+        assert!(dual.iter().any(|a| a.is_ipv6()));
+    }
+
+    /// A full proof admission is answered with the close the joiner retries on, a real failure is not.
+    #[tokio::test]
+    async fn a_full_admission_closes_with_the_busy_code_and_the_joiner_retries() {
+        let host = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let joiner = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let invitation = Invitation::new(host.identity().fingerprint, vec!["192.0.2.1:1234".parse().unwrap()], 24900, Duration::from_secs(60)).unwrap();
+        let state = InvitationState::new(&invitation);
+        let (outgoing, incoming) = tokio::join!(joiner.connect(host.local_addr().unwrap()), host.accept());
+        let (outgoing, incoming) = (outgoing.unwrap(), incoming.unwrap().unwrap());
+        let (hosted, joined) = tokio::join!(
+            async {
+                let session = InviteSession::accept_with_admission(&incoming, host.identity().fingerprint, "Host", 24900, &state,
+                    || -> Result<()> { Err(anyhow::Error::new(Busy)) }).await;
+                let failed = session.is_err();
+                let exchange = Ok::<_, tokio::time::error::Elapsed>(session);
+                let (code, reason) = rejection(&exchange);
+                incoming.conn.close(code.into(), reason);
+                (code, failed)
+            },
+            InviteSession::join(&outgoing, joiner.identity().fingerprint, "Joiner", 24901, &invitation)
+        );
+        assert_eq!(hosted, (BUSY_CODE, true));
+        assert!(is_busy(&joined.err().expect("the joiner was turned away")));
+        host.close(); joiner.close();
+    }
+
+    #[tokio::test]
+    async fn only_the_busy_close_code_makes_a_refusal_retryable() {
+        let (host, joiner, incoming, outgoing, host_session, join_session, _invitation) = exchanged().await;
+        // The host's name is its own choice: a refusal that carries it is not a busy host.
+        assert!(!is_busy(&anyhow::anyhow!("busy-pc did not accept this computer (it declined); nothing saved here")));
+        assert!(!is_busy(&anyhow::anyhow!("invitation busy")), "words alone are not the close code");
+        incoming.conn.close(1u32.into(), b"invitation busy");
+        let error = anyhow::Error::new(outgoing.conn.closed().await);
+        assert!(!is_busy(&error), "another code with the same words is not busy");
+        drop((host_session, join_session));
+        host.close(); joiner.close();
+        let (host, joiner, incoming, outgoing, ..) = exchanged().await;
+        incoming.conn.close(BUSY_CODE.into(), b"x");
+        let error = anyhow::Error::new(outgoing.conn.closed().await).context("invitation exchange timed out");
+        assert!(is_busy(&error));
+        host.close(); joiner.close();
+    }
+
+    /// A person who says no is done at once: the host's answer comes only after its own person answers.
+    #[tokio::test]
+    async fn a_joiner_that_declines_does_not_wait_for_the_host() {
+        let (host, joiner, incoming, outgoing, host_session, mut join_session, _invitation) = exchanged().await;
+        let started = std::time::Instant::now();
+        let end = tokio::time::Instant::now() + Duration::from_secs(120);
+        assert!(!send_decision(&mut join_session, false, end, Duration::from_secs(30)).await.unwrap());
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        drop((host_session, incoming, outgoing));
+        host.close(); joiner.close();
+    }
+
+    /// An answer given at the very end of the human window still gets time on the wire.
+    #[tokio::test]
+    async fn a_late_answer_still_has_time_for_the_hosts_reply() {
+        let (host, joiner, incoming, outgoing, mut host_session, mut join_session, _invitation) = exchanged().await;
+        let end = tokio::time::Instant::now();
+        let (hosted, joined) = tokio::join!(
+            async { tokio::time::sleep(Duration::from_millis(200)).await; host_session.confirm(true).await },
+            send_decision(&mut join_session, true, end, Duration::from_secs(5))
+        );
+        assert!(hosted.unwrap());
+        assert!(joined.unwrap());
+        drop((incoming, outgoing));
+        host.close(); joiner.close();
+    }
+
+    /// What was typed before a question is asked is not its answer (openpty's signature differs by system).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn typed_ahead_input_on_a_terminal_is_thrown_away() {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        let (mut master, mut slave) = (0, 0);
+        // SAFETY: openpty fills the two descriptors it is given; null for the optional arguments.
+        let opened = unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
+        if opened != 0 { eprintln!("skipped: no pseudo terminal"); return; }
+        // SAFETY: both descriptors were just opened and are owned here.
+        let (master, slave) = unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
+        let readable = |fd: &OwnedFd| {
+            let mut poll = libc::pollfd { fd: std::os::fd::AsRawFd::as_raw_fd(fd), events: libc::POLLIN, revents: 0 };
+            // SAFETY: one valid pollfd, zero timeout.
+            unsafe { libc::poll(&mut poll, 1, 100) > 0 }
+        };
+        // SAFETY: a valid descriptor and a buffer of the length given.
+        let wrote = unsafe { libc::write(std::os::fd::AsRawFd::as_raw_fd(&master), b"\n".as_ptr().cast(), 1) };
+        assert_eq!(wrote, 1);
+        assert!(readable(&slave), "the typed-ahead Enter is waiting to be read");
+        discard_pending_input(std::os::fd::AsRawFd::as_raw_fd(&slave));
+        assert!(!readable(&slave), "it is gone before the question is asked");
     }
 
     #[tokio::test]

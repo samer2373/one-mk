@@ -159,12 +159,46 @@ fn stop_daemon(home: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Stops sharing, then swaps `candidate` in. The version before the running
+/// one, kept since the last update for "Go back", is moved to `older` (inside
+/// the staging folder, deleted once the update is done) to make room for the
+/// running version: when stopping or swapping fails nothing was updated, so it
+/// goes back to `previous` instead of being deleted with the staging folder.
+fn install(files: &impl BundleFiles, stop: impl FnOnce() -> Result<()>, candidate: &Path, target: &Path, previous: &Path, older: &Path) -> Result<()> {
+    let had_previous = files.exists(previous)?;
+    if had_previous { files.rename(previous, older)?; }
+    let result = stop().and_then(|()| swap(files, candidate, target, previous));
+    if result.is_err() && had_previous && !files.exists(previous).unwrap_or(true) && let Err(error) = files.rename(older, previous) {
+        tracing::warn!("update: couldn't put the previous version back for Go back: {error:#}");
+    }
+    result
+}
+
+/// A receipt whose version is not the installed app's belongs to an update
+/// that stopped before its swap (killed, power loss, the window closed): the
+/// app is still the old one, so the receipt guards nothing and would block
+/// every later update. One whose version is the installed app's is a real
+/// swap waiting for the new app to start, and stays.
+fn clear_stale_receipt(target: &Path) -> Result<()> {
+    let marker = receipt(target);
+    if !marker.try_exists()? { return Ok(()); }
+    regular(&marker)?;
+    let pending = fs::read_to_string(&marker)?;
+    let installed = target.join("Contents/MacOS/one-mk");
+    // Only a readable, different version proves the swap never happened.
+    if version_check(&installed, None).is_ok() && version_check(&installed, Some(pending.trim())).is_err() {
+        fs::remove_file(&marker)?;
+    }
+    Ok(())
+}
+
 pub(super) fn apply_bundle(manifest: &Manifest, release: &Release, origin: &Url, executable: &Path, home: &Path) -> Result<()> {
     let target = bundle(executable)?;
     ensure!(!policy::translocated(&target.to_string_lossy()), "Move oneMK to Applications before updating");
     let _lock = target_lock(&target, "This app's folder can't be changed by your account. Choose Download instead")?;
     clean_staging(target.parent().context("The app has no parent folder")?);
     let previous = backup(&target)?;
+    clear_stale_receipt(&target)?;
     ensure!(!receipt(&target).try_exists()?, "The previous app is still waiting for a successful restart. Open oneMK once, then update");
     ensure!(Disk.exists(&target)?, "The running app is missing");
     let staging = Staging::new(target.parent().context("The app has no parent folder")?)?;
@@ -185,10 +219,7 @@ pub(super) fn apply_bundle(manifest: &Manifest, release: &Release, origin: &Url,
     let mut pending = OpenOptions::new().create_new(true).write(true).open(&marker)?;
     pending.write_all(manifest.version.as_bytes())?;
     pending.sync_all()?;
-    // The version before the running one, kept since the last update for
-    // "Go back": this update keeps the running version in its place.
-    if Disk.exists(&previous)? { fs::rename(&previous, staging.0.join("older.app"))?; }
-    if let Err(error) = stop_daemon(home).and_then(|()| swap(&Disk, &candidate, &target, &previous)) {
+    if let Err(error) = install(&Disk, || stop_daemon(home), &candidate, &target, &previous, &staging.0.join("older.app")) {
         if Disk.exists(&target).unwrap_or(false) { let _ = fs::remove_file(&marker); }
         return Err(error);
     }
@@ -325,6 +356,50 @@ mod tests {
             assert_eq!(files.exists(Path::new("old"))?, !fail);
             assert_eq!(files.exists(Path::new("new"))?, fail);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_stop_or_swap_keeps_the_app_kept_for_go_back() -> Result<()> {
+        for stop_fails in [true, false] {
+            let files = FakeFiles { paths: RefCell::new(["app", "new", "old"].map(PathBuf::from).into()), fail: !stop_fails };
+            let result = install(&files, || { ensure!(!stop_fails, "stop failed"); Ok(()) },
+                Path::new("new"), Path::new("app"), Path::new("old"), Path::new("staging/older"));
+            assert!(result.is_err());
+            assert!(files.exists(Path::new("old"))?, "the backup from the last update is still there (stop_fails={stop_fails})");
+            assert!(!files.exists(Path::new("staging/older"))?);
+        }
+        // A good update puts the older one aside for the staging folder to delete.
+        let files = FakeFiles { paths: RefCell::new(["app", "new", "old"].map(PathBuf::from).into()), fail: false };
+        install(&files, || Ok(()), Path::new("new"), Path::new("app"), Path::new("old"), Path::new("staging/older"))?;
+        assert!(files.exists(Path::new("old"))? && files.exists(Path::new("staging/older"))?);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn fake_app(target: &Path, version: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = target.join("Contents/MacOS/one-mk");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, format!("#!/bin/sh\necho 'one-mk {version}'\n")).unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_receipt_of_an_update_that_never_swapped_is_cleared_and_a_real_one_stays() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let target = temporary.path().join("one-mk.app");
+        fake_app(&target, "1.0.0");
+        // Interrupted before the swap: the installed app is still 1.0.0.
+        fs::write(receipt(&target), "1.1.0")?;
+        clear_stale_receipt(&target)?;
+        assert!(!receipt(&target).exists());
+        // Swapped, new app not yet started: the receipt stays.
+        fake_app(&target, "1.1.0");
+        fs::write(receipt(&target), "1.1.0")?;
+        clear_stale_receipt(&target)?;
+        assert!(receipt(&target).exists());
         Ok(())
     }
 

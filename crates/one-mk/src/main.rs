@@ -500,7 +500,7 @@ enum Cmd {
         #[arg(long, default_value_t = 1000)]
         rate: u32,
         /// Echo for a bench on another machine.
-        #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "24901")]
+        #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "24901", conflicts_with = "connect")]
         serve: Option<u16>,
         /// Measure against `one-mk bench --serve` on another machine, e.g. 192.168.1.20:24901.
         #[arg(long, value_name = "IP:PORT")]
@@ -818,7 +818,7 @@ fn migrate_old_home(dir: &Path) {
 
 /// Earlier versions kept their settings in the roaming AppData; move them
 /// to the local one the first time.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn migrate_roaming(old: &Path, new: &Path) {
     if old == new || new.join("identity.key.der").exists() || !old.join("identity.key.der").exists() {
         return;
@@ -829,12 +829,16 @@ fn migrate_roaming(old: &Path, new: &Path) {
         tracing::debug!("moving {} failed ({e}); copying", old.display());
         let copy = || -> std::io::Result<()> {
             std::fs::create_dir_all(new)?;
+            // The identity key goes last: its presence in the new folder is what says
+            // the migration is done, so a copy that stops half way is tried again.
+            let key = std::ffi::OsStr::new("identity.key.der");
             for entry in std::fs::read_dir(old)? {
                 let entry = entry?;
-                if entry.file_type()?.is_file() {
+                if entry.file_type()?.is_file() && entry.file_name() != key {
                     std::fs::copy(entry.path(), new.join(entry.file_name()))?;
                 }
             }
+            std::fs::copy(old.join(key), new.join(key))?;
             std::fs::remove_dir_all(old)
         };
         if let Err(e) = copy() {
@@ -881,10 +885,13 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
 fn forget(dir: &Path, device: &str) -> Result<()> {
     let d = TrustStore::update(dir, |trust| {
         let Some(d) = trust.remove(device) else { return Err(manage::not_found(trust, device)) };
-        wallpaper::forget(dir, &d.fingerprint)?;
         Ok(d)
     })?;
     println!("Forgot {}.", one_mk_proto::sanitize_name(d.label()));
+    // After the revocation is saved: a settings file that can't be read must not keep a peer trusted.
+    if let Err(e) = wallpaper::forget(dir, &d.fingerprint) {
+        eprintln!("Warning: its wallpaper permission could not be removed ({e:#}). Fix settings.toml and run `one-mk forget` again, or remove [wallpaper] grants for it by hand.");
+    }
     Ok(())
 }
 
@@ -983,6 +990,50 @@ mod tests {
         for action in ["import", "consent", "doctor"] {
             assert!(Cli::try_parse_from(["one-mk", "wallpaper", action]).is_err());
         }
+    }
+
+    #[test]
+    fn bench_serve_and_connect_are_not_given_together() {
+        assert!(Cli::try_parse_from(["one-mk", "bench", "--serve", "--connect", "1.2.3.4:5"]).is_err());
+        assert!(Cli::try_parse_from(["one-mk", "bench", "--serve"]).is_ok());
+        assert!(Cli::try_parse_from(["one-mk", "bench", "--connect", "1.2.3.4:5"]).is_ok());
+    }
+
+    /// A settings file that does not parse must not keep a revoked peer trusted.
+    #[test]
+    fn forgetting_a_peer_works_with_an_unreadable_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let fingerprint = one_mk_net::Fingerprint([7; 32]).to_string();
+        TrustStore::update(dir.path(), |trust| {
+            trust.upsert(one_mk_net::Device { name: "laptop".into(), fingerprint, ..Default::default() });
+            Ok(())
+        }).unwrap();
+        std::fs::write(dir.path().join("settings.toml"), "[wallpaper\n").unwrap();
+        forget(dir.path(), "laptop").unwrap();
+        assert!(TrustStore::load(dir.path()).unwrap().devices().is_empty());
+    }
+
+    /// The identity key is what says a migration is done, so it is copied last: a copy that stops
+    /// half way leaves no key and is tried again.
+    #[test]
+    fn an_interrupted_roaming_migration_is_finished_by_the_next_start() {
+        let root = tempfile::tempdir().unwrap();
+        let (old, new) = (root.path().join("roaming"), root.path().join("local/one-mk"));
+        std::fs::create_dir_all(&old).unwrap();
+        for name in ["devices.toml", "settings.toml", "identity.cert.der", "identity.key.der"] {
+            std::fs::write(old.join(name), name).unwrap();
+        }
+        // The new folder exists with something in the way of one file: the rename fails, then so does a copy.
+        std::fs::create_dir_all(new.join("devices.toml")).unwrap();
+        migrate_roaming(&old, &new);
+        assert!(!new.join("identity.key.der").exists(), "the key must not be there while files are missing");
+        assert!(old.join("devices.toml").is_file(), "the old folder is kept");
+        std::fs::remove_dir_all(new.join("devices.toml")).unwrap();
+        migrate_roaming(&old, &new);
+        for name in ["devices.toml", "settings.toml", "identity.cert.der", "identity.key.der"] {
+            assert_eq!(std::fs::read_to_string(new.join(name)).unwrap(), name);
+        }
+        assert!(!old.exists());
     }
 
     #[test]
