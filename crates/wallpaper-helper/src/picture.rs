@@ -393,9 +393,20 @@ fn slices(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<Vec<(
     Ok(files)
 }
 
+/// Whether a picture is shown by a window of ours (on a Wayland desktop that
+/// can host one) rather than through the desktop's own wallpaper settings.
+/// `available` is asked last. On a desktop with settings of its own (GNOME)
+/// the settings are the stable way and are used even when the oneMK video
+/// extension is enabled: that extension answers `available` for video, and a
+/// picture must not start needing its bridge.
+#[cfg(target_os = "linux")]
+fn overlay_picture(wayland: bool, settings_desktop: bool, available: impl FnOnce() -> bool) -> bool {
+    wayland && !settings_desktop && available()
+}
+
 pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<one_mk_wallpaper::picture::Mode> {
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() && one_mk_wallpaper::wayland::available().is_ok() {
+    if overlay_picture(std::env::var_os("WAYLAND_DISPLAY").is_some(), one_mk_wallpaper::picture::gnome_desktop(), || one_mk_wallpaper::wayland::available().is_ok()) {
         return Ok(one_mk_wallpaper::picture::Mode::Overlay);
     }
     std::fs::create_dir_all(root)?;
@@ -755,5 +766,16 @@ mod tests {
         assert_eq!(slice.get_pixel(0, 0).0, [0, 0, 0, 255]);
         assert_eq!(slice.get_pixel(0, 1).0, [255, 0, 0, 255]);
         restore(&root.0).unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnome_pictures_use_its_settings_even_with_the_video_extension_enabled() {
+        // GNOME Wayland with the extension: the video bridge answers `available`, the picture still goes native.
+        assert!(!overlay_picture(true, true, || panic!("not asked on a desktop with wallpaper settings")));
+        // Another layer-shell desktop: a window of ours, if it can host one.
+        assert!(overlay_picture(true, false, || true));
+        assert!(!overlay_picture(true, false, || false));
+        // X11 never uses it.
+        assert!(!overlay_picture(false, false, || panic!("not asked without Wayland")));
     }
 }
