@@ -103,6 +103,13 @@ history_skip_apps = ["keepassxc", "keepass", "1password", "bitwarden", "org.keep
   Opt-in history may retain up to 16 MiB by default; this is not a memory ceiling
   (decoded images and buffers add to it). With history off, ordinary local copies are
   neither retained nor PNG-encoded for history.
+  The window's Show asks the daemon for a preview of at most 80 characters, so showing a
+  very large item does not move the whole item; `history show N` still prints it all.
+- Item numbers start again at 1 when oneMK restarts (saved history keeps its own). So
+  `history list --json` gives every row an `instance` number for that run of oneMK, and the
+  window sends it back with Show and Copy: after a restart the daemon refuses an old row
+  ("refresh the list and choose again") instead of acting on whatever now has that number,
+  and the window reads the list again. Scripts that use plain numbers are unaffected.
 - Copies marked sensitive are never retained, even with `--skip-sensitive off`. The mark
   is read from X11's `x-kde-passwordManagerHint` (the only path tried on a real session),
   and, built but **not tried** on real desktops, the KDE hint on the Wayland data-control

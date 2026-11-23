@@ -19,6 +19,7 @@ impl App {
         let refresh = Rect::from_min_size(pos2(at.x - clear_width - 8.0 - refresh_width, at.y - 14.0), vec2(refresh_width, 28.0));
         if button(ui, refresh, Id::unique("history-refresh"), "Refresh", Look::Quiet, self.prefs.history_enabled && online, Some("Refresh clipboard history")).clicked() {
             self.clipboard_reveal = None;
+            self.clipboard_reveal_error = None;
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
             self.clipboard_clear_confirm = false;
             self.clipboard_history = None;
@@ -27,9 +28,10 @@ impl App {
         let clear = Rect::from_min_size(pos2(at.x - clear_width, at.y - 14.0), vec2(clear_width, 28.0));
         let clear_name = if self.clipboard_clear_confirm { "Sure? Click again to delete all memory and saved history; Refresh cancels." } else { "Clear deletes all memory and saved history. Click again to confirm; Refresh cancels." };
         if button(ui, clear, Id::unique("history-clear"), clear_label, Look::Quiet, online && self.prefs.history_enabled, Some(clear_name)).clicked() {
-            if self.clipboard_clear_confirm { self.link.history_change(None); }
+            if self.clipboard_clear_confirm { self.link.history_change(None, None); }
             self.clipboard_clear_confirm = !self.clipboard_clear_confirm;
             self.clipboard_reveal = None;
+            self.clipboard_reveal_error = None;
         }
         let row = card.row(ui, ROW);
         if toggle_row(ui, row, Id::unique("history-enabled"), &Words::new("Keep clipboard history"), Some("history-enabled"), self.prefs.history_enabled, true).clicked() {
@@ -37,6 +39,7 @@ impl App {
             self.set_pref("clipboard history", &["clipboard", "history", if enabled { "on" } else { "off" }], |prefs| prefs.history_enabled = enabled);
             self.clipboard_clear_confirm = false;
             self.clipboard_reveal = None;
+            self.clipboard_reveal_error = None;
             self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
         }
         let row = card.row(ui, ROW);
@@ -58,6 +61,10 @@ impl App {
         para(ui, row.min + vec2(0.0, 12.0), inner, privacy, regular(T_META), pal().ink2);
         let failure = history_failure(self.running());
         let text = history_message(online, self.clipboard_history.as_ref(), self.prefs.history_enabled, failure);
+        // A Show that failed (timed out, or the daemon refused a stale row): say so above the list.
+        if let Some(error) = self.clipboard_reveal_error.clone().filter(|error| text != Some(error.as_str())) {
+            self.history_note(ui, &mut card, &error, true);
+        }
         // A saved-history failure next to a list: say so above it, or the
         // list reads as everything there is.
         if let Some(failure) = failure.filter(|failure| text != Some(*failure)) {
@@ -100,13 +107,19 @@ impl App {
             let response = response.on_hover_text("Copy this here");
             if response.clicked() {
                 response.request_focus();
-                self.link.history_change(Some(item.id));
+                self.link.history_change(Some(item.id), item.instance);
             }
             let show_name = format!("{} the preview of clipboard item {} on screen", if revealed.is_some() { "Hide" } else { "Show" }, item.id);
-            if button(ui, show, Id::unique(("history-show", item.id)), if revealed.is_some() { "Hide" } else { "Show" }, Look::Quiet, true, Some(&show_name)).clicked() {
+            // One preview request per row at a time: another click while it is out is not sent.
+            let pending = self.clipboard_reveal_pending == Some((item.id, self.clipboard_reveal_epoch));
+            if button(ui, show, Id::unique(("history-show", item.id)), if revealed.is_some() { "Hide" } else { "Show" }, Look::Quiet, !pending, Some(&show_name)).clicked() {
                 self.clipboard_reveal_epoch = self.clipboard_reveal_epoch.wrapping_add(1);
+                self.clipboard_reveal_error = None;
                 if revealed.is_some() { self.clipboard_reveal = None; }
-                else { self.link.history_reveal(item.id, self.clipboard_reveal_epoch); }
+                else {
+                    self.clipboard_reveal_pending = Some((item.id, self.clipboard_reveal_epoch));
+                    self.link.history_reveal(item.id, item.instance, self.clipboard_reveal_epoch);
+                }
             }
         }
         page.finish(ui, card);
@@ -160,7 +173,7 @@ mod tests {
         assert_eq!(failure, Some(error));
         let empty = Ok(Vec::new());
         assert_eq!(history_message(true, Some(&empty), true, failure), Some(error));
-        let items = Ok(vec![crate::daemon::HistoryItem { id: 1, preview: String::new(), detail: String::new(), timestamp: 0 }]);
+        let items = Ok(vec![crate::daemon::HistoryItem { id: 1, instance: None, preview: String::new(), detail: String::new(), timestamp: 0 }]);
         assert_eq!(history_message(true, Some(&items), true, failure), None, "the list still shows; the failure goes above it");
         let routine = Status { clipboard_history_note: "Clipboard history is kept in memory only.".into(), ..Default::default() };
         assert_eq!(history_failure(Some(&routine)), None);

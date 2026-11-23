@@ -168,9 +168,61 @@ async fn apply_and_wait_for_delete(dir: &Path) -> Result<()> {
     bail!("The saved clipboard history is still on disk at {}; delete it by hand, or run `one-mk clipboard history clear`", file.display())
 }
 
+/// Which run of the daemon this history belongs to. Item numbers start again
+/// at 1 whenever the daemon does (unless saved history is on), so a number
+/// from a list read before a restart can name an unrelated item afterwards:
+/// `list --json` says this instance, and the window's copy and preview
+/// requests send it back to be checked here. Random per process and small
+/// enough (53 bits, never 0) to survive a script that reads JSON numbers as doubles.
+pub fn instance() -> u64 {
+    static INSTANCE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *INSTANCE.get_or_init(|| {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
+        let mixed = nanos.wrapping_mul(6364136223846793005) ^ u64::from(std::process::id()).rotate_left(40);
+        (mixed & ((1 << 53) - 1)) | 1
+    })
+}
+
+fn check_instance(requested: u64) -> Result<()> {
+    if requested != instance() {
+        bail!("The clipboard history was reloaded since this list was read (oneMK restarted); refresh the list and choose again");
+    }
+    Ok(())
+}
+
+/// Longest preview `Preview` answers with, in characters.
+const PREVIEW_CHARS: usize = 80;
+/// Characters of an item looked at to find them: an item of control
+/// characters only is not read to its end for a line that is empty anyway.
+const PREVIEW_SCAN: usize = 64 * 1024;
+
+/// The start of `value` as one printable line of at most [`PREVIEW_CHARS`]
+/// characters, "…" at the end when there was more. Reads only as far as it
+/// needs, so the cost does not grow with the item.
+fn bounded_preview(value: &str) -> String {
+    let mut preview = String::new();
+    let mut shown = 0;
+    for (scanned, ch) in value.chars().enumerate() {
+        if scanned >= PREVIEW_SCAN {
+            preview.push('…');
+            break;
+        }
+        let ch = if ch.is_whitespace() { ' ' } else { ch };
+        if ch.is_control() || invisible(ch) { continue; }
+        if shown == PREVIEW_CHARS {
+            preview.push('…');
+            break;
+        }
+        preview.push(ch);
+        shown += 1;
+    }
+    preview
+}
+
 pub async fn handle(cb: &Clipboard, action: HistoryAction, json: bool) -> Result<String> {
     let durable = matches!(action, HistoryAction::Delete(_) | HistoryAction::Clear | HistoryAction::Flush);
-    if let HistoryAction::Copy(id) = action {
+    if let HistoryAction::Copy(id) | HistoryAction::CopyChecked(id, _) = action {
+        if let HistoryAction::CopyChecked(_, instance) = action { check_instance(instance)?; }
         let entry = cb.history().lock().unwrap_or_else(|error| error.into_inner()).get(id)
             .ok_or_else(|| anyhow::anyhow!("Clipboard item {id} is no longer in history; run one-mk clipboard history list"))?;
         if entry.data.len() > cb.filter().max_bytes() { bail!("This item is over the clipboard size limit; raise it with one-mk clipboard --max-mb N"); }
@@ -204,6 +256,12 @@ pub async fn handle(cb: &Clipboard, action: HistoryAction, json: bool) -> Result
                 let content = entry.data.text.as_ref().or(entry.data.html.as_ref()).cloned().unwrap_or_else(|| format!("{} ({})", entry.preview(), crate::clip::mb(entry.data.len())));
                 Ok(if json { format!("{{\"content\":{}}}\n", quote(&content)) } else { format!("{}\n", terminal_text(&content)) })
             }
+            HistoryAction::Preview(id, instance) => {
+                check_instance(instance)?;
+                let entry = history.get(id).ok_or_else(|| anyhow::anyhow!("Clipboard item {id} is no longer in history; run one-mk clipboard history list"))?;
+                let preview = entry.data.text.as_deref().or(entry.data.html.as_deref()).map_or_else(|| format!("{} ({})", entry.preview(), crate::clip::mb(entry.data.len())), bounded_preview);
+                Ok(if json { format!("{{\"preview\":{}}}\n", quote(&preview)) } else { format!("{preview}\n") })
+            }
             HistoryAction::Delete(id) => {
                 if !history.delete(id) { bail!("Clipboard item {id} is no longer in history; run one-mk clipboard history list"); }
                 if let Some(error) = &history.error { bail!("{error}"); }
@@ -215,7 +273,7 @@ pub async fn handle(cb: &Clipboard, action: HistoryAction, json: bool) -> Result
                 Ok(if json { "{\"cleared\":true}\n".into() } else { "Cleared clipboard history.\n".into() })
             }
             HistoryAction::Flush => Ok(if json { "{\"flushed\":true}\n".into() } else { String::new() }),
-            HistoryAction::Copy(_) => bail!("Could not restore clipboard history; try again"),
+            HistoryAction::Copy(_) | HistoryAction::CopyChecked(..) => bail!("Could not restore clipboard history; try again"),
         }
     }).await.map_err(|_| anyhow::anyhow!("Could not read clipboard history; restart one-mk and try again"))??;
     if durable { cb.flush_history().await?; }
@@ -223,8 +281,8 @@ pub async fn handle(cb: &Clipboard, action: HistoryAction, json: bool) -> Result
 }
 
 fn entry_json(entry: &Entry) -> String {
-    format!("{{\"id\":{},\"kind\":{},\"preview\":{},\"size\":{},\"timestamp\":{},\"origin\":{}}}",
-        entry.id, quote(entry.kind()), quote("[hidden; use Show]"), entry.data.len(), entry.timestamp, quote(&entry.origin))
+    format!("{{\"id\":{},\"instance\":{},\"kind\":{},\"preview\":{},\"size\":{},\"timestamp\":{},\"origin\":{}}}",
+        entry.id, instance(), quote(entry.kind()), quote("[hidden; use Show]"), entry.data.len(), entry.timestamp, quote(&entry.origin))
 }
 
 fn quote(value: &str) -> String {
@@ -268,6 +326,61 @@ mod tests {
             assert!(!handle(&clipboard, HistoryAction::List, json).await.unwrap().contains("dummy-secret"));
         }
         assert!(handle(&clipboard, HistoryAction::Show(1), false).await.unwrap().contains("dummy-secret"));
+    }
+
+    /// The window's Show must not make the daemon serialise a whole item for 80 characters.
+    #[tokio::test]
+    async fn preview_is_bounded_however_large_the_item_is() {
+        let (clipboard, _) = Clipboard::memory();
+        clipboard.history().lock().unwrap().configure(20, 256 << 20, 256 << 20, None);
+        let big = format!("start\u{1b}[2J\n\t{}\u{202e}tail", "\u{1b}x\u{7}".repeat(3 << 20));
+        clipboard.history().lock().unwrap().record(Arc::new(one_mk_clipboard::ClipData { text: Some(big.clone()), ..Default::default() }), false, "peer");
+        let id = clipboard.history().lock().unwrap().list()[0].id;
+        // Show is the CLI's full content (escaped: several times the size); Preview is a line.
+        assert!(handle(&clipboard, HistoryAction::Show(id), false).await.unwrap().len() > big.len());
+        let reply = handle(&clipboard, HistoryAction::Preview(id, instance()), false).await.unwrap();
+        assert!(reply.len() < 400, "{}", reply.len());
+        assert!(reply.starts_with("start[2J  xxxxxxxx") && reply.trim_end().ends_with('…') && reply.trim_end().chars().count() == PREVIEW_CHARS + 1, "{reply:?}");
+        assert!(!reply.trim_end().chars().any(|ch| ch.is_control() || invisible(ch)), "{reply:?}");
+        let json = handle(&clipboard, HistoryAction::Preview(id, instance()), true).await.unwrap();
+        assert!(json.starts_with("{\"preview\":\"start[2J") && json.len() < 400, "{json}");
+        // Shorter than the limit: whole, no ellipsis; HTML when there is no text; others by their kind.
+        assert_eq!(bounded_preview("two\nlines"), "two lines");
+        assert_eq!(bounded_preview(&"a".repeat(PREVIEW_CHARS)), "a".repeat(PREVIEW_CHARS));
+        assert_eq!(bounded_preview(&format!("{}b\u{1b}", "a".repeat(PREVIEW_CHARS))), format!("{}…", "a".repeat(PREVIEW_CHARS)));
+        assert_eq!(bounded_preview(&format!("{}\u{1b}", "a".repeat(PREVIEW_CHARS))), "a".repeat(PREVIEW_CHARS), "a trailing control character is no more text");
+        assert_eq!(bounded_preview(&"\u{1b}".repeat(PREVIEW_SCAN * 4)), "…", "an item of nothing printable stops being read");
+        clipboard.history().lock().unwrap().record(Arc::new(one_mk_clipboard::ClipData { html: Some("<b>bold</b>".into()), ..Default::default() }), false, "peer");
+        let html = clipboard.history().lock().unwrap().list()[0].id;
+        assert_eq!(handle(&clipboard, HistoryAction::Preview(html, instance()), false).await.unwrap(), "<b>bold</b>\n");
+        let error = handle(&clipboard, HistoryAction::Preview(999, instance()), false).await.unwrap_err().to_string();
+        assert!(error.contains("no longer in history"), "{error}");
+    }
+
+    /// Item numbers start again after a restart: a row from the list of the
+    /// run before must be refused, not act on whatever now has its number.
+    #[tokio::test]
+    async fn a_row_from_another_daemon_run_is_refused_not_applied_to_another_item() {
+        let (clipboard, backend) = Clipboard::memory();
+        clipboard.history().lock().unwrap().configure(20, one_mk_clipboard::history::DEFAULT_BYTES, one_mk_clipboard::CEILING_BYTES, None);
+        clipboard.history().lock().unwrap().record(Arc::new(one_mk_clipboard::ClipData { text: Some("the new daemon's item".into()), ..Default::default() }), false, "peer");
+        let id = clipboard.history().lock().unwrap().list()[0].id;
+        assert_eq!(id, 1, "the number the previous daemon's first item had");
+        // The list says which run it is from, in every row.
+        let list = handle(&clipboard, HistoryAction::List, true).await.unwrap();
+        assert!(list.contains(&format!("\"id\":1,\"instance\":{},", instance())), "{list}");
+        let stale = instance() ^ 0x2a;
+        for action in [HistoryAction::Preview(id, stale), HistoryAction::CopyChecked(id, stale)] {
+            let error = handle(&clipboard, action, false).await.unwrap_err().to_string();
+            assert!(error.contains("refresh the list and choose again"), "{error}");
+        }
+        assert_eq!(backend.text(), None, "nothing was copied");
+        // The same run's rows work, and so do the plain forms scripts and older windows send.
+        assert_eq!(handle(&clipboard, HistoryAction::CopyChecked(id, instance()), true).await.unwrap(), "{\"copied\":true}\n");
+        assert_eq!(backend.text().as_deref(), Some("the new daemon's item"));
+        assert!(handle(&clipboard, HistoryAction::Copy(id), false).await.is_ok());
+        assert!(handle(&clipboard, HistoryAction::Show(id), false).await.unwrap().contains("the new daemon's item"));
+        assert!(instance() != 0 && instance() < 1 << 53);
     }
 
     #[test]

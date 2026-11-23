@@ -1981,7 +1981,7 @@ mod tests {
 
     fn connected(links: &[(&str, u32, u64, u64)]) -> Daemon {
         let mut s = status("aaaa-aaaa", 24900, &links.iter().map(|l| (l.0, true)).collect::<Vec<_>>());
-        s.links = links.iter().map(|(id, rtt_us, lost, sent)| ((*id).into(), one_mk_ctl::status::LinkStats { rtt_us: *rtt_us, lost: *lost, sent: *sent })).collect();
+        s.links = links.iter().map(|(id, rtt_us, lost, sent)| ((*id).into(), one_mk_ctl::status::LinkStats { rtt_us: *rtt_us, lost: *lost, sent: *sent, ..Default::default() })).collect();
         Daemon::Running(Box::new(s))
     }
 
@@ -2006,7 +2006,7 @@ mod tests {
         assert_eq!(st(&connection_check(&connected(&[("1111-1111", 40_001, 0, 100)]))), Status::Warn);
         // A computer that is not connected has no link to judge.
         let mut s = status("aaaa-aaaa", 24900, &[("1111-1111", false)]);
-        s.links = vec![("1111-1111".into(), one_mk_ctl::status::LinkStats { rtt_us: 900_000, lost: 9, sent: 10 })];
+        s.links = vec![("1111-1111".into(), one_mk_ctl::status::LinkStats { rtt_us: 900_000, lost: 9, sent: 10, ..Default::default() })];
         assert_eq!(st(&connection_check(&Daemon::Running(Box::new(s)))), Status::Skip);
     }
 

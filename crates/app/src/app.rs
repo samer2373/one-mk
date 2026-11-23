@@ -237,6 +237,11 @@ pub struct App {
     clipboard_reveal: Option<(u64, String)>,
     clipboard_clear_confirm: bool,
     clipboard_reveal_epoch: u64,
+    /// The item whose preview was asked for and the epoch it was asked in,
+    /// until the answer comes: its Show waits meanwhile.
+    clipboard_reveal_pending: Option<(u64, u64)>,
+    /// Why the last Show failed, shown in the History card until the next try.
+    clipboard_reveal_error: Option<String>,
     autostart: Option<bool>,
     scene: Scene,
     tab: Tab,
@@ -508,6 +513,8 @@ impl App {
             clipboard_reveal: None,
             clipboard_clear_confirm: false,
             clipboard_reveal_epoch: 0,
+            clipboard_reveal_pending: None,
+            clipboard_reveal_error: None,
             autostart: None,
             update_available: None,
             update_output: None,
@@ -697,11 +704,20 @@ impl App {
                     self.clipboard_history = Some(history);
                 }
                 Event::ClipboardReveal(id, epoch, content) => {
+                    if self.clipboard_reveal_pending == Some((id, epoch)) { self.clipboard_reveal_pending = None; }
                     if self.clipboard_reveal_epoch == epoch && self.tab == Tab::Files
-                        && self.clipboard_history.as_ref().and_then(|items| items.as_ref().ok()).is_some_and(|items| items.iter().any(|item| item.id == id))
-                        && let Ok(content) = content {
-                        self.fonts.cover(&self.ctx, std::iter::once(content.as_str()));
-                        self.clipboard_reveal = Some((id, content));
+                        && self.clipboard_history.as_ref().and_then(|items| items.as_ref().ok()).is_some_and(|items| items.iter().any(|item| item.id == id)) {
+                        match content {
+                            Ok(content) => {
+                                self.fonts.cover(&self.ctx, std::iter::once(content.as_str()));
+                                self.clipboard_reveal = Some((id, content));
+                            }
+                            // Said in the History card, not dropped: a Show that failed looked like a click that did nothing.
+                            Err(message) => {
+                                self.fonts.cover(&self.ctx, std::iter::once(message.as_str()));
+                                self.clipboard_reveal_error = Some(message);
+                            }
+                        }
                     }
                 }
                 Event::Status(s) => {
@@ -1809,7 +1825,7 @@ impl App {
                 self.ctx.data_mut(|data| data.remove::<usize>(Id::unique("shortcut-recorder")));
             }
             self.tab = tab;
-            if tab == Tab::Files { self.clipboard_history = None; self.link.history(); }
+            if tab == Tab::Files { self.clipboard_history = None; self.clipboard_reveal_error = None; self.link.history(); }
             // "Sure?" on Clear belongs to the visit: coming back later, it asks again.
             self.clipboard_clear_confirm = false;
             self.tab_at = self.now;
@@ -3070,7 +3086,7 @@ mod debug {
         }
         if ready && var("ONE_MK_APP_HISTORY").is_some() {
             app.prefs.history_enabled = true;
-            app.clipboard_history = Some(Ok((1..=5).map(|id| crate::daemon::HistoryItem { id, preview: "[hidden]".into(), detail: "text · 96 B · from Studio PC".into(), timestamp: 1793440000 }).collect()));
+            app.clipboard_history = Some(Ok((1..=5).map(|id| crate::daemon::HistoryItem { id, instance: None, preview: "[hidden]".into(), detail: "text · 96 B · from Studio PC".into(), timestamp: 1793440000 }).collect()));
             if var("ONE_MK_APP_HISTORY").as_deref() == Some("revealed") {
                 app.clipboard_reveal = Some((1, "First line — second line with preserved separators and a long Unicode preview…".into()));
             }
