@@ -1679,11 +1679,21 @@ async fn send_one(
     // A file that cannot be read now (permissions, a program has it locked, it
     // changed since it was listed) is refused before anything is offered, so
     // the stream stays good for the next file.
-    if let Err(e) = open_regular(&file.path, file.size) {
-        add_progress(&progress.done, file.size);
-        add_progress(&progress.skipped, file.size);
-        return Ok(Outcome::Failed(format!("{e:#}")));
-    }
+    // Opened on the blocking pool (a slow or disconnected network share must
+    // not stall the runtime that forwards input) and kept for the reader.
+    let (path, size) = (file.path.clone(), file.size);
+    let opened = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || open_regular(&path, size)
+    });
+    let source = match opened.await? {
+        Ok(source) => source,
+        Err(e) => {
+            add_progress(&progress.done, file.size);
+            add_progress(&progress.skipped, file.size);
+            return Ok(Outcome::Failed(format!("{e:#}")));
+        }
+    };
     write_file_msg(send, &FileMsg::Offer { path: file.rel.clone(), size: file.size, mtime: file.mtime, batch }).await?;
     let offset = match read_file_msg(recv).await? {
         Some(FileMsg::Saved { name }) => {
@@ -1706,8 +1716,7 @@ async fn send_one(
 
     // Disk reader (which also hashes) → bounded channel → network.
     let (tx, mut rx) = mpsc::channel::<bytes::Bytes>(DEPTH);
-    let (path, size) = (file.path.clone(), file.size);
-    let reader = tokio::task::spawn_blocking(move || read_file(&path, size, offset, tx));
+    let reader = tokio::task::spawn_blocking(move || read_file(source, &path, size, offset, tx));
     while let Some(chunk) = rx.recv().await {
         let n = chunk.len() as u64;
         if let Err(e) = send.write_chunk(chunk).await {
@@ -1747,8 +1756,10 @@ impl std::fmt::Display for LocalFailure {
 impl std::error::Error for LocalFailure {}
 
 /// Hashes the whole file and sends the part from `offset` on.
-fn read_file(path: &Path, size: u64, offset: u64, tx: mpsc::Sender<bytes::Bytes>) -> Result<[u8; 32]> {
-    let mut file = open_regular(path, size)?;
+fn read_file(mut file: File, path: &Path, size: u64, offset: u64, tx: mpsc::Sender<bytes::Bytes>) -> Result<[u8; 32]> {
+    // Opened before the offer: the file may have been written to while the
+    // receiver was deciding.
+    if file.metadata()?.len() != size { bail!("{} changed before sending", path.display()); }
     let mut hasher = blake3::Hasher::new();
     let mut pos = 0u64;
     while pos < size {
@@ -1814,7 +1825,7 @@ fn swapped_outgoing_symlink_is_rejected() {
     fs::write(root.join("secret"), b"secrets!").unwrap();
     std::os::unix::fs::symlink(root.join("secret"), &path).unwrap();
     let (sender, _receiver) = mpsc::channel(1);
-    let result = read_file(&checked.path, checked.size, 0, sender);
+    let result = open_regular(&checked.path, checked.size).and_then(|file| read_file(file, &checked.path, checked.size, 0, sender));
     fs::remove_dir_all(&root).unwrap();
     assert!(result.is_err(), "a symlink substituted after collection must not be read");
 }
@@ -1833,7 +1844,7 @@ fn swapped_outgoing_fifo_is_rejected() {
     assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
     let guard = fs::OpenOptions::new().read(true).write(true).custom_flags(libc::O_NONBLOCK).open(&path).unwrap();
     let (sender, _receiver) = mpsc::channel(1);
-    let result = read_file(&checked.path, checked.size, 0, sender);
+    let result = open_regular(&checked.path, checked.size).and_then(|file| read_file(file, &checked.path, checked.size, 0, sender));
     drop(guard);
     fs::remove_dir_all(&root).unwrap();
     assert!(result.is_err(), "a FIFO substituted after collection must not be read");
@@ -2864,7 +2875,7 @@ mod tests {
         assert_eq!((files.len(), files[0].rel.as_str(), files[0].size), (1, "link.txt", 4));
         assert!(skipped.is_empty());
         let (sender, _receiver) = mpsc::channel(1);
-        assert!(read_file(&files[0].path, files[0].size, 0, sender).is_ok(), "reading still refuses links, so the path is the target");
+        assert!(open_regular(&files[0].path, files[0].size).and_then(|file| read_file(file, &files[0].path, files[0].size, 0, sender)).is_ok(), "reading still refuses links, so the path is the target");
         // To a folder: left out, and said so. Dangling: an error that names the link.
         let (files, skipped) = collect_noted(&[root.join("dirlink"), root.join("real.txt")]).unwrap();
         assert_eq!(files.len(), 1);
