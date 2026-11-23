@@ -1120,9 +1120,8 @@ impl Link {
 }
 
 fn history_preview(body: &str) -> String {
-    let normalized: String = body.chars().map(|ch| if ch.is_whitespace() { ' ' } else { ch })
-        .filter(|ch| !ch.is_control()).collect();
-    let mut chars = normalized.chars();
+    // Lazily, so a very large item is not copied whole to show 80 characters.
+    let mut chars = body.chars().map(|ch| if ch.is_whitespace() { ' ' } else { ch }).filter(|ch| !ch.is_control());
     let mut preview: String = chars.by_ref().take(80).collect();
     if chars.next().is_some() { preview.push('…'); }
     preview
