@@ -424,6 +424,32 @@ fn retry_backs_off_and_starts_over_after_a_stable_session() {
 }
 
 #[test]
+fn a_failure_after_the_dialog_replaces_the_waiting_line() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut r = Retry::new(tx, "control", "Can't do it", "Waiting");
+    let lost = || Err(anyhow!("lost"));
+    // Told once already, then the dialog opens.
+    assert!(matches!(r.after(lost(), Duration::ZERO), Next::Retry(_)));
+    assert!(matches!(rx.try_recv(), Ok(Event::Status { problem: Some(_), .. })));
+    r.show(Some("Waiting".into()));
+    assert_eq!(rx.try_recv().unwrap(), Event::Status { part: "control", problem: Some("Waiting".into()) });
+    // The session fails after a long dialog: the line must not stay.
+    assert!(matches!(r.after(lost(), STABLE), Next::Retry(_)));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        Event::Status { part: "control", problem: Some("Can't do it: lost. Retrying in the background.".into()) }
+    );
+    // The same on a first start, where nothing was reported before.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut r = Retry::new(tx, "control", "Can't do it", "Waiting");
+    r.ever_ready = true;
+    r.show(Some("Waiting".into()));
+    let _ = rx.try_recv();
+    assert!(matches!(r.after(lost(), STABLE), Next::Retry(_)));
+    assert!(matches!(rx.try_recv(), Ok(Event::Status { problem: Some(p), .. }) if p != "Waiting"));
+}
+
+#[test]
 fn refusals_and_rejected_tokens() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut r = Retry::new(tx, "control", "Can't do it", "Waiting");

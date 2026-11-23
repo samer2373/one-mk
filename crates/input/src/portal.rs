@@ -318,8 +318,12 @@ impl Retry {
         let delay = self.unit * self.backoff.next_delay().as_secs() as u32;
         tracing::info!("{}: {e:#}; trying again in {delay:?}", self.what);
         // A session that was working and just got lost (sleep/wake) is
-        // routine; only tell the user once getting it back fails too.
-        if !self.reported && (!self.ever_ready || ran_for < STABLE) {
+        // routine; only tell the user once getting it back fails too. The
+        // dialog line is never left standing though: the dialog is gone
+        // once its request failed (and the time spent in it must not make
+        // the failure look like a routine loss).
+        let dialog_shown = self.shown.as_deref() == Some(self.dialog);
+        if dialog_shown || (!self.reported && (!self.ever_ready || ran_for < STABLE)) {
             self.reported = true;
             self.show(Some(format!("{}: {e:#}. Retrying in the background.", self.what)));
         }
