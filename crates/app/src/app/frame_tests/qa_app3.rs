@@ -330,3 +330,16 @@ fn a_name_that_cannot_be_found_ends_pairing_with_a_message() {
     assert!(fake.calls_with(&["pair"]).is_empty(), "{:?}", fake.calls());
     assert!(win.app.toast.as_ref().is_some_and(|toast| toast.error));
 }
+
+#[test]
+fn an_older_layout_failure_keeps_the_newer_place_on_the_desk() {
+    let mut win = Win::light(1200.0, 780.0);
+    win.status(Some(two()));
+    let (left, top) = (Job::Layout { id: "p1".into(), name: "Office PC".into(), side: Side::Left }, Job::Layout { id: "p1".into(), name: "Office PC".into(), side: Side::Top });
+    win.app.busy.extend([left.clone(), top.clone()]);
+    win.app.pending_side.insert("p1".into(), (Side::Top, None, win.t));
+    win.send(Event::Done { what: left, error: Some("busy".into()) });
+    assert_eq!(win.app.side_shown("p1", Side::Right), Side::Top, "the newer change is still on its way");
+    win.send(Event::Done { what: top, error: Some("busy".into()) });
+    assert_eq!(win.app.side_shown("p1", Side::Right), Side::Right, "the last one failed: the desk goes back");
+}

@@ -840,7 +840,10 @@ impl App {
                 self.failed_measure.insert(id);
             }
             Job::Layout { id, name, side } => {
-                self.pending_side.remove(&id);
+                // A newer change for it is still on its way: the desk keeps showing that one.
+                if !self.busy.iter().any(|job| matches!(job, Job::Layout { id: other, .. } if *other == id)) {
+                    self.pending_side.remove(&id);
+                }
                 self.sync_scene();
                 self.toast_error(format!("Couldn't move {name} {}. The desk went back to where it was; try again.", to_side(side)), e, now);
             }
@@ -848,7 +851,9 @@ impl App {
                 self.toast_error(format!("Couldn't send {} to {to}. Check that {to} is online, then drop the files again.", items(count)), e, now);
             }
             Job::Swap { id, name, .. } => {
-                self.pending_swap.remove(&id);
+                if !self.busy.iter().any(|job| matches!(job, Job::Swap { id: other, .. } if *other == id)) {
+                    self.pending_swap.remove(&id);
+                }
                 self.sync_scene();
                 self.toast_error(format!("Couldn't change Ctrl and Cmd for {name}. Try again."), e, now);
             }
