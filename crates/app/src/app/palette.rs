@@ -211,8 +211,9 @@ impl App {
         found
     }
 
-    /// The entry chosen in the open palette (its group and title), for tests.
-    #[cfg(test)]
+    /// The entry chosen in the open palette (its group and title), for tests
+    /// (the flows that read it run where `one-mk` can be a shell script).
+    #[cfg(all(test, unix))]
     pub(super) fn palette_chosen(&self) -> Option<String> {
         self.palette.sel_id.as_ref().map(|id| id.replace('\u{1}', " / "))
     }
