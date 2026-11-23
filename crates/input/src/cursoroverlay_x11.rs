@@ -21,6 +21,9 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::RustConnection;
 
+/// How long the X server may take to set the pointer window up.
+const OPEN_WITHIN: std::time::Duration = std::time::Duration::from_millis(1000);
+
 pub(crate) struct X11 {
     /// `None`: `$DISPLAY`.
     display: Option<String>,
@@ -42,8 +45,24 @@ impl Platform for X11 {
         Probe { pointing_device: None, os_cursor: OsCursor::Shown }
     }
 
+    /// Setting the window up is a number of round trips to the X server,
+    /// and the daemon calls this while holding its controller lock: a server
+    /// that stops answering must cost a failed overlay, not the event loop.
+    /// The opening runs on a thread of its own and is given up after
+    /// `OPEN_WITHIN`; a window that opens later is closed again there.
     fn create(&mut self, at: Pos) -> Result<Box<dyn Overlay>> {
-        Ok(Box::new(Window::open(self.display.as_deref(), at)?))
+        let display = self.display.clone();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("one-mk-x11-overlay".into())
+            .spawn(move || {
+                let _ = tx.send(Window::open(display.as_deref(), at));
+            })
+            .context("can't start the pointer window thread")?;
+        match rx.recv_timeout(OPEN_WITHIN) {
+            Ok(window) => Ok(Box::new(window?)),
+            Err(_) => anyhow::bail!("the X server did not answer within {OPEN_WITHIN:?}"),
+        }
     }
 }
 
@@ -223,6 +242,38 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("timed out");
+    }
+
+    #[test]
+    fn an_unresponsive_x_server_does_not_block_creating_the_overlay() {
+        use std::os::unix::net::UnixListener;
+        let dir = std::path::Path::new("/tmp/.X11-unix");
+        if !dir.is_dir() {
+            eprintln!("no /tmp/.X11-unix: skipping");
+            return;
+        }
+        let number = 30000 + std::process::id() % 20000;
+        let socket = dir.join(format!("X{number}"));
+        let Ok(listener) = UnixListener::bind(&socket) else {
+            eprintln!("cannot make an X socket: skipping");
+            return;
+        };
+        // Accepts and never answers the connection setup.
+        let held = std::thread::spawn(move || {
+            let mut open = Vec::new();
+            while let Ok((stream, _)) = listener.accept() {
+                open.push(stream);
+                if open.len() == 1 { break; }
+            }
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        let mut x11 = X11::on(&format!(":{number}"));
+        let started = std::time::Instant::now();
+        let result = x11.create(Pos::new(1.0, 1.0));
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_millis(2500), "took {:?}", started.elapsed());
+        let _ = std::fs::remove_file(&socket);
+        drop(held);
     }
 
     #[test]

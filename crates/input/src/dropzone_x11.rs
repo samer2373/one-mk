@@ -264,7 +264,14 @@ async fn run_target(mut target: Target, mut zones: watch::Receiver<Vec<Zone>>, d
         tokio::select! {
             ready = socket.readable() => ready?,
             changed = zones.changed() => {
-                if changed.is_err() { return Ok(()); }
+                if changed.is_err() {
+                    // Closing with a drop in flight must still tell its source,
+                    // or it keeps its drag data until its own timeout. Best
+                    // effort: the connection may be gone already.
+                    let _ = target.cancel();
+                    let _ = target.conn.flush();
+                    return Ok(());
+                }
                 target.configure(zones.borrow_and_update().clone())?;
             }
             _ = tokio::time::sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
@@ -452,5 +459,55 @@ mod tests {
         assert_eq!(source.get_window_attributes(window).unwrap().reply().unwrap().map_state, xproto::MapState::UNMAPPED);
         std::mem::drop(zones_tx);
         worker.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn private_xvfb_closing_with_a_drop_in_flight_finishes_it_unsuccessfully() {
+        let child = Command::new("Xvfb").args(["-displayfd", "1", "-screen", "0", "800x600x24", "-nolisten", "tcp"])
+            .stdout(Stdio::piped()).stderr(Stdio::null()).spawn().expect("Xvfb required for drop-path test");
+        let mut server = Server(child);
+        let mut display = String::new();
+        BufReader::new(server.0.stdout.take().unwrap()).read_line(&mut display).unwrap();
+        let display = format!(":{}", display.trim());
+        let (conn, screen) = x11rb::connect(Some(&display)).unwrap();
+        let mut target = Target::new(conn, screen).unwrap();
+        let window = target.window;
+        target.zones = vec![Zone { rect: one_mk_proto::Rect::new(788, 0, 12, 600), peer: "paired-id".into() }];
+        target.physical = vec![99];
+        target.select().unwrap();
+        let (drop_tx, mut drops) = mpsc::channel(1);
+        target.event(Event::XinputRawButtonPress(xinput::RawButtonPressEvent { sourceid: 99, detail: 1, ..Default::default() }), &drop_tx).unwrap();
+        target.event(Event::XinputMotion(xinput::MotionEvent { sourceid: 99, root_x: 795 << 16, root_y: 300 << 16, ..Default::default() }), &drop_tx).unwrap();
+        target.conn.flush().unwrap();
+        let (zones_tx, zones_rx) = watch::channel(target.zones.clone());
+        let worker = tokio::spawn(run_target(target, zones_rx, drop_tx));
+        let (source, screen) = x11rb::connect(Some(&display)).unwrap();
+        let root = source.setup().roots[screen].root;
+        let owner = source.generate_id().unwrap();
+        source.create_window(COPY_DEPTH_FROM_PARENT, owner, root, 20, 20, 20, 20, 0, xproto::WindowClass::INPUT_OUTPUT, 0, &xproto::CreateWindowAux::new()).unwrap();
+        let atoms = Atoms::new(&source).unwrap();
+        source.set_selection_owner(owner, atoms.selection, x11rb::CURRENT_TIME).unwrap();
+        source.warp_pointer(NONE, root, 0, 0, 0, 0, 400, 300).unwrap();
+        source.xtest_fake_input(xproto::BUTTON_PRESS_EVENT, 1, 0, root, 0, 0, 0).unwrap();
+        source.xtest_fake_input(xproto::MOTION_NOTIFY_EVENT, 0, 0, root, 795, 300, 0).unwrap();
+        source.flush().unwrap();
+        let message = |kind, data| source.send_event(false, window, xproto::EventMask::NO_EVENT,
+            xproto::ClientMessageEvent::new(32, window, kind, data)).unwrap();
+        message(atoms.enter, [owner, 5 << 24, atoms.uri, 0, 0]);
+        message(atoms.position, [owner, 0, (795 << 16) | 300, 0, atoms.copy]);
+        source.flush().unwrap();
+        event(&source, |event| matches!(event, Event::ClientMessage(message) if message.type_ == atoms.status)).await;
+        source.xtest_fake_input(xproto::BUTTON_RELEASE_EVENT, 1, 0, root, 0, 0, 0).unwrap();
+        message(atoms.drop, [owner, 0, 0, 0, 0]);
+        source.flush().unwrap();
+        // The target asked for the files; the source never answers. The
+        // daemon shuts down.
+        event(&source, |event| matches!(event, Event::SelectionRequest(_))).await;
+        std::mem::drop(zones_tx);
+        worker.await.unwrap().unwrap();
+        let finished = event(&source, |event| matches!(event, Event::ClientMessage(message) if message.type_ == atoms.finished)).await;
+        let Event::ClientMessage(finished) = finished else { unreachable!() };
+        assert_eq!(finished.data.as_data32()[1], 0, "not accepted");
+        assert!(drops.try_recv().is_err());
     }
 }
