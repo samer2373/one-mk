@@ -78,17 +78,20 @@ containing `one-mk.app` with window, daemon, tray, and resources.
    a real ten-character team ID and match. Unsigned/ad-hoc, invalid, or
    differently signed apps are refused. Probe the candidate daemon version
    with a five-second timeout.
-5. Persist a pending receipt and stop sharing. Rename the old bundle to hidden
-   sibling `.NAME.previous.app`, then rename the staged bundle into place on
-   the same filesystem. Restore the old bundle if the second rename fails.
-   Each rename is atomic, but the pair is **not crash-atomic**; a crash in the
-   gap can require recovery from the retained sibling.
-6. Relaunch through the window. Keep the previous bundle until the new window's
+5. Persist a pending receipt and stop sharing. Exchange the staged bundle with
+   the installed one in a single atomic step (`renamex_np` with `RENAME_SWAP`,
+   same filesystem), so there is never a moment without an app. The old bundle
+   is then renamed from the staging folder to hidden sibling
+   `.NAME.previous.app`. If that second step fails, the exchange is undone and
+   the old app is back in place. A stop between the two steps leaves the old
+   bundle in the staging folder: going back is lost, the app never is.
+6. Relaunch through the window. Keep the pending receipt until the new window's
    first frame acknowledges its own compiled version. Old/mismatched windows
-   cannot acknowledge. Then remove backup and receipt. Another update cannot
-   overwrite a pending backup. If restart fails, the surviving window offers
-   **Restore previous version**; rollback verifies the team again and preserves
-   signed-release replay protection.
+   cannot acknowledge. Then remove the receipt only: the previous bundle stays
+   for **Restore previous version** until the next update replaces it. Another
+   update cannot start while the receipt is pending. If restart fails, the
+   surviving window offers **Restore previous version**; rollback verifies the
+   team again and preserves signed-release replay protection.
 
 An app running from a DMG or translocated folder offers **Move to Applications**.
 Copy with `ditto` into staging in `/Applications`, verify both identities, rename
@@ -188,13 +191,14 @@ See the implementation report for actual check outcomes.
 On a disposable Mac account with an older production-signed release:
 
 1. Applications and writable custom folder: banner, Update now, progress,
-   restart, new version, resumed sharing, backup removed after new window starts.
+   restart, new version, resumed sharing, receipt removed after new window starts
+   (the previous app stays for Restore previous version).
    Repeat on Apple silicon and Intel.
 2. Offline, corrupt download and wrong-team/unsigned controlled fixtures:
    refuse without replacing the runnable app.
 3. Unwritable parent: plain permission text and Download. DMG/translocation:
    Move to Applications or Finder explanation; never overwrite an existing copy.
-4. Force second rename failure: old app restored. Block new launch: backup
+4. Force the rename of the old bundle to fail: old app restored. Block new launch: backup
    remains, Restore previous version works, old window cannot acknowledge it.
 5. Default asks before installing; opt-in installs only with the window open.
    Close it and verify no extra updater timer. Check narrow/HiDPI and VoiceOver.
