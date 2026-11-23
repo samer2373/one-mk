@@ -14,6 +14,9 @@ pub(super) struct Palette {
     sel: usize,
     /// The query the choice was made for: a new query chooses the first.
     sel_for: String,
+    /// The entry chosen (see `entry_id`): the results change with the
+    /// computers' state, and the choice stays on the same entry.
+    sel_id: Option<String>,
     opened: f64,
 }
 
@@ -45,6 +48,11 @@ struct Entry {
     title: String,
     hint: String,
     act: Act,
+}
+
+/// What an entry is, apart from where it stands in the list.
+fn entry_id(e: &Entry) -> String {
+    format!("{}\u{1}{}", e.group, e.title)
 }
 
 /// Settings the palette finds, and the page each is on.
@@ -150,13 +158,20 @@ impl App {
                 for p in s.peers.iter().filter(|p| p.online) {
                     let c = |title: String, act: Act| Entry { group: "Computers", title, hint: String::new(), act };
                     out.push(c(format!("Switch to {}", p.name), Act::Switch(p.id.clone(), p.name.clone())));
-                    out.push(c(format!("Send the clipboard to {}", p.name), Act::Clip(true, p.id.clone(), p.name.clone())));
-                    out.push(c(format!("Get the clipboard from {}", p.name), Act::Clip(false, p.id.clone(), p.name.clone())));
+                    // `run --no-clipboard`: the daemon refuses both.
+                    if !s.clipboard_off {
+                        out.push(c(format!("Send the clipboard to {}", p.name), Act::Clip(true, p.id.clone(), p.name.clone())));
+                        out.push(c(format!("Get the clipboard from {}", p.name), Act::Clip(false, p.id.clone(), p.name.clone())));
+                    }
                 }
             }
             None => {}
         }
-        if let Some(v) = &self.update_available {
+        // Only where oneMK can install it from here (not from a disk image, nor
+        // where a package manager does it): Settings says what to do instead.
+        if let Some(v) = &self.update_available
+            && self.update_ui.status.as_ref().is_some_and(|status| status.can_update && !status.move_to_applications)
+        {
             out.push(act(format!("Update oneMK to {v}"), "", Act::Update));
         }
         for a in crate::style::Appearance::ALL {
@@ -171,13 +186,42 @@ impl App {
             let page = TABS.iter().find(|x| x.0 == *t).map_or("", |x| x.1);
             out.push(Entry { group: "Settings", title: (*title).into(), hint: page.into(), act: Act::Tab(*t) });
         }
+        // The pages that mean nothing while oneMK is off are not offered (the window would send
+        // you to Desk).
+        if self.off() {
+            out.retain(|e| !matches!(e.act, Act::Tab(t) if !t.when_off()));
+        }
         out
+    }
+
+    /// What `query` finds, in the order it is listed, each with the ranges of
+    /// its title to light.
+    fn palette_found(&self, query: &str) -> Vec<(Entry, Vec<std::ops::Range<usize>>)> {
+        let mut found: Vec<(Entry, Vec<std::ops::Range<usize>>)> = self.palette_entries().into_iter().filter_map(|e| {
+            if query.is_empty() {
+                // Nothing typed: the pages and the actions, not every setting.
+                return (e.group != "Settings").then_some((e, vec![]));
+            }
+            let m = matches(&e.title, query)?;
+            Some((e, m))
+        }).collect();
+        if !query.is_empty() {
+            found.sort_by_key(|(e, _)| rank(e.group, &e.title, query));
+        }
+        found
+    }
+
+    /// The entry chosen in the open palette (its group and title), for tests.
+    #[cfg(test)]
+    pub(super) fn palette_chosen(&self) -> Option<String> {
+        self.palette.sel_id.as_ref().map(|id| id.replace('\u{1}', " / "))
     }
 
     pub(super) fn open_palette(&mut self, now: f64) {
         self.palette.open = true;
         self.palette.query.clear();
         self.palette.sel = 0;
+        self.palette.sel_id = None;
         self.palette.opened = now;
     }
 
@@ -205,9 +249,11 @@ impl App {
                 self.link.stop();
             }
             Act::Recheck => {
+                // Opening Health starts a check when it has none (or an old one): that one counts.
                 self.set_tab(Tab::Health);
-                self.busy.push(Job::Doctor);
-                self.link.doctor();
+                if !self.busy.contains(&Job::Doctor) {
+                    self.recheck();
+                }
             }
             Act::Update => self.begin_update(),
             Act::WallChoose => {
@@ -232,24 +278,32 @@ impl App {
         if fade < 1.0 {
             ctx.request_repaint();
         }
-        // The same dimming as behind a sheet (light: black 20 %, dark: 50 %).
-        ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("palette-dim"))).rect_filled(screen, 0.0, crate::style::scrim().gamma_multiply(fade));
+        // The same dimming as behind a sheet (light: black 20 %, dark: 50 %). It is egui's modal
+        // layer, as a sheet's scrim is: nothing behind it takes the pointer (a click that closes
+        // the palette does not also press what lies under it) or a place in the Tab order.
+        let scrim_area = egui::Area::new(Id::unique("palette-dim")).order(egui::Order::Foreground).fixed_pos(screen.min).constrain(false).movable(false).interactable(true).fade_in(false);
+        ctx.memory_mut(|m| {
+            m.set_modal_layer(scrim_area.layer());
+            m.areas_mut().move_to_top(scrim_area.layer());
+        });
+        let scrim_clicked = scrim_area.show(ctx, |ui| {
+            ui.painter().rect_filled(screen, 0.0, crate::style::scrim().gamma_multiply(fade));
+            // Clicks, never the keyboard's focus.
+            ui.allocate_rect(screen, Sense::CLICK).clicked()
+        }).inner;
+        if scrim_clicked && now - self.palette.opened > 0.1 {
+            self.palette.open = false;
+            return;
+        }
 
         let q = self.palette.query.trim().to_owned();
-        let mut found: Vec<(Entry, Vec<std::ops::Range<usize>>)> = self.palette_entries().into_iter().filter_map(|e| {
-            if q.is_empty() {
-                // Nothing typed: the pages and the actions, not every setting.
-                return (e.group != "Settings").then_some((e, vec![]));
-            }
-            let m = matches(&e.title, &q)?;
-            Some((e, m))
-        }).collect();
-        if !q.is_empty() {
-            found.sort_by_key(|(e, _)| rank(e.group, &e.title, &q));
-        }
+        let found = self.palette_found(&q);
         if self.palette.sel_for != q {
             self.palette.sel = 0;
             self.palette.sel_for = q.clone();
+        } else if let Some(k) = self.palette.sel_id.as_ref().and_then(|id| found.iter().position(|(e, _)| entry_id(e) == *id)) {
+            // The results changed under the choice (a computer went offline): it stays on its entry.
+            self.palette.sel = k;
         }
         let n = found.len();
         let (up, down, enter, esc) = ctx.input_mut(|i| (
@@ -267,11 +321,7 @@ impl App {
             if up { self.palette.sel = (self.palette.sel + n - 1) % n; }
         }
         self.palette.sel = self.palette.sel.min(n.saturating_sub(1));
-        if enter && let Some((e, _)) = found.get(self.palette.sel) {
-            let act = e.act.clone();
-            self.run(act, now);
-            return;
-        }
+        self.palette.sel_id = found.get(self.palette.sel).map(|(e, _)| entry_id(e));
 
         // Rows: a heading where the group changes, then the entries.
         const ROW: f32 = PALETTE_ROW;
@@ -281,14 +331,10 @@ impl App {
         let lay = palette_layout(screen, &rows);
         let list_h = lay.list_h;
         let rect = lay.rect.translate(vec2(0.0, 6.0 * (1.0 - fade)));
-        let clicked_out = ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !rect.contains(p)));
-        if clicked_out && now - self.palette.opened > 0.1 {
-            self.palette.open = false;
-            return;
-        }
         let mut run = None;
         egui::Area::new(Id::unique("palette")).order(egui::Order::Tooltip).fixed_pos(rect.min).show(ctx, |ui| {
-            let (r, _) = ui.allocate_exact_size(rect.size(), Sense::hover());
+            // The palette takes its own clicks: none reach the scrim, which closes it.
+            let (r, _) = ui.allocate_exact_size(rect.size(), Sense::CLICK | Sense::DRAG);
             for s in widgets::glass_shapes_as(ui.ctx(), Id::unique("palette-glass").value(), r, f32::from(R_SHEET), widgets::PALETTE_GLASS) {
                 ui.painter().add(s);
             }
@@ -306,7 +352,11 @@ impl App {
                 .frame(egui::Frame::NONE)
                 .desired_width(field.width());
             let resp = child.add(edit);
-            resp.request_focus();
+            // Asked once it has lost the keyboard, not every frame: that would break off an
+            // input method's composition each time.
+            if !resp.has_focus() {
+                resp.request_focus();
+            }
             // The field has no label of its own: its hint is only painted.
             ctx.accesskit_node_builder(resp.id, |node| node.set_label("Search actions, computers and settings"));
             p.hline(input.x_range(), input.bottom() - 0.5, Stroke::new(1.0, pal().line));
@@ -330,11 +380,13 @@ impl App {
                     let row = rr.shrink2(vec2(8.0, 2.0));
                     if resp.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
                         self.palette.sel = *k;
+                        self.palette.sel_id = Some(entry_id(e));
                     }
                     // Tabbed onto, a row is the chosen one (its fill and
                     // accent tile are the focus look), and its ring shows.
                     if resp.gained_focus() {
                         self.palette.sel = *k;
+                        self.palette.sel_id = Some(entry_id(e));
                     }
                     widgets::focus_ring(ui, &resp, row, 10);
                     let chosen = self.palette.sel == *k;
@@ -411,6 +463,16 @@ impl App {
                 x = kr.left() - 6.0 - ww - 14.0;
             }
         });
+        // Return runs what is chosen once this frame's typing has reached the field (a
+        // letter and Return in one frame search first, then do).
+        if enter && run.is_none() {
+            let q_now = self.palette.query.trim().to_owned();
+            if q_now == q {
+                run = found.get(self.palette.sel).map(|(e, _)| e.act.clone());
+            } else {
+                run = self.palette_found(&q_now).into_iter().next().map(|(e, _)| e.act);
+            }
+        }
         if let Some(act) = run {
             self.run(act, now);
         }
