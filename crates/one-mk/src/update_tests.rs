@@ -238,6 +238,29 @@ fn two_appimages_in_one_folder_each_roll_back_to_their_own_previous_version() ->
     Ok(())
 }
 
+/// The backup an earlier one-mk made of an AppImage (`one-mk.old`, shared by every copy in the
+/// folder) is not silently taken as this image's; the error says what to do with it.
+#[test]
+fn a_shared_legacy_backup_is_pointed_out_not_adopted() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new()?;
+    let script = |version: &str| format!("#!/bin/sh\necho 'one-mk {version}'\n").into_bytes();
+    let write = |path: &Path, bytes: &[u8]| -> Result<()> {
+        fs::write(path, bytes)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        Ok(())
+    };
+    let image = scratch.0.join("oneMK.AppImage");
+    write(&image, &script("2.0.0"))?;
+    let error = rollback(&image).unwrap_err().to_string();
+    assert!(!error.contains("one-mk.old"), "{error}");
+    write(&scratch.0.join("one-mk.old"), &script("1.0.0"))?;
+    let error = rollback(&image).unwrap_err().to_string();
+    assert!(error.contains("one-mk.old") && error.contains("oneMK.AppImage.old"), "{error}");
+    assert_eq!(fs::read(&image)?, script("2.0.0"), "nothing was restored");
+    Ok(())
+}
+
 #[test]
 fn a_typo_elsewhere_in_settings_does_not_stop_the_update_status() -> Result<()> {
     let scratch = Scratch::new()?;
