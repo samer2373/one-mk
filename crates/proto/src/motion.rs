@@ -694,7 +694,7 @@ mod tests {
             assert!(c.set_relative(true));
             let base = c.relative_base().expect("relative");
             // The switch datagram (`c.current()`) is lost; the first movement is not.
-            let mut rel = |c: &mut RemoteCursor, r: &mut MotionReceiver, dx: f64, dy: f64| {
+            let rel = |c: &mut RemoteCursor, r: &mut MotionReceiver, dx: f64, dy: f64| {
                 let Step::Move(Datagram::MotionBy { epoch, seq, sum_x, sum_y }) = c.motion(dx, dy) else { panic!() };
                 match r.accept_relative(epoch, seq, (sum_x, sum_y)) {
                     RelReceived::MoveBy { dx, dy } => (dx, dy),
