@@ -14,6 +14,19 @@ pub(super) struct UpdateUi {
 impl App {
     pub(super) fn begin_update(&mut self) {
         if self.busy.contains(&Job::Update) { return; }
+        // Search and Health come here too, not only Settings' button: an
+        // install that can't update itself in place (an installer, a package
+        // manager, a portable copy with other programs beside it) is sent to
+        // the download; one running from the disk image, to move first.
+        if let Some(status) = &self.update_ui.status && !status.can_update {
+            if status.move_to_applications {
+                self.settings_cat = settings_page::Cat::General;
+                self.set_tab(Tab::Settings);
+            } else {
+                self.link.download_update();
+            }
+            return;
+        }
         self.update_ui.failed = false;
         self.update_output = Some("Preparing the update…".into());
         self.busy.push(Job::Update);
@@ -32,6 +45,8 @@ impl App {
             && let Some(version) = &self.update_available
             && status.skipped.as_ref() != Some(version)
             && self.update_ui.attempted.as_ref() != Some(version) && !self.busy.contains(&Job::Update)
+            // The switch was just turned off: its write has not come back, the status is still the old one.
+            && !self.busy.contains(&Job::UpdateSettings)
         {
             self.update_ui.attempted = Some(version.clone());
             self.begin_update();
@@ -155,7 +170,10 @@ impl App {
             match (&version, status.can_update) {
                 (Some(_), true) => self.begin_update(),
                 (Some(_), false) => self.link.download_update(),
-                (None, _) => self.link.check_updates_now(),
+                (None, _) => {
+                    self.busy.push(Job::UpdateCheck);
+                    self.link.check_updates_now();
+                }
             }
         }
         let said = if checking { "Looking for a new version…".to_owned() }
@@ -233,7 +251,17 @@ impl App {
                 let g = ui.painter().layout_job(job);
                 let gh = g.size().y;
                 ui.painter().galley(pos2(c.left(), y + 24.0), g, pal().ink2);
-                let b = Rect::from_min_size(pos2(c.left(), y + 24.0 + gh + 10.0), vec2(button_width(ui, "Download"), 32.0));
+                let mut b = Rect::from_min_size(pos2(c.left(), y + 24.0 + gh + 10.0), vec2(button_width(ui, "Download"), 32.0));
+                // Still running from the disk image (a move that failed can be tried again, its cause may be gone).
+                if self.update_ui.status.as_ref().is_some_and(|status| status.move_to_applications) {
+                    let m = Rect::from_min_size(b.min, vec2(button_width(ui, "Move to Applications"), 32.0));
+                    if button(ui, m, Id::unique("update-move"), "Move to Applications", Look::Quiet, !locked, None).clicked() {
+                        self.update_ui.failed = false;
+                        self.busy.push(Job::Update);
+                        self.link.move_to_applications();
+                    }
+                    b = b.translate(vec2(m.width() + 8.0, 0.0));
+                }
                 if button(ui, b, Id::unique("update-download"), "Download", Look::Quiet, !locked, Some("Open the download page")).clicked() {
                     self.link.download_update();
                 }

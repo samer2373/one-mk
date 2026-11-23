@@ -31,21 +31,36 @@ pub(super) fn shortcut_error(error: &str) -> &'static str {
     else { "Couldn't save that shortcut. Choose different keys and try again." }
 }
 
+/// `recorded_holding` for a caller that does not keep Super from frame to frame.
 pub(super) fn recorded(events: &[egui::Event], jump: bool) -> Option<Result<String, ()>> {
+    recorded_holding(events, jump, &mut false)
+}
+
+/// The chord the keys in `events` make, once its last key is pressed:
+/// `Some(Ok(chord))`, `Some(Err(()))` for Esc (cancel). `super_down` is
+/// whether a Super key is held; it lives from frame to frame with the caller.
+pub(super) fn recorded_holding(events: &[egui::Event], jump: bool, super_down: &mut bool) -> Option<Result<String, ()>> {
     for event in events {
-        if let egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } = event {
+        let egui::Event::Key { key, pressed, repeat, modifiers, .. } = event else { continue };
+        // Outside macOS egui folds Command into Ctrl and never reports Super
+        // in its modifiers: the Super key's own events are all there is.
+        if matches!(key, Key::SuperLeft | Key::SuperRight) {
+            if !*repeat { *super_down = *pressed; }
+            continue;
+        }
+        if *pressed && !*repeat {
             if *key == Key::Escape { return Some(Err(())); }
             if *key == Key::Backspace { return Some(Ok("none".into())); }
             // egui reports Ctrl, Alt, Shift and Super as keys of their own,
             // pressed first: they belong to the chord, which the next key ends.
-            if matches!(key, Key::ControlLeft | Key::ControlRight | Key::ShiftLeft | Key::ShiftRight | Key::AltLeft | Key::AltRight | Key::SuperLeft | Key::SuperRight) { continue; }
+            if matches!(key, Key::ControlLeft | Key::ControlRight | Key::ShiftLeft | Key::ShiftRight | Key::AltLeft | Key::AltRight) { continue; }
             let Some(code) = crate::tune::evdev_of(*key) else { continue };
             let name = one_mk_proto::keynames::key_name(u32::from(code));
             let mut parts = Vec::new();
             if modifiers.ctrl { parts.push("ctrl"); }
             if modifiers.alt { parts.push("alt"); }
             if modifiers.shift { parts.push("shift"); }
-            if modifiers.mac_cmd || (!cfg!(target_os = "macos") && modifiers.command && !modifiers.ctrl) { parts.push("super"); }
+            if modifiers.mac_cmd || (!cfg!(target_os = "macos") && *super_down) { parts.push("super"); }
             if jump {
                 if !matches!(*key, Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 | Key::Num6 | Key::Num7 | Key::Num8 | Key::Num9) { continue; }
                 parts.push("{n}");
@@ -163,6 +178,7 @@ impl App {
                 } else {
                     data.insert_temp(recorder, index);
                     data.insert_temp(Id::unique("shortcut-started"), true);
+                    data.remove::<bool>(Id::unique("shortcut-super"));
                 }
             });
         }
@@ -178,8 +194,15 @@ impl App {
         if started {
             return;
         }
-        let events = ui.input(|input| input.events.clone());
-        if let Some(result) = recorded(&events, index == 0) {
+        let (events, focused) = ui.input(|input| (input.events.clone(), input.focused));
+        // A Super key let go while another window had the keyboard is never heard of.
+        let held = Id::unique("shortcut-super");
+        let mut super_down = focused && ui.ctx().data(|data| data.get_temp::<bool>(held)).unwrap_or(false);
+        let result = recorded_holding(&events, index == 0, &mut super_down);
+        ui.ctx().data_mut(|data| {
+            if result.is_some() { data.remove::<bool>(held); } else { data.insert_temp(held, super_down); }
+        });
+        if let Some(result) = result {
             if let Ok(chord) = result {
                 self.settings_command("the shortcut", shortcut_args(index, &chord));
             }
@@ -205,17 +228,21 @@ impl App {
         let current = self.prefs.hooks.iter().find(|(event, _)| *event == label).map(|(_, command)| command.as_str()).unwrap_or("").to_owned();
         let event = key.trim_start_matches("on_");
         let (computer, timeout, shell) = self.prefs.hook_options.get(event).cloned().unwrap_or_else(|| (String::new(), self.prefs.hooks_timeout, self.prefs.hooks_shell));
+        // What is typed or chosen and not saved yet (a draft) wins over what is saved; what matches it is no draft.
         let mut command = self.drafts.get(key).cloned().unwrap_or(current.clone());
-        let mut chosen = self.drafts.get(&format!("{key}-computer")).cloned().unwrap_or(computer);
+        let mut chosen = self.drafts.get(&format!("{key}-computer")).cloned().unwrap_or(computer.clone());
         let mut seconds = self.drafts.get(&format!("{key}-seconds")).cloned().unwrap_or(timeout.to_string());
         let mut use_shell = self.drafts.get(&format!("{key}-shell")).map_or(shell, |value| value == "on");
         let head = Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), 28.0));
         ui.painter().text(head.left_center(), Align2::LEFT_CENTER, label, medium(T_BODY), pal().ink);
         let mut options = vec![(String::new(), "Any computer".to_owned())];
         if let Some(status) = self.running() { options.extend(status.peers.iter().map(|peer| (peer.id.clone(), peer.name.clone()))); }
-        let shown = options.iter().find(|(id, _)| id.is_empty() && chosen.is_empty() || !id.is_empty() && chosen.replace('-', "").starts_with(&id.replace('-', ""))).map_or("A computer that's gone".to_owned(), |(_, name)| name.clone());
+        let known = hook_computer(&options, &chosen);
+        let shown = known.map_or("A computer that's gone".to_owned(), |(_, name)| name.clone());
+        // The menu marks the computer the saved fingerprint belongs to, whatever its spelling.
+        let marked = known.map_or(chosen.clone(), |(id, _)| id.clone());
         let w = (text_width(ui, &shown, regular(T_META)) + 40.0).clamp(110.0, (rect.width() * 0.5).max(110.0));
-        if let Some(id) = chooser(ui, Rect::from_min_size(pos2(head.right() - w, head.top()), vec2(w, 28.0)), Id::unique(("hook-computer", key)), &shown, &format!("{shown}, which computer: {label}"), &options, &chosen) {
+        if let Some(id) = chooser(ui, Rect::from_min_size(pos2(head.right() - w, head.top()), vec2(w, 28.0)), Id::unique(("hook-computer", key)), &shown, &format!("{shown}, which computer: {label}"), &options, &marked) {
             chosen = id;
         }
         let save_w = 70.0;
@@ -226,7 +253,9 @@ impl App {
         if !current.is_empty() && command.trim().is_empty() {
             if button(ui, save, Id::unique(("hook-remove", index)), "Remove", Look::Quiet, true, Some(&format!("Remove command: {label}"))).clicked() {
                 self.settings_command("the command", vec!["hooks".into(), format!("--{}", key.replace('_', "-")), String::new()]);
-                self.drafts.remove(key);
+                // The event starts over: nothing typed or chosen for it stays.
+                for draft in [key.to_owned(), format!("{key}-computer"), format!("{key}-seconds"), format!("{key}-shell")] { self.drafts.remove(&draft); }
+                return;
             }
         } else if button(ui, save, Id::unique(("hook-save", index)), if current.is_empty() { "Add" } else { "Save" }, if changed || current.is_empty() { Look::Primary } else { Look::Quiet }, !command.trim().is_empty(), Some(&format!("{} command: {label}", if current.is_empty() { "Add" } else { "Save" }))).clicked() {
             match number(&seconds, 60).filter_positive() {
@@ -241,10 +270,10 @@ impl App {
         ui.painter().text(pos2(rect.left() + after + 56.0, opts_y + 15.0), Align2::LEFT_CENTER, "seconds", regular(T_META), pal().ink2);
         let shell_row = Rect::from_min_size(pos2(rect.right() - 170.0, opts_y), vec2(170.0, 30.0));
         if switch_help(ui, shell_row, Id::unique(("hook-shell", key)), "Run in a shell", "hook-shell", use_shell, true).clicked() { use_shell = !use_shell; }
-        self.drafts.insert(key.into(), command);
-        self.drafts.insert(format!("{key}-computer"), chosen);
-        self.drafts.insert(format!("{key}-seconds"), seconds);
-        self.drafts.insert(format!("{key}-shell"), if use_shell { "on" } else { "off" }.into());
+        keep_draft(&mut self.drafts, key.into(), command, &current);
+        keep_draft(&mut self.drafts, format!("{key}-computer"), chosen, &computer);
+        keep_draft(&mut self.drafts, format!("{key}-seconds"), seconds, &timeout.to_string());
+        keep_draft(&mut self.drafts, format!("{key}-shell"), if use_shell { "on" } else { "off" }.into(), if shell { "on" } else { "off" });
     }
 
     /// "Stop when idle (minutes)" for typing on every computer.
@@ -266,6 +295,20 @@ trait Positive {
 
 impl Positive for Result<u32, String> {
     fn filter_positive(self) -> Result<u32, String> { self.and_then(|value| if value > 0 { Ok(value) } else { Err("Enter a whole number from 1 to 60.".into()) }) }
+}
+
+/// Keeps what was typed or chosen as a draft only while it differs from what
+/// is saved: a field nobody touched shows the saved value as it changes.
+fn keep_draft(drafts: &mut HashMap<String, String>, key: String, value: String, saved: &str) {
+    if value == saved { drafts.remove(&key); } else { drafts.insert(key, value); }
+}
+
+/// The computer in `options` (an id, a name; the first is "Any computer",
+/// with no id) a hook's saved `chosen` computer is. The daemon matches a
+/// saved fingerprint against a computer's short id ignoring case and dashes.
+fn hook_computer<'a>(options: &'a [(String, String)], chosen: &str) -> Option<&'a (String, String)> {
+    let chosen = chosen.replace('-', "").to_lowercase();
+    options.iter().find(|(id, _)| id.is_empty() && chosen.is_empty() || !id.is_empty() && chosen.starts_with(&id.replace('-', "").to_lowercase()))
 }
 
 /// One event's height in the commands card.
@@ -320,6 +363,29 @@ mod tests {
     }
 
     #[test]
+    fn a_hooks_computer_is_found_whatever_the_spelling_of_its_fingerprint() {
+        let options = vec![(String::new(), "Any computer".to_owned()), ("abcd-1234".to_owned(), "Office PC".to_owned())];
+        let name = |chosen: &str| hook_computer(&options, chosen).map(|(_, name)| name.as_str());
+        assert_eq!(name(""), Some("Any computer"));
+        assert_eq!(name("abcd-1234"), Some("Office PC"));
+        let full = format!("abcd1234{}", "ef".repeat(28));
+        assert_eq!(name(&full), Some("Office PC"));
+        assert_eq!(name(&full.to_uppercase()), Some("Office PC"));
+        assert_eq!(name("ffff-0000"), None);
+    }
+
+    #[test]
+    fn only_what_differs_from_the_saved_value_is_a_draft() {
+        let mut drafts = HashMap::new();
+        keep_draft(&mut drafts, "k".into(), "typed".into(), "saved");
+        assert_eq!(drafts.get("k").map(String::as_str), Some("typed"));
+        keep_draft(&mut drafts, "k".into(), "saved".into(), "saved");
+        assert!(drafts.is_empty());
+        keep_draft(&mut drafts, "k".into(), "saved".into(), "saved");
+        assert!(drafts.is_empty());
+    }
+
+    #[test]
     fn shortcut_failures_are_plain_and_actionable() {
         assert!(shortcut_error("Ctrl+K would do two things: cycle and home").contains("already used"));
         assert!(shortcut_error("always brings the pointer back").contains("always bring"));
@@ -346,5 +412,26 @@ mod tests {
         assert_eq!(recorded(&chord[..1], false), None, "Ctrl alone is not a shortcut yet");
         assert_eq!(recorded(&chord[..2], false), None);
         assert_eq!(recorded(&chord, false), Some(Ok("ctrl+shift+j".to_owned())));
+    }
+
+    /// Outside macOS egui never says Super is held: the key's own events do,
+    /// and may come frames before the key that ends the chord.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn recorder_keeps_super_from_its_key_events_across_frames() {
+        let mods = |ctrl, command| egui::Modifiers { ctrl, command, ..Default::default() };
+        let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+        let mut held = false;
+        assert_eq!(recorded_holding(&[key(Key::ControlLeft, true, mods(true, true)), key(Key::SuperLeft, true, mods(true, true))], false, &mut held), None);
+        assert!(held, "Super stays held for the next frame");
+        assert_eq!(recorded_holding(&[key(Key::J, true, mods(true, true))], false, &mut held), Some(Ok("ctrl+super+j".to_owned())));
+        // Super alone with a letter (egui folds nothing into Ctrl here).
+        let mut held = false;
+        let chord = [key(Key::SuperLeft, true, mods(false, false)), key(Key::AltLeft, true, mods(false, false)), key(Key::J, true, egui::Modifiers { alt: true, ..Default::default() })];
+        assert_eq!(recorded_holding(&chord, false, &mut held), Some(Ok("alt+super+j".to_owned())));
+        // Let go again: a later chord does not carry it.
+        assert_eq!(recorded_holding(&[key(Key::SuperLeft, false, mods(false, false))], false, &mut held), None);
+        assert!(!held);
+        assert_eq!(recorded_holding(&[key(Key::K, true, mods(true, true))], false, &mut held), Some(Ok("ctrl+k".to_owned())));
     }
 }
