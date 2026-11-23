@@ -12,6 +12,7 @@ use std::hint::black_box;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -62,42 +63,9 @@ pub async fn run(dir: &Path, opts: Options) -> Result<()> {
     println!("one-mk bench ({label}, {} events at {} Hz)", opts.count, opts.rate);
     println!("  protocol cost   {ns:.0} ns per mouse event (move, encode, decode, filter)");
 
-    let base = Instant::now();
-    let recv_conn = conn.clone();
-    let count = opts.count as usize;
-    let receiver = tokio::spawn(async move {
-        let mut rtts = Vec::with_capacity(count);
-        while let Ok(Ok(b)) = tokio::time::timeout(Duration::from_secs(1), recv_conn.read_datagram()).await {
-            if let Ok(Datagram::ProbeEcho { id, sent_ns }) = Datagram::decode(&b) {
-                if id as usize >= count { continue; }
-                let Some(elapsed) = (base.elapsed().as_nanos() as u64).checked_sub(sent_ns) else { continue };
-                rtts.push(elapsed);
-                if rtts.len() == count {
-                    break;
-                }
-            }
-        }
-        rtts
-    });
-
     let cpu0 = cpu_time();
-    let wall0 = Instant::now();
-    let per_tick = opts.rate.div_ceil(1000).max(1);
-    let mut tick = tokio::time::interval(Duration::from_secs_f64(f64::from(per_tick) / f64::from(opts.rate)));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
-    let mut sent = 0u32;
-    while sent < opts.count {
-        tick.tick().await;
-        for _ in 0..per_tick.min(opts.count - sent) {
-            let d = Datagram::Probe { id: sent, sent_ns: base.elapsed().as_nanos() as u64 };
-            let (b, n) = d.encode();
-            conn.send_datagram(bytes::Bytes::copy_from_slice(&b[..n]))?;
-            sent += 1;
-        }
-    }
-    let wall = wall0.elapsed();
+    let (mut rtts, wall) = measure(&conn, opts.count, opts.rate).await?;
     let cpu = cpu_time().map(|c| c.saturating_sub(cpu0.unwrap_or_default()));
-    let mut rtts = receiver.await?;
 
     rtts.sort_unstable();
     let q = |p: f64| -> f64 {
@@ -125,6 +93,69 @@ pub async fn run(dir: &Path, opts: Options) -> Result<()> {
     }
     client.close();
     Ok(())
+}
+
+/// How long after the last probe was sent a late echo is still waited for.
+const GRACE: Duration = Duration::from_secs(1);
+
+/// Sends `count` probes at `rate` per second and collects the round trip of each
+/// one that is echoed (nanoseconds), and how long sending took. An echo counts
+/// once, for a probe that was sent, with the time that probe carried; anything
+/// else (a repeat, an id never sent, a made-up time) is ignored. Echoes are
+/// collected until every one is in, or until [`GRACE`] after the last probe left,
+/// however slowly the probes go out.
+async fn measure(conn: &quinn::Connection, count: u32, rate: u32) -> Result<(Vec<u64>, Duration)> {
+    let base = Instant::now();
+    let total = count as usize;
+    // What each probe carried (+1, so 0 is "not sent yet").
+    let sent_ns: Arc<Vec<AtomicU64>> = Arc::new((0..total).map(|_| AtomicU64::new(0)).collect());
+    let finished = Arc::new(AtomicBool::new(false));
+    let receiver = {
+        let (conn, sent_ns, finished) = (conn.clone(), sent_ns.clone(), finished.clone());
+        tokio::spawn(async move {
+            let mut rtts = Vec::with_capacity(total);
+            let mut echoed = vec![false; total];
+            let mut finished_at: Option<Instant> = None;
+            while rtts.len() < total {
+                if finished.load(Ordering::Acquire) {
+                    finished_at.get_or_insert_with(Instant::now);
+                }
+                if finished_at.is_some_and(|at| at.elapsed() >= GRACE) {
+                    break;
+                }
+                let Ok(read) = tokio::time::timeout(Duration::from_millis(100), conn.read_datagram()).await else { continue };
+                let Ok(b) = read else { break };
+                if let Ok(Datagram::ProbeEcho { id, sent_ns: carried }) = Datagram::decode(&b) {
+                    let Some(slot) = sent_ns.get(id as usize) else { continue };
+                    if echoed[id as usize] || slot.load(Ordering::Acquire) != carried.wrapping_add(1) { continue }
+                    let Some(elapsed) = (base.elapsed().as_nanos() as u64).checked_sub(carried) else { continue };
+                    echoed[id as usize] = true;
+                    rtts.push(elapsed);
+                }
+            }
+            rtts
+        })
+    };
+
+    let wall0 = Instant::now();
+    let per_tick = rate.div_ceil(1000).max(1);
+    let mut tick = tokio::time::interval(Duration::from_secs_f64(f64::from(per_tick) / f64::from(rate)));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
+    let mut sent = 0u32;
+    while sent < count {
+        tick.tick().await;
+        for _ in 0..per_tick.min(count - sent) {
+            let at = base.elapsed().as_nanos() as u64;
+            sent_ns[sent as usize].store(at.wrapping_add(1), Ordering::Release);
+            let d = Datagram::Probe { id: sent, sent_ns: at };
+            let (b, n) = d.encode();
+            conn.send_datagram(bytes::Bytes::copy_from_slice(&b[..n]))?;
+            sent += 1;
+        }
+    }
+    let wall = wall0.elapsed();
+    finished.store(true, Ordering::Release);
+    Ok((receiver.await?, wall))
 }
 
 /// Average time for one pointer event through all of our own code.
@@ -186,6 +217,52 @@ fn cpu_time() -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A responder that echoes what `answer` says for each probe it reads
+    /// (`id`, then the probe's own time), sending every listed echo.
+    async fn responder(answer: impl Fn(u32, u64) -> Vec<(u32, u64)> + Send + 'static) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let server = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = server.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let peer = server.accept().await.unwrap().unwrap();
+            while let Ok(bytes) = peer.conn.read_datagram().await {
+                if let Ok(Datagram::Probe { id, sent_ns }) = Datagram::decode(&bytes) {
+                    for (id, sent_ns) in answer(id, sent_ns) {
+                        let (bytes, length) = Datagram::ProbeEcho { id, sent_ns }.encode();
+                        let _ = peer.conn.send_datagram(bytes::Bytes::copy_from_slice(&bytes[..length]));
+                    }
+                }
+            }
+        });
+        (address, task)
+    }
+
+    async fn connect(address: SocketAddr) -> (Node, quinn::Connection) {
+        let client = Node::bind_any(Arc::new(Identity::ephemeral().unwrap()), 0).unwrap();
+        let peer = client.connect_timeout(address, DIAL_TIMEOUT).await.unwrap();
+        (client, peer.conn)
+    }
+
+    /// At a rate slower than the old one-second cut-off, an early lost echo
+    /// must not end the listening: the later probes still count.
+    #[tokio::test]
+    async fn a_slow_rate_keeps_listening_until_the_sender_is_done() {
+        let (address, task) = responder(|id, sent_ns| if id == 0 { vec![] } else { vec![(id, sent_ns)] }).await;
+        let (_client, conn) = connect(address).await;
+        let (rtts, _) = measure(&conn, 3, 1).await.unwrap();
+        task.abort();
+        assert_eq!(rtts.len(), 2, "probe 0 was lost, 1 and 2 were echoed");
+    }
+
+    /// A repeated echo, or one for a probe that was never sent, is no delivery.
+    #[tokio::test]
+    async fn duplicate_and_unsent_echoes_are_not_deliveries() {
+        let (address, task) = responder(|id, sent_ns| if id == 0 { vec![(0, sent_ns), (0, sent_ns), (1, sent_ns), (99, sent_ns)] } else { vec![] }).await;
+        let (_client, conn) = connect(address).await;
+        let (rtts, _) = measure(&conn, 2, 1000).await.unwrap();
+        task.abort();
+        assert_eq!(rtts.len(), 1, "only probe 0 was echoed, and once");
+    }
 
     #[tokio::test]
     async fn hostile_probe_timestamps_do_not_panic_or_replace_valid_samples() {
