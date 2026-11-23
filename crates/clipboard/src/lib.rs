@@ -650,19 +650,63 @@ fn wayland_data_control() -> bool {
     *KNOWN.get_or_init(|| std::env::var_os("WAYLAND_DISPLAY").is_some() && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok())
 }
 
-/// Refuses text or HTML larger than an X11 clipboard can hand over (see
-/// [`Clipboard::write_limit`]), instead of setting a clipboard nothing can
-/// paste. Images are encoded by arboard, so their size is not known here.
+/// Refuses text, HTML or a picture larger than an X11 clipboard can hand over
+/// (see [`Clipboard::write_limit`]), instead of setting a clipboard nothing can
+/// paste.
 #[cfg(target_os = "linux")]
 fn check_x11_size(raw: &Raw) -> Result<()> {
+    x11_size_error(raw, x11_write_limit())
+}
+
+#[cfg(target_os = "linux")]
+fn x11_size_error(raw: &Raw, limit: Option<usize>) -> Result<()> {
+    let Some(limit) = limit else { return Ok(()) };
     let largest = raw.text.as_ref().map_or(0, String::len).max(raw.html.as_ref().map_or(0, String::len));
-    match x11_write_limit() {
-        Some(limit) if largest > limit => bail!(
-            "{} MB of text is more than this computer's X11 clipboard can hand over ({} MB at most)",
-            largest >> 20, limit >> 20
-        ),
-        _ => Ok(()),
+    if largest > limit {
+        bail!("{} MB of text is more than this computer's X11 clipboard can hand over ({} MB at most)", largest >> 20, limit >> 20);
     }
+    // arboard encodes a picture again before it offers it (see `served_png_len`), so
+    // the size of what came over the wire says little about what has to fit.
+    if raw.text.is_none() && raw.html.is_none() && let Some(image) = &raw.image {
+        let served = served_png_len(image, limit)?;
+        if served > limit {
+            bail!("a {} MB picture is more than this computer's X11 clipboard can hand over ({} MB at most)", served >> 20, limit >> 20);
+        }
+    }
+    Ok(())
+}
+
+/// The size of the PNG that arboard offers for `image`: it encodes the picture again,
+/// as `image`'s PngEncoder does by default (fast compression, adaptive filtering),
+/// not as [`encode_png`] does for the wire (fast compression, the default filter).
+/// The same `png` crate does the work, so the size is the one it will make. Pictures that cannot get over `limit`
+/// even when nothing compresses (the common case) are not encoded at all.
+#[cfg(target_os = "linux")]
+fn served_png_len(image: &Image, limit: usize) -> Result<usize> {
+    // The least that fits, whatever the encoder does: stored blocks add 5 bytes per
+    // 64 KB, a filter byte per row, chunk headers and a trailer; this adds 0.2 %.
+    let worst = image.rgba.len().saturating_add(image.rgba.len() / 512).saturating_add(image.height).saturating_add(4096);
+    if worst <= limit {
+        return Ok(worst);
+    }
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let mut count = Count(0);
+    let mut encoder = png::Encoder::new(&mut count, image.width as u32, image.height as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    encoder.set_filter(png::Filter::Adaptive);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(&image.rgba)?;
+    writer.finish()?;
+    Ok(count.0)
 }
 
 impl Backend {
@@ -885,6 +929,9 @@ impl Worker {
         let owner = if matches!(self.backend, Backend::System(_)) && std::env::var_os("WAYLAND_DISPLAY").is_none() { Some(sensitivity::owner()?) } else { None };
         #[cfg(any(windows, target_os = "macos"))]
         let generation = sensitivity::generation();
+        // Before the sensitivity query: a copy made between it and the read is caught (see `sensitivity::Guard`).
+        #[cfg(target_os = "linux")]
+        let guard = if matches!(self.backend, Backend::System(_)) { Some(sensitivity::Guard::begin()?) } else { None };
         let concealed = if matches!(self.backend, Backend::System(_)) {
             let apps = self.history_apps.lock().unwrap_or_else(|error| error.into_inner());
             #[cfg(target_os = "linux")]
@@ -900,6 +947,8 @@ impl Worker {
         });
         #[cfg(target_os = "linux")]
         if let Some(owner) = owner && sensitivity::owner()? != owner { bail!("clipboard owner changed during read; retry"); }
+        #[cfg(target_os = "linux")]
+        if let Some(guard) = guard && r.is_ok() { guard.finish()?; }
         #[cfg(any(windows, target_os = "macos"))]
         if matches!(self.backend, Backend::System(_)) && sensitivity::generation() != generation { bail!("clipboard changed during sensitivity check; retry"); }
         if r.is_err()
@@ -929,9 +978,6 @@ impl Worker {
 
     fn read_raw(&mut self, raw: Raw, skip: &[Digest], mode: ReadMode) -> Result<Read> {
         let max = self.filter().max_bytes();
-        // Before the sensitivity query: a copy made between it and the read is caught (see `sensitivity::Guard`).
-        #[cfg(target_os = "linux")]
-        let guard = if matches!(self.backend, Backend::System(_)) { Some(sensitivity::Guard::begin()?) } else { None };
         let skip_concealed = self.filter().skip_concealed;
         if raw.is_empty() {
             return Ok(Read::Empty);
@@ -947,8 +993,6 @@ impl Worker {
         }
         if concealed && (skip_concealed || received) && mode != ReadMode::Explicit {
             return Ok(Read::Concealed(digest));
-        #[cfg(target_os = "linux")]
-        if let Some(guard) = guard && r.is_ok() { guard.finish()?; }
         }
         if let Some((d, data)) = &self.cache
             && *d == digest
@@ -1345,6 +1389,86 @@ mod tests {
     fn image() -> Image {
         let rgba = (0..4 * 3 * 4).map(|i| (i * 7) as u8).collect();
         Image { width: 4, height: 3, rgba }
+    }
+
+    /// A picture of pixels with a lot of order in them, and the PNG of it that a program
+    /// squeezing the file (not oneMK, which sends the fast encoder's) would write.
+    #[cfg(target_os = "linux")]
+    fn gradient(width: usize, height: usize) -> Image {
+        let rgba = (0..width * height * 4).map(|i| ((i / 4) % width + (i / 4) / width + i % 4) as u8).collect();
+        Image { width, height, rgba }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn squeezed_png(image: &Image) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut encoder = png::Encoder::new(&mut out, image.width as u32, image.height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::High);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&image.rgba).unwrap();
+        writer.finish().unwrap();
+        out
+    }
+
+    /// Random pixels, which no encoder makes smaller than they are.
+    #[cfg(target_os = "linux")]
+    fn noise(width: usize, height: usize) -> Image {
+        let mut seed = 12345u64;
+        let rgba = (0..width * height * 4).map(|_| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as u8
+        }).collect();
+        Image { width, height, rgba }
+    }
+
+    /// The picture the peer sent fits what the X11 clipboard can hand over, but arboard
+    /// encodes it again, and the new PNG does not: it is refused, not set unpasteable.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_picture_that_is_too_big_once_arboard_encodes_it_again_is_refused() {
+        let image = gradient(512, 512);
+        let wire = squeezed_png(&image).len();
+        let served = served_png_len(&image, 0).unwrap();
+        assert!(served > wire * 10, "the scenario needs a squeezed file much smaller than the new one ({served} vs {wire})");
+        let raw = Raw { image: Some(image.clone()), ..Raw::default() };
+        // The wire's size fits, the served one does not.
+        let error = x11_size_error(&raw, Some(wire + 10)).unwrap_err();
+        assert!(format!("{error:#}").contains("picture is more than this computer's X11 clipboard can hand over"), "{error:#}");
+        x11_size_error(&raw, Some(served)).unwrap();
+        x11_size_error(&raw, None).unwrap();
+        // Text next to it is what is written then, not the picture.
+        x11_size_error(&Raw { text: Some("a".into()), image: Some(image), ..Raw::default() }, Some(wire + 10)).unwrap();
+    }
+
+    /// A picture that cannot reach the limit however it is encoded is not encoded to be
+    /// measured, and text and HTML are checked as before.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn small_pictures_pass_without_being_measured_and_big_text_is_still_refused() {
+        let image = noise(64, 64);
+        assert!(served_png_len(&image, 1 << 24).unwrap() >= image.rgba.len());
+        x11_size_error(&Raw { image: Some(image), ..Raw::default() }, Some(1 << 24)).unwrap();
+        assert!(x11_size_error(&Raw { text: Some("x".repeat(101)), ..Raw::default() }, Some(100)).is_err());
+        assert!(x11_size_error(&Raw { html: Some("x".repeat(101)), ..Raw::default() }, Some(100)).is_err());
+        x11_size_error(&Raw { text: Some("x".repeat(100)), ..Raw::default() }, Some(100)).unwrap();
+    }
+
+    /// What arboard really serves has the size `served_png_len` says.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires an explicitly private X11 display and xclip"]
+    async fn real_x11_serves_the_picture_at_the_predicted_size() {
+        assert_eq!(std::env::var("ONE_MK_PRIVATE_X11").as_deref(), Ok("1"));
+        assert!(std::env::var_os("WAYLAND_DISPLAY").is_none());
+        let clipboard = Clipboard::system();
+        for image in [noise(300, 200), noise(1, 1), gradient(300, 200), Image { width: 64, height: 64, rgba: vec![7; 64 * 64 * 4] }] {
+            let expected = served_png_len(&image, 0).unwrap();
+            clipboard.write(ClipData { png: Some(encode_png(&image).unwrap()), ..Default::default() }).await.unwrap();
+            let out = std::process::Command::new("xclip").args(["-selection", "clipboard", "-o", "-t", "image/png"]).output().unwrap();
+            assert_eq!(out.stdout.len(), expected, "{}x{}", image.width, image.height);
+        }
     }
 
     #[test]
