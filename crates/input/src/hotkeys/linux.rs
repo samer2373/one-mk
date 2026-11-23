@@ -156,6 +156,11 @@ async fn session(
             close(&session).await;
             return Ok(if changed.is_ok() { End::Changed } else { End::Quit });
         }
+        // The desktop closing the session under the dialog: no answer will come.
+        _ = closed.next() => {
+            close(&session).await;
+            return Ok(End::Closed);
+        }
     };
     match bound {
         Ok(b) => {
@@ -174,7 +179,12 @@ async fn session(
             let _ = events.send(Event::Hotkeys(Availability::Active(how)));
         }
         Err(e) => {
+            // A request that failed because the session was closed is that, not a refusal (and
+            // not the user turning the dialog down, which is final).
+            let ended = !matches!(e, ashpd::Error::Response(ResponseError::Cancelled))
+                && futures::FutureExt::now_or_never(closed.next()).is_some();
             close(&session).await;
+            if ended { return Ok(End::Closed); }
             return Err(match e {
                 ashpd::Error::Response(ResponseError::Cancelled) => {
                     "they were turned down in the desktop's dialog; restart one-mk to be asked again".into()
