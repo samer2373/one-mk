@@ -968,10 +968,6 @@ impl Ctx {
                     && st.tap.is_some()
                     && let (Some(desktop), Some(at)) = (st.desktop.clone(), at)
                 {
-                    // Unlike an edge hit, this can come mid-drag: the app has the press already.
-                    st.local_buttons = (0..8u32)
-                        .filter(|&button| CGEventSource::button_state(CGEventSourceStateID::HIDSystemState, CGMouseButton(button)))
-                        .fold(0, |mask, button| mask | 1 << button);
                     self.start(&mut st, side, desktop.clamp(Pos::new(at.x, at.y)));
                 }
             }
@@ -1139,6 +1135,11 @@ impl Ctx {
         }
         st.id = id;
         st.secure_reported = false;
+        // Buttons held now went to this Mac's apps, and the activation can come mid-drag or after
+        // a local rules fence that took a while: a release of one of them stays here.
+        st.local_buttons = (0..8u32)
+            .filter(|&button| CGEventSource::button_state(CGEventSourceStateID::HIDSystemState, CGMouseButton(button)))
+            .fold(0, |mask, button| mask | 1 << button);
         st.activate();
         self.hid.capture(true);
         self.update_timer(st);
