@@ -821,13 +821,20 @@ impl Link {
     pub fn set_side(&self, peer: &str, name: &str, side: one_mk_proto::Side, offset: Option<(i32, i32)>) {
         let (id, word) = (peer.to_owned(), side.to_string());
         let at = offset.map_or_else(|| "--offset=none".to_owned(), |(x, y)| format!("--offset={x},{y}"));
-        self.job(Job::Layout { id: peer.into(), name: name.into(), side }, move |l| l.one_mk(&["layout", &id, &word, &at]).map(drop));
+        self.layout_job(Job::Layout { id: peer.into(), name: name.into(), side }, vec!["layout".into(), id, word, at]);
     }
 
     pub fn set_swap(&self, peer: &str, name: &str, swap: &str) {
         let (id, value) = (peer.to_owned(), swap.to_owned());
         let what = Job::Swap { id: peer.into(), name: name.into(), swap: swap.into() };
-        self.job(what, move |l| l.one_mk(&["layout", &id, "--swap-ctrl-cmd", &value]).map(drop));
+        self.layout_job(what, vec!["layout".into(), id, "--swap-ctrl-cmd".into(), value]);
+    }
+
+    /// Runs a layout or swap change after every change asked before it, one
+    /// at a time: separate processes started together finish in any order,
+    /// and the one asked first could land last and win.
+    fn layout_job(&self, what: Job, args: Vec<String>) {
+        self.tuning_send(Tuning::Run { job: what, cmds: vec![args], key: None });
     }
 
     /// `one-mk profile use|save|delete <name>`.

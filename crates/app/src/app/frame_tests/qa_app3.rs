@@ -267,3 +267,26 @@ fn health_names_what_its_update_button_does_where_it_cannot_install() {
         assert!(win.find("Update now").is_some() == (label == "Update now"));
     }
 }
+
+#[test]
+fn layout_changes_reach_one_mk_in_the_order_they_were_asked() {
+    let (mut win, fake) = settings_on(settings_page::Cat::General);
+    let sides = [Side::Left, Side::Right, Side::Top, Side::Bottom];
+    for n in 0..24 {
+        win.app.link.set_side("p1", "Office PC", sides[n % 4], None);
+        win.app.link.set_swap("p1", "Office PC", if n % 2 == 0 { "on" } else { "off" });
+    }
+    for _ in 0..400 {
+        if fake.calls_with(&["layout"]).len() >= 48 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let calls = fake.calls_with(&["layout"]);
+    assert_eq!(calls.len(), 48, "{calls:?}");
+    for (n, pair) in calls.chunks(2).enumerate() {
+        assert_eq!(pair[0][2], sides[n % 4].to_string(), "call {n}: {calls:?}");
+        assert_eq!(pair[1][2], "--swap-ctrl-cmd", "call {n}: {calls:?}");
+        assert_eq!(pair[1][3], if n % 2 == 0 { "on" } else { "off" }, "call {n}: {calls:?}");
+    }
+}
