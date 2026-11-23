@@ -256,7 +256,7 @@ pub async fn notify(dir: &Path, state: Option<OnOff>) -> Result<()> {
     applied(dir).await
 }
 
-async fn applied(dir: &Path) -> Result<()> {
+pub(crate) async fn applied(dir: &Path) -> Result<()> {
     match control::request(dir, Request::Settings).await? {
         None => println!("one-mk is not running; this takes effect the next time it starts."),
         Some(r) if r.starts_with("ok") => println!("Applied right away."),

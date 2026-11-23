@@ -110,11 +110,9 @@ pub async fn run_command(dir: &Path, args: PowerArgs) -> Result<()> {
     };
     println!("{}", power.describe());
     if changes {
-        if crate::control::request(dir, crate::control::Request::Reload).await?.is_some() {
-            println!("Applied right away.");
-        } else {
-            println!("one-mk is not running; this takes effect the next time it starts.");
-        }
+        // `Settings`, not `Reload`: a reload answers ok even when the settings
+        // could not be read and the old ones stay in force.
+        crate::clipctl::applied(dir).await?;
     }
     Ok(())
 }
@@ -175,6 +173,23 @@ mod tests {
         a.set(false, take(false));
         a.set(true, take(false));
         assert_eq!(tries.load(Ordering::SeqCst), 2);
+    }
+
+    /// A daemon that cannot apply the change says so; "Applied right away" was
+    /// printed for any reply at all.
+    #[tokio::test]
+    async fn a_daemon_that_could_not_apply_the_change_is_reported() {
+        let dir = crate::testdir::scratch("power-apply");
+        let mut server = crate::control::Server::start(&dir).await.unwrap();
+        let task = tokio::spawn(async move {
+            while let Some((_, reply)) = server.recv().await {
+                let _ = reply.send("error settings.toml is not valid\n".into());
+            }
+        });
+        let args = PowerArgs { block_screensaver: Some(true), ..Default::default() };
+        let error = run_command(&dir, args).await.unwrap_err().to_string();
+        assert!(error.contains("could not apply") && error.contains("settings.toml is not valid"), "{error}");
+        task.abort();
     }
 
     #[test]
