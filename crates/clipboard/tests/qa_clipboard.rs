@@ -159,6 +159,10 @@ fn damaged_and_hostile_pictures_are_errors_within_bounds() {
         (1 << 20, 1 << 20, 0, 1),
         (16_385, 4_096, 6, 8),
         (u32::MAX >> 1, 2, 6, 8),
+        // Small as the decoder lays them out (1 byte a pixel for grey, 3 for RGB), over the
+        // limit as the RGBA that is made of them.
+        (12_000, 12_000, 0, 8),
+        (8_000, 8_000, 2, 8),
     ] {
         let started = std::time::Instant::now();
         let bomb = claimed_size(w, h, color, depth);

@@ -117,13 +117,17 @@ pub struct Tuned {
 #[derive(Clone, Debug, Default)]
 pub struct ScrollTune {
     cfg: ScrollConfig,
-    /// What hasn't been sent yet, in 1/120 notch.
-    rem: (f64, f64),
+    /// What hasn't been sent yet, in 1/120 notch: from smooth (touchpad)
+    /// scrolling and from the wheel, apart, since they may step differently.
+    rem: [(f64, f64); 2],
 }
+
+const SMOOTH: usize = 0;
+const WHEEL: usize = 1;
 
 impl ScrollTune {
     pub fn new(cfg: ScrollConfig) -> Self {
-        ScrollTune { cfg, rem: (0.0, 0.0) }
+        ScrollTune { cfg, rem: [(0.0, 0.0); 2] }
     }
 
     pub fn config(&self) -> &ScrollConfig {
@@ -140,7 +144,7 @@ impl ScrollTune {
         let (dx, dy, used) = self.shape(dx, dy, &p, held);
         let out = match p.mode {
             Mode::Auto | Mode::Smooth => (dx != 0.0 || dy != 0.0).then_some(ScrollOut::Smooth { dx, dy }),
-            Mode::Discrete => self.notches(dx / PX_PER_NOTCH * UNITS_PER_NOTCH, dy / PX_PER_NOTCH * UNITS_PER_NOTCH, true),
+            Mode::Discrete => self.notches(dx / PX_PER_NOTCH * UNITS_PER_NOTCH, dy / PX_PER_NOTCH * UNITS_PER_NOTCH, true, SMOOTH),
         };
         Tuned { out, used }
     }
@@ -154,8 +158,8 @@ impl ScrollTune {
                 dx: dx / UNITS_PER_NOTCH * PX_PER_NOTCH,
                 dy: dy / UNITS_PER_NOTCH * PX_PER_NOTCH,
             }),
-            Mode::Auto => self.notches(dx, dy, false),
-            Mode::Discrete => self.notches(dx, dy, true),
+            Mode::Auto => self.notches(dx, dy, false, WHEEL),
+            Mode::Discrete => self.notches(dx, dy, true, WHEEL),
         };
         Tuned { out, used }
     }
@@ -163,7 +167,7 @@ impl ScrollTune {
     /// The fingers left the touchpad. In discrete mode nothing is sent
     /// (and the partial notch is dropped: the gesture is over).
     pub fn stop(&mut self) -> Option<ScrollOut> {
-        self.rem = (0.0, 0.0);
+        self.rem[SMOOTH] = (0.0, 0.0);
         (self.cfg.smooth.mode != Mode::Discrete).then_some(ScrollOut::Stop)
     }
 
@@ -196,7 +200,7 @@ impl ScrollTune {
     /// Adds `dx, dy` (1/120 notch) to what is left over and sends what is
     /// whole: whole notches if `whole`, else whole units. A change of
     /// direction drops what was left over the other way.
-    fn notches(&mut self, dx: f64, dy: f64, whole: bool) -> Option<ScrollOut> {
+    fn notches(&mut self, dx: f64, dy: f64, whole: bool, from: usize) -> Option<ScrollOut> {
         let step = if whole { UNITS_PER_NOTCH } else { 1.0 };
         let take = |rem: &mut f64, d: f64| -> i32 {
             if d != 0.0 && rem.signum() != d.signum() {
@@ -207,9 +211,9 @@ impl ScrollTune {
             *rem -= n;
             n.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
         };
-        let (mut rx, mut ry) = self.rem;
+        let (mut rx, mut ry) = self.rem[from];
         let (ox, oy) = (take(&mut rx, dx), take(&mut ry, dy));
-        self.rem = (rx, ry);
+        self.rem[from] = (rx, ry);
         (ox != 0 || oy != 0).then_some(ScrollOut::Discrete { dx: ox, dy: oy })
     }
 }
@@ -273,6 +277,22 @@ mod tests {
         assert_eq!(t.discrete(0, 120, 0).out, None);
         assert_eq!(t.discrete(0, -120, 0).out, None);
         assert_eq!(t.discrete(0, -120, 0).out, Some(ScrollOut::Discrete { dx: 0, dy: -120 }));
+    }
+
+    #[test]
+    fn touchpad_and_wheel_keep_their_own_partial_notches() {
+        let mut t = tune(|c| c.smooth.mode = Mode::Discrete);
+        assert_eq!(t.smooth(0.0, 10.0, 0).out, None, "less than a notch");
+        // A wheel notch in the middle of the gesture is a notch, not more.
+        assert_eq!(t.discrete(0, 120, 0).out, Some(ScrollOut::Discrete { dx: 0, dy: 120 }));
+        // The touchpad's leftover is still there, and its stop drops only its own.
+        assert_eq!(t.smooth(0.0, 10.0, 0).out, None);
+        assert_eq!(t.discrete(0, 60, 0).out, Some(ScrollOut::Discrete { dx: 0, dy: 60 }));
+        assert_eq!(t.stop(), None);
+        let mut t = tune(|c| c.wheel.mode = Mode::Discrete);
+        assert_eq!(t.discrete(0, 60, 0).out, None);
+        assert_eq!(t.stop(), Some(ScrollOut::Stop));
+        assert_eq!(t.discrete(0, 60, 0).out, Some(ScrollOut::Discrete { dx: 0, dy: 120 }), "the wheel's half notch survives a touchpad stop");
     }
 
     #[test]

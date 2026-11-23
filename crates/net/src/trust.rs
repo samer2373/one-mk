@@ -198,7 +198,15 @@ impl TrustStore {
         };
         for device in &mut file.devices {
             device.offset = device.offset.map(bounded_offset);
+            // A fingerprint is looked up as the lowercase text `Fingerprint` prints; a file
+            // restored or written by hand may have it in capitals, which parse just as well.
+            if let Ok(fp) = device.fingerprint.parse::<Fingerprint>() {
+                device.fingerprint = fp.to_string();
+            }
         }
+        // Two rows for one computer (one in capitals): the first one counts.
+        let mut seen = std::collections::HashSet::new();
+        file.devices.retain(|d| d.fingerprint.parse::<Fingerprint>().is_err() || seen.insert(d.fingerprint.clone()));
         Ok(Self { path, file })
     }
 
@@ -399,6 +407,23 @@ fn lock(dir: &Path, wait: Option<Duration>) -> Result<std::fs::File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_fingerprint_in_capitals_is_the_same_computer() {
+        let dir = tempfile::tempdir().unwrap();
+        let fp = Fingerprint([0xab; 32]);
+        let text = |hex: &str| format!("[[device]]\nfingerprint = \"{hex}\"\nname = \"Studio\"\n");
+        std::fs::write(dir.path().join("devices.toml"), text(&fp.to_string().to_uppercase())).unwrap();
+        let mut store = TrustStore::load(dir.path()).unwrap();
+        assert!(store.is_trusted(&fp) && store.get(&fp).is_some() && store.get_mut(&fp).is_some());
+        assert!(store.find_fingerprint(&fp.short()).is_some());
+        store.upsert(Device { fingerprint: fp.to_string(), name: "Studio".into(), ..Default::default() });
+        assert_eq!(store.devices().len(), 1, "pairing again refreshes the row");
+        // Both spellings in one file are one computer.
+        let both = text(&fp.to_string().to_uppercase()) + &text(&fp.to_string());
+        std::fs::write(dir.path().join("devices.toml"), both).unwrap();
+        assert_eq!(TrustStore::load(dir.path()).unwrap().devices().len(), 1);
+    }
 
     #[test]
     fn fingerprint_lookup_ignores_names() {

@@ -97,6 +97,10 @@ pub struct History {
     revision: u64,
     path: Option<PathBuf>,
     pub error: Option<String>,
+    /// An unfinished save (a temporary file with clipboard text in it, left by a crash)
+    /// that could not be removed; kept apart from `error`, which a change of the saved
+    /// file's place clears.
+    cleanup_error: Option<String>,
     pub monitoring_unavailable: bool,
     status: Arc<Status>,
     saver: Option<crate::history_save::Saver>,
@@ -109,7 +113,7 @@ pub struct History {
 impl Default for History {
     fn default() -> Self {
         Self { entries: VecDeque::new(), bytes: 0, max: 20, byte_cap: DEFAULT_BYTES,
-            item_cap: crate::DEFAULT_MAX_BYTES, next: 1, revision: 0, path: None, error: None, monitoring_unavailable: false,
+            item_cap: crate::DEFAULT_MAX_BYTES, next: 1, revision: 0, path: None, error: None, cleanup_error: None, monitoring_unavailable: false,
             status: Arc::default(), saver: None, last_saved: None, blocked: false, remove_path: None, removed_path: None }
     }
 }
@@ -124,6 +128,7 @@ impl History {
         if self.path != path { self.remove_path = self.path.take(); self.blocked = false; self.error = None; }
         self.path = path;
         if self.path.is_some() { self.removed_path = None; }
+        self.clean_unfinished_saves();
         if load && let Err(error) = self.load() {
             self.error = Some(format!("Could not load clipboard history: {error}; clear it with one-mk clipboard history clear."));
             self.blocked = true;
@@ -134,6 +139,19 @@ impl History {
         if load && !self.disabled() { self.last_saved = Some((self.path.clone(), self.revision)); }
         self.trim();
         self.save_checked();
+    }
+
+    /// Removes what a crash left of an unfinished save beside the saved file, and says if it
+    /// can't. Only while no save has been made by this process, whose own temporary
+    /// file must not be taken for a leftover.
+    fn clean_unfinished_saves(&mut self) {
+        let Some(directory) = self.path.as_ref().and_then(|path| path.parent()).filter(|dir| self.saver.is_none() && dir.is_dir()) else {
+            self.cleanup_error = None;
+            return;
+        };
+        self.cleanup_error = clean_unfinished(directory).err().map(|error| {
+            format!("Could not remove an unfinished clipboard-history save: {error}; check the settings folder is writable, then restart one-mk.")
+        });
     }
 
     pub fn list(&self) -> Vec<Entry> { self.entries.iter().rev().cloned().collect() }
@@ -155,7 +173,7 @@ impl History {
         self.status.revision.store(self.revision, Ordering::Relaxed);
         self.status.disabled.store(self.disabled(), Ordering::Relaxed);
         if self.monitoring_unavailable { self.status.monitoring_unavailable.store(true, Ordering::Relaxed); }
-        *self.status.note.lock().unwrap_or_else(|error| error.into_inner()) = self.error.clone();
+        *self.status.note.lock().unwrap_or_else(|error| error.into_inner()) = self.error.clone().or_else(|| self.cleanup_error.clone());
     }
 
     #[cfg(test)]
@@ -224,6 +242,12 @@ impl History {
 
     fn load(&mut self) -> Result<()> {
         let Some(path) = &self.path else { return Ok(()); };
+        // Opening a FIFO waits for a writer, which would hang the daemon's startup or
+        // settings reload: look before opening.
+        match std::fs::metadata(path) {
+            Ok(meta) if !meta.is_file() => bail!("{} is not a regular file", path.display()),
+            _ => {}
+        }
         let mut file = match std::fs::File::open(path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -316,6 +340,53 @@ mod tests {
         clean_unfinished(directory.path()).unwrap();
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
         assert_eq!(std::fs::read(directory.path().join("clipboard-history.bin")).unwrap(), b"saved");
+    }
+
+    /// Opening a FIFO waits for a writer: loading must refuse it, not hang the daemon.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_history_path_that_is_a_fifo_is_refused_without_waiting() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("clipboard-history.bin");
+        let c_path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let (done, finished) = std::sync::mpsc::channel();
+        let at = path.clone();
+        std::thread::spawn(move || {
+            let mut history = History::default();
+            history.configure(20, DEFAULT_BYTES, 1024, Some(at));
+            let _ = done.send(history.error.clone());
+        });
+        let outcome = finished.recv_timeout(std::time::Duration::from_secs(5));
+        // Let a thread that is stuck go, so the test ends either way.
+        if outcome.is_err() {
+            let _ = std::fs::OpenOptions::new().write(true).open(&path);
+        }
+        let error = outcome.expect("configure waited for a writer on the FIFO");
+        assert!(error.is_some_and(|e| e.contains("not a regular file")));
+    }
+
+    /// A leftover temporary save that can't be removed is not forgotten when the saved
+    /// file's place is set at startup.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_unremovable_unfinished_save_is_still_reported_after_configure() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions. As root nothing is unremovable.
+        if unsafe { libc::geteuid() } == 0 { return; }
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join(".clipboard-history-x"), b"clipboard text").unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let mut history = History::default();
+        history.configure(20, DEFAULT_BYTES, 1024, Some(directory.path().join("clipboard-history.bin")));
+        let note = history.status().note();
+        // Let the temporary folder be removed.
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(note.is_some_and(|n| n.contains("unfinished")), "the warning was lost");
+        // Once it can be removed, the warning goes.
+        history.configure(20, DEFAULT_BYTES, 1024, Some(directory.path().join("clipboard-history.bin")));
+        assert!(history.status().note().is_none_or(|n| !n.contains("unfinished")));
+        assert!(!directory.path().join(".clipboard-history-x").exists());
     }
 
     #[test]

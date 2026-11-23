@@ -147,15 +147,26 @@ impl Ctx {
                 anyhow::bail!("oneMK's service is missing; reinstall oneMK");
             }
             let running = client::is_running(&self.dir);
-            install::install(&Launch {
-                exe: self.daemon.clone(),
-                tray: Some(self.tray.clone()),
-                home: self.login_home(),
-                // Do not start a second copy of a daemon that is already up.
-                start_now: !running,
-            })?;
+            // Do not start a second copy of a daemon that is already up.
+            let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from).filter(|p| p.is_file());
+            install::install(&self.login_launch(appimage, !running))?;
         }
         Ok(())
+    }
+
+    /// What to start at login. Inside an AppImage this program and `one-mk`
+    /// sit in a temporary mount that is gone afterwards, so it is the
+    /// AppImage file itself (which hands its arguments to `one-mk`), and
+    /// the tray only exists as a real file beside it, as for the window.
+    fn login_launch(&self, appimage: Option<PathBuf>, start_now: bool) -> Launch {
+        let (exe, tray) = match appimage {
+            Some(file) => {
+                let tray = install::sibling(&file, "one-mk-tray");
+                (file, tray)
+            }
+            None => (self.daemon.clone(), Some(self.tray.clone())),
+        };
+        Launch { exe, tray, home: self.login_home(), start_now }
     }
 }
 
@@ -217,6 +228,22 @@ mod tests {
         assert_eq!(args[0], "--home");
         ctx.custom_home = false;
         assert!(ctx.home_args().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn login_from_an_appimage_starts_the_appimage_not_its_temporary_mount() {
+        let (ctx, dir) = lonely("appimage");
+        let file = dir.join("oneMK.AppImage");
+        std::fs::write(&file, "").unwrap();
+        let launch = ctx.login_launch(Some(file.clone()), true);
+        assert_eq!(launch.exe, file);
+        assert_eq!(launch.tray, None, "no tray file beside the AppImage");
+        assert!(launch.start_now && launch.home.is_some());
+        // An installed program is started as it is, with its tray.
+        let launch = ctx.login_launch(None, false);
+        assert_eq!((launch.exe, launch.tray), (ctx.daemon.clone(), Some(ctx.tray.clone())));
+        assert!(!launch.start_now);
         let _ = std::fs::remove_dir_all(dir);
     }
 

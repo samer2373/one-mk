@@ -53,6 +53,15 @@ impl Snapshot {
         self.status.is_some()
     }
 
+    /// Whether the menu and icon built from `other` would look like this
+    /// one's: the link counters and latencies in a status change with every
+    /// look and are shown nowhere.
+    #[cfg(any(windows, target_os = "macos", test))]
+    pub fn looks_like(&self, other: &Snapshot) -> bool {
+        self.autostart == other.autostart
+            && self.status.as_ref().map(Status::without_links) == other.status.as_ref().map(Status::without_links)
+    }
+
     /// Which icon to draw.
     pub fn icon_state(&self) -> IconState {
         match &self.status {
@@ -158,16 +167,19 @@ pub fn menu(snap: &Snapshot) -> Vec<Entry> {
                     switch.insert(0, Entry::Item { label: "Switch back here".into(), action: Action::Switch("here".into()), checked: None });
                 }
                 grouped(&mut m, "Switch to", switch);
-                let clip = online
-                    .iter()
-                    .map(|p| Entry::Item { label: format!("Send clipboard to {}", p.name), action: Action::ClipSend(p.id.clone()), checked: None })
-                    .collect();
-                grouped(&mut m, "Send clipboard to", clip);
-                let get = online
-                    .iter()
-                    .map(|p| Entry::Item { label: format!("Get clipboard from {}", p.name), action: Action::ClipGet(p.id.clone()), checked: None })
-                    .collect();
-                grouped(&mut m, "Get clipboard from", get);
+                // Not with sharing off (`--no-clipboard`): the daemon refuses both.
+                if !s.clipboard_off {
+                    let clip = online
+                        .iter()
+                        .map(|p| Entry::Item { label: format!("Send clipboard to {}", p.name), action: Action::ClipSend(p.id.clone()), checked: None })
+                        .collect();
+                    grouped(&mut m, "Send clipboard to", clip);
+                    let get = online
+                        .iter()
+                        .map(|p| Entry::Item { label: format!("Get clipboard from {}", p.name), action: Action::ClipGet(p.id.clone()), checked: None })
+                        .collect();
+                    grouped(&mut m, "Get clipboard from", get);
+                }
                 m.push(Entry::Separator);
             }
             for p in &s.peers {
@@ -296,6 +308,31 @@ mod tests {
         // Many computers: one submenu each instead of a long menu.
         let many = menu(&snap((0..5).map(|i| peer(&format!("pc{i}"), Side::Right, true)).collect()));
         assert!(many.iter().any(|e| matches!(e, Entry::Sub { label, items } if label == "Switch to" && items.len() == 5)), "{many:?}");
+    }
+
+    #[test]
+    fn without_clipboard_sharing_there_are_no_clipboard_entries() {
+        let mut s = snap(vec![peer("desk", Side::Right, true)]);
+        s.status.as_mut().unwrap().clipboard_off = true;
+        let l = labels(&menu(&s));
+        assert!(l.contains(&"Switch to desk".into()), "{l:?}");
+        assert!(!l.iter().any(|x| x.starts_with("Send clipboard to") || x.starts_with("Get clipboard from")), "{l:?}");
+    }
+
+    #[test]
+    fn link_counters_do_not_change_what_the_menu_looks_like() {
+        use one_mk_ctl::status::LinkStats;
+        let a = snap(vec![peer("desk", Side::Right, true)]);
+        let mut b = a.clone();
+        b.status.as_mut().unwrap().links = vec![("desk-id".into(), LinkStats { rtt_us: 900, sent: 5, ..Default::default() })];
+        assert!(a != b && a.looks_like(&b));
+        let mut c = a.clone();
+        c.status.as_mut().unwrap().pointer_locked = true;
+        assert!(!a.looks_like(&c));
+        c = a.clone();
+        c.autostart = true;
+        assert!(!a.looks_like(&c));
+        assert!(!a.looks_like(&Snapshot::default()));
     }
 
     #[test]

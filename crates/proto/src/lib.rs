@@ -54,8 +54,9 @@ pub const DEFAULT_PORT: u16 = 24900;
 pub const LINUX_APP_ID: &str = "io.github.onemk.OneMk";
 
 /// Makes a peer-supplied device name safe to display: removes control,
-/// bidi-override and zero-width characters (which could redraw a terminal or
-/// disguise a name), collapses whitespace and limits the length.
+/// bidi-override, zero-width and other invisible characters (which could
+/// redraw a terminal or disguise a name), collapses whitespace and limits the
+/// length. A name left empty is shown as "unnamed device".
 pub fn sanitize_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -64,9 +65,19 @@ pub fn sanitize_name(name: &str) -> String {
                 && !matches!(*c,
                     '\u{200B}'..='\u{200F}' // zero-width, LRM/RLM
                     | '\u{202A}'..='\u{202E}' // bidi embeddings/overrides
-                    | '\u{2060}'..='\u{2064}' // word joiner, invisible operators
-                    | '\u{2066}'..='\u{2069}' // bidi isolates
+                    | '\u{2060}'..='\u{206F}' // word joiner, invisible operators, bidi isolates, deprecated format characters
                     | '\u{FEFF}' // BOM / zero-width no-break space
+                    | '\u{00AD}' // soft hyphen
+                    | '\u{034F}' // combining grapheme joiner
+                    | '\u{061C}' // Arabic letter mark (bidi)
+                    | '\u{115F}'..='\u{1160}' // Hangul choseong/jungseong fillers
+                    | '\u{17B4}'..='\u{17B5}' // Khmer inherent vowels
+                    | '\u{180B}'..='\u{180F}' // Mongolian variation selectors, vowel separator
+                    | '\u{2800}' // braille blank
+                    | '\u{3164}' // Hangul filler
+                    | '\u{FFA0}' // halfwidth Hangul filler
+                    | '\u{FFF9}'..='\u{FFFB}' // interlinear annotation
+                    | '\u{E0000}'..='\u{E007F}' // tag characters
                 )
         })
         .collect();
@@ -85,5 +96,15 @@ mod tests {
         assert_eq!(sanitize_name("evil\u{202E}txt.exe"), "eviltxt.exe");
         assert_eq!(sanitize_name("\u{200B}\n"), "unnamed device");
         assert_eq!(sanitize_name(&"x".repeat(300)).len(), 64);
+    }
+
+    #[test]
+    fn strips_characters_that_show_as_blank() {
+        assert_eq!(sanitize_name("\u{3164}"), "unnamed device");
+        assert_eq!(sanitize_name("\u{2800}\u{FFA0}\u{115F}\u{1160}"), "unnamed device");
+        assert_eq!(sanitize_name("\u{E0041}\u{E007F}"), "unnamed device");
+        assert_eq!(sanitize_name("Mac\u{061C}\u{2800}"), "Mac");
+        assert_eq!(sanitize_name("Samer's MacBook\u{3164}"), "Samer's MacBook");
+        assert_eq!(sanitize_name("a\u{206A}b"), "ab");
     }
 }
