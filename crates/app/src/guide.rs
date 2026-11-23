@@ -888,7 +888,8 @@ fn draw_card(
             } else if now - v.phase_at > STUCK_AFTER {
                 // macOS can show a switch as on for an entry made by an
                 // older version of the app, and still refuse it.
-                "Already on? Remove it (−), reopen oneMK"
+                // (Reopening the window does not ask macOS again: the sharing service asks once per run.)
+                "Already on? Remove it (−), then Stop and Start oneMK"
             } else {
                 "Watching for the switch…"
             };
@@ -1061,7 +1062,9 @@ impl Overlay {
             if enabled && self.active() {
                 self.offered = true;
             }
-        } else if !self.active() {
+        } else {
+            // Every permission is on: the gap is over, whether or not the card is
+            // still showing its success (it may be the last status for a while).
             self.offered = false;
         }
         self.set_status_input(input, now);
@@ -1238,7 +1241,7 @@ impl Overlay {
             || leave < 1.0
             || self.covered.moving(now)
             || now - view.phase_at < 1.4
-            || (waiting && nudging);
+            || keeps_nudging(waiting, nudging, shown);
         if busy {
             ctx.request_repaint();
         } else {
@@ -2096,6 +2099,12 @@ mod tests {
     }
 }
 
+/// Whether the arrow's nudges ask for frames: not once the card has
+/// faded away (covered by another window), when nothing of it is drawn.
+fn keeps_nudging(waiting: bool, nudging: bool, shown: f32) -> bool {
+    waiting && nudging && shown > 0.0
+}
+
 #[cfg(test)]
 mod on_status_tests {
     use super::*;
@@ -2119,6 +2128,26 @@ mod on_status_tests {
         o.on_status_if(true, &[], 3.0);
         o.on_status_if(true, &missing(), 4.0);
         assert!(o.active());
+    }
+
+    #[test]
+    fn a_gap_after_a_guide_that_finished_is_offered_again() {
+        let mut o = Overlay::default();
+        o.on_status_if(true, &missing(), 0.0);
+        assert!(o.active());
+        // Everything granted while the card is still up; no other status follows.
+        o.on_status_if(true, &[], 0.5);
+        o.stop(); // the card finished and went
+        o.on_status_if(true, &missing(), 60.0);
+        assert!(o.active(), "revoked later: the card comes back");
+    }
+
+    #[test]
+    fn a_covered_card_asks_for_no_frames_for_its_nudges() {
+        assert!(keeps_nudging(true, true, 1.0));
+        assert!(!keeps_nudging(true, true, 0.0), "faded away: nothing is drawn");
+        assert!(!keeps_nudging(false, true, 1.0));
+        assert!(!keeps_nudging(true, false, 1.0));
     }
 
     #[test]

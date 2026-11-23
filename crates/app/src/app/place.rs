@@ -116,7 +116,7 @@ fn short_warning(apart: bool, warnings: &[String]) -> Option<&'static str> {
     if apart || warnings.iter().any(|w| w.contains("does not overlap")) {
         Some("None of its screens touches yours, so the pointer can't cross to it. Drag it next to a monitor.")
     } else if !warnings.is_empty() {
-        Some("It shares part of an edge with another computer; the pointer goes to the one placed first.")
+        Some("It shares part of an edge with another computer; the pointer goes to only one of them.")
     } else {
         None
     }
@@ -154,7 +154,8 @@ const FIELD_H: f32 = 38.0;
 pub(super) fn parse_place(x: &str, y: &str) -> Result<(i32, i32), &'static str> {
     let num = |s: &str| s.trim().replace('\u{2212}', "-").parse::<i64>().ok();
     let (Some(x), Some(y)) = (num(x), num(y)) else { return Err(PLACE_WHOLE) };
-    if x.abs() > MAX_OFFSET || y.abs() > MAX_OFFSET {
+    // (`abs` of the lowest i64 has no answer: the magnitude is taken unsigned.)
+    if x.unsigned_abs() > MAX_OFFSET as u64 || y.unsigned_abs() > MAX_OFFSET as u64 {
         return Err(PLACE_BOUNDS);
     }
     Ok((x as i32, y as i32))
@@ -201,7 +202,15 @@ pub(super) fn plan_landing(mine: &Desktop, theirs: &Desktop, at: (i32, i32), rea
     let edges: Vec<Edge> = Side::ALL.into_iter().flat_map(|s| mine.exposed_edges(s)).collect();
     let b = theirs.bounds();
     let corner = (f64::from(at.0) + f64::from(b.x), f64::from(at.1) + f64::from(b.y));
-    let dropped = scene::drop_place(&mine.screens, &edges, b, corner, if apart { 0.0 } else { reach });
+    // A desk drop is held within its own size of our desktop; placed apart (an
+    // Exact place far off, moved with the keys) it stays exactly where it is.
+    let m = mine.bounds();
+    let far = |at: f64, from: i32, size: i32, peer: i32| at.round() < f64::from(from - 2 * peer) || at.round() > f64::from(from + size + peer);
+    let dropped = if apart && (far(corner.0, m.x, m.w, b.w) || far(corner.1, m.y, m.h, b.h)) {
+        (side_for(mine, theirs, at), at)
+    } else {
+        scene::drop_place(&mine.screens, &edges, b, corner, if apart { 0.0 } else { reach })
+    };
     scene::landing(mine, theirs, dropped, apart)
 }
 
@@ -967,6 +976,21 @@ impl App {
         let can = !status.screens.is_empty() && !peer.screens.is_empty();
         let (cx, cy) = offset.map_or((String::new(), String::new()), |(x, y)| (x.to_string(), y.to_string()));
         let hint = shown_offset(&one_mk_ctl::wallpaper::canvas(status), &peer.id).map_or(("X".to_owned(), "Y".to_owned()), |(x, y)| (x.to_string(), y.to_string()));
+        // A place typed in is a draft of both X and Y, made from where it was. If it moves
+        // meanwhile (the other computer changes it), the axis not typed in follows it.
+        let kb = format!("place-base:{}", peer.id);
+        let here = format!("{cx},{cy}");
+        match self.drafts.get(&kb).cloned() {
+            Some(base) if base != here && self.drafts.contains_key(&kx) && self.drafts.contains_key(&ky) => {
+                let (bx, by) = base.split_once(',').unwrap_or_default();
+                for (key, was, now) in [(&kx, bx, &cx), (&ky, by, &cy)] {
+                    if self.drafts.get(key).is_some_and(|draft| draft == was) { self.drafts.insert(key.clone(), now.clone()); }
+                }
+                self.drafts.insert(kb.clone(), here.clone());
+            }
+            None if self.drafts.contains_key(&kx) && self.drafts.contains_key(&ky) => { self.drafts.insert(kb.clone(), here.clone()); }
+            _ => {}
+        }
         let mut xs = self.drafts.get(&kx).cloned().unwrap_or_else(|| cx.clone());
         let mut ys = self.drafts.get(&ky).cloned().unwrap_or_else(|| cy.clone());
         let fy = row.top() + text_top + ch + 12.0;
@@ -981,9 +1005,11 @@ impl App {
         if xs == cx && ys == cy {
             self.drafts.remove(&kx);
             self.drafts.remove(&ky);
+            self.drafts.remove(&kb);
         } else {
             self.drafts.insert(kx.clone(), xs.clone());
             self.drafts.insert(ky.clone(), ys.clone());
+            self.drafts.entry(kb.clone()).or_insert(here);
         }
         let left = rx.lost_focus() || ry.lost_focus();
         let (enter, escape) = ui.input(|i| (i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)));
@@ -991,6 +1017,7 @@ impl App {
             // Esc: back to where it is.
             self.drafts.remove(&kx);
             self.drafts.remove(&ky);
+            self.drafts.remove(&kb);
         }
         let typed = self.place_draft(&peer.id).and_then(Result::ok).filter(|o| Some(*o) != offset);
         let ready = can && typed.is_some();
@@ -999,6 +1026,7 @@ impl App {
         if let Some(o) = typed.filter(|_| ready && (clicked || (left && enter))) {
             self.drafts.remove(&kx);
             self.drafts.remove(&ky);
+            self.drafts.remove(&kb);
             let side = side_for(&Desktop::new(status.screens.clone()), &Desktop::new(peer.screens.clone()), o);
             self.choose_place(&peer.id, side, Some(o), false);
         }
@@ -1016,6 +1044,7 @@ impl App {
             if button(ui, b, Id::unique(("place-anywhere", &peer.id)), &shown, Look::Quiet, true, Some(&format!("Let {} take the pointer anywhere along your {} edge", peer.name, edge_word(side)))).clicked() {
                 self.drafts.remove(&kx);
                 self.drafts.remove(&ky);
+                self.drafts.remove(&kb);
                 self.choose_side(&peer.id, side, false);
             }
             // Placed apart: one step to where the screens touch.
@@ -1422,5 +1451,51 @@ mod tests {
         assert!(short_warning(false, &["layout of B does not overlap yours".to_owned()]).unwrap().starts_with("None of its"));
         assert!(short_warning(false, &["B shares an edge".to_owned()]).unwrap().starts_with("It shares part"));
         assert_eq!(short_warning(false, &[]), None);
+    }
+
+    #[test]
+    fn the_lowest_i64_is_out_of_bounds_not_zero() {
+        assert_eq!(parse_place("-9223372036854775808", "0"), Err(PLACE_BOUNDS));
+        assert_eq!(parse_place("0", "-9223372036854775808"), Err(PLACE_BOUNDS));
+        assert_eq!(parse_place("9223372036854775807", "0"), Err(PLACE_BOUNDS));
+    }
+
+    #[test]
+    fn placed_apart_a_computer_far_off_stays_where_it_is() {
+        let mine = Desktop::new(vec![screen(0, 0, 1920, 1080)]);
+        let theirs = Desktop::new(vec![screen(0, 0, 1280, 800)]);
+        // Exact place put it at X 7000, beyond one of its own widths from ours; one more pixel by the keys.
+        assert_eq!(plan_landing(&mine, &theirs, (7001, 0), 50.0, true), scene::Landing::Apart(Side::Right, (7001, 0)));
+        assert_eq!(plan_landing(&mine, &theirs, (-9000, 4000), 50.0, true), scene::Landing::Apart(Side::Left, (-9000, 4000)));
+        // Dropped on the desk it is still held within reach.
+        assert!(matches!(plan_landing(&mine, &theirs, (7001, 0), 50.0, false), scene::Landing::Beside(Side::Right, _)));
+    }
+
+    // The window tests do not build on Windows (frame_tests is not compiled there).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_typed_place_follows_what_the_other_computer_changes_in_the_axis_not_typed() {
+        use super::super::frame_tests::{Win, two};
+        let mut win = Win::light(1400.0, 1000.0);
+        let mut status = two();
+        status.offsets = vec![("p1".into(), (1920, 100))];
+        win.status(Some(status.clone()));
+        win.go(Tab::Arrange);
+        win.app.selected = Some("p1".into());
+        win.settle();
+        // X typed (Y comes with it as a draft, as the window stores them).
+        win.app.drafts.insert("place-x:p1".into(), "2000".into());
+        win.app.drafts.insert("place-y:p1".into(), "100".into());
+        win.frames(3);
+        assert_eq!(win.app.place_draft("p1"), Some(Ok((2000, 100))));
+        // The other computer moves it down: the untouched axis is where it is now.
+        status.offsets = vec![("p1".into(), (1920, 300))];
+        win.status(Some(status.clone()));
+        assert_eq!(win.app.place_draft("p1"), Some(Ok((2000, 300))));
+        // Typing the other axis is kept as typed.
+        win.app.drafts.insert("place-y:p1".into(), "50".into());
+        status.offsets = vec![("p1".into(), (1920, 400))];
+        win.status(Some(status));
+        assert_eq!(win.app.place_draft("p1"), Some(Ok((2000, 50))));
     }
 }
