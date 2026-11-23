@@ -409,8 +409,10 @@ built on ubuntu-22.04 (glibc 2.35), the oldest distribution it is meant for.
 `dpkg-shlibdeps` reads the libraries the four programs are linked against and
 the glibc version their symbols need (on ubuntu-22.04: `libc6 (>= 2.35)`, which
 Debian 12 meets too, and `libgcc-s1`), and the script adds what the window opens
-at run time, which `dpkg-shlibdeps` cannot see: `libxkbcommon0`, one OpenGL
-loader (`libegl1 | libgl1`), and for X11 sessions `libxkbcommon-x11-0`,
+at run time, which `dpkg-shlibdeps` cannot see: `libxkbcommon0`, `libegl1`
+(required outright: a native Wayland window gets its OpenGL context only through
+EGL, so an alternative like `libgl1`, which is GLX only, must not satisfy it),
+and for X11 sessions `libxkbcommon-x11-0`,
 `libxcursor1` and `libxi6`. The last three were found by installing the
 package on a clean Ubuntu with `--no-install-recommends`, starting the window on
 an X server and adding libraries until it stayed up: without `libxi6` and
