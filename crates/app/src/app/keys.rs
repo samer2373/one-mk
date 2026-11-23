@@ -2959,7 +2959,7 @@ impl App {
                 if widgets::menu_item(ui, 240.0, widgets::MenuItem::choice(label, names[k], k == at_nat)).clicked() {
                     if k != at_nat {
                         change = Some(match nat_values[k] {
-                            None => tune::natural_as_here(input, &self.keys.scope, dev, s.natural.as_deref()),
+                            None => tune::natural_as_here(input, facts, &self.keys.scope, dev),
                             value => ScrollChange::Natural(value),
                         });
                     }
