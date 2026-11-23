@@ -532,6 +532,8 @@ mod pages;
 #[cfg(unix)]
 mod qa;
 #[cfg(unix)]
+mod qa_keys_palette;
+#[cfg(unix)]
 mod qa_files;
 #[cfg(unix)]
 mod qa_settings;

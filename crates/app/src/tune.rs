@@ -117,6 +117,35 @@ pub struct Peer {
     pub os: u8,
 }
 
+impl Peer {
+    /// Whether `name` is the display text for two computers that share a
+    /// name: `Studio (ab12-cd34)`. The daemon finds a computer by its own
+    /// name or by an id, never by that text.
+    fn name_is_decorated(&self) -> bool {
+        !self.id.is_empty() && self.name.ends_with(&format!(" ({})", self.id))
+    }
+
+    /// Whether `query` (a name, or at least 4 characters of the id, as a
+    /// saved scope or a command writes it) names this computer.
+    pub fn matches(&self, query: &str) -> bool {
+        peer_matches(query, &self.name, &self.id)
+    }
+
+    /// What names this computer in a saved rule's scope: its name, or its id
+    /// when the name shown is the decorated one (see `name_is_decorated`).
+    pub fn scope_arg(&self) -> String {
+        if self.name_is_decorated() { self.id.clone() } else { self.name.clone() }
+    }
+
+    /// What names this computer after `switch`: its name, or its id when the
+    /// name is decorated or reads as one of the reserved words (`here`,
+    /// `next`), which a computer called that would otherwise be taken for.
+    pub fn switch_arg(&self) -> String {
+        let reserved = ["here", "next"].iter().any(|w| self.name.trim().eq_ignore_ascii_case(w));
+        if reserved && !self.id.is_empty() { self.id.clone() } else { self.scope_arg() }
+    }
+}
+
 pub fn os_word(o: u8) -> &'static str {
     match o {
         os::MACOS => "mac",
@@ -170,14 +199,20 @@ impl Scope {
     /// "All computers", "Only Macs", "Only Studio PC", "Only Travel
     /// Keyboard", "Only Travel Keyboard, on Macs".
     pub fn label(&self) -> String {
+        self.label_in(&[])
+    }
+
+    /// The same, with a computer named by its id (as a rule for one of two
+    /// computers called alike is saved) shown by the name it has in `peers`.
+    pub fn label_in(&self, peers: &[Peer]) -> String {
         match self {
             Scope::All => "All computers".into(),
             Scope::Os(o) => format!("Only {}", os_plural(*o)),
-            Scope::Peer(p) => format!("Only {p}"),
+            Scope::Peer(p) => format!("Only {}", peers.iter().find(|x| peer_matches(p, &x.name, &x.id)).map_or(p.as_str(), |x| x.name.as_str())),
             Scope::Device(fp, on) => match &**on {
                 Scope::All => format!("Only {}", device_name(fp)),
                 Scope::Os(o) => format!("Only {}, on {}", device_name(fp), os_plural(*o)),
-                on => format!("Only {}, on {}", device_name(fp), on.label().trim_start_matches("Only ")),
+                on => format!("Only {}, on {}", device_name(fp), on.label_in(peers).trim_start_matches("Only ")),
             },
         }
     }
@@ -237,6 +272,19 @@ pub struct Facts {
     /// The keyboard or mouse input comes from (a fingerprint), if one
     /// was chosen: its rules apply on top.
     pub device: Option<String>,
+    /// Ctrl and Cmd are swapped on the way to it (see [`swap_applies`]).
+    pub swap: bool,
+}
+
+/// Whether Ctrl and Cmd are swapped between this computer (`local_os`) and
+/// one running `peer_os` whose setting is `setting` (`auto`, `on`, `off`),
+/// as the daemon decides it for a visit.
+pub fn swap_applies(setting: &str, local_os: u8, peer_os: u8) -> bool {
+    match setting {
+        "on" => true,
+        "off" => false,
+        _ => local_os != peer_os && [local_os, peer_os].contains(&os::MACOS) && local_os != os::UNKNOWN && peer_os != os::UNKNOWN,
+    }
 }
 
 impl Facts {
@@ -244,14 +292,21 @@ impl Facts {
     /// the rules for every computer.
     pub fn of(scope: &Scope, peers: &[Peer]) -> Facts {
         match scope {
-            Scope::All => Facts { name: String::new(), id: String::new(), os: os::UNKNOWN, device: None },
-            Scope::Os(o) => Facts { name: String::new(), id: String::new(), os: *o, device: None },
+            Scope::All => Facts { name: String::new(), id: String::new(), os: os::UNKNOWN, device: None, swap: false },
+            Scope::Os(o) => Facts { name: String::new(), id: String::new(), os: *o, device: None, swap: swap_applies("auto", os::local(), *o) },
             Scope::Peer(p) => match peers.iter().find(|x| peer_matches(p, &x.name, &x.id)) {
-                Some(x) => Facts { name: x.name.clone(), id: x.id.clone(), os: x.os, device: None },
-                None => Facts { name: p.clone(), id: String::new(), os: os::UNKNOWN, device: None },
+                Some(x) => Facts { name: x.name.clone(), id: x.id.clone(), os: x.os, device: None, swap: swap_applies("auto", os::local(), x.os) },
+                None => Facts { name: p.clone(), id: String::new(), os: os::UNKNOWN, device: None, swap: false },
             },
             Scope::Device(fp, on) => Facts { device: Some(fp.clone()), ..Facts::of(on, peers) },
         }
+    }
+
+    /// The same, with the computer's own Ctrl/Cmd setting (`auto`, `on`,
+    /// `off`) instead of the automatic one.
+    pub fn with_swap_setting(self, setting: &str) -> Facts {
+        let swap = swap_applies(setting, os::local(), self.os);
+        Facts { swap, ..self }
     }
 }
 
@@ -603,7 +658,7 @@ impl Input {
     /// The keymap for `f`, compiled as a visit would compile it.
     pub fn keymap(&self, f: &Facts) -> Result<Keymap, String> {
         let specs: Vec<RuleSpec> = self.specs(f).into_iter().map(|(s, _)| s).collect();
-        Keymap::compile(&specs, remap::Target { os: f.os, swap: false }, self.tap()).map(|c| c.map).map_err(|e| e.0)
+        Keymap::compile(&specs, remap::Target { os: f.os, swap: f.swap }, self.tap()).map(|c| c.map).map_err(|e| e.0)
     }
 
     /// The key that switches layer `name` on, if one does.
@@ -1141,8 +1196,26 @@ fn trim_num(x: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
+/// The natural-scrolling value that does what leaving it unset does on this
+/// computer: it sends scrolling as this computer's own system does.
+fn natural_like_here() -> &'static str {
+    if os::local() == os::MACOS { "on" } else { "off" }
+}
+
+/// What "As here" for natural scrolling asks, given the natural scrolling
+/// now in force (`shown`) for the computers and kind chosen: forgetting the
+/// setting where this scope has one of its own, or, where a broader rule
+/// supplies it, a setting of its own that does what unset does here.
+pub fn natural_as_here(input: &Input, scope: &Scope, device: Option<Device>, shown: Option<&str>) -> ScrollChange {
+    let own = input.scroll.iter().any(|r| r.scope == *scope && r.device == device && r.app.is_none() && r.natural.is_some());
+    if shown.is_some() && !own { ScrollChange::Natural(Some(natural_like_here())) } else { ScrollChange::Natural(None) }
+}
+
 /// The commands for a scroll change. Natural scrolling can only be unset
-/// by forgetting the rule (`--reset`) and writing the rest of it again.
+/// by forgetting the rule (`--reset`) and writing the rest of it again;
+/// where that would lose what the command line cannot write back (a speed
+/// for one axis, a speed with more digits than it takes) it is set to what
+/// unset does here instead.
 pub fn scroll_commands(input: &Input, scope: &Scope, device: Option<Device>, change: &ScrollChange) -> Vec<Vec<String>> {
     let base = |a: &mut Vec<String>| {
         if let Some(d) = device {
@@ -1157,6 +1230,12 @@ pub fn scroll_commands(input: &Input, scope: &Scope, device: Option<Device>, cha
             if r.natural.is_none() {
                 return vec![];
             }
+            let writable = r.speed_x.is_none() && r.speed_y.is_none() && r.speed.is_none_or(|v| trim_num(v).parse::<f64>() == Ok(v));
+            if !writable {
+                a.push(format!("--natural={}", natural_like_here()));
+                base(&mut a);
+                return vec![a];
+            }
             a.push("--reset".into());
             base(&mut a);
             let mut again = vec!["scroll".to_owned()];
@@ -1167,7 +1246,7 @@ pub fn scroll_commands(input: &Input, scope: &Scope, device: Option<Device>, cha
             if let Some(v) = r.reverse_horizontal {
                 again.push(format!("--reverse-horizontal={}", on(v)));
             }
-            if let Some(s) = r.speed.or(r.speed_y) {
+            if let Some(s) = r.speed {
                 again.push(format!("--speed={}", trim_num(s)));
             }
             if let Some(m) = &r.mode {
@@ -1204,6 +1283,13 @@ pub fn check_add(input: &Input, rule: &KeyRule) -> Result<(), String> {
     if keynames::is_button(u32::from(spec.from.key)) {
         return Err(format!("{} is a mouse button: change it under Mouse", trigger_text(&spec.from)));
     }
+    if let Some(app) = &rule.app {
+        // As `--app` is checked: it must read, and be one the computers named could ever have.
+        let pattern = app.parse::<one_mk_proto::appmatch::AppPattern>()?;
+        if let Some(why) = scope_os(&rule.scope).and_then(|o| pattern.never_on(o)) {
+            return Err(why);
+        }
+    }
     let any = remap::Target { os: os::UNKNOWN, swap: false };
     if let What::TapHold { .. } = spec.what {
         Keymap::compile(std::slice::from_ref(&spec), any, remap::DEFAULT_TAP).map_err(|e| e.0)?;
@@ -1216,9 +1302,26 @@ pub fn check_add(input: &Input, rule: &KeyRule) -> Result<(), String> {
     all.keymap(&Facts::of(&Scope::All, &[])).map(drop)
 }
 
-/// Whether `one-mk buttons map N TO` would take it.
+/// The OS a scope is for, if it names one.
+fn scope_os(scope: &Scope) -> Option<u8> {
+    match scope {
+        Scope::Os(o) => Some(*o),
+        Scope::Device(_, on) => scope_os(on),
+        Scope::All | Scope::Peer(_) => None,
+    }
+}
+
+/// Whether `one-mk buttons map N TO` would take it: it must read, and the
+/// left and right buttons must keep clicking (not nothing, not a layer).
 pub fn check_button(n: u32, to: &str) -> Result<(), String> {
-    ButtonRule { from: n.to_string(), to: To::One(to.into()), scope: Scope::All, app: None }.spec().map(drop)
+    let spec = ButtonRule { from: n.to_string(), to: To::One(to.into()), scope: Scope::All, app: None }.spec()?;
+    if matches!(spec.from.key, 0x110 | 0x111) && !spec.from.has_mods() && matches!(spec.what, What::To(Output::None | Output::Layer(_))) {
+        return Err(format!(
+            "the {} button must keep clicking: it can't be mapped to {to} (map it to another button or a key instead)",
+            if spec.from.key == 0x110 { "left" } else { "right" }
+        ));
+    }
+    Ok(())
 }
 
 // ---------- keys from the window ----------
@@ -1342,7 +1445,8 @@ pub fn event_key(e: &egui::Event) -> Option<(u16, bool, bool)> {
         }
         egui::Event::Copy => Some((46, true, false)),
         egui::Event::Cut => Some((45, true, false)),
-        egui::Event::Paste(_) => Some((47, true, false)),
+        // Ctrl+V with a picture (or nothing text) on the clipboard comes as one.
+        egui::Event::Paste(_) | egui::Event::PasteImage(_) => Some((47, true, false)),
         _ => None,
     }
 }
@@ -1459,17 +1563,25 @@ impl ChipLog {
 pub struct Tester {
     mapper: Mapper,
     tap: Duration,
+    /// Ctrl and Cmd are swapped on what is sent, as a visit does it.
+    swap: bool,
     pub pressed: ChipLog,
     pub sent: ChipLog,
     /// How the last tap/hold key was decided, in a sentence.
     pub note: Option<String>,
-    /// A tap/hold key not decided yet, and since when.
-    pending: Option<(u16, Instant)>,
+    /// A tap/hold key not decided yet, since when, and how long the rule
+    /// for it waits (its own time, else the general one).
+    pending: Option<(u16, Instant, Duration)>,
 }
 
 impl Tester {
     pub fn new(map: Keymap, tap: Duration) -> Tester {
-        Tester { mapper: Mapper::new(map), tap, pressed: ChipLog::default(), sent: ChipLog::default(), note: None, pending: None }
+        Tester { mapper: Mapper::new(map), tap, swap: false, pressed: ChipLog::default(), sent: ChipLog::default(), note: None, pending: None }
+    }
+
+    /// Whether what is sent has Ctrl and Cmd swapped (the visit's setting).
+    pub fn set_swap(&mut self, swap: bool) {
+        self.swap = swap;
     }
 
     /// The rules changed: use the new ones from the next key on.
@@ -1486,27 +1598,29 @@ impl Tester {
         let mut out = vec![];
         self.mapper.key(u32::from(code), down, now, &mut |e| out.push(e));
         let pending_now = self.mapper.deadline().is_some();
-        if let Some((k, since)) = was
+        if let Some((k, since, limit)) = was
             && !pending_now
         {
             let ms = now.saturating_duration_since(since).as_millis();
             let name = key_label(u32::from(k));
-            self.note = Some(if k == code && !down && now.saturating_duration_since(since) < self.tap {
-                format!("{name} was tapped: let go after {ms} ms, under {} ms.", self.tap.as_millis())
+            self.note = Some(if k == code && !down && now.saturating_duration_since(since) < limit {
+                format!("{name} was tapped: let go after {ms} ms, under {} ms.", limit.as_millis())
             } else if k == code && !down {
-                format!("{name} was held: {} ms passed.", self.tap.as_millis())
+                format!("{name} was held: {} ms passed.", limit.as_millis())
             } else {
                 format!("{name} was held: another key went down after {ms} ms.")
             });
             self.pending = None;
         }
         if was.is_none() && pending_now {
-            self.pending = Some((code, now));
-            self.note = Some(format!("{}: a tap or a hold? Let go within {} ms for a tap.", key_label(u32::from(code)), self.tap.as_millis()));
+            // The mapper knows how long this rule waits (it may have its own time).
+            let limit = self.mapper.deadline().map_or(self.tap, |d| d.saturating_duration_since(now));
+            self.pending = Some((code, now, limit));
+            self.note = Some(format!("{}: a tap or a hold? Let go within {} ms for a tap.", key_label(u32::from(code)), limit.as_millis()));
         }
         let decided = was.is_some() && self.pending.is_none();
         self.emit(out);
-        if decided && let Some((k, _)) = was {
+        if decided && let Some((k, ..)) = was {
             let word = if self.note.as_deref().is_some_and(|n| n.contains("tapped")) { "tap" } else { "hold" };
             let _ = k;
             self.sent.note_last(word.into());
@@ -1522,10 +1636,10 @@ impl Tester {
     pub fn tick(&mut self, now: Instant) {
         let mut out = vec![];
         self.mapper.timer(now, &mut |e| out.push(e));
-        if let Some((k, _)) = self.pending
+        if let Some((k, _, limit)) = self.pending
             && self.mapper.deadline().is_none()
         {
-            self.note = Some(format!("{} was held: {} ms passed.", key_label(u32::from(k)), self.tap.as_millis()));
+            self.note = Some(format!("{} was held: {} ms passed.", key_label(u32::from(k)), limit.as_millis()));
             self.pending = None;
             self.emit(out);
             self.sent.note_last("hold".into());
@@ -1536,8 +1650,8 @@ impl Tester {
 
     /// How far a pending key is towards being held, 0 to 1.
     pub fn progress(&self, now: Instant) -> Option<f32> {
-        let (_, since) = self.pending?;
-        Some((now.saturating_duration_since(since).as_secs_f32() / self.tap.as_secs_f32()).clamp(0.0, 1.0))
+        let (_, since, limit) = self.pending?;
+        Some((now.saturating_duration_since(since).as_secs_f32() / limit.as_secs_f32().max(f32::EPSILON)).clamp(0.0, 1.0))
     }
 
     /// The box lost the keyboard: everything is let go of.
@@ -1559,7 +1673,10 @@ impl Tester {
     fn emit(&mut self, out: Vec<Emit>) {
         for e in out {
             match e {
-                Emit::Key { code, down } => self.sent.key(code as u16, down),
+                Emit::Key { code, down } => {
+                    let code = if self.swap { one_mk_proto::swap_ctrl_meta(code) } else { code };
+                    self.sent.key(code as u16, down);
+                }
                 Emit::Action(a) => self.sent.push(title(&action_text(&a)), Some("not run here".into())),
             }
         }
@@ -1633,6 +1750,12 @@ pub fn buttons_shown(input: &Input, f: &Facts) -> Vec<(u32, String, bool)> {
         .collect()
 }
 
+/// Whether `scope` has a rule of its own (for no app) for mouse button `n`.
+pub fn button_has_own_rule(input: &Input, scope: &Scope, n: u32) -> bool {
+    let Some(code) = keynames::button_code(n) else { return false };
+    input.buttons.iter().any(|b| b.scope == *scope && b.app.is_none() && b.trigger().is_ok_and(|t| t == Trigger::key(code as u16)))
+}
+
 /// Pointer acceleration this computer can do: only the system's, for now.
 pub const RAW_MOTION: bool = false;
 
@@ -1667,17 +1790,29 @@ pub fn scroll_shown(input: &Input, f: &Facts, device: Option<Device>) -> ScrollS
         .scroll
         .iter()
         .enumerate()
-        .filter(|(_, r)| r.app.is_none() && (r.device.is_none() || r.device == device))
+        .filter(|(_, r)| r.app.is_none())
         .filter_map(|(i, r)| Some((r.scope.rank(f)?, i, r)))
         .collect();
     rules.sort_by_key(|(rank, i, r)| (*rank, r.device.is_some(), *i));
     let mut s = ScrollShown { reverse_vertical: false, reverse_horizontal: false, natural: None, speed: 1.0, mode: "auto".into(), shift_sideways: false, alt_faster: false };
-    for (_, _, r) in rules {
+    // As `one-mk` resolves a kind: a plain speed resets the axes set less
+    // specifically, and up and down use the vertical speed.
+    let (mut speed, mut speed_y): (Option<f64>, Option<f64>) = (None, None);
+    for (_, _, r) in rules.iter().filter(|(_, _, r)| r.device.is_none() || r.device == device) {
         s.reverse_vertical = r.reverse_vertical.unwrap_or(s.reverse_vertical);
         s.reverse_horizontal = r.reverse_horizontal.unwrap_or(s.reverse_horizontal);
         s.natural = r.natural.clone().or(s.natural);
-        s.speed = r.speed.or(r.speed_y).unwrap_or(s.speed).clamp(0.1, 10.0);
+        if r.speed.is_some() {
+            speed_y = None;
+        }
+        speed = r.speed.or(speed);
+        speed_y = r.speed_y.or(speed_y);
         s.mode = r.mode.clone().unwrap_or(s.mode);
+    }
+    s.speed = speed_y.or(speed).unwrap_or(1.0).clamp(0.1, 10.0);
+    // `one-mk` keeps one modifier setting for wheels and touchpads alike:
+    // what a rule for either says counts for both.
+    for (_, _, r) in &rules {
         for (m, b) in &r.modifiers {
             match m.as_str() {
                 "shift" => s.shift_sideways = b == "horizontal",
@@ -1687,6 +1822,37 @@ pub fn scroll_shown(input: &Input, f: &Facts, device: Option<Device>) -> ScrollS
         }
     }
     s
+}
+
+/// Autoscroll as it applies to `f`: whether it is on, its speed and the
+/// button that starts it (rules for apps, devices and the primary buttons
+/// don't count, as `one-mk` ignores them).
+pub fn autoscroll_shown(input: &Input, f: &Facts) -> (bool, f64, String) {
+    let mut rows: Vec<_> = input.autoscroll.iter().filter(|row| row.app.is_none())
+        .filter(|row| !matches!(row.scope, Scope::Device(..)))
+        .filter(|row| !row.button.as_deref().is_some_and(primary_mouse_button))
+        .filter_map(|row| Some((row.scope.rank(f)?, row))).collect();
+    rows.sort_by_key(|(rank, _)| *rank);
+    let (mut enabled, mut speed, mut button) = (false, 1.0, "middle");
+    for (_, row) in rows {
+        enabled = row.enabled.unwrap_or(enabled);
+        speed = row.speed.unwrap_or(speed);
+        button = row.button.as_deref().unwrap_or(button);
+    }
+    (enabled, speed, button.to_owned())
+}
+
+/// Why "side-button desktop swipes" can't be set up for `f`: autoscroll is
+/// on and starts with the back button, which a swipe on it would shadow
+/// (the words `one-mk gestures add` gives for the same clash).
+pub fn side_swipe_conflict(input: &Input, f: &Facts) -> Option<String> {
+    let (enabled, _, button) = autoscroll_shown(input, f);
+    let code = match button.trim().parse::<u32>() {
+        Ok(n) => keynames::button_code(n),
+        Err(_) => keynames::parse_key(&button).ok(),
+    };
+    (enabled && code == keynames::button_code(4))
+        .then(|| "gesture button4 left is reserved by autoscroll; choose another button or turn autoscroll off".to_owned())
 }
 
 /// A problem from `one-mk keymap check` in the window's words:
@@ -2327,4 +2493,191 @@ to = "f1"
         assert!(SeenDevice { bus: "virtual".into(), ..Default::default() }.is_virtual());
     }
 
+}
+
+#[cfg(test)]
+mod fixes {
+    use super::*;
+
+    fn peer(name: &str, id: &str, os: u8) -> Peer {
+        Peer { name: name.into(), id: id.into(), os }
+    }
+
+    fn rows(rules: Vec<ScrollRule>) -> Input {
+        Input { scroll: rules, ..Default::default() }
+    }
+
+    /// Two computers that call themselves alike are shown as `Studio (ab12-cd34)`, a name the
+    /// daemon cannot find: what is saved or run names one by its id.
+    #[test]
+    fn a_computer_shown_with_its_id_is_named_by_its_id() {
+        let twin = peer("Studio (ab12-cd34)", "ab12-cd34", os::LINUX);
+        let plain = peer("Studio", "ee00-ff11", os::LINUX);
+        assert_eq!(twin.scope_arg(), "ab12-cd34");
+        assert_eq!(plain.scope_arg(), "Studio");
+        // The id still picks it out, and the window still calls it by its name.
+        let scope = Scope::Peer(twin.scope_arg());
+        let peers = [twin.clone(), plain];
+        assert_eq!(Facts::of(&scope, &peers).name, "Studio (ab12-cd34)");
+        assert_eq!(scope.label_in(&peers), "Only Studio (ab12-cd34)");
+        assert_eq!(scope.args(), ["--peer=ab12-cd34"]);
+        // `switch Here` means "back here"; a computer called that is named by its id.
+        assert_eq!(peer("Here", "ab12-cd34", os::LINUX).switch_arg(), "ab12-cd34");
+        assert_eq!(peer(" NEXT ", "ab12-cd34", os::LINUX).switch_arg(), "ab12-cd34");
+        assert_eq!(peer("Office", "ab12-cd34", os::LINUX).switch_arg(), "Office");
+        assert_eq!(twin.switch_arg(), "ab12-cd34");
+    }
+
+    #[test]
+    fn an_app_that_cannot_exist_on_the_computers_chosen_is_refused_before_anything_changes() {
+        let mac = Scope::Os(os::MACOS);
+        let rule = KeyRule { scope: mac.clone(), app: Some("chrome.exe".into()), ..KeyRule::to("capslock", "esc") };
+        let why = check_add(&Input::default(), &rule).unwrap_err();
+        assert!(why.contains("never matches on a Mac"), "{why}");
+        // For Macs through a keyboard too; for Windows, or for all, it is fine.
+        let device = KeyRule { scope: Scope::Device("usb/1:2//k".into(), Box::new(mac)), ..rule.clone() };
+        assert!(check_add(&Input::default(), &device).is_err());
+        for scope in [Scope::Os(os::WINDOWS), Scope::All] {
+            assert!(check_add(&Input::default(), &KeyRule { scope, ..rule.clone() }).is_ok());
+        }
+    }
+
+    #[test]
+    fn the_left_and_right_buttons_cannot_be_given_nothing() {
+        for n in [1, 2] {
+            let why = check_button(n, "none").unwrap_err();
+            assert!(why.contains("must keep clicking"), "{why}");
+        }
+        assert!(check_button(2, "layer:nav").is_err());
+        for (n, to) in [(1, "button2"), (2, "esc"), (3, "none"), (4, "none"), (5, "back")] {
+            assert!(check_button(n, to).is_ok(), "{n} {to}");
+        }
+    }
+
+    #[test]
+    fn natural_scrolling_is_unset_without_losing_the_rest_of_the_row() {
+        let row = |speed: Option<f64>, speed_x: Option<f64>, speed_y: Option<f64>| ScrollRule {
+            natural: Some("on".into()), speed, speed_x, speed_y, mode: Some("smooth".into()), ..Default::default()
+        };
+        let reset = |cmds: Vec<Vec<String>>| cmds.iter().any(|c| c.iter().any(|a| a == "--reset"));
+        // A row the command line can write back whole is forgotten and written again.
+        let plain = rows(vec![row(Some(0.75), None, None)]);
+        let cmds = scroll_commands(&plain, &Scope::All, None, &ScrollChange::Natural(None));
+        assert!(reset(cmds.clone()), "{cmds:?}");
+        assert_eq!(cmds[1], ["scroll", "--speed=0.75", "--mode=smooth"]);
+        // One with a speed for each axis cannot be: it keeps both, and gets what unset does here.
+        let axes = rows(vec![row(None, Some(2.5), Some(0.75))]);
+        let cmds = scroll_commands(&axes, &Scope::All, None, &ScrollChange::Natural(None));
+        assert!(!reset(cmds.clone()), "{cmds:?}");
+        assert_eq!(cmds, vec![vec!["scroll".to_owned(), format!("--natural={}", natural_like_here())]]);
+        // Nor a speed with more digits than the command line is told.
+        let fine = rows(vec![row(Some(1.234), None, None)]);
+        assert!(!reset(scroll_commands(&fine, &Scope::All, None, &ScrollChange::Natural(None))));
+    }
+
+    #[test]
+    fn as_here_for_natural_scrolling_overrides_what_a_broader_rule_supplies() {
+        let all = rows(vec![ScrollRule { natural: Some("on".into()), ..Default::default() }]);
+        let laptop = Scope::Peer("Laptop".into());
+        // Nothing of the laptop's own to forget: the command used to be empty.
+        assert!(scroll_commands(&all, &laptop, None, &ScrollChange::Natural(None)).is_empty());
+        let change = natural_as_here(&all, &laptop, None, Some("on"));
+        assert_eq!(change, ScrollChange::Natural(Some(natural_like_here())));
+        let cmds = scroll_commands(&all, &laptop, None, &change);
+        assert_eq!(cmds, vec![vec!["scroll".to_owned(), format!("--natural={}", natural_like_here()), "--peer=Laptop".to_owned()]]);
+        // Where the scope has its own, it is forgotten; where nothing is in force, nothing is asked.
+        assert_eq!(natural_as_here(&all, &Scope::All, None, Some("on")), ScrollChange::Natural(None));
+        assert_eq!(natural_as_here(&Input::default(), &laptop, None, None), ScrollChange::Natural(None));
+    }
+
+    #[test]
+    fn scroll_shows_what_the_daemon_resolves() {
+        let f = Facts::of(&Scope::All, &[]);
+        // Up and down use the vertical speed when a row has one.
+        let both = rows(vec![ScrollRule { speed: Some(2.0), speed_y: Some(3.0), ..Default::default() }]);
+        assert_eq!(scroll_shown(&both, &f, None).speed, 3.0);
+        // A plain speed in a more specific row resets the axes set less specifically.
+        let reset = rows(vec![
+            ScrollRule { speed_y: Some(3.0), ..Default::default() },
+            ScrollRule { speed: Some(1.5), scope: Scope::Os(os::LINUX), ..Default::default() },
+        ]);
+        let linux = Facts::of(&Scope::Os(os::LINUX), &[]);
+        assert_eq!(scroll_shown(&reset, &linux, None).speed, 1.5);
+        // One modifier setting serves wheels and touchpads: a wheel's Shift is the touchpad's too.
+        let wheel = rows(vec![ScrollRule { device: Some(Device::Wheel), modifiers: vec![("shift".into(), "horizontal".into())], ..Default::default() }]);
+        for device in [None, Some(Device::Wheel), Some(Device::Touchpad)] {
+            assert!(scroll_shown(&wheel, &f, device).shift_sideways, "{device:?}");
+        }
+    }
+
+    #[test]
+    fn the_test_box_waits_as_long_as_the_rule_does() {
+        let rule = KeyRule { timeout_ms: Some(500), ..KeyRule::tap_hold("capslock", "esc", "lctrl") };
+        let input = Input { keys: vec![rule], ..Default::default() };
+        let mut t = Tester::new(input.keymap(&Facts::of(&Scope::All, &[])).unwrap(), Duration::from_millis(200));
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        t.key(58, true, ms(0));
+        assert!(t.note.as_deref().unwrap().contains("within 500 ms"), "{:?}", t.note);
+        assert!((t.progress(ms(250)).unwrap() - 0.5).abs() < 0.01, "the bar runs to the rule's own time");
+        // Let go at 300 ms: under the rule's 500, so a tap (the general 200 would say held).
+        t.key(58, false, ms(300));
+        assert_eq!(t.note.as_deref(), Some("Caps Lock was tapped: let go after 300 ms, under 500 ms."));
+        assert_eq!(t.sent.chips.back(), Some(&Chip { text: "Esc".into(), note: Some("tap".into()) }));
+        // Held past 500: held, and it says so with the time it waited.
+        t.key(58, true, ms(1000));
+        t.tick(ms(1500));
+        assert_eq!(t.note.as_deref(), Some("Caps Lock was held: 500 ms passed."));
+        assert_eq!(t.sent.chips.back().unwrap().note.as_deref(), Some("hold"));
+    }
+
+    #[test]
+    fn the_test_box_sends_ctrl_and_cmd_swapped_where_a_visit_does() {
+        let input = Input { keys: vec![KeyRule::to("capslock", "lctrl")], ..Default::default() };
+        let mac = Facts::of(&Scope::Os(os::MACOS), &[]);
+        let mut t = Tester::new(input.keymap(&mac).unwrap(), input.tap());
+        let t0 = Instant::now();
+        t.key(58, true, t0);
+        t.key(58, false, t0);
+        assert_eq!(t.sent.chips.back().unwrap().text, ctrl_word());
+        t.clear();
+        t.set_swap(true);
+        t.key(58, true, t0);
+        t.key(58, false, t0);
+        assert_eq!(t.sent.chips.back().unwrap().text, meta_word(), "the Mac gets Cmd");
+        // Which computers are swapped: Auto only between a Mac and the rest; a setting overrides it.
+        assert!(swap_applies("auto", os::LINUX, os::MACOS) && swap_applies("auto", os::MACOS, os::WINDOWS));
+        assert!(!swap_applies("auto", os::LINUX, os::WINDOWS) && !swap_applies("auto", os::MACOS, os::MACOS));
+        assert!(swap_applies("on", os::LINUX, os::LINUX) && !swap_applies("off", os::LINUX, os::MACOS));
+        let peer = Facts { name: "Mac".into(), id: "ab12-cd34".into(), os: os::MACOS, device: None, swap: true };
+        assert!(!peer.with_swap_setting("off").swap);
+    }
+
+    #[test]
+    fn a_paste_with_a_picture_is_still_the_v_key_going_down() {
+        let image = std::sync::Arc::new(egui::ColorImage::default());
+        assert_eq!(event_key(&egui::Event::PasteImage(image)), Some((47, true, false)));
+        assert_eq!(event_key(&egui::Event::Paste("x".into())), Some((47, true, false)));
+    }
+
+    #[test]
+    fn side_swipes_are_refused_where_autoscroll_takes_the_back_button() {
+        let row = |button: &str, enabled: bool| AutoscrollRow { enabled: Some(enabled), speed: None, button: Some(button.into()), scope: Scope::All, app: None };
+        let f = Facts::of(&Scope::All, &[]);
+        let with = |r: AutoscrollRow| Input { autoscroll: vec![r], ..Default::default() };
+        assert!(side_swipe_conflict(&with(row("button4", true)), &f).unwrap().contains("reserved by autoscroll"));
+        assert!(side_swipe_conflict(&with(row("4", true)), &f).is_some());
+        assert!(side_swipe_conflict(&with(row("button4", false)), &f).is_none(), "off: nothing is shadowed");
+        assert!(side_swipe_conflict(&with(row("middle", true)), &f).is_none());
+        assert!(side_swipe_conflict(&Input::default(), &f).is_none());
+    }
+
+    #[test]
+    fn a_button_rule_of_a_broader_scope_is_not_this_scopes_own() {
+        let rule = |scope: Scope| ButtonRule { from: "4".into(), to: To::One("esc".into()), scope, app: None };
+        let input = Input { buttons: vec![rule(Scope::All)], ..Default::default() };
+        assert!(button_has_own_rule(&input, &Scope::All, 4));
+        assert!(!button_has_own_rule(&input, &Scope::Peer("Laptop".into()), 4));
+        assert!(!button_has_own_rule(&input, &Scope::All, 5));
+    }
 }
