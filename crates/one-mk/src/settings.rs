@@ -832,7 +832,7 @@ fn create_settings_dir(dir: &Path) -> Result<()> {
 /// Says a thing about the settings file on stderr, once per process: `doctor`
 /// and the daemon read the file many times, and the same line for each read
 /// buried what else they print (and in a daemon, its log).
-fn say_once(line: String) {
+pub(crate) fn say_once(line: String) {
     static SAID: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     let mut said = SAID.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if !said.contains(&line) && said.len() < 64 {

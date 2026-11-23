@@ -883,7 +883,8 @@ impl TuningSettings {
         let resolve = |device| -> Result<_> {
             let peer = PeerFacts { name: "", id: "", os: os::MACOS, apps, device };
             let (specs, warnings) = self.specs_in(&peer, true);
-            if !warnings.is_empty() { bail!("{}", warnings.join("; ")); }
+            // A rule that is skipped costs only itself (see `local_compiled_with`).
+            for warning in warnings { crate::settings::say_once(format!("one-mk: {warning}")); }
             Ok(specs)
         };
         let base = resolve(None)?;
@@ -930,18 +931,41 @@ impl TuningSettings {
         Ok((maps, plan))
     }
 
+    /// For `check`: a rule that is skipped is reported as an error.
     fn local_compiled_for(&self, device: Option<&Fingerprint>) -> Result<remap::Compiled> {
-        self.local_compiled_with(device, &[], true)
+        let (compiled, skipped) = self.local_compiled_parts(device, &[], true)?;
+        if !skipped.is_empty() {
+            bail!("{}", skipped.join("; "));
+        }
+        Ok(compiled)
     }
 
+    /// Strict, for a command about to save a rule: a rule that is skipped is an
+    /// error. Lenient (a file edited by hand, at run time): the rules that can be
+    /// used are kept, and what was skipped is said once and shown with the other
+    /// warnings.
     fn local_compiled_with(&self, device: Option<&Fingerprint>, apps: &[String], lenient: bool) -> Result<remap::Compiled> {
+        let (mut compiled, skipped) = self.local_compiled_parts(device, apps, lenient)?;
+        if !lenient && !skipped.is_empty() {
+            bail!("{}", skipped.join("; "));
+        }
+        for warning in skipped {
+            crate::settings::say_once(format!("one-mk: {warning}"));
+            compiled.warnings.push(warning);
+        }
+        Ok(compiled)
+    }
+
+    /// The local rules that apply, built, and the ones left out (and why).
+    fn local_compiled_parts(&self, device: Option<&Fingerprint>, apps: &[String], lenient: bool) -> Result<(remap::Compiled, Vec<String>)> {
         let peer = PeerFacts { name: "", id: "", os: os::local(), apps, device };
-        let (specs, warnings) = self.specs_in(&peer, true);
-        if !warnings.is_empty() {
-            bail!("{}", warnings.join("; "));
+        let (specs, skipped) = self.specs_in(&peer, true);
+        if !lenient && !skipped.is_empty() {
+            bail!("{}", skipped.join("; "));
         }
         let target = remap::Target { os: peer.os, swap: false };
-        Ok(if lenient { Keymap::compile_lenient(&specs, target, self.keymap.tap())? } else { Keymap::compile(&specs, target, self.keymap.tap())? })
+        let compiled = if lenient { Keymap::compile_lenient(&specs, target, self.keymap.tap())? } else { Keymap::compile(&specs, target, self.keymap.tap())? };
+        Ok((compiled, skipped))
     }
 
     fn specs_in(&self, peer: &PeerFacts, local: bool) -> (Vec<RuleSpec>, Vec<String>) {
@@ -2770,6 +2794,19 @@ scope = { peer = "Laptop" }
         }
         let encoded = toml::to_string(&Settings { input: tuning.clone(), ..Default::default() }).unwrap();
         assert_eq!(load(&encoded), tuning);
+    }
+
+    /// One local rule that names a key that does not exist costs only itself at run time; a
+    /// command about to save a rule still refuses it.
+    #[test]
+    fn a_malformed_local_rule_does_not_drop_the_other_local_rules() {
+        let tuning = load("[[input.keymap.rule]]\nfrom = \"a\"\nto = \"b\"\nscope = { local = true }\n[[input.keymap.rule]]\nfrom = \"c\"\nto = \"nosuchkey\"\nscope = { local = true }\n");
+        assert!(tuning.local_compiled_with(None, &[], false).is_err(), "strict still refuses");
+        let set = tuning.local_keymaps_for(&[], &[]).unwrap();
+        assert!(!set.base().is_empty(), "the valid rule is applied");
+        let (maps, plan) = tuning.local_native_keymaps_for(&[], &[]).unwrap();
+        assert!(!maps.base().is_empty() || !plan.base.is_empty(), "the valid rule is applied on macOS too");
+        assert!(tuning.check(&[]).iter().any(|line| line.contains("nosuchkey") || line.contains("skipped")), "{:?}", tuning.check(&[]));
     }
 
     #[test]
