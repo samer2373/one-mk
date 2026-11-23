@@ -68,7 +68,14 @@ async fn inject_loop(
                         warned = true;
                     }
                     controlled.apply(&mut batch);
-                    batch.clear();
+                    // Releases still reach the injector: its held modifiers and buttons (stamped on
+                    // every later event) must not outlive the visit that pressed them, and the
+                    // post itself does nothing without the permission.
+                    for m in batch.drain(..) {
+                        if matches!(m, Inject::Key { down: false, .. } | Inject::CharacterKey { down: false, .. } | Inject::Button { down: false, .. }) {
+                            inj.apply(m);
+                        }
+                    }
                     repeat.clear();
                     text.clear();
                     continue;

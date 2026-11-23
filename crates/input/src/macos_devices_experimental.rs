@@ -59,6 +59,9 @@ struct Inner {
     info: usize,
     local: Option<crate::macos_localmap::Dispatch>,
     physical: Vec<(DeviceRef, u32)>,
+    /// The `IOHIDManagerRef` when opening it failed (Input Monitoring not granted yet), to try
+    /// again once a permission check passes.
+    unopened: usize,
 }
 
 /// "Never", for a timer: a century away.
@@ -135,9 +138,25 @@ impl Hid {
             let r = IOHIDManagerOpen(manager, 0);
             if r != 0 {
                 tracing::debug!(r, "IOHIDManagerOpen failed: input from every device counts as unknown");
+                hid.inner.borrow_mut().unopened = manager as usize;
             }
         }
         hid
+    }
+
+    /// Opens the manager again if that failed at start, which is before the permissions are
+    /// asked for: called when they are all granted.
+    pub(crate) fn retry_open(&self) {
+        let Ok(mut inner) = self.inner.try_borrow_mut() else { return };
+        if inner.unopened == 0 { return; }
+        // SAFETY: the manager `start` created, which lives for the rest of the process.
+        let r = unsafe { IOHIDManagerOpen(inner.unopened as Ref, 0) };
+        if r == 0 {
+            tracing::debug!("IOHIDManagerOpen succeeded on a later try");
+            inner.unopened = 0;
+        } else {
+            tracing::debug!(r, "IOHIDManagerOpen failed again: input from every device counts as unknown");
+        }
     }
 
     /// Capture starts (true) or ends: device input is read only meanwhile.
@@ -154,6 +173,9 @@ impl Hid {
             unsafe { IOHIDDeviceRegisterInputValueCallback(*dev as Ref, if on { Some(on_value) } else { None }, info) };
         }
         if !on {
+            // Nobody is told of releases from now on: a key held now and let go while unsubscribed
+            // would stay in the ledger and count towards the emergency chord and mapping restore.
+            inner.physical.clear();
             let mut out = Vec::new();
             inner.corr.finish(&mut out);
             for ev in out {
@@ -210,8 +232,10 @@ impl Inner {
         }
         let Some(t) = &self.timer else { return };
         let now = CFAbsoluteTimeGetCurrent();
+        // At the oldest waiting event's own deadline: not WAIT_MS from now, which every callback
+        // that matches nothing (a gamepad's axes) would push further away.
         t.set_next_fire_date(match self.corr.deadline() {
-            Some(_) => now + crate::devcorr::WAIT_MS as f64 / 1000.0,
+            Some(deadline) => now + deadline.saturating_sub(now_ms()) as f64 / 1000.0,
             None => now + NEVER,
         });
     }

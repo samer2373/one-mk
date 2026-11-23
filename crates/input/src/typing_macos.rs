@@ -27,7 +27,8 @@ struct Source(*const c_void);
 impl Source {
     fn current() -> Option<Self> {
         let source = unsafe { TISCopyCurrentKeyboardLayoutInputSource() };
-        (!source.is_null()).then_some(Self(source))
+        // Not then_some(Self(source)): that builds the guard first, and dropping it for a null source would call CFRelease(NULL).
+        if source.is_null() { None } else { Some(Self(source)) }
     }
 }
 

@@ -159,8 +159,6 @@ mod helper {
     struct Shown {
         window: Retained<NSWindow>,
         hot: CGPoint,
-        /// The main display's height: AppKit's y grows upwards from its bottom.
-        main_h: f64,
         ordered_front: bool,
     }
 
@@ -175,9 +173,12 @@ mod helper {
     fn place() {
         QUEUED.store(false, Ordering::SeqCst);
         let (x, y) = *LATEST.lock().unwrap_or_else(|e| e.into_inner());
+        // The main display's height, read each time (its resolution or which display is the main
+        // one can change during a visit): AppKit's y grows upwards from its bottom.
+        let main_h = CGDisplayBounds(CGMainDisplayID()).size.height;
         SHOWN.with(|s| {
             if let Some(s) = s.borrow_mut().as_mut() {
-                s.window.setFrameTopLeftPoint(CGPoint::new(x - s.hot.x, s.main_h - (y - s.hot.y)));
+                s.window.setFrameTopLeftPoint(CGPoint::new(x - s.hot.x, main_h - (y - s.hot.y)));
                 if !s.ordered_front {
                     s.window.orderFrontRegardless();
                     s.ordered_front = true;
@@ -219,9 +220,8 @@ mod helper {
         );
         let view = NSImageView::imageViewWithImage(&image, mtm);
         window.setContentView(Some(&view));
-        let main_h = CGDisplayBounds(CGMainDisplayID()).size.height;
         let hot = cursor.hotSpot();
-        SHOWN.with(|s| *s.borrow_mut() = Some(Shown { window, hot, main_h, ordered_front: false }));
+        SHOWN.with(|s| *s.borrow_mut() = Some(Shown { window, hot, ordered_front: false }));
 
         std::thread::spawn(|| {
             for line in std::io::stdin().lock().lines() {
