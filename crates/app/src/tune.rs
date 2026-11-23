@@ -1812,11 +1812,7 @@ pub fn scroll_shown(input: &Input, f: &Facts, device: Option<Device>) -> ScrollS
         speed = r.speed.or(speed);
         speed_y = r.speed_y.or(speed_y);
         s.mode = r.mode.clone().unwrap_or(s.mode);
-    }
-    s.speed = speed_y.or(speed).unwrap_or(1.0).clamp(0.1, 10.0);
-    // `one-mk` keeps one modifier setting for wheels and touchpads alike:
-    // what a rule for either says counts for both.
-    for (_, _, r) in &rules {
+        // Modifiers too belong to the kind a rule names: a wheel's Shift is not the touchpad's.
         for (m, b) in &r.modifiers {
             match m.as_str() {
                 "shift" => s.shift_sideways = b == "horizontal",
@@ -1825,6 +1821,7 @@ pub fn scroll_shown(input: &Input, f: &Facts, device: Option<Device>) -> ScrollS
             }
         }
     }
+    s.speed = speed_y.or(speed).unwrap_or(1.0).clamp(0.1, 10.0);
     s
 }
 
@@ -2609,11 +2606,17 @@ mod fixes {
         ]);
         let linux = Facts::of(&Scope::Os(os::LINUX), &[]);
         assert_eq!(scroll_shown(&reset, &linux, None).speed, 1.5);
-        // One modifier setting serves wheels and touchpads: a wheel's Shift is the touchpad's too.
-        let wheel = rows(vec![ScrollRule { device: Some(Device::Wheel), modifiers: vec![("shift".into(), "horizontal".into())], ..Default::default() }]);
-        for device in [None, Some(Device::Wheel), Some(Device::Touchpad)] {
-            assert!(scroll_shown(&wheel, &f, device).shift_sideways, "{device:?}");
-        }
+        // A modifier written for wheels is the wheel's alone (the daemon keeps them apart), and one for everything is both's.
+        let wheel = rows(vec![
+            ScrollRule { device: Some(Device::Wheel), modifiers: vec![("shift".into(), "horizontal".into())], ..Default::default() },
+            ScrollRule { device: Some(Device::Touchpad), modifiers: vec![("alt".into(), "x5".into())], ..Default::default() },
+            ScrollRule { modifiers: vec![("alt".into(), "x2".into())], scope: Scope::Os(os::LINUX), ..Default::default() },
+        ]);
+        let linux = Facts::of(&Scope::Os(os::LINUX), &[]);
+        let shown = |device| { let s = scroll_shown(&wheel, &linux, device); (s.shift_sideways, s.alt_faster) };
+        assert_eq!(shown(Some(Device::Wheel)), (true, true));
+        assert_eq!(shown(Some(Device::Touchpad)), (false, true), "the touchpad's Shift still scrolls normally");
+        assert_eq!(shown(None), (false, true), "only what is written for both kinds");
     }
 
     #[test]
