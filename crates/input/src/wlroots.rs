@@ -971,9 +971,14 @@ impl State {
             self.keyboard = Some(self.s.seat.get_keyboard(&qh, ()));
         } else if !caps.contains(wl_seat::Capability::Keyboard)
             && let Some(k) = self.keyboard.take()
-            && k.version() >= 3
         {
-            k.release();
+            if k.version() >= 3 {
+                k.release();
+            }
+            // A capture without a keyboard has nothing to say when a held
+            // key comes up (the compositor may send no leave for it): end
+            // it, so the daemon lets go of what the peer holds.
+            self.end_capture(true);
         }
     }
 }
