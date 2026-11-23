@@ -856,10 +856,12 @@ impl TuningSettings {
         Ok(self.local_compiled_for(None)?.map)
     }
 
+    #[cfg(test)]
     pub fn local_keymaps(&self, devices: &[InputDevice]) -> Result<KeymapSet> {
         self.local_keymaps_for(devices, &[])
     }
 
+    #[cfg(any(windows, test))]
     pub fn local_keymaps_for(&self, devices: &[InputDevice], apps: &[String]) -> Result<KeymapSet> {
         self.local_keymaps_with(devices, apps, true)
     }
