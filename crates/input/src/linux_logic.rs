@@ -16,6 +16,8 @@ pub(crate) const BTN_RIGHT: u32 = 0x111;
 pub(crate) const BTN_MIDDLE: u32 = 0x112;
 pub(crate) const BTN_SIDE: u32 = 0x113;
 pub(crate) const BTN_EXTRA: u32 = 0x114;
+pub(crate) const BTN_FORWARD: u32 = 0x115;
+pub(crate) const BTN_BACK: u32 = 0x116;
 
 /// One wheel notch in discrete scroll units (120ths of a notch, as libei,
 /// evdev's hi-res wheel and Windows count them).
@@ -137,8 +139,10 @@ pub(crate) fn evdev_to_x_button(code: u32) -> Option<u8> {
         BTN_LEFT => 1,
         BTN_MIDDLE => 2,
         BTN_RIGHT => 3,
-        BTN_SIDE => 8,
-        BTN_EXTRA => 9,
+        // Some mice report back and forward as BTN_BACK and BTN_FORWARD
+        // (as the macOS mapping accepts them); they are X's buttons 8 and 9.
+        BTN_SIDE | BTN_BACK => 8,
+        BTN_EXTRA | BTN_FORWARD => 9,
         _ => return None,
     })
 }
@@ -646,6 +650,8 @@ mod tests {
         assert_eq!(x_button(7), Some(XButton::Scroll(120, 0)));
         assert_eq!(x_button(12), None);
         assert_eq!(evdev_to_x_button(0x118), None);
+        assert_eq!(evdev_to_x_button(0x116), Some(8), "BTN_BACK");
+        assert_eq!(evdev_to_x_button(0x115), Some(9), "BTN_FORWARD");
     }
 
     #[test]
