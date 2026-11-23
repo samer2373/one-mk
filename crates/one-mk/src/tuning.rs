@@ -1170,19 +1170,24 @@ impl TuningSettings {
                     ScrollMode::Smooth => scroll::Mode::Smooth,
                     ScrollMode::Discrete => scroll::Mode::Discrete,
                 },
+                modifiers: [ModScroll::Unchanged; 4],
             }
         };
-        let mut modifiers = [ModScroll::Unchanged; 4];
+        // Like everything else, a rule for one kind of device is only that kind's.
+        let mut wheel = params(Device::Wheel);
+        let mut smooth = params(Device::Touchpad);
         for (_, i, r) in &rules {
             for (name, b) in &r.modifiers {
                 match (modifier_group(name), parse_mod_scroll(b)) {
-                    (Ok(g), Ok(m)) => modifiers[g] = m,
+                    (Ok(g), Ok(m)) => {
+                        if r.device.is_none_or(|d| d == Device::Wheel) { wheel.modifiers[g] = m; }
+                        if r.device.is_none_or(|d| d == Device::Touchpad) { smooth.modifiers[g] = m; }
+                    }
                     (Err(e), _) | (_, Err(e)) => warnings.push(format!("{} skipped modifier: {e}", place("input.scroll", *i))),
                 }
             }
         }
-        let cfg = ScrollConfig { wheel: params(Device::Wheel), smooth: params(Device::Touchpad), modifiers };
-        (cfg, warnings)
+        (ScrollConfig { wheel, smooth }, warnings)
     }
 
     /// Every rule's place, scope and app: key rules, pointer, scroll and
@@ -2679,8 +2684,8 @@ to = "back"
         let mac = t.resolve(&facts(os::MACOS), false);
         assert!(mac.warnings.is_empty(), "{:?}", mac.warnings);
         assert_eq!(mac.pointer.speed(), 1.5);
-        assert_eq!(mac.scroll.modifiers[1], ModScroll::Horizontal);
-        assert_eq!(mac.scroll.modifiers[2], ModScroll::Multiply(5.0));
+        assert_eq!(mac.scroll.wheel.modifiers[1], ModScroll::Horizontal);
+        assert_eq!(mac.scroll.smooth.modifiers[2], ModScroll::Multiply(5.0));
         let other = PeerFacts { name: "Desk", id: "ffff", os: os::WINDOWS, apps: &[], device: None };
         let win = t.resolve(&other, false);
         assert_eq!(win.pointer.speed(), 1.0, "not the laptop");
@@ -3340,6 +3345,26 @@ scope = { device = "usb/0001:0002//Pad" }
         assert!(t.check(&[]).iter().any(|p| p.contains("timeout_ms 49 is outside 50 to 2000 and is clamped")), "{:?}", t.check(&[]));
     }
 
+    /// `--kind wheel` modifiers apply to wheels only, and a touchpad keeps the ones
+    /// written for everything (or for touchpads).
+    #[test]
+    fn scroll_modifiers_for_one_kind_do_not_reach_the_other() {
+        let t = TuningSettings {
+            scroll: vec![
+                ScrollRule { modifiers: [("alt".to_owned(), "x3".to_owned())].into(), ..Default::default() },
+                ScrollRule { device: Some(Device::Wheel), modifiers: [("shift".to_owned(), "horizontal".to_owned())].into(), ..Default::default() },
+                ScrollRule { device: Some(Device::Touchpad), modifiers: [("ctrl".to_owned(), "vertical".to_owned())].into(), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let resolved = t.resolve(&facts(os::LINUX), false);
+        assert!(resolved.warnings.is_empty(), "{:?}", resolved.warnings);
+        let (wheel, smooth) = (resolved.scroll.wheel.modifiers, resolved.scroll.smooth.modifiers);
+        assert_eq!((wheel[1], smooth[1]), (ModScroll::Horizontal, ModScroll::Unchanged));
+        assert_eq!((wheel[0], smooth[0]), (ModScroll::Unchanged, ModScroll::Vertical));
+        assert_eq!((wheel[2], smooth[2]), (ModScroll::Multiply(3.0), ModScroll::Multiply(3.0)));
+    }
+
     /// A hand-edited rule the key map cannot build (a tap/hold key with a modifier, a
     /// layer name with a space) is left out with a warning; the other rules keep working.
     #[test]
@@ -3451,7 +3476,7 @@ scope = { device = "usb/0001:0002//Pad" }
     #[tokio::test]
     async fn scroll_modifier_edits_replace_hand_written_aliases() {
         let text = "[[input.scroll]]\nmodifiers = { option = 'horizontal', cmd = 'x3' }\n";
-        let modifiers = |dir: &Path| saved(dir).resolve(&facts(os::LINUX), false).scroll.modifiers;
+        let modifiers = |dir: &Path| saved(dir).resolve(&facts(os::LINUX), false).scroll.wheel.modifiers;
         let edit = |args: &[&str]| ScrollArgs { modifier: args.iter().map(|s| s.to_string()).collect(), ..Default::default() };
         let dir = settings_dir("modifier-alias-off", text);
         assert_eq!(modifiers(&dir)[2], ModScroll::Horizontal);
