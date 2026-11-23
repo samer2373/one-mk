@@ -477,7 +477,9 @@ impl KeyRule {
             (None, Some(tap), Some(hold)) => What::TapHold {
                 tap: parse("tap", tap)?,
                 hold: parse("hold", hold)?,
-                timeout: self.timeout_ms.map(|ms| Duration::from_millis(u64::from(ms))),
+                // Clamped, as `tap_ms` is (and reported by `check`): one rule's
+                // number out of range must not cost every other rule.
+                timeout: self.timeout_ms.map(|ms| Duration::from_millis(u64::from(ms.clamp(remap::MIN_TAP_MS, remap::MAX_TAP_MS)))),
             },
             (Some(_), _, _) => return Err("give `to`, or `tap` and `hold`, not both".into()),
             (None, None, None) => return Err("`to` is missing (or `tap` and `hold`)".into()),
@@ -785,6 +787,15 @@ fn app_rank(app: &Option<String>, peer: &PeerFacts) -> Result<Option<u8>, String
     let Some(a) = app else { return Ok(Some(0)) };
     let p: AppPattern = a.parse()?;
     Ok(p.matches(peer.apps).then_some(APP_RANK))
+}
+
+/// A name the pattern `p` (written as `text`) matches, to check rules as if
+/// that app had the focus; `None` when no such name is found.
+fn sample_app(p: &AppPattern, text: &str) -> Option<String> {
+    let rest = text.strip_prefix('!').map_or(text, str::trim_start);
+    let candidate = if p.is_negated() { String::new() } else { rest.replace('*', "") };
+    let candidate = if candidate.is_empty() { "other-app".to_owned() } else { candidate };
+    p.matches(std::slice::from_ref(&candidate)).then_some(candidate)
 }
 
 /// A rule's whole rank for `peer` (scope, then app), `None` if it doesn't
@@ -1249,9 +1260,15 @@ impl TuningSettings {
             if let Some(why) = target.and_then(|o| p.never_on(o)) {
                 out.push(format!("{at}: {why}"));
             }
+            // The app as the focused one: a name written plainly is its own
+            // case; a pattern with `*` or `!` is tried with a name it
+            // matches, so rules that overlap on such apps are found too.
             let plain = app.trim();
-            if !p.is_negated() && !plain.contains('*') && !plain_apps.iter().any(|a| a.eq_ignore_ascii_case(plain)) {
-                plain_apps.push(plain.to_owned());
+            let sample = if !p.is_negated() && !plain.contains('*') { Some(plain.to_owned()) } else { sample_app(&p, plain) };
+            if let Some(sample) = sample
+                && !plain_apps.iter().any(|a| a.eq_ignore_ascii_case(&sample))
+            {
+                plain_apps.push(sample);
             }
         }
         for (i, r) in self.keymap.rule.iter().enumerate() {
@@ -1362,6 +1379,13 @@ impl TuningSettings {
         {
             out.push(format!("input.keymap tap_ms {ms} is outside {} to {} and is clamped", remap::MIN_TAP_MS, remap::MAX_TAP_MS));
         }
+        for (i, r) in self.keymap.rule.iter().enumerate() {
+            if let Some(ms) = r.timeout_ms
+                && !(remap::MIN_TAP_MS..=remap::MAX_TAP_MS).contains(&ms)
+            {
+                out.push(format!("{}: timeout_ms {ms} is outside {} to {} and is clamped", place("input.keymap.rule", i), remap::MIN_TAP_MS, remap::MAX_TAP_MS));
+            }
+        }
         let mut seen = std::collections::HashSet::new();
         out.retain(|p| seen.insert(p.clone()));
         out
@@ -1411,6 +1435,19 @@ impl TuningSettings {
 
 // ------------------------------------------------------------ command line
 
+/// What a rule saves for `--peer QUERY`. A visit matches a rule's peer
+/// against the name the computer calls itself, or its id; `one-mk rename`
+/// only changes the name shown here, which `QUERY` may be. So a query that
+/// names the computer only by that local name is saved as its fingerprint,
+/// which always matches (and a rule saved so can be removed the same way).
+fn peer_selector(dir: &Path, query: &str) -> String {
+    let Ok(trust) = TrustStore::load(dir) else { return query.to_owned() };
+    match trust.find(query) {
+        Some(device) if !peer_matches(query, &device.name, &device.fingerprint) => device.fingerprint.clone(),
+        _ => query.to_owned(),
+    }
+}
+
 /// Checks that `--peer` names a paired computer.
 fn check_scope(dir: &Path, scope: &Scope) -> Result<()> {
     if let Scope::Peer(p) = scope.target()
@@ -1421,34 +1458,49 @@ fn check_scope(dir: &Path, scope: &Scope) -> Result<()> {
     Ok(())
 }
 
+/// Whether the daemon answers (what `one-mk input-devices` calls running):
+/// only then is the backend it recorded the one rules apply through.
+async fn daemon_running(dir: &Path) -> bool {
+    matches!(crate::control::request(dir, crate::control::Request::Status).await, Ok(Some(_)))
+}
+
 /// After a change to a rule for one device: says so if such rules can't
 /// apply on this computer, or aren't tested here.
-fn device_note(dir: &Path, scope: &Scope) {
+async fn device_note(dir: &Path, scope: &Scope) {
     if *scope.target() == Scope::Local {
         println!("Note: {}", local_rules_note());
+        if cfg!(any(windows, target_os = "macos")) && Settings::load_lenient(dir).is_ok_and(|settings| !settings.input.local_rules) {
+            println!("Note: the switch for local key rules is off, so this rule is saved but does not apply here yet. Turn it on with `one-mk keymap local on`.");
+        }
         return;
     }
     if scope.device().is_none() {
         return;
     }
     let seen = crate::inputdevices::Remembered::load(dir).unwrap_or_default();
-    match crate::inputdevices::support(&seen, false) {
+    match crate::inputdevices::support(&seen, daemon_running(dir).await) {
         Ok(None) => {}
         Ok(Some(untested)) => println!("Note: per-device rules here are {untested}."),
         Err(why) => println!("Note: {why}, so this rule doesn't apply here. It is kept: it works in an X11 session, on Windows and on macOS."),
     }
 }
 
-/// After saving a rule in a layer: says so if no key switches that layer on.
-fn layer_note(dir: &Path, name: &str) {
+/// Whether some key (as `to`, or as the `hold` of a tap/hold key) or button
+/// switches layer `name` on.
+fn layer_switched_on(input: &TuningSettings, name: &str) -> bool {
     let wanted = format!("layer:{}", name.trim().to_ascii_lowercase());
     let sets = |to: &To| match to {
         To::One(s) => s.trim().eq_ignore_ascii_case(&wanted),
         To::Many(_) => false,
     };
+    input.keymap.rule.iter().any(|rule| rule.to.as_ref().is_some_and(sets) || rule.hold.as_deref().is_some_and(|hold| hold.trim().eq_ignore_ascii_case(&wanted)))
+        || input.button.iter().any(|rule| sets(&rule.to))
+}
+
+/// After saving a rule in a layer: says so if no key switches that layer on.
+fn layer_note(dir: &Path, name: &str) {
     if let Ok(settings) = Settings::load_lenient(dir)
-        && !settings.input.keymap.rule.iter().any(|rule| rule.to.as_ref().is_some_and(sets))
-        && !settings.input.button.iter().any(|rule| sets(&rule.to))
+        && !layer_switched_on(&settings.input, name)
     {
         println!("Note: no key switches the layer {name:?} on yet, so this rule can't work. Add one with `one-mk keymap add KEY layer:{name}` (the layer is on while KEY is held).");
     }
@@ -1467,9 +1519,9 @@ fn run_note(dir: &Path) {
 
 /// Whether this desktop can't tell keyboards and mice apart, so rules for
 /// one device never apply here (they are kept for other computers' desktops).
-fn devices_unavailable(dir: &Path) -> bool {
+async fn devices_unavailable(dir: &Path) -> bool {
     let seen = crate::inputdevices::Remembered::load(dir).unwrap_or_default();
-    crate::inputdevices::support(&seen, false).is_err()
+    crate::inputdevices::support(&seen, daemon_running(dir).await).is_err()
 }
 
 /// ` [inactive on this desktop]` after a rule for one device that can't apply here.
@@ -1551,7 +1603,11 @@ impl ScopeArgs {
     /// The scope asked for; `--device` is looked up in the devices seen.
     fn selected(&self, dir: &Path) -> Result<Scope> {
         let device = self.device.as_deref().map(|d| device_arg(dir, d)).transpose()?;
-        Ok(Scope::from_args(self.peer.as_deref(), self.os.as_deref())?.for_device(device))
+        let scope = match Scope::from_args(self.peer.as_deref(), self.os.as_deref())? {
+            Scope::Peer(query) => Scope::Peer(peer_selector(dir, &query)),
+            scope => scope,
+        };
+        Ok(scope.for_device(device))
     }
 
     fn scope(&self, dir: &Path) -> Result<Scope> {
@@ -1712,6 +1768,14 @@ async fn local_runtime_status(dir: &Path) {
     }
 }
 
+/// How a rule for this computer's own keyboard is marked in the list.
+fn local_state(linux: bool, native: bool, switched_on: bool) -> &'static str {
+    if linux { " [inactive: local key rules are not available on Linux]" }
+    else if native && switched_on { " [on this computer, experimental]" }
+    else if native { " [inactive: local key rules are switched off; `one-mk keymap local on`]" }
+    else { " [not available on this desktop]" }
+}
+
 fn list_keymap(s: &TuningSettings, unavailable: bool) {
     if s.keymap.rule.is_empty() {
         println!("No key rules: keys are sent as they are. Add one with `one-mk keymap add capslock esc`.");
@@ -1719,11 +1783,7 @@ fn list_keymap(s: &TuningSettings, unavailable: bool) {
     }
     println!("Key rules (remote unless marked local):");
     for r in &s.keymap.rule {
-        let state = if *r.scope.target() == Scope::Local {
-            if cfg!(target_os = "linux") { " [inactive: local key rules are not available on Linux]" }
-            else if cfg!(any(windows, target_os = "macos")) { " [on this computer, experimental]" }
-            else { " [not available on this desktop]" }
-        } else { "" };
+        let state = if *r.scope.target() == Scope::Local { local_state(cfg!(target_os = "linux"), cfg!(any(windows, target_os = "macos")), s.local_rules) } else { "" };
         println!("  {}{}{state}{}", r.describe(), where_suffix(&r.scope, &r.app), device_mark(&r.scope, unavailable));
     }
     if s.keymap.rule.iter().any(|rule| *rule.scope.target() == Scope::Local) {
@@ -1737,7 +1797,7 @@ fn list_keymap(s: &TuningSettings, unavailable: bool) {
 pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
     match cmd.unwrap_or(KeymapCmd::List) {
         KeymapCmd::List => {
-            list_keymap(&Settings::view(dir)?.input, devices_unavailable(dir));
+            list_keymap(&Settings::view(dir)?.input, devices_unavailable(dir).await);
             local_runtime_status(dir).await;
         }
         KeymapCmd::Local { enabled } => {
@@ -1778,11 +1838,12 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
             if keynames::is_button(u32::from(spec.from.key)) {
                 bail!("{} is a mouse button: use `one-mk buttons map`", spec.from);
             }
-            if let What::TapHold { .. } = spec.what {
-                // Bounds and modifiers, checked by building it alone.
-                Keymap::compile(std::slice::from_ref(&spec), remap::Target { os: os::UNKNOWN, swap: false }, Duration::from_millis(200))
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
-            }
+            // Layer names, bounds and modifiers, checked by building it alone:
+            // the whole-map check below only sees the rules that apply to
+            // the facts it tries, and a rule for another OS or computer
+            // would escape it.
+            Keymap::compile(std::slice::from_ref(&spec), remap::Target { os: os::UNKNOWN, swap: false }, Duration::from_millis(200))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
             let shown = rule.describe();
             let used_layer = rule.layer.clone();
             let added = rule.clone();
@@ -1801,14 +1862,20 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
                 }
                 let focused: Vec<String> = app.iter().filter(|a| !a.starts_with('!') && !a.contains('*')).cloned().collect();
                 let device = scope.device().and_then(|d| d.parse::<Fingerprint>().ok());
-                let facts = PeerFacts { name: "", id: "", os: os::UNKNOWN, apps: &focused, device: device.as_ref() };
+                // As the computers the rule is for: its OS, or its name.
+                let (os, name) = match scope.target() {
+                    Scope::Os(o) => (*o, ""),
+                    Scope::Peer(p) => (os::UNKNOWN, p.as_str()),
+                    _ => (os::UNKNOWN, ""),
+                };
+                let facts = PeerFacts { name, id: "", os, apps: &focused, device: device.as_ref() };
                 let (specs, _) = s.input.specs(&facts);
-                Keymap::compile(&specs, remap::Target { os: os::UNKNOWN, swap: false }, s.input.keymap.tap())
+                Keymap::compile(&specs, remap::Target { os, swap: false }, s.input.keymap.tap())
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                 Ok(())
             })?;
             println!("{shown}{}.", where_suffix(&scope, &app));
-            device_note(dir, &scope);
+            device_note(dir, &scope).await;
             run_note(dir);
             switch_note(dir, &key_rule_outputs(&added));
             if let Some(name) = used_layer {
@@ -1893,9 +1960,78 @@ fn describe_pointer(s: &TuningSettings, unavailable: bool) {
     }
 }
 
+/// The pointer rule for exactly `scope` and `app`, to edit (`None`: there is
+/// none). Several tables for one place (written by hand) all count, later
+/// fields over earlier ones, so they are folded into the first: an edit
+/// then changes what is in force instead of a setting a later table hides.
+fn fold_pointer_rules(rules: &mut Vec<PointerRule>, scope: &Scope, app: &Option<String>) -> Option<usize> {
+    let here = |r: &PointerRule| r.scope == *scope && same_app(&r.app, app);
+    let first = rules.iter().position(here)?;
+    let mut i = first + 1;
+    while i < rules.len() {
+        if !here(&rules[i]) {
+            i += 1;
+            continue;
+        }
+        let later = rules.remove(i);
+        let r = &mut rules[first];
+        r.speed = later.speed.or(r.speed);
+        r.acceleration = later.acceleration.or(r.acceleration);
+        r.accel_gain = later.accel_gain.or(r.accel_gain);
+        r.accel_exp = later.accel_exp.or(r.accel_exp);
+        r.accel_cap = later.accel_cap.or(r.accel_cap);
+    }
+    Some(first)
+}
+
+/// [`fold_pointer_rules`] for scroll tables (of one kind of device).
+fn fold_scroll_rules(rules: &mut Vec<ScrollRule>, scope: &Scope, kind: Option<Device>, app: &Option<String>) -> Option<usize> {
+    let here = |r: &ScrollRule| r.scope == *scope && r.device == kind && same_app(&r.app, app);
+    let first = rules.iter().position(here)?;
+    let mut i = first + 1;
+    while i < rules.len() {
+        if !here(&rules[i]) {
+            i += 1;
+            continue;
+        }
+        let later = rules.remove(i);
+        let r = &mut rules[first];
+        r.reverse_vertical = later.reverse_vertical.or(r.reverse_vertical);
+        r.reverse_horizontal = later.reverse_horizontal.or(r.reverse_horizontal);
+        r.natural = later.natural.or(r.natural);
+        // A plain speed resets the axes set before it, as when resolving.
+        if later.speed.is_some() {
+            (r.speed_x, r.speed_y) = (None, None);
+        }
+        r.speed = later.speed.or(r.speed);
+        r.speed_x = later.speed_x.or(r.speed_x);
+        r.speed_y = later.speed_y.or(r.speed_y);
+        r.mode = later.mode.or(r.mode);
+        for (name, what) in later.modifiers {
+            set_modifier(&mut r.modifiers, &name, Some(&what));
+        }
+    }
+    Some(first)
+}
+
+/// Sets (`Some`) or removes (`None`) the scroll modifier `name` in a rule's
+/// `modifiers`, dropping the entries that name the same key under another
+/// name first (`alt` and `option`, `meta` and `cmd`): they all mean one.
+fn set_modifier(modifiers: &mut BTreeMap<String, String>, name: &str, what: Option<&str>) {
+    let group = modifier_group(name).ok();
+    if group.is_some() {
+        modifiers.retain(|key, _| modifier_group(key).ok() != group);
+    } else {
+        modifiers.remove(name);
+    }
+    if let Some(what) = what {
+        modifiers.insert(name.to_owned(), what.to_owned());
+    }
+}
+
 pub async fn pointer_command(dir: &Path, args: PointerArgs) -> Result<()> {
     if args.speed.is_none() && args.accel.is_none() && !args.reset {
-        describe_pointer(&Settings::view(dir)?.input, devices_unavailable(dir));
+        describe_pointer(&Settings::view(dir)?.input, devices_unavailable(dir).await);
         return Ok(());
     }
     let app = args.scope.app()?;
@@ -1913,13 +2049,12 @@ pub async fn pointer_command(dir: &Path, args: PointerArgs) -> Result<()> {
     }
     let s = Settings::update(dir, |s| {
         let rules = &mut s.input.pointer;
-        let at = rules.iter().position(|r| r.scope == scope && same_app(&r.app, &app));
         if args.reset {
-            if let Some(i) = at {
-                rules.remove(i);
-            }
+            // Every table for this place: a later one would stay in force.
+            rules.retain(|r| !(r.scope == scope && same_app(&r.app, &app)));
             return Ok(s.input.clone());
         }
+        let at = fold_pointer_rules(rules, &scope, &app);
         let blank = PointerRule { scope: scope.clone(), app: app.clone(), ..Default::default() };
         let i = at.unwrap_or_else(|| {
             rules.push(blank.clone());
@@ -1938,8 +2073,8 @@ pub async fn pointer_command(dir: &Path, args: PointerArgs) -> Result<()> {
         }
         Ok(s.input.clone())
     })?;
-    describe_pointer(&s, devices_unavailable(dir));
-    device_note(dir, &scope);
+    describe_pointer(&s, devices_unavailable(dir).await);
+    device_note(dir, &scope).await;
     settings::apply(dir).await
 }
 
@@ -2033,7 +2168,7 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
         args.scope.device = None;
     }
     if !args.changes_anything() {
-        describe_scroll(&Settings::view(dir)?.input, devices_unavailable(dir), args.kind);
+        describe_scroll(&Settings::view(dir)?.input, devices_unavailable(dir).await, args.kind);
         return Ok(());
     }
     let app = args.scope.app()?;
@@ -2054,13 +2189,12 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
     }
     let s = Settings::update(dir, |s| {
         let rules = &mut s.input.scroll;
-        let at = rules.iter().position(|r| r.scope == scope && r.device == args.kind && same_app(&r.app, &app));
         if args.reset {
-            if let Some(i) = at {
-                rules.remove(i);
-            }
+            // Every table for this place: a later one would stay in force.
+            rules.retain(|r| !(r.scope == scope && r.device == args.kind && same_app(&r.app, &app)));
             return Ok(s.input.clone());
         }
+        let at = fold_scroll_rules(rules, &scope, args.kind, &app);
         let blank = ScrollRule { scope: scope.clone(), device: args.kind, app: app.clone(), ..Default::default() };
         let i = at.unwrap_or_else(|| {
             rules.push(blank.clone());
@@ -2075,18 +2209,16 @@ pub async fn scroll_command(dir: &Path, mut args: ScrollArgs) -> Result<()> {
         r.mode = args.mode.or(r.mode);
         r.natural = args.natural.or(r.natural);
         for (name, what) in &mods {
-            match what {
-                Some(w) => r.modifiers.insert(name.clone(), w.clone()),
-                None => r.modifiers.remove(name),
-            };
+            // Whatever way the group was written (`alt`, `option`): one entry.
+            set_modifier(&mut r.modifiers, name, what.as_deref());
         }
         if *r == blank {
             rules.remove(i);
         }
         Ok(s.input.clone())
     })?;
-    describe_scroll(&s, devices_unavailable(dir), None);
-    device_note(dir, &scope);
+    describe_scroll(&s, devices_unavailable(dir).await, None);
+    device_note(dir, &scope).await;
     settings::apply(dir).await
 }
 
@@ -2156,7 +2288,7 @@ fn set_button(rules: &mut Vec<ButtonRule>, rule: ButtonRule, t: &Trigger) {
 pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
     match cmd.unwrap_or(ButtonsCmd::List) {
         ButtonsCmd::List => {
-            list_buttons(&Settings::view(dir)?.input, devices_unavailable(dir));
+            list_buttons(&Settings::view(dir)?.input, devices_unavailable(dir).await);
             return Ok(());
         }
         ButtonsCmd::Map { button, to, scope } => {
@@ -2174,7 +2306,7 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
                 Ok(())
             })?;
             println!("{line}.");
-            device_note(dir, &scope);
+            device_note(dir, &scope).await;
             run_note(dir);
             if let Some(to) = &mapped { switch_note(dir, &[to.as_str()]); }
         }
@@ -2204,7 +2336,7 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
                 Ok(())
             })?;
             println!("Buttons 4 and 5 go back and forward{} (Alt+Left/Right; Cmd+[ and Cmd+] on a Mac).", where_suffix(&scope, &app));
-            device_note(dir, &scope);
+            device_note(dir, &scope).await;
         }
         ButtonsCmd::Clear => {
             let n = Settings::update(dir, |s| Ok(std::mem::take(&mut s.input.button).len()))?;
@@ -3174,6 +3306,141 @@ scope = { device = "usb/0001:0002//Pad" }
         assert!(p.contains("rules for the device \"not a device\" never apply: "), "{p}");
         assert!(p.contains("rules for \"Nowhere\" never apply"), "{p}");
         assert!(p.contains("layer \"nav\" has no rules"), "the device's keymap is compiled too: {p}");
+    }
+
+    // ----------------------------------------------------- command line fixes
+
+    fn settings_dir(tag: &str, text: &str) -> std::path::PathBuf {
+        let dir = crate::testdir::scratch(tag);
+        std::fs::write(dir.join("settings.toml"), text).unwrap();
+        dir
+    }
+
+    fn saved(dir: &Path) -> TuningSettings {
+        Settings::load(dir).unwrap().input
+    }
+
+    /// One tap/hold rule's timeout out of range is clamped and reported,
+    /// and every other rule keeps working.
+    #[test]
+    fn an_out_of_range_tap_hold_timeout_costs_only_itself() {
+        let t = load("[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"esc\"\n\n[[input.keymap.rule]]\nfrom = \"space\"\ntap = \"space\"\nhold = \"lshift\"\ntimeout_ms = 49\n\n[[input.button]]\nfrom = 4\nto = \"back\"\n");
+        let resolved = t.resolve(&facts(os::LINUX), false);
+        assert!(!resolved.warnings.iter().any(|w| w.contains("key rules not used")), "{:?}", resolved.warnings);
+        assert!(!resolved.keymap.is_empty());
+        assert!(t.check(&[]).iter().any(|p| p.contains("timeout_ms 49 is outside 50 to 2000 and is clamped")), "{:?}", t.check(&[]));
+    }
+
+    /// `--peer` accepts the name chosen here (`one-mk rename`), but a visit
+    /// knows the computer by the name it calls itself: the rule is saved as
+    /// something that matches.
+    #[test]
+    fn a_peer_rule_made_with_a_local_alias_matches_the_computer() {
+        use one_mk_net::{Device, Identity};
+        let dir = crate::testdir::scratch("peer-alias");
+        let id = Identity::ephemeral().unwrap();
+        let mut trust = TrustStore::load(&dir).unwrap();
+        trust.upsert(Device { name: "Desk".into(), alias: Some("Office".into()), fingerprint: id.fingerprint.to_string(), ..Device::default() });
+        trust.save().unwrap();
+        let fingerprint = id.fingerprint.to_string();
+        let visit = PeerFacts { name: "Desk", id: &fingerprint, os: os::LINUX, apps: &[], device: None };
+        let by = |name: &str| ScopeArgs { peer: Some(name.into()), ..Default::default() };
+        let scope = by("Office").scope(&dir).unwrap();
+        assert!(scope.rank(&visit).is_some(), "{scope:?} never applies to the computer");
+        assert_eq!(by("Office").selected(&dir).unwrap(), scope, "and it is taken out the same way");
+        assert!(by("Nobody").scope(&dir).is_err());
+    }
+
+    /// `keymap add` refuses an invalid layer whatever the rule's scope is
+    /// (an OS, a computer): it would disable the whole map for them.
+    #[tokio::test]
+    async fn keymap_add_refuses_an_invalid_layer_in_every_scope() {
+        let dir = settings_dir("keymap-bad-layer", "[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"esc\"\n");
+        let add = |layer: &str, remote: ScopeArgs| KeymapCmd::Add {
+            from: "h".into(), to: vec!["left".into()], tap: None, hold: None, layer: Some(layer.into()), timeout_ms: None,
+            scope: KeyScopeArgs { remote, ..Default::default() },
+        };
+        let linux = || ScopeArgs { os: Some("linux".into()), ..Default::default() };
+        assert!(keymap(&dir, Some(add("bad layer", linux()))).await.is_err());
+        assert!(keymap(&dir, Some(add("bad layer", ScopeArgs::default()))).await.is_err());
+        assert_eq!(saved(&dir).keymap.rule.len(), 1, "nothing was saved");
+        keymap(&dir, Some(add("nav", linux()))).await.unwrap();
+        assert_eq!(saved(&dir).keymap.rule.len(), 2);
+        assert!(!saved(&dir).resolve(&facts(os::LINUX), false).keymap.is_empty());
+    }
+
+    /// A gesture for an app pattern (`game*`, `!code`) is checked against
+    /// autoscroll's toggle button as for the apps it matches.
+    #[test]
+    fn gesture_conflicts_are_found_for_wildcard_and_negated_apps() {
+        for app in ["game*", "!code", "*", "GameLauncher"] {
+            let t = load(&format!("[input.autoscroll]\nenabled = true\nbutton = \"middle\"\n[[input.gesture]]\nbutton = \"middle\"\ndirection = \"left\"\nto = \"back\"\napp = \"{app}\"\n"));
+            assert!(t.check(&[]).iter().any(|p| p.contains("reserved by autoscroll")), "{app}: {:?}", t.check(&[]));
+        }
+        let fine = load("[input.autoscroll]\nenabled = true\nbutton = \"middle\"\n[[input.gesture]]\nbutton = \"button4\"\ndirection = \"left\"\nto = \"back\"\napp = \"game*\"\n");
+        assert!(!fine.check(&[]).iter().any(|p| p.contains("reserved by autoscroll")));
+    }
+
+    /// A layer is switched on by the hold half of a tap/hold key too.
+    #[test]
+    fn a_tap_hold_key_can_switch_a_layer_on() {
+        let t = load("[[input.keymap.rule]]\nfrom = \"capslock\"\ntap = \"esc\"\nhold = \"layer:nav\"\n");
+        assert!(layer_switched_on(&t, "nav") && layer_switched_on(&t, " NAV "));
+        assert!(!layer_switched_on(&t, "other"));
+        assert!(!layer_switched_on(&TuningSettings::default(), "nav"));
+    }
+
+    /// A rule for this computer's own keyboard is listed as active only while
+    /// the switch for local rules is on.
+    #[test]
+    fn local_rules_are_not_listed_as_active_while_the_switch_is_off() {
+        assert_eq!(local_state(false, true, true), " [on this computer, experimental]");
+        assert!(local_state(false, true, false).contains("inactive") && local_state(false, true, false).contains("keymap local on"));
+        assert!(local_state(true, false, true).contains("not available on Linux"));
+        assert!(local_state(false, false, false).contains("not available"));
+    }
+
+    /// Hand-written duplicate pointer and scroll tables for one place: an
+    /// edit changes what is in force, and a reset takes all of them away.
+    #[tokio::test]
+    async fn pointer_and_scroll_edits_reach_duplicate_tables() {
+        let pointer = "[[input.pointer]]\nspeed = 1.5\n[[input.pointer]]\nspeed = 2.0\n";
+        let dir = settings_dir("pointer-duplicates", pointer);
+        pointer_command(&dir, PointerArgs { speed: Some(3.0), ..Default::default() }).await.unwrap();
+        assert_eq!(saved(&dir).resolve(&facts(os::LINUX), false).pointer.speed(), 3.0);
+        assert_eq!(saved(&dir).pointer.len(), 1);
+        let dir = settings_dir("pointer-duplicates-reset", pointer);
+        pointer_command(&dir, PointerArgs { reset: true, ..Default::default() }).await.unwrap();
+        assert!(saved(&dir).pointer.is_empty());
+        assert_eq!(saved(&dir).resolve(&facts(os::LINUX), false).pointer.speed(), 1.0);
+
+        let scroll = "[[input.scroll]]\nspeed = 1.5\nreverse_vertical = true\n[[input.scroll]]\nspeed = 2.0\n";
+        let dir = settings_dir("scroll-duplicates", scroll);
+        scroll_command(&dir, ScrollArgs { speed: Some(3.0), ..Default::default() }).await.unwrap();
+        let resolved = saved(&dir).resolve(&facts(os::LINUX), false).scroll;
+        assert_eq!((resolved.wheel.speed_y, resolved.wheel.reverse_y), (3.0, true), "the untouched field is kept");
+        let dir = settings_dir("scroll-duplicates-reset", scroll);
+        scroll_command(&dir, ScrollArgs { reset: true, ..Default::default() }).await.unwrap();
+        assert!(saved(&dir).scroll.is_empty());
+    }
+
+    /// `alt` and `option` are one modifier: setting or removing it replaces
+    /// whatever way it was written.
+    #[tokio::test]
+    async fn scroll_modifier_edits_replace_hand_written_aliases() {
+        let text = "[[input.scroll]]\nmodifiers = { option = 'horizontal', cmd = 'x3' }\n";
+        let modifiers = |dir: &Path| saved(dir).resolve(&facts(os::LINUX), false).scroll.modifiers;
+        let edit = |args: &[&str]| ScrollArgs { modifier: args.iter().map(|s| s.to_string()).collect(), ..Default::default() };
+        let dir = settings_dir("modifier-alias-off", text);
+        assert_eq!(modifiers(&dir)[2], ModScroll::Horizontal);
+        scroll_command(&dir, edit(&["alt=unchanged"])).await.unwrap();
+        assert_eq!(modifiers(&dir)[2], ModScroll::Unchanged, "Alt no longer redirects scrolling");
+        assert_eq!(modifiers(&dir)[3], ModScroll::Multiply(3.0), "another modifier is left alone");
+        let dir = settings_dir("modifier-alias-x5", text);
+        scroll_command(&dir, edit(&["alt=x5"])).await.unwrap();
+        assert_eq!(modifiers(&dir)[2], ModScroll::Multiply(5.0));
+        scroll_command(&dir, edit(&["meta=unchanged"])).await.unwrap();
+        assert_eq!(modifiers(&dir)[3], ModScroll::Unchanged);
     }
 
 }

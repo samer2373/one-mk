@@ -43,6 +43,40 @@ fn no_device(scope: &ScopeArgs) -> Result<()> {
     Ok(())
 }
 
+/// Folds the autoscroll tables for one place (`scope` and `app`) into one,
+/// later fields over earlier ones as when resolving: the base counts as
+/// the first table for an unscoped place, so a table written by hand for
+/// the same place can't keep overriding what an edit sets.
+fn fold_autoscroll_rules(auto: &mut AutoscrollSettings, scope: &Scope, app: &Option<String>) {
+    let here = |rule: &AutoscrollRule| rule.scope == *scope && same_app(&rule.app, app);
+    // The table the others go into: the base, or the first one for the place.
+    let into = if scope.is_global() && app.is_none() { None } else {
+        match auto.rule.iter().position(here) {
+            Some(first) => Some(first),
+            None => return,
+        }
+    };
+    let mut i = into.map_or(0, |first| first + 1);
+    while i < auto.rule.len() {
+        if !here(&auto.rule[i]) {
+            i += 1;
+            continue;
+        }
+        let later = auto.rule.remove(i);
+        let target = match into {
+            Some(first) => &mut auto.rule[first],
+            None => &mut auto.base,
+        };
+        target.enabled = later.enabled.or(target.enabled);
+        if later.button.is_some() {
+            target.button = later.button;
+        }
+        target.speed = later.speed.or(target.speed);
+        target.dead_zone = later.dead_zone.or(target.dead_zone);
+        target.vertical_only = later.vertical_only.or(target.vertical_only);
+    }
+}
+
 pub async fn autoscroll_command(dir: &Path, args: AutoscrollArgs) -> Result<()> {
     no_device(&args.scope)?;
     let scope = args.scope.scope(dir)?;
@@ -66,7 +100,10 @@ pub async fn autoscroll_command(dir: &Path, args: AutoscrollArgs) -> Result<()> 
         let removed = Settings::update(dir, |settings| {
             let auto = &mut settings.input.autoscroll;
             if scope.is_global() && app.is_none() {
-                let had = auto.base != AutoscrollRule::default();
+                // The base, and any table for the same place written by hand.
+                let before = auto.rule.len();
+                auto.rule.retain(|rule| !(rule.scope.is_global() && rule.app.is_none()));
+                let had = auto.base != AutoscrollRule::default() || auto.rule.len() != before;
                 auto.base = AutoscrollRule::default();
                 Ok(had)
             } else {
@@ -91,6 +128,7 @@ pub async fn autoscroll_command(dir: &Path, args: AutoscrollArgs) -> Result<()> 
     Settings::update(dir, |settings| {
         let known = reserved_gestures(&settings.input, &paired);
         let auto = &mut settings.input.autoscroll;
+        fold_autoscroll_rules(auto, &scope, &app);
         let rule = if scope.is_global() && app.is_none() { &mut auto.base } else {
             if !auto.rule.iter().any(|rule| rule.scope == scope && same_app(&rule.app, &app)) {
                 auto.rule.push(AutoscrollRule { scope, app, ..Default::default() });
@@ -230,12 +268,19 @@ pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()
             no_device(&scope)?;
             let app = scope.app()?;
             let scope = scope.scope(dir)?;
+            let paired = paired(dir);
             Settings::update(dir, |settings| {
+                // As `gestures add` does: not saved if autoscroll's toggle
+                // button is button4 (the preset would be skipped for it).
+                let known = reserved_gestures(&settings.input, &paired);
                 for direction in ["left", "right"] {
                     set_gesture(&mut settings.input.gesture, GestureRule { button: "button4".into(), direction: direction.into(),
                         to: To::One(format!("desktop-{direction}")), threshold_px: 60.0, scope: scope.clone(), app: app.clone() });
                 }
-                Ok(())
+                match reserved_gestures(&settings.input, &paired).into_iter().find(|problem| !known.contains(problem)) {
+                    Some(problem) => bail!("{problem}; the preset was not saved"),
+                    None => Ok(()),
+                }
             })?;
             println!("Hold the back side button and swipe left or right to change desktops on the other computer.");
         }
@@ -359,4 +404,47 @@ mod tests {
             let _ = AutoscrollRule { speed: Some(f64::from_bits(random())), ..Default::default() }.validate();
         }
     }
+    fn dir_with(tag: &str, text: &str) -> std::path::PathBuf {
+        let dir = crate::testdir::scratch(tag);
+        std::fs::write(dir.join("settings.toml"), text).unwrap();
+        dir
+    }
+
+    /// The side-swipe preset is refused, like `gestures add`, when its
+    /// button is autoscroll's toggle: it would be skipped there.
+    #[tokio::test]
+    async fn the_gesture_preset_respects_autoscroll_conflicts() {
+        let dir = dir_with("preset-conflict", "[input.autoscroll]\nenabled = true\nbutton = \"button4\"\n");
+        let preset = || Some(GesturesCmd::Preset { name: "side-swipe".into(), scope: ScopeArgs::default() });
+        let error = gestures_command(&dir, preset()).await.unwrap_err().to_string();
+        assert!(error.contains("reserved by autoscroll") && error.contains("not saved"), "{error}");
+        assert!(Settings::load(&dir).unwrap().input.gesture.is_empty(), "nothing was saved");
+        // Without the conflict it installs.
+        let dir = dir_with("preset-fine", "");
+        gestures_command(&dir, preset()).await.unwrap();
+        assert_eq!(Settings::load(&dir).unwrap().input.gesture.len(), 2);
+    }
+
+    /// Turning autoscroll off or resetting it also reaches a table for the
+    /// same place written by hand, which would keep it on.
+    #[tokio::test]
+    async fn autoscroll_edits_reach_a_same_scope_table() {
+        let text = "[input.autoscroll]\nspeed = 2.0\n[[input.autoscroll.rule]]\nenabled = true\n";
+        let facts = PeerFacts { name: "pc", id: "", os: os::LINUX, apps: &[], device: None };
+        let resolved = |dir: &Path| Settings::load(dir).unwrap().input.resolve(&facts, false).autoscroll;
+        let dir = dir_with("autoscroll-off", text);
+        assert!(resolved(&dir).is_some());
+        autoscroll_command(&dir, AutoscrollArgs { off: true, ..Default::default() }).await.unwrap();
+        assert!(resolved(&dir).is_none(), "the hand-written table kept autoscroll on");
+        assert_eq!(Settings::load(&dir).unwrap().input.autoscroll.base.speed, Some(2.0), "other settings stay");
+        let dir = dir_with("autoscroll-reset", text);
+        autoscroll_command(&dir, AutoscrollArgs { reset: true, ..Default::default() }).await.unwrap();
+        assert!(resolved(&dir).is_none());
+        assert!(Settings::load(&dir).unwrap().input.autoscroll.is_empty());
+        // And turning it on, after it was written off by a table.
+        let dir = dir_with("autoscroll-on", "[[input.autoscroll.rule]]\nenabled = false\n");
+        autoscroll_command(&dir, AutoscrollArgs { on: true, ..Default::default() }).await.unwrap();
+        assert!(resolved(&dir).is_some());
+    }
+
 }

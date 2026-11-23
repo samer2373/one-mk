@@ -564,15 +564,17 @@ impl Queue {
     fn insert(&mut self, mut pending: Pending, now: Instant) {
         pending.generation = self.generation;
         let event = pending.event;
-        self.cancel_opposite(event, &pending.env[2].1);
+        // Peers are told apart by their whole fingerprint: the id in the
+        // environment is only its first 32 bits, for people to read.
+        self.cancel_opposite(event, &pending.fingerprint);
         self.sequence = self.sequence.wrapping_add(1);
         pending.sequence = self.sequence;
-        let key = (event, if matches!(event, Event::PeerConnect | Event::PeerDisconnect) { pending.env[2].1.clone() } else { String::new() });
+        let key = (event, if matches!(event, Event::PeerConnect | Event::PeerDisconnect) { pending.fingerprint.clone() } else { String::new() });
         self.peer_last.retain(|_, last| now.saturating_duration_since(*last) < MIN_INTERVAL);
         let last = if key.1.is_empty() { self.limit.last[event.index()] } else { self.peer_last.get(&key).copied() };
         pending.due = last.map_or(now, |last| (last + MIN_INTERVAL).max(now));
         if !key.1.is_empty() {
-            for queued in self.pending.values().filter(|queued| queued.env[2].1 == key.1) {
+            for queued in self.pending.values().filter(|queued| queued.fingerprint == key.1) {
                 pending.due = pending.due.max(queued.due);
             }
         }
@@ -771,7 +773,7 @@ impl Engine {
 
     fn fire(&mut self, cfg: &Hooks, ev: Event, peer: &PeerInfo) {
         let (lane, wake) = if matches!(ev, Event::Enter | Event::Leave) { (&self.queue, &self.wake) } else { (&self.peer_queue, &self.peer_wake) };
-        lane.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel_opposite(ev, &peer.id);
+        lane.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cancel_opposite(ev, &peer.fingerprint);
         wake.notify_one();
         let Some(cmd) = cfg.get(ev) else { return };
         if !cfg.accepts(ev, &peer.fingerprint) { return; }
@@ -896,6 +898,27 @@ impl Drop for ProcessGroup {
     }
 }
 
+/// Ends process `pid` and everything it started (`taskkill /T /F`), as the
+/// Unix branch does with the hook's process group.
+#[cfg(windows)]
+async fn kill_tree(pid: u32) {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let root = std::env::var_os("SystemRoot").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from);
+    let mut taskkill = tokio::process::Command::new(root.join("System32").join("taskkill.exe"));
+    taskkill
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    match tokio::time::timeout(Duration::from_secs(5), taskkill.status()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::debug!("could not end the hook's processes: {e}"),
+        Err(_) => tracing::debug!("ending the hook's processes took too long"),
+    }
+}
+
 /// Runs one hook to its end or the timeout, and reaps it.
 async fn run(label: &'static str, argv: &[String], env: &[(&'static str, String)], timeout: Duration, shell: bool) {
     #[cfg(windows)]
@@ -945,6 +968,12 @@ async fn run(label: &'static str, argv: &[String], env: &[(&'static str, String)
                 // SAFETY: plain syscall; the group was created for this child
                 // and nothing else uses its number while we hold the child.
                 unsafe { libc::kill(-pid, libc::SIGKILL) };
+            }
+            // Windows has no process groups: the hook's whole tree is ended
+            // while its parent still exists (the tree is found through it).
+            #[cfg(windows)]
+            if let Some(pid) = pid {
+                kill_tree(pid).await;
             }
             let _ = pid;
             let _ = child.kill().await; // and reaps it
@@ -1024,10 +1053,14 @@ impl HooksArgs {
             h.timeout_secs = (t != DEFAULT_TIMEOUT_SECS).then_some(t);
         }
         if let Some(on) = self.shell {
+            // An event with a shell choice of its own (`--event-shell`) is
+            // not affected by this one: its command stays exactly as it is.
+            let follows = |h: &Hooks, event: Event| h.options.get(event.as_str()).is_none_or(|options| options.shell.is_none());
             #[cfg(windows)]
             if on {
                 for event in Event::ALL {
-                    if let Some(Command::Argv(words)) = h.get(event)
+                    if follows(h, event)
+                        && let Some(Command::Argv(words)) = h.get(event)
                         && words.iter().any(|word| word.contains(['^', '&', '|', '<', '>', '%', '!', '"', '\r', '\n', '(', ')']) || word.ends_with('\\')) {
                         bail!("cannot safely convert Windows argv to cmd script: {words:?}; keep --shell off or explicitly provide the exact shell script");
                     }
@@ -1036,7 +1069,8 @@ impl HooksArgs {
             h.shell = on;
             if on {
                 for event in Event::ALL {
-                    if let Some(Command::Argv(words)) = h.get(event) {
+                    if follows(h, event)
+                        && let Some(Command::Argv(words)) = h.get(event) {
                         let line = words.iter().map(|word| legacy_shell_word(word)).collect::<Vec<_>>().join(" ");
                         *h.slot(event) = Some(Command::Line(line));
                     }
@@ -1098,9 +1132,6 @@ pub async fn run_command(dir: &Path, mut args: HooksArgs) -> Result<()> {
             None => anyhow::anyhow!("Choose one paired computer from the list."),
         })?.fingerprint.clone();
     }
-    if args.trust_permissions {
-        trust_permissions(dir)?;
-    }
     if args.off {
         match std::fs::remove_file(dir.join(TRUST_FILE)) {
             Ok(()) => {},
@@ -1109,10 +1140,16 @@ pub async fn run_command(dir: &Path, mut args: HooksArgs) -> Result<()> {
         }
     }
     let hooks = if args.changes_anything() {
-        Settings::update(dir, |s| {
+        let hooks = Settings::update(dir, |s| {
             args.apply(&mut s.hooks)?;
             Ok(s.hooks.clone())
-        })?
+        })?;
+        // Only now: a command that was refused (a bad timeout, a hook that
+        // can't be read) must not leave the permissions override behind.
+        if args.trust_permissions {
+            trust_permissions(dir)?;
+        }
+        hooks
     } else {
         Settings::view(dir)?.hooks
     };
@@ -1275,8 +1312,8 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn newest_peer_transition_cancels_the_opposite() {
         let mut queue = Queue::default();
-        let peer = PeerInfo { name: "peer".into(), id: "id".into(), fingerprint: String::new(), side: Side::Left };
-        let pending = |event| Pending { command: None, fingerprint: String::new(), generation: 0, event, argv: vec!["echo".into()], env: env(event, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 };
+        let peer = PeerInfo { name: "peer".into(), id: "id".into(), fingerprint: "fingerprint".into(), side: Side::Left };
+        let pending = |event| Pending { command: None, fingerprint: peer.fingerprint.clone(), generation: 0, event, argv: vec!["echo".into()], env: env(event, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 };
         queue.insert(pending(Event::PeerConnect), Instant::now());
         assert_eq!(queue.take_ready(Instant::now()).unwrap().event, Event::PeerConnect);
         tokio::time::advance(Duration::from_millis(100)).await;
@@ -1368,12 +1405,67 @@ mod tests {
         }
     }
 
+    /// Two peers whose ids (the first 32 bits of their fingerprints) are the
+    /// same stay two peers: neither merges into, rate-limits or cancels the
+    /// other.
+    #[tokio::test(start_paused = true)]
+    async fn peers_sharing_a_displayed_id_are_not_coalesced() {
+        let (first, mut second) = (Fingerprint([0xab; 32]), Fingerprint([0xab; 32]));
+        second.0[31] = 0xcd;
+        assert_eq!(first.short(), second.short());
+        let mut engine = Engine::default();
+        engine.peer_queue.lock().unwrap().active = true;
+        let hooks = Hooks { on_peer_connect: Some(Command::Argv(vec!["echo".into()])), on_peer_disconnect: Some(Command::Argv(vec!["echo".into()])), ..Hooks::default() };
+        engine.sync(&hooks, None, None, std::iter::empty());
+        engine.sync(&hooks, None, None, [(first, "One", Side::Left), (second, "Two", Side::Right)].into_iter());
+        assert_eq!(engine.peer_queue.lock().unwrap().pending.len(), 2, "both connects are queued");
+        // One disconnecting does not cancel the other's connect.
+        engine.sync(&hooks, None, None, std::iter::once((second, "Two", Side::Right)));
+        let queue = engine.peer_queue.lock().unwrap();
+        let events: Vec<(Event, String)> = queue.pending.values().map(|pending| (pending.event, pending.fingerprint.clone())).collect();
+        assert!(events.contains(&(Event::PeerConnect, second.to_string())), "{events:?}");
+        assert!(events.contains(&(Event::PeerDisconnect, first.to_string())), "{events:?}");
+        assert!(!events.contains(&(Event::PeerConnect, first.to_string())), "its own connect is cancelled: {events:?}");
+    }
+
+    /// Switching the global shell on leaves the commands of events that
+    /// have a shell choice of their own exactly as they are.
+    #[test]
+    fn the_global_shell_leaves_events_with_their_own_choice_alone() {
+        let argv = vec!["C:\\Tools\\my-hook.exe".to_owned(), "arg".to_owned()];
+        let mut hooks = Hooks {
+            on_enter: Some(Command::Argv(argv.clone())),
+            on_leave: Some(Command::Argv(vec!["notify".into(), "hi there".into()])),
+            ..Hooks::default()
+        };
+        hooks.options.insert("enter".into(), HookOptions { shell: Some(false), ..HookOptions::default() });
+        HooksArgs { shell: Some(true), ..Default::default() }.apply(&mut hooks).unwrap();
+        assert_eq!(hooks.on_enter, Some(Command::Argv(argv.clone())), "the array is not rewritten");
+        assert_eq!(hooks.get(Event::Enter).unwrap().argv(false).unwrap(), argv);
+        assert!(matches!(hooks.on_leave, Some(Command::Line(_))), "an event that follows the global choice is converted");
+        // Turning it off again: still untouched.
+        HooksArgs { shell: Some(false), ..Default::default() }.apply(&mut hooks).unwrap();
+        assert_eq!(hooks.on_enter, Some(Command::Argv(argv)));
+    }
+
+    /// A command that is refused changes nothing: the override that lets
+    /// hooks run from unsafe permissions is not left behind by it.
+    #[tokio::test]
+    async fn a_refused_hooks_command_does_not_leave_the_permissions_override() {
+        let dir = crate::testdir::scratch("hooks-refused-trust");
+        let refused = HooksArgs { trust_permissions: true, timeout: Some(0), ..Default::default() };
+        assert!(run_command(&dir, refused).await.is_err());
+        assert!(!permissions_trusted(&dir), "the override must not be saved by a refused command");
+        run_command(&dir, HooksArgs { trust_permissions: true, timeout: Some(7), ..Default::default() }).await.unwrap();
+        assert!(permissions_trusted(&dir), "a command that was accepted saves it");
+    }
+
     #[tokio::test(start_paused = true)]
     async fn different_peers_are_not_coalesced() {
         let mut queue = Queue::default();
         for id in ["first", "second"] {
-            let peer = PeerInfo { name: id.into(), id: id.into(), fingerprint: String::new(), side: Side::Left };
-            queue.insert(Pending { command: None, fingerprint: String::new(), generation: 0, event: Event::PeerConnect, argv: vec!["echo".into()], env: env(Event::PeerConnect, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 }, Instant::now());
+            let peer = PeerInfo { name: id.into(), id: id.into(), fingerprint: id.into(), side: Side::Left };
+            queue.insert(Pending { command: None, fingerprint: peer.fingerprint.clone(), generation: 0, event: Event::PeerConnect, argv: vec!["echo".into()], env: env(Event::PeerConnect, &peer), shell: false, timeout: Duration::from_secs(1), due: Instant::now(), sequence: 0 }, Instant::now());
         }
         assert!(queue.take_ready(Instant::now()).is_some());
         assert!(queue.take_ready(Instant::now()).is_some());
