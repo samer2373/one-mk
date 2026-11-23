@@ -377,7 +377,8 @@ impl App {
                 (None, None) => text.to_owned(),
             };
             if resp.on_hover_text(tip).clicked() {
-                self.set_tab(Tab::Settings);
+                // The Updates group is in General: Settings may have been left on another category.
+                self.jump_to_setting(super::settings_page::Cat::General, "update-check");
             }
         }
 

@@ -539,3 +539,5 @@ mod qa_settings;
 mod qa_updates_settings;
 #[cfg(unix)]
 mod qa_wallpaper;
+#[cfg(unix)]
+mod regressions;

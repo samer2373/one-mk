@@ -103,7 +103,9 @@ pub(crate) fn swap_row_h(inner_w: f32) -> f32 {
 enum Drag {
     /// `place` is set when both computers' monitors are known: then the
     /// drag puts it at an exact place beside this computer's monitors.
-    Device { i: usize, start: Pos2, x0: f32, place: Option<Box<Placing>> },
+    /// `i` is where it stands in the scene's list this frame (`keep_drag`
+    /// finds it again by `id`: the list closes up when another one leaves).
+    Device { id: String, i: usize, start: Pos2, x0: f32, place: Option<Box<Placing>> },
     Orbit,
 }
 
@@ -241,10 +243,14 @@ pub struct App {
     drag: Option<Drag>,
     /// While dragging: the side the computer would go to if let go now.
     drag_side: Option<(String, Side)>,
-    menu_for: Option<usize>,
+    /// The computer whose right-click menu is open (by id: the scene's list closes up).
+    menu_for: Option<String>,
     pairing: Option<PairUi>,
     /// Files dropped where it wasn't clear which computer they were for, and when.
     pending_drop: Option<(Vec<PathBuf>, f64)>,
+    /// The frame (its time) in which files let go over the window were taken:
+    /// the page that follows in that frame doesn't read them again.
+    drop_taken: Option<f64>,
     /// A computer (id, name) the sheet is asking whether to remove, and since when.
     removing: Option<(String, String, f64)>,
     /// A saved layout the sheet is asking whether to delete, and since when.
@@ -270,6 +276,9 @@ pub struct App {
     /// Sides (and offsets) chosen here and not yet reported back by the
     /// daemon, and when.
     pending_side: HashMap<String, (Side, Offset, f64)>,
+    /// The last place asked of the daemon for each computer (side and exact
+    /// offset): "Try again" on a failed move asks for that, not just the side.
+    layout_asked: HashMap<String, (Side, Offset)>,
     /// Layout learning's question (computer id, side) answered here, and
     /// hidden until the daemon stops asking it.
     answered: Option<(String, Side)>,
@@ -506,6 +515,7 @@ impl App {
             menu_for: None,
             pairing: None,
             pending_drop: None,
+            drop_taken: None,
             removing: None,
             deleting_profile: None,
             settings_cat: settings_page::Cat::General,
@@ -521,6 +531,7 @@ impl App {
             failed_measure: HashSet::new(),
             measuring: None,
             pending_side: HashMap::new(),
+            layout_asked: HashMap::new(),
             answered: None,
             apart: HashSet::new(),
             plan: None,
@@ -612,7 +623,11 @@ impl App {
     /// Runs a failed job again, as the control that asked for it did.
     fn retry(&mut self, job: Job) {
         match job.clone() {
-            Job::Layout { id, side, .. } => self.choose_side(&id, side, true),
+            Job::Layout { id, side, .. } => {
+                // The whole place that was asked for: an exact offset stays exact.
+                let offset = self.layout_asked.get(&id).filter(|(asked, _)| *asked == side).and_then(|(_, offset)| *offset);
+                self.choose_place(&id, side, offset, true);
+            }
             Job::Swap { id, name, swap } => {
                 self.pending_swap.insert(id.clone(), swap.clone());
                 self.busy.push(job);
@@ -688,10 +703,8 @@ impl App {
                     // oneMK started or stopped, or a computer came or went:
                     // checks made before say nothing now, so they run again
                     // (Health and the top bar's "check Health" tell the truth).
-                    let mut basis = online;
-                    basis.sort();
-                    let basis = (self.running().is_some(), basis);
-                    // (While a check runs, the change waits for the next status.)
+                    let basis = self.health_basis_now();
+                    // (While a check runs, the change waits until it ends: see Event::Done.)
                     if self.health_basis.as_ref() != Some(&basis) {
                         if self.doctor.is_none() || self.health_basis.is_none() {
                             self.health_basis = Some(basis);
@@ -730,7 +743,17 @@ impl App {
                 }
                 Event::Done { what, error } => {
                     self.busy.retain(|j| j != &what);
+                    let check = what == Job::Doctor;
                     self.finished(what, error, now);
+                    // What changed while the check ran may not send another
+                    // status (a state that then stays put): check again now.
+                    if check {
+                        let basis = self.health_basis_now();
+                        if self.health_basis.as_ref().is_some_and(|was| *was != basis) && !self.busy.contains(&Job::Doctor) {
+                            self.health_basis = Some(basis);
+                            self.recheck();
+                        }
+                    }
                 }
                 Event::Prefs(p) => {
                     self.appearance_choice.read(p.appearance);
@@ -764,6 +787,13 @@ impl App {
             self.sync_scene();
         }
         self.sync_pairing_scene(now);
+    }
+
+    /// What a Health report depends on: whether oneMK runs, and which computers are online.
+    fn health_basis_now(&self) -> (bool, Vec<String>) {
+        let mut online: Vec<String> = self.running().map_or(vec![], |s| s.peers.iter().filter(|p| p.online).map(|p| p.id.clone()).collect());
+        online.sort();
+        (self.running().is_some(), online)
     }
 
     /// A command finished: say how it went, and undo what it promised if it failed.
@@ -895,7 +925,11 @@ impl App {
                     }
                     Step::Paired { id, name } => {
                         finished = Some((id.clone(), name.clone()));
-                        p.proc = None;
+                        // It still has work after this line (the file manager's
+                        // entries for the new computer): let it end by itself.
+                        if let Some(proc) = p.proc.take() {
+                            proc.finish();
+                        }
                         p.step = Step::Paired { id, name };
                         p.since = now;
                     }
@@ -959,8 +993,8 @@ impl App {
     /// Side and offset to show: where a drag would put it, or what was
     /// chosen here but not yet confirmed, or what the daemon reports.
     fn place_shown(&self, id: &str, reported: (Side, Option<(i32, i32)>)) -> (Side, Option<(i32, i32)>) {
-        if let Some(Drag::Device { i, place: Some(pl), .. }) = &self.drag
-            && self.scene.devices.get(*i).is_some_and(|d| d.id == id)
+        if let Some(Drag::Device { id: held, place: Some(pl), .. }) = &self.drag
+            && held == id
         {
             return (pl.now.0, Some(pl.now.1));
         }
@@ -1249,6 +1283,7 @@ impl App {
         if self.place_of(id) != Some((side, offset)) {
             let name = self.name_of(id);
             self.pending_side.insert(id.to_owned(), (side, offset, self.now));
+            self.layout_asked.insert(id.to_owned(), (side, offset));
             self.busy.push(Job::Layout { id: id.into(), name: name.clone(), side });
             self.link.set_side(id, &name, side, offset);
             if hop {
@@ -1260,7 +1295,7 @@ impl App {
 
     /// Whether the computer with this id is being dragged on the desk.
     fn dragging(&self, id: &str) -> bool {
-        matches!(&self.drag, Some(Drag::Device { i, .. }) if self.scene.devices.get(*i).is_some_and(|d| d.id == id))
+        matches!(&self.drag, Some(Drag::Device { id: held, .. }) if held == id)
     }
 
     /// A computer placed apart, moved beside the nearest edge of ours (or
@@ -1334,6 +1369,13 @@ impl App {
     /// with a pointer position that can't be trusted), ask which one,
     /// unless only one could take them.
     fn drop_files(&mut self, paths: Vec<PathBuf>, at: Option<Pos2>, now: f64) {
+        // A sheet (pairing, a question) is modal: files let go over its scrim
+        // are not for the page behind it, nor for a second sheet on top.
+        if self.sheet_open() {
+            return;
+        }
+        // This frame's drop is taken: a page drawn later in it must not read it again.
+        self.drop_taken = Some(self.now);
         let online = self.online_targets();
         match at.and_then(|p| self.scene.hit(p)) {
             Some(i) if i != 0 && self.draggable(i) && !self.scene.devices[i].online => {
@@ -1406,6 +1448,7 @@ impl App {
         let locked = widgets::locked(ui);
         self.desk_keys(ui, rect, now);
         let resp = ui.interact(rect, Id::unique("desk"), if locked { Sense::hover() } else { Sense::CLICK | Sense::DRAG });
+        self.keep_drag(now);
         let pointer = resp.hover_pos().filter(|_| !locked);
         let hovering_files = ui.input(|i| !i.raw.hovered_files.is_empty());
         self.scene.drop_targets = hovering_files;
@@ -1425,7 +1468,10 @@ impl App {
         }
 
         if resp.drag_started() {
-            let start = resp.interact_pointer_pos().unwrap_or_default();
+            // Where the button went down: egui starts a drag only once the
+            // pointer has moved a few points, and what was under it then may
+            // be another computer, or none.
+            let start = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos()).unwrap_or_default();
             self.drag = match self.scene.hit(start) {
                 Some(i) if self.draggable(i) => {
                     let place = self.placing(rect, i, start);
@@ -1433,29 +1479,17 @@ impl App {
                     // Picked up: it lifts a little and its shadow softens.
                     d.lift.go(motion::space(2.5), now, 0.12, motion::out_cubic);
                     d.pop.go(if motion::reduced() { 1.0 } else { 1.02 }, now, 0.12, motion::out_cubic);
-                    Some(Drag::Device { i, start, x0: d.pos.x, place })
+                    Some(Drag::Device { id: d.id.clone(), i, start, x0: d.pos.x, place })
                 }
                 _ => Some(Drag::Orbit),
             };
         }
         if resp.dragged() {
-            match &mut self.drag {
-                Some(Drag::Device { i, start, x0, place }) => {
-                    let (i, start, x0) = (*i, *start, *x0);
-                    if let Some(pl) = place {
-                        // In our monitors' plane, snapping beside the nearest.
-                        if let Some((x, y)) = resp.interact_pointer_pos().and_then(|p| self.scene.wall_px(rect, &pl.fit.map, p)) {
-                            pl.now = scene::drop_place(&pl.mine.screens, &pl.edges, pl.peer, (x + pl.grab.0, y + pl.grab.1), pl.fit.reach());
-                            let d = &mut self.scene.devices[i];
-                            d.pos = pl.fit.pos(pl.now.1);
-                            d.scale = pl.fit.scale;
-                        }
-                    } else if let Some(p) = resp.interact_pointer_pos() {
-                        let ax = self.scene.x_axis(rect, i);
-                        let d = p - start;
-                        let dx = (d.x * ax.x + d.y * ax.y) / ax.length_sq().max(1e-3);
-                        let me_x = self.scene.devices[0].pos.x;
-                        self.scene.devices[i].pos.x = (x0 + dx).clamp(me_x - SPACING * 4.0, me_x + SPACING * 4.0);
+            match &self.drag {
+                Some(Drag::Device { i, .. }) => {
+                    let i = *i;
+                    if let Some(p) = resp.interact_pointer_pos() {
+                        self.drag_to(rect, p);
                     }
                     self.make_room(i);
                 }
@@ -1468,34 +1502,57 @@ impl App {
             }
         }
         if resp.drag_stopped() {
-            if let Some(Drag::Device { i, place, .. }) = &self.drag
-                && *i < self.scene.devices.len()
-            {
-                let i = *i;
-                let side = self.side_at(i);
-                // Where the screens touch, or beside the nearest edge of
-                // ours; never apart by accident.
-                let theirs = &self.scene.devices[i].screens;
-                let landing = match place.as_ref().filter(|_| !theirs.is_empty()) {
-                    Some(pl) => scene::landing(&pl.mine, &Desktop::new(theirs.clone()), (side, pl.now.1), false),
-                    None => scene::Landing::Along(side),
-                };
-                let d = &mut self.scene.devices[i];
-                d.lift.go(0.0, now, motion::space(0.16), motion::out_cubic);
-                d.pop.go(1.0, now, 0.16, motion::out_cubic);
-                let id = d.id.clone();
-                self.drag_side = None;
-                // Snapped: it glides from where it was let go to its place.
-                match landing {
-                    scene::Landing::Beside(side, o) => self.choose_place(&id, side, Some(o), false),
-                    scene::Landing::Apart(side, o) => {
-                        self.choose_place(&id, side, Some(o), false);
-                        self.placed_apart(&id, now);
+            if ui.input(|i| i.pointer.primary_down()) {
+                // egui ends a drag on Escape with the button still down:
+                // that is a change of mind, not a drop.
+                self.cancel_drag(now);
+            } else {
+                // The pointer may have moved in the very frame it was let go.
+                if let Some(p) = resp.interact_pointer_pos() {
+                    self.drag_to(rect, p);
+                }
+                let dropped = match &self.drag {
+                    Some(Drag::Device { i, place, .. }) if *i < self.scene.devices.len() => {
+                        let i = *i;
+                        let side = self.side_at(i);
+                        // Where the screens touch, or beside the nearest edge of
+                        // ours; never apart by accident.
+                        let theirs = &self.scene.devices[i].screens;
+                        let landing = match place.as_ref().filter(|_| !theirs.is_empty()) {
+                            Some(pl) => scene::landing(&pl.mine, &Desktop::new(theirs.clone()), (side, pl.now.1), false),
+                            None => scene::Landing::Along(side),
+                        };
+                        Some((i, landing))
                     }
-                    scene::Landing::Along(side) => self.choose_side(&id, side, false),
+                    _ => None,
+                };
+                // Let go before choosing: the desk then follows what is saved
+                // (or asked), not the spot the drag was last at; a drop that
+                // changes nothing still goes back to where the computer is.
+                self.drag = None;
+                if let Some((i, landing)) = dropped {
+                    let d = &mut self.scene.devices[i];
+                    d.lift.go(0.0, now, motion::space(0.16), motion::out_cubic);
+                    d.pop.go(1.0, now, 0.16, motion::out_cubic);
+                    let id = d.id.clone();
+                    self.drag_side = None;
+                    // Snapped: it glides from where it was let go to its place.
+                    match landing {
+                        scene::Landing::Beside(side, o) => self.choose_place(&id, side, Some(o), false),
+                        scene::Landing::Apart(side, o) => {
+                            self.choose_place(&id, side, Some(o), false);
+                            self.placed_apart(&id, now);
+                        }
+                        scene::Landing::Along(side) => self.choose_side(&id, side, false),
+                    }
                 }
             }
             self.drag = None;
+        }
+        // A drag whose button is up and that no longer has the pointer (the
+        // release came while the desk was not on screen): nothing holds it.
+        if self.drag.is_some() && !resp.dragged() && !ui.input(|i| i.pointer.primary_down()) {
+            self.cancel_drag(now);
         }
 
         let under = pointer.and_then(|p| self.scene.hit(p));
@@ -1536,7 +1593,7 @@ impl App {
             self.scene.reset_camera();
         }
         if resp.secondary_clicked() {
-            self.menu_for = under.filter(|&i| self.draggable(i));
+            self.menu_for = under.filter(|&i| self.draggable(i)).map(|i| self.scene.devices[i].id.clone());
         }
         resp.context_menu(|ui| self.place_menu(ui));
 
@@ -1568,6 +1625,63 @@ impl App {
         }
     }
 
+    /// The computer in hand is looked up by id each frame, because the
+    /// scene's list closes up when another leaves (an index would then point
+    /// at a different computer, or past the end). It is put down when it
+    /// is gone, or can no longer be placed by its screens.
+    fn keep_drag(&mut self, now: f64) {
+        let Some(Drag::Device { id, place, .. }) = &self.drag else { return };
+        let exact = place.is_some();
+        let at = self.scene.index(id).filter(|&i| self.draggable(i)).filter(|&i| !exact || !(self.scene.devices[i].screens.is_empty() || self.scene.devices[0].screens.is_empty()));
+        match at {
+            Some(at) => {
+                if let Some(Drag::Device { i, .. }) = &mut self.drag {
+                    *i = at;
+                }
+            }
+            None => self.cancel_drag(now),
+        }
+    }
+
+    /// Puts down what is being dragged without placing it: the computer goes
+    /// back to where it is saved (or asked), and nothing is sent to the daemon.
+    fn cancel_drag(&mut self, now: f64) {
+        let held = match self.drag.take() {
+            Some(Drag::Device { id, .. }) => Some(id),
+            _ => None,
+        };
+        if let Some(i) = held.as_deref().and_then(|id| self.scene.index(id)) {
+            let d = &mut self.scene.devices[i];
+            d.lift.go(0.0, now, motion::space(0.16), motion::out_cubic);
+            d.pop.go(1.0, now, 0.16, motion::out_cubic);
+        }
+        let had_side = self.drag_side.take().is_some();
+        if held.is_some() || had_side {
+            self.sync_scene();
+        }
+    }
+
+    /// Moves the computer in hand to the pointer at `p`.
+    fn drag_to(&mut self, rect: Rect, p: Pos2) {
+        let Some(Drag::Device { i, start, x0, place, .. }) = &mut self.drag else { return };
+        let (i, start, x0) = (*i, *start, *x0);
+        if let Some(pl) = place {
+            // In our monitors' plane, snapping beside the nearest.
+            if let Some((x, y)) = self.scene.wall_px(rect, &pl.fit.map, p) {
+                pl.now = scene::drop_place(&pl.mine.screens, &pl.edges, pl.peer, (x + pl.grab.0, y + pl.grab.1), pl.fit.reach());
+                let d = &mut self.scene.devices[i];
+                d.pos = pl.fit.pos(pl.now.1);
+                d.scale = pl.fit.scale;
+            }
+        } else {
+            let ax = self.scene.x_axis(rect, i);
+            let d = p - start;
+            let dx = (d.x * ax.x + d.y * ax.y) / ax.length_sq().max(1e-3);
+            let me_x = self.scene.devices[0].pos.x;
+            self.scene.devices[i].pos.x = (x0 + dx).clamp(me_x - SPACING * 4.0, me_x + SPACING * 4.0);
+        }
+    }
+
     /// While a computer is dragged, the others make room live, so the
     /// result shows before it is let go.
     fn make_room(&mut self, i: usize) {
@@ -1580,7 +1694,7 @@ impl App {
 
     /// The right-click menu on a computer: where it is.
     fn place_menu(&mut self, ui: &mut Ui) {
-        let Some(i) = self.menu_for.filter(|&i| i < self.scene.devices.len()) else {
+        let Some(i) = self.menu_for.as_deref().and_then(|id| self.scene.index(id)).filter(|&i| self.draggable(i)) else {
             ui.close();
             return;
         };
@@ -1647,6 +1761,14 @@ impl App {
                 Tab::Wallpaper => self.wallpaper_ui.release(),
                 Tab::Keys => self.keys.release_meshes(),
                 _ => {}
+            }
+            // A drag on the desk belongs to the page it began on: its release
+            // would never be seen from another one.
+            self.cancel_drag(self.now);
+            // A shortcut being recorded stops listening when Settings is left:
+            // hidden, it would still swallow the page keys and never see Esc.
+            if self.tab == Tab::Settings {
+                self.ctx.data_mut(|data| data.remove::<usize>(Id::unique("shortcut-recorder")));
             }
             self.tab = tab;
             if tab == Tab::Files { self.clipboard_history = None; self.link.history(); }
@@ -1939,8 +2061,10 @@ impl App {
         let row = view.buttons.iter().map(|(l, _, _)| button_width(ui, l) + 8.0).sum::<f32>() - 8.0 <= inner;
         let mut view = view;
         if !row && view.buttons.first().is_some_and(|b| b.2 == Act::Close) {
+            let n = view.buttons.len();
             view.buttons.rotate_left(1);
-            view.focus = view.focus.saturating_sub(1);
+            // Focus moves with its button: the one that was first is last now.
+            view.focus = (view.focus + n - 1) % n;
         }
         let widths: Vec<f32> = view.buttons.iter().map(|(l, _, _)| button_width(ui, l).min(inner)).collect();
         let button_labels: Vec<_> = view.buttons.iter().map(|(label, look, _)| ui.painter().layout(label.clone(), widgets::button_font(*look), pal().ink, inner - 28.0)).collect();
@@ -2503,7 +2627,7 @@ impl eframe::App for App {
         let desk_lay = (self.tab == Tab::Desk).then(|| desk_panel::desk_layout(full, f.bar.bottom()));
         let desk = desk_lay.as_ref().map_or(content, |l| l.scene);
         // Files let go over a page without the desk: ask where they go.
-        if !self.tab.desk() && self.tab != Tab::Wallpaper {
+        if !self.tab.desk() && self.tab != Tab::Wallpaper && !self.sheet_open() {
             let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
             if !dropped.is_empty() {
                 self.set_tab(Tab::Files);
@@ -3046,7 +3170,7 @@ mod debug {
                 let d = &mut app.scene.devices[i];
                 d.lift.go(2.5, now, 0.12, motion::out_cubic);
                 d.pop.go(1.02, now, 0.12, motion::out_cubic);
-                app.drag = Some(Drag::Device { i, start: Pos2::ZERO, x0: d.pos.x, place: None });
+                app.drag = Some(Drag::Device { id: d.id.clone(), i, start: Pos2::ZERO, x0: d.pos.x, place: None });
             }
             if let Some(Drag::Device { x0, .. }) = app.drag {
                 let t = ((now - 1.5) / 1.5).min(1.0) as f32;
