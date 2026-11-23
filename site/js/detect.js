@@ -60,6 +60,16 @@
     if (isWin) {
       r.os = "windows"; r.panel = "windows";
       var winArm = arch === "arm" || /ARM64|aarch64/i.test(ua);
+      // 32-bit Windows: the client hint says so, or the user agent names no 64-bit
+      // system at all. "WOW64" is a 32-bit browser on a 64-bit Windows, which runs
+      // the 64-bit installer, so it never counts (whatever bitness it reports).
+      var win32 = !winArm && !/WOW64|Win64|x64|amd64/i.test(ua) && (hints.bitness === "32" || (/Windows NT/.test(ua) && !hints.bitness));
+      if (win32) {
+        r.arch = "x86"; r.sure = hints.bitness === "32";
+        r.label = "See the Windows downloads"; r.href = "#download";
+        r.note = "No build for 32-bit Windows; 64-bit only";
+        return r;
+      }
       if (winArm) {
         // No ARM build; x64 emulation on Windows 11 for ARM has not been tried.
         r.arch = "arm"; r.sure = arch === "arm" || /ARM64/i.test(ua);
@@ -79,6 +89,12 @@
       if (arch === "arm" || /aarch64|arm64|armv\d/i.test(ua + " " + plat)) {
         r.arch = "arm"; r.sure = true; r.label = "See the Linux downloads"; r.href = "#download";
         r.note = "No build for ARM Linux yet; x86_64 only";
+        return r;
+      }
+      // 32-bit x86 Linux ("i686"); a 32-bit browser on a 64-bit system says "i686 on x86_64".
+      if (!/x86_64|amd64/i.test(ua + " " + plat) && (/i[3-6]86/i.test(ua + " " + plat) || (arch === "x86" && hints.bitness === "32"))) {
+        r.arch = "x86"; r.sure = true; r.label = "See the Linux downloads"; r.href = "#download";
+        r.note = "No build for 32-bit Linux; x86_64 only";
         return r;
       }
       r.arch = "x86_64"; r.sure = /x86_64|amd64/i.test(ua + " " + plat) || arch === "x86";
