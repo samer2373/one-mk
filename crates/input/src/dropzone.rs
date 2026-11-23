@@ -1,7 +1,7 @@
 //! OS-owned edge drop targets. No clipboard polling and no input injection.
 
 use anyhow::{Result, bail};
-use one_mk_proto::Rect;
+use one_mk_proto::{Pos, Rect};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -37,6 +37,42 @@ impl DropTarget for Handle {
         self.zones.send_if_modified(|current| {
             if *current == zones { false } else { *current = zones; true }
         });
+    }
+}
+
+/// What tells a drag from a click while the left button is held. Nothing on Windows, macOS or
+/// (without XDND ownership, see `dropzone_x11`) X11 says "a file is being dragged" before the
+/// target is shown, and the target is a real window that takes the input over the strip. So a held
+/// button only counts as a drag that may arm a zone if it went down outside every zone (a click on
+/// a control or scroll bar that sits in the strip never does) and has since moved by `slop`
+/// pixels, the way the system itself starts a drag.
+#[derive(Debug, Default)]
+#[allow(dead_code)]
+pub(crate) struct Gesture {
+    origin: Option<Pos>,
+    dragging: bool,
+}
+
+#[allow(dead_code)]
+impl Gesture {
+    /// The button went down at `at`; `in_zone` is whether that is inside a zone.
+    pub(crate) fn press(&mut self, at: Pos, in_zone: bool) {
+        self.origin = (!in_zone).then_some(at);
+        self.dragging = false;
+    }
+
+    pub(crate) fn release(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Whether the held button has become a drag: it stays one until released.
+    pub(crate) fn dragging(&mut self, at: Pos, slop: f64) -> bool {
+        if let Some(origin) = self.origin
+            && (at.x - origin.x).hypot(at.y - origin.y) >= slop
+        {
+            self.dragging = true;
+        }
+        self.dragging
     }
 }
 
@@ -305,5 +341,25 @@ mod tests {
     fn a_desktop_without_drop_targets_starts_nothing() {
         #[cfg(target_os = "linux")]
         assert!(platform("portal").unwrap().is_none() && platform("wlroots").unwrap().is_none() && platform("null").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_press_inside_a_zone_or_without_travel_is_not_a_drag() {
+        let p = |x: f64, y: f64| Pos::new(x, y);
+        // A click on a control in the strip, even moved around in it: never.
+        let mut gesture = Gesture::default();
+        gesture.press(p(795.0, 300.0), true);
+        assert!(!gesture.dragging(p(795.0, 340.0), 8.0));
+        // A press outside that has not gone far is a click.
+        gesture.press(p(400.0, 300.0), false);
+        assert!(!gesture.dragging(p(404.0, 303.0), 8.0));
+        // Past the slop it is a drag, and stays one on the way back.
+        assert!(gesture.dragging(p(412.0, 300.0), 8.0));
+        assert!(gesture.dragging(p(400.0, 300.0), 8.0));
+        // Released: the next gesture starts over.
+        gesture.release();
+        assert!(!gesture.dragging(p(795.0, 300.0), 8.0));
+        gesture.press(p(10.0, 10.0), false);
+        assert!(!gesture.dragging(p(10.0, 10.0), 8.0));
     }
 }

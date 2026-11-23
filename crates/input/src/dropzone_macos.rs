@@ -1,4 +1,4 @@
-use super::{Drop, Zone, MAX_URI_BYTES, uri_list};
+use super::{Drop, Gesture, Zone, MAX_URI_BYTES, uri_list};
 use anyhow::{Result, bail};
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchTime};
@@ -91,6 +91,8 @@ struct Ui {
     zones: Vec<Zone>,
     state: Drag,
     held: bool,
+    /// Whether the held button is a drag that began outside the zones, not a click on a control.
+    gesture: Gesture,
     generation: u64,
     /// Which `start` made this target.
     instance: u64,
@@ -123,7 +125,7 @@ impl Ui {
         let local = unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &local) };
         let mut monitors = vec![global];
         monitors.extend(local);
-        Ok(Self { window, view, monitors, zones: vec![], state: Drag::default(), held: false, generation: 0, instance })
+        Ok(Self { window, view, monitors, zones: vec![], state: Drag::default(), held: false, gesture: Gesture::default(), generation: 0, instance })
     }
 
     fn cancel(&mut self) {
@@ -144,6 +146,7 @@ impl Ui {
             self.held = true;
         } else if event.r#type() == NSEventType::LeftMouseUp {
             self.held = false;
+            self.gesture.release();
             if self.view.ivars().zone.borrow().is_some() {
                 let generation = self.generation;
                 let _ = DispatchQueue::main().after(DispatchTime::try_from(Duration::from_millis(300)).expect("bounded delay"), move || {
@@ -159,7 +162,12 @@ impl Ui {
         let point = NSEvent::mouseLocation();
         let point = Pos::new(point.x, height - point.y);
         let zone = self.zones.iter().position(|zone| zone.rect.contains(point));
-        match self.state.pointer(true, zone) {
+        // The window takes the input over the strip, and macOS has no signal that a file is being
+        // dragged before it is there: only a button that went down outside the zones and has moved
+        // a few points counts, so a click or a scroll bar in the strip is safe.
+        if event.r#type() == NSEventType::LeftMouseDown { self.gesture.press(point, zone.is_some()); }
+        let held = self.gesture.dragging(point, 4.0);
+        match self.state.pointer(held, zone) {
             Change::Show(index) => {
                 self.generation = self.generation.wrapping_add(1);
                 let generation = self.generation;

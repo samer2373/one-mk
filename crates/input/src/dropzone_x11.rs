@@ -1,4 +1,4 @@
-use super::{Drop, Zone, MAX_URI_BYTES, uri_list};
+use super::{Drop, Gesture, Zone, MAX_URI_BYTES, uri_list};
 use anyhow::{Context, Result};
 use one_mk_proto::{Pos, drag::{Change, Drag}};
 use std::os::fd::AsRawFd;
@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use x11rb::{NONE, COPY_DEPTH_FROM_PARENT};
 use x11rb::connection::Connection;
-use x11rb::protocol::{Event, xinput::{self, ConnectionExt as _}, xproto::{self, ConnectionExt as _}};
+use x11rb::protocol::{Event, xfixes::{self, ConnectionExt as _}, xinput::{self, ConnectionExt as _}, xproto::{self, ConnectionExt as _}};
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
@@ -37,6 +37,9 @@ impl Atoms {
     }
 }
 
+/// How far (pixels) a held button must move before it is a drag (GTK's default threshold).
+const DRAG_SLOP: f64 = 8.0;
+
 struct Source { window: u32, uri: bool, positioned: bool }
 struct Pending { source: u32, peer: String, time: u32 }
 
@@ -54,6 +57,12 @@ struct Target {
     deadline: Option<Instant>,
     motion_at: Option<Instant>,
     physical: Vec<u16>,
+    /// A held button that went down outside the zones and moved: a drag, not a click.
+    gesture: Gesture,
+    /// Whether a drag source owns `XdndSelection`, which XDND requires of it for the whole drag:
+    /// the one native signal that a drag is under way. `None` where XFixes cannot say, in which
+    /// case a held button in a zone arms it as before.
+    xdnd_owned: Option<bool>,
 }
 
 impl Target {
@@ -68,11 +77,28 @@ impl Target {
                 .event_mask(xproto::EventMask::PROPERTY_CHANGE))?.check()?;
         conn.change_property32(xproto::PropMode::REPLACE, window, atoms.aware, xproto::AtomEnum::ATOM, &[5])?;
         let mut target = Self { conn, root, window, atoms, zones: vec![], state: Drag::default(), shown: None,
-            held: false, source: None, pending: None, deadline: None, motion_at: None, physical: vec![] };
+            held: false, source: None, pending: None, deadline: None, motion_at: None, physical: vec![],
+            gesture: Gesture::default(), xdnd_owned: None };
+        target.watch_xdnd();
         target.devices()?;
         target.select()?;
         target.conn.flush()?;
         Ok(target)
+    }
+
+    /// Asks to hear when the owner of `XdndSelection` changes. Without XFixes there is no signal.
+    fn watch_xdnd(&mut self) {
+        let watched = (|| -> Result<bool> {
+            self.conn.xfixes_query_version(5, 0)?.reply()?;
+            self.conn.xfixes_select_selection_input(self.window, self.atoms.selection,
+                xfixes::SelectionEventMask::SET_SELECTION_OWNER | xfixes::SelectionEventMask::SELECTION_WINDOW_DESTROY
+                | xfixes::SelectionEventMask::SELECTION_CLIENT_CLOSE)?.check()?;
+            Ok(self.conn.get_selection_owner(self.atoms.selection)?.reply()?.owner != NONE)
+        })();
+        match watched {
+            Ok(owned) => self.xdnd_owned = Some(owned),
+            Err(error) => tracing::debug!("no way to see a file drag begin: {error:#}"),
+        }
     }
 
     fn select(&mut self) -> Result<()> {
@@ -111,10 +137,23 @@ impl Target {
         self.position(pos)
     }
 
+    /// The left button went down: where decides whether this can be a drag at all.
+    fn press(&mut self) -> Result<()> {
+        if self.pending.is_some() { return Ok(()); }
+        let pointer = self.conn.query_pointer(self.root)?.reply()?;
+        let pos = Pos::new(pointer.root_x.into(), pointer.root_y.into());
+        self.gesture.press(pos, self.zones.iter().any(|zone| zone.rect.contains(pos)));
+        self.position(pos)
+    }
+
     fn position(&mut self, pos: Pos) -> Result<()> {
         if self.pending.is_some() { return Ok(()); }
         let zone = self.zones.iter().position(|zone| zone.rect.contains(pos));
-        match self.state.pointer(self.held, zone) {
+        // A click or a held control in the strip must not get the target over it: it is armed by a
+        // real drag only (a button that went down outside and moved, with a drag source that owns
+        // the XDND selection where that can be seen).
+        let drag = self.held && self.gesture.dragging(pos, DRAG_SLOP) && self.xdnd_owned != Some(false);
+        match self.state.pointer(drag, zone) {
             Change::Show(index) => {
                 self.hide()?;
                 let rect = self.zones[index].rect;
@@ -153,6 +192,7 @@ impl Target {
     fn configure(&mut self, zones: Vec<Zone>) -> Result<()> {
         self.cancel()?;
         self.held = false;
+        self.gesture.release();
         self.zones = zones;
         self.select()
     }
@@ -168,17 +208,25 @@ impl Target {
 
     fn handle(&mut self, event: Event, dropped: &mpsc::Sender<Drop>) -> Result<()> {
         match event {
-            Event::XinputHierarchy(_) => { self.cancel()?; self.held = false; self.devices()?; self.select()?; }
+            Event::XinputHierarchy(_) => { self.cancel()?; self.held = false; self.gesture.release(); self.devices()?; self.select()?; }
             Event::Error(error) => { anyhow::bail!("{error:?}"); }
             Event::XinputRawButtonPress(event) if event.detail == 1 && self.physical_event(event.sourceid, event.response_type) => {
                 self.cancel()?;
                 self.state.pointer(false, None);
                 self.held = true;
                 self.select()?;
-                self.pointer()?;
+                self.press()?;
+            }
+            Event::XfixesSelectionNotify(event) if event.selection == self.atoms.selection => {
+                let owned = event.owner != NONE;
+                self.xdnd_owned = Some(owned);
+                if owned && self.held { self.pointer()?; }
+                // The drag ended or was given up without a drop on us.
+                else if !owned && self.pending.is_none() && self.source.is_none() && self.shown.is_some() { self.cancel()?; }
             }
             Event::XinputRawButtonRelease(event) if event.detail == 1 && self.physical_event(event.sourceid, event.response_type) => {
                 self.held = false;
+                self.gesture.release();
                 self.motion_at = None;
                 self.select()?;
                 if self.shown.is_some() && self.pending.is_none() {
@@ -352,7 +400,12 @@ mod tests {
         assert!(target.event(bad, &sender).is_ok(), "BadWindow must abort only the current drag");
         assert!(!injected_held, "XTEST must not arm a file drop");
         target.physical = vec![99];
+        // Where there is no signal for a drag source, a press outside the zone that moves into it is one.
+        target.xdnd_owned = None;
+        target.conn.warp_pointer(NONE, target.root, 0, 0, 0, 0, 400, 300).unwrap();
         target.event(Event::XinputRawButtonPress(xinput::RawButtonPressEvent { sourceid: 99, detail: 1, ..Default::default() }), &sender).unwrap();
+        target.conn.warp_pointer(NONE, target.root, 0, 0, 0, 0, 795, 300).unwrap();
+        target.pointer().unwrap();
         assert!(target.shown.is_some(), "a subsequent physical drag still works after BadWindow");
         target.event(Event::XinputRawMotion(xinput::RawMotionEvent { sourceid: 99, ..Default::default() }), &sender).unwrap();
         let motion_at = target.motion_at;
@@ -364,6 +417,86 @@ mod tests {
         assert!(target.motion_at.is_none(), "release disarms motion sampling");
         target.configure(vec![]).unwrap();
         assert!(target.deadline.is_none());
+    }
+
+    fn private_server() -> (Server, String) {
+        let child = Command::new("Xvfb").args(["-displayfd", "1", "-screen", "0", "800x600x24", "-nolisten", "tcp"])
+            .stdout(Stdio::piped()).stderr(Stdio::null()).spawn().expect("Xvfb required for drop-path test");
+        let mut server = Server(child);
+        let mut display = String::new();
+        BufReader::new(server.0.stdout.take().unwrap()).read_line(&mut display).unwrap();
+        (server, format!(":{}", display.trim()))
+    }
+
+    fn pump(target: &mut Target, sender: &mpsc::Sender<Drop>) {
+        target.conn.get_input_focus().unwrap().reply().unwrap();
+        while let Some(event) = target.conn.poll_for_event().unwrap() { target.event(event, sender).unwrap(); }
+    }
+
+    #[test]
+    fn a_click_or_a_held_control_in_the_strip_never_gets_the_drop_window_over_it() {
+        let (_server, display) = private_server();
+        let (conn, screen) = x11rb::connect(Some(&display)).unwrap();
+        let mut target = Target::new(conn, screen).unwrap();
+        target.zones = vec![Zone { rect: one_mk_proto::Rect::new(788, 0, 12, 600), peer: "paired".into() }];
+        target.physical = vec![99];
+        target.select().unwrap();
+        let (sender, _receiver) = mpsc::channel(1);
+        let press = || Event::XinputRawButtonPress(xinput::RawButtonPressEvent { sourceid: 99, detail: 1, ..Default::default() });
+        let release = || Event::XinputRawButtonRelease(xinput::RawButtonReleaseEvent { sourceid: 99, detail: 1, ..Default::default() });
+        let motion = |y: i32| Event::XinputMotion(xinput::MotionEvent { sourceid: 99, root_x: 795 << 16, root_y: y << 16, ..Default::default() });
+        // Even where nothing can say whether a file is being dragged, a press that goes down
+        // in the strip (a scroll bar, a button) is a click or a control drag: never a file drag.
+        target.xdnd_owned = None;
+        target.conn.warp_pointer(NONE, target.root, 0, 0, 0, 0, 795, 300).unwrap();
+        target.event(press(), &sender).unwrap();
+        target.event(motion(300), &sender).unwrap();
+        target.event(motion(380), &sender).unwrap();
+        assert!(target.shown.is_none(), "a press inside the strip is not a file drag");
+        target.event(release(), &sender).unwrap();
+        // A press outside that has not gone anywhere is a click too.
+        target.conn.warp_pointer(NONE, target.root, 0, 0, 0, 0, 400, 300).unwrap();
+        target.event(press(), &sender).unwrap();
+        target.event(motion(300), &sender).unwrap();
+        assert!(target.shown.is_some(), "but one that came from elsewhere into the strip is");
+        target.event(release(), &sender).unwrap();
+        target.cancel().unwrap();
+    }
+
+    #[test]
+    fn the_drop_window_waits_for_a_drag_source_to_own_the_xdnd_selection() {
+        let (_server, display) = private_server();
+        let (conn, screen) = x11rb::connect(Some(&display)).unwrap();
+        let mut target = Target::new(conn, screen).unwrap();
+        if target.xdnd_owned.is_none() { eprintln!("no XFixes on this server: skipping"); return; }
+        assert_eq!(target.xdnd_owned, Some(false));
+        target.zones = vec![Zone { rect: one_mk_proto::Rect::new(788, 0, 12, 600), peer: "paired".into() }];
+        target.physical = vec![99];
+        target.select().unwrap();
+        let (sender, _receiver) = mpsc::channel(1);
+        target.conn.warp_pointer(NONE, target.root, 0, 0, 0, 0, 400, 300).unwrap();
+        target.event(Event::XinputRawButtonPress(xinput::RawButtonPressEvent { sourceid: 99, detail: 1, ..Default::default() }), &sender).unwrap();
+        // The button is held and has come into the strip, but nothing is being dragged.
+        target.conn.warp_pointer(NONE, target.root, 0, 0, 0, 0, 795, 300).unwrap();
+        target.pointer().unwrap();
+        assert!(target.shown.is_none(), "a held button alone does not arm the drop window");
+        // A source begins a drag: the window is up at once, without another move.
+        let (source, source_screen) = x11rb::connect(Some(&display)).unwrap();
+        let root = source.setup().roots[source_screen].root;
+        let owner = source.generate_id().unwrap();
+        source.create_window(COPY_DEPTH_FROM_PARENT, owner, root, 20, 20, 20, 20, 0, xproto::WindowClass::INPUT_OUTPUT, 0, &xproto::CreateWindowAux::new()).unwrap();
+        let selection = target.atoms.selection;
+        source.set_selection_owner(owner, selection, x11rb::CURRENT_TIME).unwrap();
+        source.get_input_focus().unwrap().reply().unwrap();
+        pump(&mut target, &sender);
+        assert_eq!(target.xdnd_owned, Some(true));
+        assert!(target.shown.is_some(), "a drag began while the pointer was in the strip");
+        // The drag ends without a drop here: the window goes.
+        source.set_selection_owner(NONE, selection, x11rb::CURRENT_TIME).unwrap();
+        source.get_input_focus().unwrap().reply().unwrap();
+        pump(&mut target, &sender);
+        assert_eq!(target.xdnd_owned, Some(false));
+        assert!(target.shown.is_none());
     }
 
     #[test]
@@ -391,8 +524,17 @@ mod tests {
         let mut display = String::new();
         BufReader::new(server.0.stdout.take().unwrap()).read_line(&mut display).unwrap();
         let display = format!(":{}", display.trim());
+        // A drag source owns XdndSelection for the whole drag: it does before the target looks.
+        let (source, source_screen) = x11rb::connect(Some(&display)).unwrap();
+        let root = source.setup().roots[source_screen].root;
+        let owner = source.generate_id().unwrap();
+        source.create_window(COPY_DEPTH_FROM_PARENT, owner, root, 20, 20, 20, 20, 0, xproto::WindowClass::INPUT_OUTPUT, 0, &xproto::CreateWindowAux::new()).unwrap();
+        let atoms = Atoms::new(&source).unwrap();
+        source.set_selection_owner(owner, atoms.selection, x11rb::CURRENT_TIME).unwrap();
+        source.get_input_focus().unwrap().reply().unwrap();
         let (conn, screen) = x11rb::connect(Some(&display)).unwrap();
         let mut target = Target::new(conn, screen).unwrap();
+        assert_eq!(target.xdnd_owned, Some(true));
         target.held = true;
         target.configure(vec![]).unwrap();
         assert!(!target.held, "reconfiguration must forget buttons released while unsubscribed");
@@ -406,13 +548,7 @@ mod tests {
         target.conn.flush().unwrap();
         let (zones_tx, zones_rx) = watch::channel(target.zones.clone());
         let worker = tokio::spawn(run_target(target, zones_rx, drop_tx));
-        let (source, screen) = x11rb::connect(Some(&display)).unwrap();
-        let root = source.setup().roots[screen].root;
         source.change_window_attributes(root, &xproto::ChangeWindowAttributesAux::new().event_mask(xproto::EventMask::SUBSTRUCTURE_NOTIFY)).unwrap().check().unwrap();
-        let owner = source.generate_id().unwrap();
-        source.create_window(COPY_DEPTH_FROM_PARENT, owner, root, 20, 20, 20, 20, 0, xproto::WindowClass::INPUT_OUTPUT, 0, &xproto::CreateWindowAux::new()).unwrap();
-        let atoms = Atoms::new(&source).unwrap();
-        source.set_selection_owner(owner, atoms.selection, x11rb::CURRENT_TIME).unwrap();
         source.warp_pointer(NONE, root, 0, 0, 0, 0, 400, 300).unwrap();
         source.xtest_fake_input(xproto::BUTTON_PRESS_EVENT, 1, 0, root, 0, 0, 0).unwrap();
         source.xtest_fake_input(xproto::MOTION_NOTIFY_EVENT, 0, 0, root, 795, 300, 0).unwrap();
@@ -469,6 +605,13 @@ mod tests {
         let mut display = String::new();
         BufReader::new(server.0.stdout.take().unwrap()).read_line(&mut display).unwrap();
         let display = format!(":{}", display.trim());
+        let (source, source_screen) = x11rb::connect(Some(&display)).unwrap();
+        let root = source.setup().roots[source_screen].root;
+        let owner = source.generate_id().unwrap();
+        source.create_window(COPY_DEPTH_FROM_PARENT, owner, root, 20, 20, 20, 20, 0, xproto::WindowClass::INPUT_OUTPUT, 0, &xproto::CreateWindowAux::new()).unwrap();
+        let atoms = Atoms::new(&source).unwrap();
+        source.set_selection_owner(owner, atoms.selection, x11rb::CURRENT_TIME).unwrap();
+        source.get_input_focus().unwrap().reply().unwrap();
         let (conn, screen) = x11rb::connect(Some(&display)).unwrap();
         let mut target = Target::new(conn, screen).unwrap();
         let window = target.window;
@@ -481,12 +624,6 @@ mod tests {
         target.conn.flush().unwrap();
         let (zones_tx, zones_rx) = watch::channel(target.zones.clone());
         let worker = tokio::spawn(run_target(target, zones_rx, drop_tx));
-        let (source, screen) = x11rb::connect(Some(&display)).unwrap();
-        let root = source.setup().roots[screen].root;
-        let owner = source.generate_id().unwrap();
-        source.create_window(COPY_DEPTH_FROM_PARENT, owner, root, 20, 20, 20, 20, 0, xproto::WindowClass::INPUT_OUTPUT, 0, &xproto::CreateWindowAux::new()).unwrap();
-        let atoms = Atoms::new(&source).unwrap();
-        source.set_selection_owner(owner, atoms.selection, x11rb::CURRENT_TIME).unwrap();
         source.warp_pointer(NONE, root, 0, 0, 0, 0, 400, 300).unwrap();
         source.xtest_fake_input(xproto::BUTTON_PRESS_EVENT, 1, 0, root, 0, 0, 0).unwrap();
         source.xtest_fake_input(xproto::MOTION_NOTIFY_EVENT, 0, 0, root, 795, 300, 0).unwrap();
