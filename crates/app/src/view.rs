@@ -313,10 +313,34 @@ impl Default for Prefs {
 pub const HOOK_EVENTS: [(&str, &str); 4] =
     [("on_enter", "Pointer arrives"), ("on_leave", "Pointer leaves"), ("on_peer_connect", "A computer connects"), ("on_peer_disconnect", "A computer disconnects")];
 
+/// The value of `key` in `table`, however the file wrote it: under `[table]`
+/// (as one-mk does), as a dotted key (`power.sleep_sync = true`) or inside an
+/// inline table (`power = { sleep_sync = true }`). The first form wins.
+fn find_value<'a>(entries: &'a [Entry], table: &str, key: &str) -> Option<&'a Val> {
+    if let Some(entry) = entries.iter().find(|x| x.table == table && x.key == key) {
+        return Some(&entry.val);
+    }
+    fn inside<'a>(val: &'a Val, path: &str) -> Option<&'a Val> {
+        let Val::Table(pairs) = val else { return None };
+        pairs.iter().find(|(k, _)| k == path).map(|(_, v)| v).or_else(|| {
+            pairs.iter().find_map(|(k, v)| path.strip_prefix(k.as_str()).and_then(|rest| rest.strip_prefix('.')).and_then(|rest| inside(v, rest)))
+        })
+    }
+    let want = if table.is_empty() { key.to_owned() } else { format!("{table}.{key}") };
+    entries.iter().find_map(|x| {
+        let path = if x.table.is_empty() { x.key.clone() } else { format!("{}.{}", x.table, x.key) };
+        if path == want {
+            Some(&x.val)
+        } else {
+            want.strip_prefix(&path).and_then(|rest| rest.strip_prefix('.')).and_then(|rest| inside(&x.val, rest))
+        }
+    })
+}
+
 impl Prefs {
     pub fn read(settings: &str, profiles: &str) -> Prefs {
         let e = read_toml(settings);
-        let get = |table: &str, key: &str| e.iter().find(|x| x.table == table && x.key == key).map(|x| &x.val);
+        let get = |table: &str, key: &str| find_value(&e, table, key);
         let flag = |table: &str, key: &str, def: bool| get(table, key).and_then(Val::as_bool).unwrap_or(def);
         let num = |table: &str, key: &str, def: i64| get(table, key).and_then(Val::as_int).unwrap_or(def);
         let text = |table: &str, key: &str, def: &str| get(table, key).and_then(Val::as_str).unwrap_or(def).to_owned();
@@ -1072,6 +1096,28 @@ name = "Café, 2nd floor"
         assert_eq!((e[3].table.as_str(), e[3].index, e[3].val.as_f64()), ("r", 1, Some(-0.25)));
         assert_eq!((e[4].table.as_str(), e[4].index, e[4].val.as_str()), ("r.scope", 1, Some("a, b")));
         assert_eq!((e[5].table.as_str(), e[5].index, e[5].val.as_f64()), ("other", 0, Some(1000.0)));
+    }
+
+    #[test]
+    fn settings_written_as_dotted_keys_or_inline_tables_read_like_tables() {
+        let tables = Prefs::read("[power]\nsleep_sync = true\nblock_screensaver_on_peers = true\n[clipboard]\nmax_mb = 9\n", "");
+        assert!(tables.sleep_sync && tables.block_screensaver && tables.clip_max_mb == 9);
+        for text in [
+            "power = { sleep_sync = true, block_screensaver_on_peers = true }\nclipboard = { max_mb = 9 }\n",
+            "power.sleep_sync = true\npower.block_screensaver_on_peers = true\nclipboard.max_mb = 9\n",
+            "[power]\nsleep_sync = true\n[x]\n[clipboard]\nmax_mb = 9\n",
+        ] {
+            let prefs = Prefs::read(text, "");
+            assert!(prefs.sleep_sync && prefs.clip_max_mb == 9, "{text:?}");
+        }
+        let nested = Prefs::read("edge = { left = { corner = 3 }, wrap = true }\nsettings_version = 3\ndrag = { enabled = true }\n", "");
+        assert_eq!(nested.edge_sides.iter().find(|(side, _)| side == "left").map(|(_, edge)| edge.corner), Some(3));
+        assert_eq!(nested.edge_wrap, "on");
+        assert!(nested.drop_zones);
+        // The expanded table (what one-mk writes) wins over another spelling of the same key.
+        let both = Prefs::read("power = { sleep_sync = true }\n[power]\nsleep_sync = false\n", "");
+        assert!(!both.sleep_sync);
+        assert!(!Prefs::read("power = { other = true }\n", "").sleep_sync);
     }
 
     #[test]
