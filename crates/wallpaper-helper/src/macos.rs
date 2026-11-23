@@ -96,8 +96,15 @@ fn asset(path: &Path) -> Retained<AVURLAsset> {
     unsafe { AVURLAsset::URLAssetWithURL_options(&NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy())), None) }
 }
 
-#[allow(deprecated)]
 pub fn probe(path: &Path, poster: Option<&Path>) -> Result<Media> {
+    let result = probe_video(path, poster);
+    // A refused video keeps no link (and so no disk space of its own).
+    if result.is_err() { crate::playable::forget(path); }
+    result
+}
+
+#[allow(deprecated)]
+fn probe_video(path: &Path, poster: Option<&Path>) -> Result<Media> {
     let asset = asset(path);
     unsafe {
         let duration_ms = millis(asset.duration());

@@ -56,6 +56,20 @@ pub fn path(path: &Path) -> Result<PathBuf> {
     Ok(link)
 }
 
+/// Removes the link [`path`] made for the cached video `path`, after the
+/// video was refused: a link keeps the file's bytes on disk, so one left for
+/// a refused video holds them until some later cleanup. Nothing depends on a
+/// link staying: `path` makes it again when a video is opened.
+pub fn forget(path: &Path) {
+    if !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("video")) { return; }
+    let (Some(cache), Some(stem)) = (path.parent(), path.file_stem()) else { return };
+    let Ok(entries) = fs::read_dir(one_mk_wallpaper::links_dir(cache)) else { return };
+    for entry in entries.flatten() {
+        let link = entry.path();
+        if !entry.file_name().to_string_lossy().starts_with('.') && link.file_stem() == Some(stem) { let _ = fs::remove_file(link); }
+    }
+}
+
 /// A name for a link being made: never the same twice in one process. The
 /// clock alone isn't enough: macOS reads it in microseconds, so threads
 /// opening one video together got the same name and `hard_link` failed
@@ -129,6 +143,15 @@ mod tests {
         for handle in handles { assert_eq!(handle.join().unwrap().unwrap(), opened); }
         assert!(same_file(&opened, &video));
         assert!(!fs::read_dir(&links).unwrap().flatten().any(|entry| entry.file_name().to_string_lossy().ends_with(".part")));
+
+        // A refused video's link goes (its bytes are then only the cache file's); another video's stays.
+        let other = links.join(format!("{}.mp4", "c".repeat(64)));
+        fs::write(&other, b"other").unwrap();
+        forget(&video);
+        assert!(!opened.exists() && other.exists());
+        assert!(video.exists());
+        // It is made again when the video is opened.
+        assert_eq!(path(&video).unwrap(), opened);
 
         // A separate copy with the same size and dates is not the same file.
         let copy = home.path().join("copy.mp4");

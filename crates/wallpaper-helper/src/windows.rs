@@ -107,6 +107,13 @@ impl Drop for Engine {
 }
 
 pub fn probe(path: &Path, poster: Option<&Path>) -> Result<Media> {
+    let result = probe_video(path, poster);
+    // A refused video keeps no link (and so no disk space of its own).
+    if result.is_err() { crate::playable::forget(path); }
+    result
+}
+
+fn probe_video(path: &Path, poster: Option<&Path>) -> Result<Media> {
     let engine = unsafe { Engine::new(path)? };
     let mut media = engine.metadata()?;
     media.frame_rate = frame_rate(path).unwrap_or(60.0).round() as u32;
