@@ -2039,7 +2039,9 @@ mod tests {
         child.wait().unwrap();
         { let mut state = runtime.state.lock().unwrap(); state.player = Some(child); state.computer = "host".into(); state.directory = Some(directory.path().to_owned()); state.status.computers.insert("host".into(), Playback::Ready); }
         let status = runtime.status();
-        assert_eq!(status.message, "no display");
+        // What the player said is kept in the state. The text `status()` hands out is replaced by
+        // "needs an X11 desktop" on a machine without a usable display, so it is not read here.
+        assert_eq!(runtime.state.lock().unwrap().status.message, "no display");
         assert_eq!(status.computers.get("host"), Some(&Playback::Error("no display".into())));
     }
 
