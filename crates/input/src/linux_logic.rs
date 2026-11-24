@@ -479,6 +479,9 @@ pub(crate) struct Handoff {
     configured: bool,
     /// `None`: there is no keyboard to wait for.
     keyboard: Option<bool>,
+    /// The keyboard's modifiers, which follow its enter, have arrived: what it held when it
+    /// entered. Only waited for with a keyboard.
+    modifiers: bool,
     /// `None`: there is no pointer to wait for.
     pointer: Option<bool>,
     started: std::time::Instant,
@@ -489,19 +492,24 @@ impl Handoff {
     pub(crate) const PATIENCE: std::time::Duration = std::time::Duration::from_secs(2);
 
     pub(crate) fn new(keyboard: bool, pointer: bool, now: std::time::Instant) -> Self {
-        Self { configured: false, keyboard: keyboard.then_some(false), pointer: pointer.then_some(false), started: now }
+        Self { configured: false, keyboard: keyboard.then_some(false), modifiers: false, pointer: pointer.then_some(false), started: now }
     }
     pub(crate) fn configured(&mut self) { self.configured = true; }
     pub(crate) fn keyboard_entered(&mut self) { if let Some(k) = &mut self.keyboard { *k = true; } }
+    /// The modifiers that came with the keyboard's enter (those before it were another surface's).
+    pub(crate) fn keyboard_modifiers(&mut self) { if self.keyboard == Some(true) { self.modifiers = true; } }
+    /// Whether the keyboard entered and its modifiers are still to come.
+    pub(crate) fn awaits_modifiers(&self) -> bool { self.keyboard == Some(true) && !self.modifiers }
     pub(crate) fn pointer_ready(&mut self) { if let Some(p) = &mut self.pointer { *p = true; } }
     pub(crate) fn ready(&self) -> bool {
-        self.configured && self.keyboard.unwrap_or(true) && self.pointer.unwrap_or(true)
+        self.configured && self.keyboard.is_none_or(|entered| entered && self.modifiers) && self.pointer.unwrap_or(true)
     }
     pub(crate) fn deadline(&self) -> std::time::Instant { self.started + Self::PATIENCE }
     /// What the compositor has not done yet, in words.
     pub(crate) fn missing(&self) -> &'static str {
         if !self.configured { "show the capture surface" }
         else if self.keyboard == Some(false) { "give it the keyboard" }
+        else if self.awaits_modifiers() { "say which modifiers the keyboard holds" }
         else if self.pointer == Some(false) { "lock the pointer on it" }
         else { "finish" }
     }
@@ -940,6 +948,9 @@ mod tests {
         h.pointer_ready();
         assert!(!h.ready(), "the pointer alone is not enough");
         h.keyboard_entered();
+        assert!(!h.ready(), "what the keyboard holds comes after its enter");
+        assert_eq!(h.missing(), "say which modifiers the keyboard holds");
+        h.keyboard_modifiers();
         assert!(h.ready());
         assert_eq!(h.deadline(), now + Handoff::PATIENCE);
     }
@@ -957,6 +968,14 @@ mod tests {
         assert_eq!(h.missing(), "give it the keyboard");
         h.keyboard_entered();
         h.pointer_ready();
+        h.keyboard_modifiers();
         assert!(h.ready());
+        // Modifiers said before the enter were another surface's.
+        let mut h = Handoff::new(true, false, std::time::Instant::now());
+        h.configured();
+        h.keyboard_modifiers();
+        h.keyboard_entered();
+        assert!(!h.ready());
+        assert!(h.awaits_modifiers());
     }
 }

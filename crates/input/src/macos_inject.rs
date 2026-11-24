@@ -90,7 +90,7 @@ async fn inject_loop(
                         if !was && active {
                             let _ = CGDisplayShowCursor(kCGNullDirectDisplay);
                             // The Mac's own Caps Lock may have been toggled since the last visit.
-                            inj.sync_caps(true);
+                            inj.sync_caps();
                         }
                     }
                     if let Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } = m {
@@ -160,9 +160,10 @@ impl Injector {
     /// what the system would use: it starts at off and flips only with a peer's presses, so a
     /// Caps Lock turned on or off at this Mac's own keyboard left it the wrong way round (the
     /// peer's letters in the wrong case, and the peer's next Caps Lock press out of step with the
-    /// real one). Not right after a press of ours, whose effect the system may not show yet.
-    fn sync_caps(&mut self, force: bool) {
-        if !force && self.caps_toggled.is_some_and(|at| at.elapsed() < CAPS_SETTLE) { return; }
+    /// real one). Not right after a press of ours, whose effect the system may not show yet (also
+    /// at the start of a visit, which comes quickly after the last one's end).
+    fn sync_caps(&mut self) {
+        if self.caps_toggled.is_some_and(|at| at.elapsed() < CAPS_SETTLE) { return; }
         let state = CGEventSource::flags_state(CGEventSourceStateID::CombinedSessionState);
         self.mods.sync_caps(state.0 & logic::flags::ALPHA_SHIFT != 0);
     }
@@ -264,7 +265,8 @@ impl Injector {
                 }
             }
             Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => {
-                if code != KEY_CAPSLOCK { self.sync_caps(false); }
+                // Also before a Caps Lock press, which flips what the system says now.
+                self.sync_caps();
                 // Each posted Caps Lock press toggles it; a repeat must not.
                 if self.mods.is_caps_repeat(code, down) {
                     return;

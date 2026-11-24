@@ -214,18 +214,25 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, first: WPARAM,
     }
 }
 
+/// Explorer has no desktop window to sit in (it is restarting): worth looking for again, unlike
+/// any other reason a desktop could not be made.
+#[derive(Debug)]
+struct DesktopMissing(&'static str);
+impl std::fmt::Display for DesktopMissing { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.0) } }
+impl std::error::Error for DesktopMissing {}
+
 struct Chain { swap: IDXGISwapChain2, latency: HANDLE }
 impl Drop for Chain { fn drop(&mut self) { unsafe { let _ = CloseHandle(self.latency); } } }
 struct Desktop { host: HWND, windows: Vec<HWND>, chains: Vec<Chain>, destinations: Vec<RECT>, sources: Vec<MFVideoNormalizedRect> }
 impl Desktop {
     unsafe fn new(device: Option<&ID3D11Device>, config: &PlayerConfig) -> Result<Self> {
         unsafe {
-            let progman = FindWindowW(w!("Progman"), None).context("The Windows desktop is not available")?;
+            let progman = FindWindowW(w!("Progman"), None).map_err(|_| DesktopMissing("The Windows desktop is not available"))?;
             let _ = SendMessageTimeoutW(progman, 0x052c, WPARAM(0), LPARAM(0), SMTO_NORMAL, 1000, None);
             let mut worker = FindWindowExW(Some(progman), None, w!("WorkerW"), None).unwrap_or_default();
             if worker.is_invalid() { EnumWindows(Some(find_worker), LPARAM(&mut worker as *mut HWND as isize))?; }
             if worker.is_invalid() && FindWindowExW(Some(progman), None, w!("SHELLDLL_DefView"), None).is_ok() { worker = progman; }
-            ensure!(!worker.is_invalid(), "Windows did not provide a wallpaper surface");
+            if worker.is_invalid() { return Err(DesktopMissing("Windows did not provide a wallpaper surface").into()); }
             let class = WNDCLASSW { lpfnWndProc: Some(window_proc), lpszClassName: w!("oneMKWallpaper"), ..Default::default() };
             RegisterClassW(&class);
             let factory: Option<IDXGIFactory2> = device.map(|device| -> windows::core::Result<_> {
@@ -234,36 +241,43 @@ impl Desktop {
             let local: Vec<_> = config.plan.canvas.monitors.iter().filter(|monitor| monitor.computer == config.computer).collect();
             ensure!(!local.is_empty(), "No monitors selected on this computer");
             let mut desktop = Self { host: worker, windows: Vec::new(), chains: Vec::new(), destinations: Vec::new(), sources: Vec::new() };
-            for monitor in local {
-                let width = (monitor.rect.width * monitor.scale).round() as u32;
-                let height = (monitor.rect.height * monitor.scale).round() as u32;
-                let local_rect = monitor.local.unwrap_or(monitor.rect);
-                let mut origin = POINT { x: local_rect.x as i32, y: local_rect.y as i32 };
-                let _ = ScreenToClient(worker, &mut origin);
-                let window = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW, w!("oneMKWallpaper"), w!("oneMK Wallpaper"), WS_CHILD, origin.x, origin.y, width as i32, height as i32, Some(worker), None, None, None)?;
-                desktop.windows.push(window);
-                let descriptor = DXGI_SWAP_CHAIN_DESC1 { Width: width, Height: height, Format: DXGI_FORMAT_B8G8R8A8_UNORM, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, BufferCount: 2, SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32, ..Default::default() };
-                if let (Some(factory), Some(device)) = (&factory, device) {
-                    let chain: IDXGISwapChain2 = factory.CreateSwapChainForHwnd(device, window, &descriptor, None, None)?.cast()?;
-                    chain.SetMaximumFrameLatency(1)?;
-                    let latency = chain.GetFrameLatencyWaitableObject();
-                    ensure!(!latency.is_invalid(), "Windows did not provide a frame pacing handle");
-                    desktop.chains.push(Chain { swap: chain, latency });
+            // The desktop window can go away while the windows are made: then it is missing, not broken.
+            let built: Result<()> = (|| {
+                for monitor in local {
+                    let width = (monitor.rect.width * monitor.scale).round() as u32;
+                    let height = (monitor.rect.height * monitor.scale).round() as u32;
+                    let local_rect = monitor.local.unwrap_or(monitor.rect);
+                    let mut origin = POINT { x: local_rect.x as i32, y: local_rect.y as i32 };
+                    let _ = ScreenToClient(worker, &mut origin);
+                    let window = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW, w!("oneMKWallpaper"), w!("oneMK Wallpaper"), WS_CHILD, origin.x, origin.y, width as i32, height as i32, Some(worker), None, None, None)?;
+                    desktop.windows.push(window);
+                    let descriptor = DXGI_SWAP_CHAIN_DESC1 { Width: width, Height: height, Format: DXGI_FORMAT_B8G8R8A8_UNORM, SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT, BufferCount: 2, SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32, ..Default::default() };
+                    if let (Some(factory), Some(device)) = (&factory, device) {
+                        let chain: IDXGISwapChain2 = factory.CreateSwapChainForHwnd(device, window, &descriptor, None, None)?.cast()?;
+                        chain.SetMaximumFrameLatency(1)?;
+                        let latency = chain.GetFrameLatencyWaitableObject();
+                        ensure!(!latency.is_invalid(), "Windows did not provide a frame pacing handle");
+                        desktop.chains.push(Chain { swap: chain, latency });
+                    }
+                    desktop.destinations.push(RECT { left: 0, top: 0, right: width as i32, bottom: height as i32 });
+                    let slice = config.plan.slice(monitor).context("Empty canvas")?;
+                    let left = slice.x.max(0.0);
+                    let top = slice.y.max(0.0);
+                    let right = (slice.x + slice.width).min(1.0);
+                    let bottom = (slice.y + slice.height).min(1.0);
+                    desktop.sources.push(MFVideoNormalizedRect { left: left as f32, top: top as f32, right: right as f32, bottom: bottom as f32 });
+                    if left != slice.x || top != slice.y || right != slice.x + slice.width || bottom != slice.y + slice.height {
+                        let destination = desktop.destinations.last_mut().unwrap();
+                        destination.left = ((left - slice.x) / slice.width * f64::from(width)).round() as i32;
+                        destination.top = ((top - slice.y) / slice.height * f64::from(height)).round() as i32;
+                        destination.right = ((right - slice.x) / slice.width * f64::from(width)).round() as i32;
+                        destination.bottom = ((bottom - slice.y) / slice.height * f64::from(height)).round() as i32;
+                    }
                 }
-                desktop.destinations.push(RECT { left: 0, top: 0, right: width as i32, bottom: height as i32 });
-                let slice = config.plan.slice(monitor).context("Empty canvas")?;
-                let left = slice.x.max(0.0);
-                let top = slice.y.max(0.0);
-                let right = (slice.x + slice.width).min(1.0);
-                let bottom = (slice.y + slice.height).min(1.0);
-                desktop.sources.push(MFVideoNormalizedRect { left: left as f32, top: top as f32, right: right as f32, bottom: bottom as f32 });
-                if left != slice.x || top != slice.y || right != slice.x + slice.width || bottom != slice.y + slice.height {
-                    let destination = desktop.destinations.last_mut().unwrap();
-                    destination.left = ((left - slice.x) / slice.width * f64::from(width)).round() as i32;
-                    destination.top = ((top - slice.y) / slice.height * f64::from(height)).round() as i32;
-                    destination.right = ((right - slice.x) / slice.width * f64::from(width)).round() as i32;
-                    destination.bottom = ((bottom - slice.y) / slice.height * f64::from(height)).round() as i32;
-                }
+                Ok(())
+            })();
+            if let Err(error) = built {
+                return Err(if IsWindow(Some(worker)).as_bool() { error } else { DesktopMissing("The Windows desktop went away while the wallpaper was being set up").into() });
             }
             Ok(desktop)
         }
@@ -360,8 +374,9 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
                         preparing_since = Instant::now();
                         HOLDS_CHANGED.store(true, Ordering::Relaxed);
                     }
-                    // No desktop window to sit in yet (Explorer is starting): report that, and look again.
-                    Err(_) if lost && !changed => {
+                    // No desktop window to sit in yet (Explorer is starting), also while the displays
+                    // changed: report that, and look again. Any other failure ends the helper.
+                    Err(error) if error.is::<DesktopMissing>() => {
                         if hosted { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Paused("Waiting for the Windows desktop to come back".into())); }
                         hosted = false;
                         ready = false;
@@ -473,8 +488,8 @@ fn run_picture(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()
                 if changed { refresh_displays(&mut config)?; }
                 match picture_desktop(&config, &crate::picture::player_source(&config)?) {
                     Ok(replacement) => { picture = replacement; visible = false; hosted = true; }
-                    // No desktop window to sit in yet (Explorer is starting): report that, and look again.
-                    Err(_) if lost && !changed => hosted = false,
+                    // No desktop window to sit in yet (Explorer is starting): look again.
+                    Err(error) if error.is::<DesktopMissing>() => hosted = false,
                     Err(error) => return Err(error),
                 }
             }
