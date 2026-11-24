@@ -87,10 +87,29 @@ pub fn from_processes(table: &str) -> Launch {
     }
 }
 
-/// `one-mk run ...`: the daemon (not `one-mk status` and the like).
+/// The daemon: `one-mk run ...`, plain `one-mk` (which is `run`), and either
+/// with options in front of or without `run` (`one-mk --home /x run`,
+/// `one-mk --port 1`); not `one-mk status` and the like. Options that take a
+/// value are skipped with it; one this does not know is taken for the
+/// subcommand's place, which is then not `run`.
 fn is_daemon(command: &str) -> bool {
-    let program = command.split(" run").next().unwrap_or("");
-    command.contains(" run") && (program == "one-mk" || program.ends_with("/one-mk")) && command[program.len()..].split_whitespace().next() == Some("run")
+    let mut words = command.split_whitespace();
+    let program = words.next().unwrap_or("");
+    if !(program == "one-mk" || program.ends_with("/one-mk")) {
+        return false;
+    }
+    while let Some(word) = words.next() {
+        match word {
+            "run" => return true,
+            "--help" | "-h" | "--version" | "-V" => return false,
+            "--home" | "--port" | "--connect" | "--backend" | "--downloads" => {
+                words.next();
+            }
+            _ if word.starts_with('-') => {}
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// The launch of a program whose parent process is `ppid`.
@@ -166,6 +185,19 @@ mod tests {
     }
 
     #[test]
+    fn a_plain_or_optioned_daemon_started_in_terminal_names_it() {
+        for command in ["one-mk", "one-mk --home /tmp/desk run"] {
+            let t = table(&[
+                (1, 0, "/sbin/launchd"),
+                (500, 1, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal"),
+                (502, 500, "-zsh"),
+                (503, 502, &format!("{HOME} {}", command.trim_start_matches("one-mk").trim_start())),
+            ]);
+            assert_eq!(from_processes(&t), Launch::Terminal(App::Terminal), "{command}");
+        }
+    }
+
+    #[test]
     fn a_shell_with_no_app_above_it_is_a_terminal_too() {
         // tmux's server has no app above it.
         let t = table(&[(1, 0, "/sbin/launchd"), (700, 1, "tmux: server"), (701, 700, "-zsh"), (702, 701, &format!("{HOME} run"))]);
@@ -198,5 +230,14 @@ mod tests {
         assert!(!is_daemon("/usr/local/bin/one-mk-app"));
         assert!(!is_daemon("vim notes-one-mk run.txt"));
         assert!(!is_daemon("/usr/local/bin/one-mk runner"));
+        // Plain `one-mk` is `run`, and options may come before the subcommand.
+        assert!(is_daemon("one-mk"));
+        assert!(is_daemon("/usr/local/bin/one-mk --home /tmp/desk run"));
+        assert!(is_daemon("/usr/local/bin/one-mk --home /tmp/desk"));
+        assert!(is_daemon("/usr/local/bin/one-mk -vv --backend null --no-clipboard run --port 1"));
+        assert!(is_daemon("/usr/local/bin/one-mk --home=/tmp/desk --no-discovery"));
+        assert!(!is_daemon("/usr/local/bin/one-mk --home /tmp/desk status"));
+        assert!(!is_daemon("/usr/local/bin/one-mk -v send a run"));
+        assert!(!is_daemon("/usr/local/bin/one-mk --version"));
     }
 }

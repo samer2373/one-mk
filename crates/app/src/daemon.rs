@@ -1159,13 +1159,17 @@ impl Link {
     }
 }
 
+const PREVIEW_SLOW: &str = "The preview took too long. Try Show again, or Refresh.";
+
 /// What the window shows for the daemon's answer to a preview request: the
 /// preview, or the sentence saying why there is none.
 fn reveal_result(reply: anyhow::Result<Option<String>>) -> Result<String, String> {
     match reply {
-        Err(error) if timed_out(&error) => Err("The preview took too long. Try Show again, or Refresh.".to_owned()),
+        Err(error) if timed_out(&error) => Err(PREVIEW_SLOW.to_owned()),
         Err(_) => Err("Could not reveal this item. Try Refresh.".to_owned()),
         Ok(None) => Err("Start oneMK to see this item.".to_owned()),
+        // The control server gives up on a request after its own 5 s and closes without a word.
+        Ok(Some(reply)) if reply.trim().is_empty() => Err(PREVIEW_SLOW.to_owned()),
         Ok(Some(reply)) => match reply.strip_prefix("ok\n") {
             Some(body) => Ok(history_preview(body.trim_end_matches('\n'))),
             None => Err(reply.strip_prefix("error ").map(str::trim).filter(|text| !text.is_empty()).map_or_else(|| "This item is no longer available.".to_owned(), str::to_owned)),
@@ -1666,26 +1670,8 @@ mod tests {
         assert_eq!(reveal_result(Ok(Some("error The clipboard history was reloaded\n".into()))), Err("The clipboard history was reloaded".to_owned()));
         assert_eq!(reveal_result(Ok(Some("error \n".into()))), Err("This item is no longer available.".to_owned()));
         assert_eq!(reveal_result(Ok(Some("nonsense".into()))), Err("This item is no longer available.".to_owned()));
-    }
-
-    /// Answers every request on `dir`'s control socket by `answer(request number, line)`, each on its own thread, so a slow answer can be overtaken.
-    #[cfg(unix)]
-    fn serve_each(dir: &std::path::Path, answer: impl Fn(usize, &str) -> (u64, String) + Send + Sync + 'static) {
-        use std::io::{BufRead, Write};
-        let listener = std::os::unix::net::UnixListener::bind(client::unix_socket_path(dir)).unwrap();
-        let answer = Arc::new(answer);
-        std::thread::spawn(move || {
-            for (number, stream) in listener.incoming().flatten().enumerate() {
-                let answer = answer.clone();
-                std::thread::spawn(move || {
-                    let mut line = String::new();
-                    let _ = std::io::BufReader::new(&stream).read_line(&mut line);
-                    let (delay_ms, reply) = answer(number, line.trim());
-                    std::thread::sleep(Duration::from_millis(delay_ms));
-                    let _ = (&stream).write_all(reply.as_bytes());
-                });
-            }
-        });
+        // A clean close with nothing said is the control server's own timeout, not a missing item.
+        assert!(reveal_result(Ok(Some(String::new()))).unwrap_err().contains("took too long"));
     }
 
     #[cfg(unix)]
@@ -1701,17 +1687,36 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("omk-history-order-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        // The first list asked for is slow and old (item 1); the second is quick and new (item 2).
-        serve_each(&dir, |number, _| if number == 0 { (600, rows(1)) } else { (0, rows(2)) });
+        // The first list asked for is old (item 1) and held back; the second is new (item 2) and answered first.
+        // The fake says when it has read the first request, so which one is first does not depend on thread timing.
+        use std::io::{BufRead, Write};
+        let listener = std::os::unix::net::UnixListener::bind(client::unix_socket_path(&dir)).unwrap();
+        let (read_tx, read_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let read_request = |stream: &std::os::unix::net::UnixStream| {
+                let mut line = String::new();
+                let _ = std::io::BufReader::new(stream).read_line(&mut line);
+            };
+            let (first, _) = listener.accept().unwrap();
+            read_request(&first);
+            read_tx.send(()).unwrap();
+            let (second, _) = listener.accept().unwrap();
+            read_request(&second);
+            (&second).write_all(rows(2).as_bytes()).unwrap();
+            drop(second);
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = (&first).write_all(rows(1).as_bytes());
+        });
         let (tx, rx) = std::sync::mpsc::channel();
         let link = Link::detached(dir.clone(), tx, egui::Context::default());
         link.history();
-        std::thread::sleep(Duration::from_millis(100));
+        read_rx.recv_timeout(Duration::from_secs(5)).expect("the first request reached the fake daemon");
         link.history();
         let mut ids = Vec::new();
         while let Ok(event) = rx.recv_timeout(Duration::from_millis(1200)) {
             if let Event::ClipboardHistory(Ok(items)) = event { ids.extend(items.iter().map(|item| item.id)); }
         }
+        server.join().unwrap();
         assert_eq!(ids, vec![2], "only the newest list is shown, and nothing replaces it afterwards");
         let _ = std::fs::remove_dir_all(&dir);
     }
