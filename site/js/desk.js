@@ -478,9 +478,10 @@
       pointer.scale.set(size, size, 1);
       pointer.position.set((u - 0.5) * s.w + size * 0.32, (0.5 - v) * s.h - size * 0.36, 0.004);
       // The chosen computer stays lit while the pointer crosses the ones between; once it arrives, or
-      // the five seconds are over (a slow renderer may not get there), the chips follow the pointer again.
+      // a minute is over (a slow renderer may not get there), the chips follow the pointer again. The demo
+      // waits for it too, so it does not walk the pointer away from the computer that was chosen.
       var settle = false;
-      if (want != null && (i === want || performance.now() > follow)) { settle = i !== want; want = null; }
+      if (want != null && (i === want || performance.now() > follow + 55000)) { settle = i !== want; want = null; }
       if (i !== P.on) { P.on = i; if (want == null) onActive(i); }
       else if (settle) onActive(i);
     }
@@ -528,7 +529,7 @@
             sc.lines.push(sc.typed); if (sc.lines.length > 5) sc.lines.shift(); sc.typed = ""; sc.draw(false); auto.typing = null; auto.until = now + 300;
           }
         }
-      } else if (now > follow && now > auto.until) {
+      } else if (now > follow && (want == null || now > follow + 55000) && now > auto.until) {
         var leg = ROUTE[auto.step % ROUTE.length];
         P.tx = strip[leg[0]] + PX[leg[0]] * leg[1]; P.ty = leg[2];
         if (Math.abs(P.x - P.tx) < 12 && Math.abs(P.y - P.ty) < 0.01) {

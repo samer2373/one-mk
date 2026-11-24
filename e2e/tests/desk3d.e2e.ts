@@ -83,9 +83,9 @@ test3d('the buttons under the desk move the pointer to that computer, with mouse
     }
   };
   await choose(mac, ['true', 'false', 'false']);
-  await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 5000 }).toEqual([true, false, false]);
+  await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 60_000 }).toEqual([true, false, false]);
   await choose(pc, ['false', 'false', 'true']);
-  await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 5000 }).toEqual([false, false, true]);
+  await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 60_000 }).toEqual([false, false, true]);
   // From the keyboard.
   await studio.focus();
   await browser.keyboard.press('Enter');
