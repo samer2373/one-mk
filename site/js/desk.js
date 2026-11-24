@@ -477,11 +477,18 @@
       var size = Math.max(0.24, Math.min(0.32, 0.27 * (s.w / 5)));
       pointer.scale.set(size, size, 1);
       pointer.position.set((u - 0.5) * s.w + size * 0.32, (0.5 - v) * s.h - size * 0.36, 0.004);
-      if (i !== P.on) { P.on = i; onActive(i); }
+      // The chosen computer stays lit while the pointer crosses the ones between; once it arrives, or
+      // the five seconds are over (a slow renderer may not get there), the chips follow the pointer again.
+      var settle = false;
+      if (want != null && (i === want || performance.now() > follow)) { settle = i !== want; want = null; }
+      if (i !== P.on) { P.on = i; if (want == null) onActive(i); }
+      else if (settle) onActive(i);
     }
+    var want = null;
     function goTo(i, still) {
       P.tx = strip[i] + PX[i] * 0.5; P.ty = 0.46; follow = performance.now() + 5000; auto.typing = null;
-      if (still) { P.x = P.tx; P.y = P.ty; }
+      if (still) { P.x = P.tx; P.y = P.ty; want = null; }
+      else { want = i; onActive(i); }
       dirty = true;
     }
     function typeOn(i, now) {
