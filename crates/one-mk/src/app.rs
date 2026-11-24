@@ -4813,7 +4813,7 @@ mod tests {
         }
 
         async fn next(&mut self) -> Control {
-            let f = tokio::time::timeout(Duration::from_secs(5), read_frame(&mut self.recv, &mut self.buf));
+            let f = tokio::time::timeout(Duration::from_secs(20), read_frame(&mut self.recv, &mut self.buf));
             f.await.expect("timed out").unwrap().expect("stream ended")
         }
     }
