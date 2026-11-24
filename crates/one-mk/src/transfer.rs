@@ -813,7 +813,23 @@ impl Staging {
             return None;
         }
         // SAFETY: `fd` was just opened and nobody else owns it.
-        locked(File::from(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }))
+        let file = locked(File::from(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) }))?;
+        // Locked, but another sweep may have deleted the name meanwhile, and a receive
+        // made a new file under it: deleting by name would then take that one.
+        self.names(&file, &c).then_some(file)
+    }
+
+    /// Whether `name` in the folder still is `file`.
+    fn names(&self, file: &File, name: &std::ffi::CStr) -> bool {
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::fs::MetadataExt as _;
+        // SAFETY: an all-zero stat is a valid out buffer.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: valid descriptor, C string and buffer; the result is checked.
+        if unsafe { libc::fstatat(self.0.as_raw_fd(), name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            return false;
+        }
+        file.metadata().is_ok_and(|m| m.dev() == st.st_dev as u64 && m.ino() == st.st_ino as u64)
     }
 
     /// Deletes `name` inside the opened folder, if it still is one of ours.
@@ -1168,15 +1184,26 @@ fn open_part(root: &Path, id: &str, size: u64) -> Result<(File, PathBuf, u64, Op
         use std::os::unix::fs::OpenOptionsExt;
         opts.custom_flags(libc::O_NOFOLLOW);
     }
-    let file = opts.open(&part).with_context(|| format!("opening {}", part.display()))?;
-    ensure!(file.metadata()?.is_file(), "{} is not a file", part.display());
-    // Before anything is changed in it.
-    match file.try_lock() {
-        Ok(()) => {}
-        Err(fs::TryLockError::WouldBlock) => bail!("this file is being received by another one-mk on this computer right now; send it again in a moment"),
-        // A folder that can't lock (some network drives): as before, no claim.
-        Err(fs::TryLockError::Error(e)) => tracing::debug!("cannot lock {}: {e}", part.display()),
-    }
+    // A clear in another settings home may lock and unlink the name between the
+    // open and the lock below; what is then locked is a file nobody can reach.
+    // The lock is only good if the name still leads to the file: else start over.
+    let mut tries = 0;
+    let file = loop {
+        let file = opts.open(&part).with_context(|| format!("opening {}", part.display()))?;
+        ensure!(file.metadata()?.is_file(), "{} is not a file", part.display());
+        // Before anything is changed in it.
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => bail!("this file is being received by another one-mk on this computer right now; send it again in a moment"),
+            // A folder that can't lock (some network drives): as before, no claim.
+            Err(fs::TryLockError::Error(e)) => tracing::debug!("cannot lock {}: {e}", part.display()),
+        }
+        tries += 1;
+        if names_file(&file, &part) {
+            break file;
+        }
+        ensure!(tries < 8, "{} keeps being replaced by another one-mk on this computer; send it again in a moment", part.display());
+    };
     let claim = file.try_clone().ok();
     let mut len = file.metadata()?.len();
     if len > size {
@@ -1184,6 +1211,22 @@ fn open_part(root: &Path, id: &str, size: u64) -> Result<(File, PathBuf, u64, Op
         len = 0;
     }
     Ok((file, part, len, claim))
+}
+
+/// Whether `path` still names `file` (not unlinked, nor replaced by another
+/// file since it was opened). Only Unix can unlink a file that is open.
+#[cfg(unix)]
+fn names_file(file: &File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    match (file.metadata(), fs::symlink_metadata(path)) {
+        (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn names_file(_file: &File, _path: &Path) -> bool {
+    true
 }
 
 /// What the writer needs of a partial file: a real file, or (in tests) one
@@ -2648,7 +2691,8 @@ mod tests {
         let id = part_id(fp, "big.bin", 100, 1);
         let limits = Arc::new(Mutex::new(Limits::default()));
         let (file, part, _, reservation) = prepare(&root, &id, &fp_prefix(fp), 100, PEER_PARTIAL_CAP, &limits, fp).unwrap();
-        fs::write(&part, vec![1u8; 40]).unwrap();
+        // Through the receiver's own handle: Windows refuses another one while it is locked.
+        std::io::Write::write_all(&mut &file, &[1u8; 40]).unwrap();
         // The offline home's `partials --clear`, and a sweep, which know nothing of the receive.
         assert_eq!(clear_idle_partials_in(&root), 0);
         assert!(part.exists(), "the file of a receive in progress was deleted");
@@ -2663,6 +2707,45 @@ mod tests {
         drop(reservation);
         assert_eq!(clear_idle_partials_in(&root), 1);
         assert!(!part.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A clear in another settings home may unlink the partial between a receiver's open and its
+    /// lock. The receiver must then not go on with the unlinked file (its bytes would be lost, or
+    /// land under a name another receiver made since): what `open_part` returns is what the name
+    /// leads to, however a concurrent clear interleaves.
+    #[cfg(unix)]
+    #[test]
+    fn a_receive_never_locks_a_partial_a_clear_has_unlinked() {
+        let root = temp("partial-race");
+        let id = part_id(Fingerprint([7; 32]), "race.bin", 100, 1);
+        let (file, part, _, claim) = open_part(&root, &id, 100).unwrap();
+        assert!(names_file(&file, &part));
+        drop((file, claim));
+        // Unlinked and made again, as a clear and a second receiver would: the old handle is stale.
+        let stale = File::open(&part).unwrap();
+        fs::remove_file(&part).unwrap();
+        assert!(!names_file(&stale, &part), "an unlinked file still counts as the name's");
+        fs::write(&part, "new").unwrap();
+        assert!(!names_file(&stale, &part), "a file made under the name since counts as the name's");
+
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let clearer = {
+            let (root, stop) = (root.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    clear_idle_partials_in(&root);
+                }
+            })
+        };
+        for _ in 0..2000 {
+            if let Ok((file, part, _, claim)) = open_part(&root, &id, 100) {
+                assert!(names_file(&file, &part), "the locked partial is not the one the name leads to");
+                drop((file, claim));
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        clearer.join().unwrap();
         let _ = fs::remove_dir_all(&root);
     }
 

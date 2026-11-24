@@ -2546,7 +2546,11 @@ impl App {
                 if let Some(o) = self.owner.as_mut().filter(|o| o.peer == fp && o.link == id && o.epoch == epoch) {
                     o.relative = relative;
                     if let Some(base) = base.filter(|_| relative) {
-                        o.motion.relative_from(epoch, base);
+                        // The first movement after the switch, when it came before this message.
+                        let (dx, dy) = o.motion.relative_from(epoch, base);
+                        if dx != 0 || dy != 0 {
+                            let _ = self.inject.send(Inject::MoveBy { dx, dy });
+                        }
                     }
                 }
             }

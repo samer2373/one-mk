@@ -180,12 +180,14 @@ async fn run_inner(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery:
     // The last session: with whom, from when to when. A duplicate connection
     // to that computer failing meanwhile is not a new failure.
     let mut last: Option<(Fingerprint, Instant, Instant)> = None;
+    // What finished failing while a person was being asked, for after.
+    let mut backlog: VecDeque<Started> = VecDeque::new();
     loop {
         // The terminal goes to one candidate at a time.
         while let Some(ready) = queue.take(Instant::now()) {
             hinted = true;
             let (fp, began) = (ready.peer.fingerprint, Instant::now());
-            let res = session(dir, ready, &mut trust, &mut answers, out).await;
+            let res = while_asked(session(dir, ready, &mut trust, &mut answers, out), &mut started, &mut queue, &mut backlog).await;
             last = Some((fp, began, Instant::now()));
             match res {
                 Ok(()) => {
@@ -216,7 +218,7 @@ async fn run_inner(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery:
                     dial(node.clone(), f.fingerprint, f.addrs, Duration::ZERO, tx.clone(), unreachable_tx.clone());
                 }
             }
-            Some(one) = started.recv() => {
+            Some(one) = next_started(&mut backlog, &mut started) => {
                 hinted = true;
                 match one {
                     Started::Ready(ready) => queue.push(ready),
@@ -242,6 +244,38 @@ async fn run_inner(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery:
                 }
             }
             _ = tokio::time::sleep_until(queue.next_wake().unwrap_or_else(|| Instant::now() + Duration::from_secs(3600))), if queue.next_wake().is_some() => {}
+        }
+    }
+}
+
+/// The next finished connection: one that failed while a person was asked
+/// first, else the next to report.
+async fn next_started(backlog: &mut VecDeque<Started>, started: &mut mpsc::UnboundedReceiver<Started>) -> Option<Started> {
+    match backlog.pop_front() {
+        Some(one) => Some(one),
+        None => started.recv().await,
+    }
+}
+
+/// Waits for `session` (a person reading a code and answering, up to two
+/// minutes) while the connections that finish meanwhile are still taken in:
+/// the ready ones go through the queue, which lets the oldest beyond
+/// [`MAX_READY`] go, so none pile up live in the channel. The failed ones
+/// (small) are kept in `backlog`, to be told afterwards.
+async fn while_asked<F: Future>(session: F, started: &mut mpsc::UnboundedReceiver<Started>, queue: &mut Queue<Ready>, backlog: &mut VecDeque<Started>) -> F::Output {
+    tokio::pin!(session);
+    loop {
+        tokio::select! {
+            res = &mut session => return res,
+            Some(one) = started.recv() => match one {
+                Started::Ready(ready) => queue.push(ready),
+                failed => {
+                    backlog.push_back(failed);
+                    while backlog.len() > MAX_READY {
+                        backlog.pop_front();
+                    }
+                }
+            },
         }
     }
 }
@@ -812,6 +846,45 @@ mod tests {
         assert!(silent[0].1.conn.close_reason().is_some(), "the oldest silent connection was dropped");
         assert!(silent.last().unwrap().1.conn.close_reason().is_none());
         assert!(started.try_recv().is_err(), "the silent ones are still within their step");
+    }
+
+    /// While a person reads a code, other computers keep finishing their agreements: those are
+    /// taken into the bounded queue (the oldest beyond [`MAX_READY`] closed) instead of waiting,
+    /// live, in the channel until the answer is in.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn connections_finishing_during_the_prompt_stay_bounded() {
+        let identity = Arc::new(Identity::ephemeral().unwrap());
+        let listener = Node::bind(identity.clone(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = SocketAddr::from(([127, 0, 0, 1], listener.local_addr().unwrap().port()));
+        let (tx, peers) = mpsc::channel::<Peer>(4);
+        let accepting = listener.clone();
+        tokio::spawn(async move {
+            while let Some(res) = accepting.accept().await {
+                if let Ok(p) = res
+                    && tx.send(p).await.is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let (report, mut started) = mpsc::unbounded_channel();
+        start_each(peers, identity, Duration::from_secs(30), report);
+        let mut others = Vec::new();
+        for _ in 0..MAX_READY + 4 {
+            let me = Arc::new(Identity::ephemeral().unwrap());
+            let node = Node::bind(me.clone(), "127.0.0.1:0".parse().unwrap()).unwrap();
+            let peer = node.connect(addr).await.unwrap();
+            let theirs = Pairing::start_within(&peer, me.fingerprint, "other", Duration::from_secs(10)).await.unwrap();
+            others.push((node, peer, theirs));
+        }
+        let mut queue = Queue::new(Fingerprint([1; 32]), None);
+        let mut backlog = VecDeque::new();
+        let out = while_asked(async { tokio::time::sleep(Duration::from_millis(500)).await; 7 }, &mut started, &mut queue, &mut backlog).await;
+        assert_eq!(out, 7);
+        assert_eq!(queue.items.len(), MAX_READY, "no more than the cap are kept live");
+        assert!(started.try_recv().is_err(), "everything that finished was taken in during the wait");
+        let closed = others.iter().filter(|(_, peer, _)| peer.conn.close_reason().is_some()).count();
+        assert_eq!(closed, 4, "the oldest beyond the cap were let go");
     }
 
     #[test]

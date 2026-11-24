@@ -2115,7 +2115,7 @@ pub struct ScrollArgs {
     pub modifier: Vec<String>,
     /// Forget only the natural-scrolling setting of this scope (and device),
     /// keeping its speed, direction, mode and modifiers as they are.
-    #[arg(long, conflicts_with = "natural")]
+    #[arg(long, conflicts_with_all = ["natural", "reset"])]
     pub clear_natural: bool,
     /// Only for wheels or only for touchpads (`--device wheel|touchpad`
     /// still works too).
@@ -3592,6 +3592,9 @@ scope = { device = "usb/0001:0002//Pad" }
         assert!(saved(&dir).scroll.is_empty());
         let both = <ScrollArgs as clap::Args>::augment_args(clap::Command::new("scroll")).try_get_matches_from(["scroll", "--clear-natural", "--natural", "on"]);
         assert!(both.is_err());
+        // A full reset would delete the other settings the help says are kept.
+        let reset = <ScrollArgs as clap::Args>::augment_args(clap::Command::new("scroll")).try_get_matches_from(["scroll", "--clear-natural", "--reset"]);
+        assert!(reset.is_err());
     }
 
 }
