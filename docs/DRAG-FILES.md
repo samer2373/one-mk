@@ -29,8 +29,19 @@ on every desktop.
 
 ## Things to know
 
+- The strip is a real window that takes the mouse over it while it is up, so it is
+  put up only for a drag, not for a click. The mouse button has to go down
+  outside the strip and move a few pixels (the distance the system itself asks
+  for a drag) before the strip comes up; a click or a scroll bar thumb that
+  starts inside the strip never raises it, and a file that you start dragging
+  from inside the strip cannot be dropped on it (drag it out and back in). On X11
+  the strip also waits for the program you are dragging from to announce a drag
+  (it owns the `XdndSelection`), when the X server can say so; Windows and macOS
+  have no such signal, so they rely on the button and the distance alone.
 - Only files and folders you can read are sent, at most 10000 files and 1 TiB in
-  one drop. Symbolic links, pipes and empty folders are not sent.
+  one drop. A drop that contains a symbolic link, junction, pipe or socket is
+  refused as a whole, so nothing in it is sent. Empty folders are skipped; a
+  drop of nothing but empty folders is refused as "nothing to send".
 - Any program that can talk to your X server can fake a drop, so on X11 this is
   not a protection boundary against hostile programs running as you. That is one
   reason it is opt-in.

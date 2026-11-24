@@ -59,6 +59,12 @@ operating system and desktop, and `one-mk --version`.
   is reconnecting or waiting for you. With the X11 and wlroots backends, stopping oneMK in any way
   (even `kill -9`) lets go of the pointer and keyboard; on X11, keys a killed oneMK was pressing on a
   peer's behalf stay down until oneMK starts again, which lets go of them.
+- **On Sway, Hyprland or another wlroots desktop the pointer does not cross, and the log says
+  "the Wayland compositor did not let one-mk take the keyboard and mouse".** oneMK tells the other
+  computer it has the keyboard and mouse only after the compositor has shown its capture surface,
+  given it the keyboard and activated the pointer lock; if that does not happen in two seconds the
+  switch is cancelled. Another program is probably holding an exclusive keyboard focus (a launcher or
+  lock screen overlay) or a pointer lock: close it and try again.
 - **The mouse stutters or lags on another computer.** Look at the graph on the window's Desk or
   Health tab, or run `one-mk status` (`rtt 4 ms` per connected computer) and `one-mk doctor`
   ("Connection quality"). Under about 40 ms is smooth. Higher, or **Some stalls** with lost packets,

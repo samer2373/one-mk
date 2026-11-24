@@ -77,30 +77,46 @@ struct Item {
 /// cannot); with several, one per computer and a generic one that takes
 /// the first.
 fn items(computers: &[Computer]) -> Vec<Item> {
-    let named = |c: &Computer, others: &[Computer]| {
-        let mut label = format!("Send to {}", file_safe(&one_mk_proto::sanitize_name(&c.name)));
-        // Two computers with one name: tell them apart by id.
-        if others.iter().any(|o| o.id != c.id && format!("Send to {}", file_safe(&one_mk_proto::sanitize_name(&o.name))) == label) {
-            label += &format!(" ({})", &c.id[..4]);
-        }
-        Item { label, to: Some(c.id.clone()) }
+    // One computer is one entry, whatever the trust list says twice.
+    let mut seen = std::collections::HashSet::new();
+    let computers: Vec<&Computer> = computers.iter().filter(|c| seen.insert(c.id.clone())).collect();
+    let base = |c: &Computer| format!("Send to {}", file_safe(&one_mk_proto::sanitize_name(&c.name)));
+    // Names that become the same file name (Windows and macOS folders ignore case too) are told apart
+    // by the start of the id, as many characters as it takes for every entry to be its own file.
+    let fold = |s: &str| s.to_lowercase();
+    let bases: Vec<String> = computers.iter().map(|c| base(c)).collect();
+    let shared: Vec<bool> = (0..computers.len()).map(|i| (0..computers.len()).any(|j| j != i && fold(&bases[j]) == fold(&bases[i]))).collect();
+    let labels = |width: usize| -> Vec<String> {
+        computers.iter().enumerate().map(|(i, c)| if shared[i] { format!("{} ({})", bases[i], &c.id[..width.min(c.id.len())]) } else { bases[i].clone() }).collect()
     };
-    match computers {
+    let distinct = |labels: &[String]| labels.iter().map(|l| fold(l)).collect::<std::collections::HashSet<_>>().len() == labels.len();
+    let labels = (4..=64).map(labels).find(|l| distinct(l)).unwrap_or_else(|| labels(64));
+    let named: Vec<Item> = computers.iter().zip(labels).map(|(c, label)| Item { label, to: Some(c.id.clone()) }).collect();
+    match &named[..] {
         [] => vec![Item { label: "Send with one-mk".into(), to: None }],
-        [one] => vec![named(one, computers)],
+        [_] => named,
         many => {
-            let mut v: Vec<Item> = many.iter().map(|c| named(c, many)).collect();
-            v.push(Item { label: "Send with one-mk".into(), to: Some(many[0].id.clone()) });
+            let first = many[0].to.clone();
+            let mut v = named;
+            v.push(Item { label: "Send with one-mk".into(), to: first });
             v
         }
     }
 }
 
 /// Safe as a file name on every system: no separators or characters
-/// Windows rejects, no trailing dot or space, bounded.
+/// Windows rejects, no trailing dot or space, bounded in characters and in
+/// bytes (a file system's limit is on bytes: a name of four-byte characters
+/// would otherwise pass the character count and fail to be created).
 fn file_safe(s: &str) -> String {
+    const BYTES: usize = 120;
     let s: String = s.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c }).collect();
-    s.trim_end_matches(['.', ' ']).chars().take(80).collect()
+    let mut out = String::new();
+    for c in s.chars().take(80) {
+        if out.len() + c.len_utf8() > BYTES { break; }
+        out.push(c);
+    }
+    out.trim_end_matches(['.', ' ']).to_owned()
 }
 
 /// `'...'` for `sh`.
@@ -191,7 +207,11 @@ fn kde_service_menu(setup: &Setup, entries: &[Item]) -> String {
 }
 
 /// A SendTo `.cmd`: the window stays open (on `pause`) if sending failed,
-/// since Windows has no notification from one-mk yet.
+/// since Windows has no notification from one-mk yet. CMD reads a batch file in
+/// the console's code page, which is rarely UTF-8, so a path with characters
+/// outside ASCII would be read as other characters: such a file switches the
+/// console to UTF-8 (65001) before its first non-ASCII line and puts the
+/// previous code page back afterwards.
 fn windows_cmd(setup: &Setup, item: &Item) -> String {
     let q = |s: &str| format!("\"{}\"", s.replace('%', "%%"));
     let mut c = q(&setup.exe.display().to_string());
@@ -202,7 +222,18 @@ fn windows_cmd(setup: &Setup, item: &Item) -> String {
     if let Some(id) = &item.to {
         c += &format!(" --to {id}");
     }
-    format!("@echo off\r\nREM {MARKER}\r\n{c} -- %*\r\nif errorlevel 1 pause\r\n")
+    if c.is_ascii() {
+        return format!("@echo off\r\nREM {MARKER}\r\n{c} -- %*\r\nif errorlevel 1 pause\r\n");
+    }
+    format!(
+        "@echo off\r\nREM {MARKER}\r\n\
+         for /f \"tokens=2 delims=:\" %%p in ('chcp') do set \"OMK_CP=%%p\"\r\n\
+         chcp 65001 >nul\r\n\
+         {c} -- %*\r\n\
+         set \"OMK_ERR=%errorlevel%\"\r\n\
+         chcp %OMK_CP% >nul\r\n\
+         if not \"%OMK_ERR%\"==\"0\" pause\r\n"
+    )
 }
 
 fn xml_escape(s: &str) -> String {
@@ -342,6 +373,24 @@ fn is_our_bundle(path: &Path) -> bool {
         && head.contains("OneMkGenerated")
 }
 
+/// The name a Quick Action is built under before it is moved to its own: nothing else has it.
+const STAGING: &str = "Send ~one-mk-staging-";
+
+/// What an interrupted write of an earlier version leaves behind: a real folder with nothing in it
+/// but the shape we write (`Contents/` and its two files) with every file empty, or one of our
+/// staging folders. Anything else, even empty, might be someone's own and is left alone.
+fn is_unfinished_bundle(path: &Path) -> bool {
+    let is_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_dir());
+    // Only the names we write, and nothing in them (a missing file is as unfinished as an empty one).
+    let only_ours = |dir: &Path, names: &[&str], check: &dyn Fn(&Path) -> bool| {
+        std::fs::read_dir(dir).is_ok_and(|rd| rd.flatten().all(|e| e.file_name().to_str().is_some_and(|n| names.contains(&n)) && check(&e.path())))
+    };
+    let empty_file = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file() && m.len() == 0);
+    is_dir(path)
+        && (path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(STAGING))
+            || only_ours(path, &["Contents"], &|contents| is_dir(contents) && only_ours(contents, &["Info.plist", "document.wflow"], &empty_file)))
+}
+
 /// What generated entries are in `t`: files for the first three kinds,
 /// folders for macOS.
 fn generated(t: &Target) -> Vec<PathBuf> {
@@ -354,7 +403,7 @@ fn generated(t: &Target) -> Vec<PathBuf> {
                 p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("Send ")) && is_ours(p)
             }
             Kind::Services => {
-                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("Send ") && n.ends_with(".workflow")) && is_our_bundle(p)
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("Send ") && n.ends_with(".workflow")) && (is_our_bundle(p) || is_unfinished_bundle(p))
             }
         })
         .collect()
@@ -403,18 +452,23 @@ fn put(path: &Path, text: &str, executable: bool) -> Result<bool> {
     Ok(true)
 }
 
-/// A Quick Action folder, like [`put`]: not if anything is there.
+/// A Quick Action folder, like [`put`]: not if anything is there. It is built under a staging name
+/// and moved to its own once complete, so a write that fails or is interrupted never leaves a
+/// half-made folder at the name where later runs would take it for someone else's.
 fn put_bundle(bundle: &Path, plist: &str, workflow: &str) -> Result<bool> {
-    if let Some(dir) = bundle.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    }
-    match std::fs::create_dir(bundle) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
-        Err(e) => return Err(e).with_context(|| format!("creating {}", bundle.display())),
-    }
-    let ok = put(&bundle.join("Contents/Info.plist"), plist, false)? && put(&bundle.join("Contents/document.wflow"), workflow, false)?;
-    debug_assert!(ok, "a folder made just now was not empty");
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let Some(dir) = bundle.parent() else { bail!("{} has no folder", bundle.display()) };
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    // Something (a user's folder, a symlink) is already at the name: leave it.
+    if std::fs::symlink_metadata(bundle).is_ok() { return Ok(false); }
+    let staging = dir.join(format!("{STAGING}{}-{}.workflow", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let build = || -> Result<()> {
+        std::fs::create_dir(&staging).with_context(|| format!("creating {}", staging.display()))?;
+        let ok = put(&staging.join("Contents/Info.plist"), plist, false)? && put(&staging.join("Contents/document.wflow"), workflow, false)?;
+        debug_assert!(ok, "a folder made just now was not empty");
+        std::fs::rename(&staging, bundle).with_context(|| format!("creating {}", bundle.display()))
+    };
+    build().inspect_err(|_| { let _ = std::fs::remove_dir_all(&staging); })?;
     Ok(true)
 }
 
@@ -551,12 +605,40 @@ pub fn install(setup: &Setup) -> Result<Outcome> {
     })
 }
 
+/// Whether the entries in `t` were made for settings folder `home` (`None`: the usual one), read
+/// from the `--home` their commands carry. An entry that cannot be read is taken as this one's.
+fn owned_by(t: &Target, home: Option<&Path>) -> bool {
+    generated(t).iter().all(|p| {
+        let text = match t.kind {
+            Kind::Services => std::fs::read_to_string(p.join("Contents/document.wflow")),
+            _ => std::fs::read_to_string(p),
+        };
+        let Ok(text) = text else { return true };
+        if text.is_empty() { return true; }
+        match home {
+            None => !text.contains(" --home "),
+            Some(h) => {
+                let h = h.display().to_string();
+                let word = match t.kind {
+                    Kind::Scripts => sh_quote(&h),
+                    Kind::Services => xml_escape(&sh_quote(&h)),
+                    Kind::KdeMenu => exec_word(&h),
+                    Kind::SendTo => format!("\"{}\"", h.replace('%', "%%")),
+                };
+                // The word is always followed by `send`: an unquoted path is not a prefix of a longer one.
+                text.contains(&format!(" --home {word} send "))
+            }
+        }
+    })
+}
+
 /// Rewrites the entries for the current computers, if they are installed.
 /// Does nothing for someone who never ran `integrate`. An error (after
 /// writing everything it could) if something that is not ours is in the way.
 pub fn refresh(setup: &Setup) -> Result<()> {
     let mut skipped = Vec::new();
-    for t in targets(true) {
+    // Entries made for another settings folder follow that folder's computers, not this one's.
+    for t in targets(true).into_iter().filter(|t| owned_by(t, setup.home.as_deref())) {
         skipped.extend(write_target(&t, setup)?.skipped);
     }
     if !skipped.is_empty() {
@@ -815,6 +897,118 @@ echo mine
         assert!(!root.join("nowhere").exists());
         assert_eq!(clear(&t).unwrap(), 1, "only the Desk script is ours");
         assert!(std::fs::symlink_metadata(t.dir.join("Send to laptop")).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A write that stopped before the bundle was complete (a full disk, a closed app) must not
+    /// leave something later runs treat as a user's own: install recovers it, remove clears it.
+    #[test]
+    fn an_unfinished_quick_action_is_recovered_and_removed() {
+        let root = tmp("unfinished");
+        let t = Target { dir: root.join("services"), kind: Kind::Services };
+        let s = setup(&[(A, "Laptop")]);
+        let (empty, zero) = (t.dir.join("Send to Laptop.workflow"), t.dir.join("Send with one-mk.workflow"));
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(zero.join("Contents")).unwrap();
+        std::fs::write(zero.join("Contents/Info.plist"), "").unwrap();
+        assert_eq!(generated(&t).len(), 2);
+        let done = write_target(&t, &s).unwrap();
+        assert!(done.skipped.is_empty(), "{done:?}");
+        assert_eq!(done.files.len(), 1);
+        assert!(is_our_bundle(&empty) && !zero.exists());
+        // The same leftovers, removed instead.
+        std::fs::create_dir_all(&zero).unwrap();
+        assert_eq!(clear(&t).unwrap(), 2);
+        assert!(!empty.exists() && !zero.exists());
+        // Empty files under names we never write are someone's: not ours to take either.
+        let other = t.dir.join("Send to Archive.workflow");
+        std::fs::create_dir_all(other.join("Contents")).unwrap();
+        std::fs::write(other.join("Contents/Info.plist"), "").unwrap();
+        std::fs::write(other.join("Contents/placeholder.txt"), "").unwrap();
+        assert!(!generated(&t).contains(&other));
+        std::fs::remove_dir_all(&other).unwrap();
+        // A folder with anything in it that is not empty is not ours to take.
+        std::fs::create_dir_all(empty.join("Contents")).unwrap();
+        std::fs::write(empty.join("Contents/Info.plist"), "<plist>mine</plist>").unwrap();
+        assert_eq!(write_target(&t, &s).unwrap().skipped.len(), 1);
+        assert!(std::fs::read_to_string(empty.join("Contents/Info.plist")).unwrap().contains("mine"));
+        // Nothing of the staging is left behind, whichever way it ended.
+        assert!(std::fs::read_dir(&t.dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(STAGING)));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn names_that_collide_by_case_or_id_prefix_still_get_their_own_entry() {
+        // The same name from two computers whose ids start alike: the suffix grows until they differ.
+        let (c, d) = ("abcd0001aaaa", "abcd0002aaaa");
+        let l: Vec<String> = items(&setup(&[(c, "PC"), (d, "PC")]).computers).into_iter().map(|i| i.label).collect();
+        assert_eq!(l, ["Send to PC (abcd0001)", "Send to PC (abcd0002)", "Send with one-mk"]);
+        // Names that only differ after file name cleaning and case folding.
+        let l: Vec<String> = items(&setup(&[(A, "Room:PC"), (B, "room?pc")]).computers).into_iter().map(|i| i.label).collect();
+        assert_eq!(l, ["Send to Room_PC (aaaa)", "Send to room_pc (bbbb)", "Send with one-mk"]);
+        let folded: std::collections::HashSet<String> = l.iter().map(|l| l.to_lowercase()).collect();
+        assert_eq!(folded.len(), l.len());
+        // The same computer listed twice is one entry.
+        assert_eq!(items(&setup(&[(A, "PC"), (A, "PC")]).computers).len(), 1);
+    }
+
+    #[test]
+    fn a_name_of_four_byte_characters_fits_a_file_name() {
+        // sanitize_name keeps 64 characters: 256 bytes here, over the 255 a file name may have.
+        let name = "\u{1F600}".repeat(64);
+        let s = setup(&[(A, &name), (B, &name)]);
+        for item in items(&s.computers) {
+            for extension in ["", ".cmd", ".workflow"] {
+                assert!(item.label.len() + extension.len() <= 255, "{} bytes", item.label.len());
+            }
+        }
+        let root = tmp("bytes");
+        let t = Target { dir: root.join("scripts"), kind: Kind::Scripts };
+        let done = write_target(&t, &s).unwrap();
+        assert_eq!((done.files.len(), done.skipped.len()), (3, 0));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_windows_send_to_script_survives_a_non_utf8_code_page() {
+        let s = Setup { exe: r"C:\Users\José\AppData\Local\one-mk\one-mk.exe".into(), ..setup(&[(A, "Laptop")]) };
+        let c = windows_cmd(&s, &items(&s.computers)[0]);
+        // Everything before the first non-ASCII character is ASCII, and the code page is switched there.
+        let first = c.find(|ch: char| !ch.is_ascii()).unwrap();
+        let (before, after) = (&c[..first], &c[first..]);
+        assert!(before.contains("chcp 65001"), "{c}");
+        assert!(after.contains("é\\AppData") && after.contains("chcp %OMK_CP%"), "{c}");
+        // An all-ASCII path needs none of it.
+        assert!(!windows_cmd(&setup(&[(A, "Laptop")]), &items(&setup(&[(A, "Laptop")]).computers)[0]).contains("chcp"));
+    }
+
+    /// The entries follow the settings folder they were made for: a refresh for another folder
+    /// (the usual one, say) leaves them as they are, and one for their own rewrites them.
+    #[test]
+    fn a_refresh_follows_only_the_home_the_entries_were_made_for() {
+        let root = tmp("owner");
+        for kind in [Kind::Scripts, Kind::KdeMenu, Kind::SendTo, Kind::Services] {
+            let t = Target { dir: root.join(format!("{kind:?}")), kind };
+            let custom = Setup { home: Some("/tmp/my home/100%".into()), ..setup(&[(A, "Laptop")]) };
+            write_target(&t, &custom).unwrap();
+            assert!(owned_by(&t, custom.home.as_deref()), "{kind:?}");
+            assert!(!owned_by(&t, None), "{kind:?}");
+            assert!(!owned_by(&t, Some(Path::new("/tmp/other"))), "{kind:?}");
+            write_target(&t, &setup(&[(A, "Laptop"), (B, "Desk")])).unwrap();
+            assert!(owned_by(&t, None) && !owned_by(&t, custom.home.as_deref()), "{kind:?}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_home_that_is_the_start_of_another_homes_path_is_not_that_home() {
+        let root = tmp("prefix");
+        for kind in [Kind::Scripts, Kind::KdeMenu, Kind::SendTo, Kind::Services] {
+            let t = Target { dir: root.join(format!("{kind:?}")), kind };
+            write_target(&t, &Setup { home: Some("/tmp/office-backup".into()), ..setup(&[(A, "Laptop")]) }).unwrap();
+            assert!(owned_by(&t, Some(Path::new("/tmp/office-backup"))), "{kind:?}");
+            assert!(!owned_by(&t, Some(Path::new("/tmp/office"))), "{kind:?}");
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

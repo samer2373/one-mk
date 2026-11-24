@@ -139,6 +139,8 @@ pub struct Paired {
 pub struct Config {
     pub dir_exists: bool,
     pub has_identity: bool,
+    /// Why the identity files there cannot be used (a mismatched or damaged pair), when they cannot.
+    pub identity_problem: Option<String>,
     /// The paired computers, or why `devices.toml` could not be read.
     pub paired: Result<Vec<Paired>, String>,
     /// Whether `settings.toml` (if there is one) can be read in full.
@@ -189,15 +191,55 @@ pub struct Firewall {
     pub ufw_active: Option<bool>,
     /// `/etc/ufw/user.rules`, when this user may read it (usually not).
     pub ufw_rules: Option<String>,
-    pub firewalld: Option<Firewalld>,
+    /// The zones whose rules apply to the paired computers' traffic (or the default
+    /// zone, where that could not be found out); empty when firewalld is not running.
+    pub firewalld: Vec<Firewalld>,
     pub mac_enabled: Option<bool>,
     pub mac_blocked: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Firewalld {
+    /// The zone these rules belong to; `None` when its name could not be had (they
+    /// are then those of the default zone).
+    pub zone: Option<String>,
+    pub why: ZoneWhy,
     pub ports: String,
     pub services: String,
+}
+
+/// Why a firewalld zone's rules are the ones checked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ZoneWhy {
+    /// Nothing better is known: the default zone, which an interface without a zone of its own is in.
+    Default,
+    /// The zone of the interface that the route to a paired computer leaves by.
+    Interface { interface: String, peer: String },
+    /// A source (an address range) that the paired computer's address is in, which firewalld
+    /// matches before any interface.
+    Source { source: String, peer: String },
+}
+
+impl Firewalld {
+    /// Where the rules are, as part of a sentence: "in ...".
+    fn place(&self) -> String {
+        let zone = self.zone.as_deref();
+        match (&self.why, zone) {
+            (ZoneWhy::Default, Some(zone)) => format!("in its default zone (`{zone}`)"),
+            (ZoneWhy::Default, None) => "in its default zone".to_owned(),
+            (ZoneWhy::Interface { interface, peer }, zone) => {
+                format!("in the zone of {interface}, the interface that reaches {peer}{}", zone.map(|z| format!(" (`{z}`)")).unwrap_or_default())
+            }
+            (ZoneWhy::Source { source, peer }, zone) => {
+                format!("in the zone that holds the source {source}, which {peer} is in{}", zone.map(|z| format!(" (`{z}`)")).unwrap_or_default())
+            }
+        }
+    }
+
+    /// `--zone=...` for a firewall-cmd that has to act on these rules.
+    fn zone_flag(&self) -> String {
+        self.zone.as_deref().map(|zone| format!(" --zone={zone}")).unwrap_or_default()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -291,6 +333,10 @@ pub fn config_checks(c: &Config, dir: &Path) -> Vec<Check> {
         )
     };
     let identity = match (c.dir_exists, c.has_identity) {
+        _ if c.identity_problem.is_some() => Outcome::fail(
+            format!("The identity files cannot be used: {}.", c.identity_problem.as_deref().unwrap_or_default()),
+            "Restore the matching key and certificate from a backup. With no copy, move both `identity.key.der` and `identity.cert.der` out of the settings folder to make a new identity, then pair the computers again.",
+        ),
         (_, true) => Outcome::pass("This computer has its identity (key and certificate)."),
         (false, false) => Outcome::skip("No identity yet; it is created the first time one-mk starts."),
         (true, false) => Outcome::skip("No identity yet; it is created automatically when sharing starts."),
@@ -423,6 +469,10 @@ fn ufw_allows(rules: &str, port: u16) -> bool {
         if !l.starts_with("-A ufw-user-input") || !l.ends_with("-j ACCEPT") || !l.contains("-p udp") {
             return false;
         }
+        // A rule for one source, destination or interface does not open the port for the paired computer.
+        if l.split_whitespace().any(|w| matches!(w, "-s" | "--source" | "-d" | "--destination" | "-i" | "--in-interface" | "-o" | "--out-interface")) {
+            return false;
+        }
         let mut words = l.split_whitespace();
         while let Some(w) = words.next() {
             if w == "--dport" || w == "--dports" {
@@ -440,7 +490,13 @@ fn ufw_allows(rules: &str, port: u16) -> bool {
     })
 }
 
+#[cfg(test)]
 pub fn firewall_check(os: Os, f: &Firewall, port: u16) -> Check {
+    firewall_check_for(os, f, port, true)
+}
+
+/// [`firewall_check`]; mDNS must pass the firewall only when `discovery` is in use.
+pub fn firewall_check_for(os: Os, f: &Firewall, port: u16, discovery: bool) -> Check {
     let title = "Firewall";
     let out = match os {
         Os::Windows => Outcome::skip(
@@ -454,12 +510,12 @@ pub fn firewall_check(os: Os, f: &Firewall, port: u16) -> Check {
             _ => Outcome::skip("The firewall's rules could not be checked."),
         },
         Os::Other => Outcome::skip("Not checked on this system."),
-        Os::Linux => linux_firewall(f, port),
+        Os::Linux => linux_firewall(f, port, discovery),
     };
     check("firewall", title, out)
 }
 
-fn linux_firewall(f: &Firewall, port: u16) -> Outcome {
+fn linux_firewall(f: &Firewall, port: u16, discovery: bool) -> Outcome {
     let mut active = false;
     let mut blocked: Vec<String> = Vec::new();
     let mut unknown: Vec<String> = Vec::new();
@@ -474,23 +530,25 @@ fn linux_firewall(f: &Firewall, port: u16) -> Outcome {
             )),
         }
     }
-    if let Some(fw) = &f.firewalld {
+    for fw in &f.firewalld {
         active = true;
-        let mdns = fw.services.split_whitespace().any(|s| s == "mdns") || port_listed(&fw.ports, MDNS_PORT);
+        let mdns = !discovery || fw.services.split_whitespace().any(|s| s == "mdns") || port_listed(&fw.ports, MDNS_PORT);
         let mut missing = Vec::new();
         let mut fix = Vec::new();
+        let flag = fw.zone_flag();
         if !port_listed(&fw.ports, port) {
             missing.push(format!("UDP {port}"));
-            fix.push(format!("`sudo firewall-cmd --permanent --add-port={port}/udp`"));
+            fix.push(format!("`sudo firewall-cmd --permanent{flag} --add-port={port}/udp`"));
         }
         if !mdns {
             missing.push(format!("mDNS (UDP {MDNS_PORT})"));
-            fix.push("`sudo firewall-cmd --permanent --add-service=mdns`".to_owned());
+            fix.push(format!("`sudo firewall-cmd --permanent{flag} --add-service=mdns`"));
         }
         if !missing.is_empty() {
             blocked.push(format!(
-                "firewalld does not allow {} in its default zone: {} then `sudo firewall-cmd --reload`",
+                "firewalld does not allow {} {}: {} then `sudo firewall-cmd --reload`",
                 missing.join(" and "),
+                fw.place(),
                 fix.join(" and "),
             ));
         }
@@ -506,7 +564,7 @@ fn linux_firewall(f: &Firewall, port: u16) -> Outcome {
         );
     }
     if active {
-        Outcome::pass(format!("The firewall allows UDP {port} and mDNS."))
+        Outcome::pass(if discovery { format!("The firewall allows UDP {port} and mDNS.") } else { format!("The firewall allows UDP {port}.") })
     } else if f.ufw_active.is_none() {
         Outcome::warn(
             "Could not tell whether a firewall is on (ufw and firewalld could not be queried without root).",
@@ -537,6 +595,19 @@ pub fn portal_check(os: Os, p: Option<&Portals>, running: &[String]) -> Check {
         ),
     };
     check("input", title, out)
+}
+
+/// The Permissions line for a running daemon whose input backend is not the portal (X11, wlroots,
+/// native): there is no portal to probe, but what the backend reports (a lost compositor
+/// connection, a failed capture) is still said.
+fn backend_permissions_check(backend: &str, running: &[String]) -> Check {
+    if running.is_empty() {
+        return check("portals", "Permissions", Outcome::skip(format!("this daemon uses the {backend} backend")));
+    }
+    check("portals", "Permissions", Outcome::warn(
+        format!("The running one-mk ({backend} backend) says: {}", running.join(" ")),
+        "Do as it says; `one-mk status` shows it until it is resolved.",
+    ))
 }
 
 fn macos_permissions() -> Outcome {
@@ -997,10 +1068,19 @@ pub fn unrecognised_check(d: &Daemon) -> Option<Check> {
 }
 
 /// Private IPv4 ranges (RFC 1918): what a home or office LAN uses.
+#[cfg(test)]
 pub fn network_check(addrs: &[Addr]) -> Check {
+    network_check_with(addrs, &[])
+}
+
+/// [`network_check`], also knowing the up interfaces that have a usable IPv6 address: oneMK works over
+/// an IPv6-only network, so no IPv4 address is then no reason to say there is no network.
+pub fn network_check_with(addrs: &[Addr], ipv6: &[String]) -> Check {
     let title = "Network";
     let out = if let Some(a) = addrs.iter().find(|a| a.ip.is_private()) {
         Outcome::pass(format!("Connected to a private network ({} on {}).", a.ip, a.iface))
+    } else if addrs.is_empty() && !ipv6.is_empty() {
+        Outcome::pass(format!("Connected over IPv6 only (on {}); there is no IPv4 address.", ipv6.join(", ")))
     } else if addrs.is_empty() {
         Outcome::fail(
             "This computer has no IPv4 address on any active network.",
@@ -1184,9 +1264,14 @@ fn window_check(source: &Check) -> (Check, Option<&'static str>, bool) {
             else { "Some saved settings could not be read and are left out; everything else is used." },
             if good { None } else { Some("Review your preferences in Settings.") }),
         "identity" => {
-            shown.outcome.status = Status::Pass;
-            ("Secure identity", if good { "This computer is ready to connect securely." }
-                else { "A secure identity will be created automatically when sharing starts." }, None)
+            if status != Status::Fail { shown.outcome.status = Status::Pass; }
+            if status == Status::Fail {
+                ("Secure identity", "This computer's secure identity is damaged, so sharing cannot start.",
+                    Some("Restore the matching key and certificate from a backup, or move both identity files out of the settings folder and pair again."))
+            } else {
+                ("Secure identity", if good { "This computer is ready to connect securely." }
+                    else { "A secure identity will be created automatically when sharing starts." }, None)
+            }
         }
         "pairing" => {
             if status == Status::Skip { action = Some("Pair"); }
@@ -1335,6 +1420,16 @@ pub async fn run(dir: &Path, json: bool, all: bool) -> Result<()> {
     Ok(())
 }
 
+/// The wallpaper line: not available is a skip, a player that failed or stopped is a warning
+/// (its message says why), anything else passes.
+fn wallpaper_check(status: &one_mk_wallpaper::Status) -> Check {
+    let failed = status.available && (status.computers.values().any(|playback| matches!(playback, one_mk_wallpaper::Playback::Error(_)))
+        || status.message.starts_with("The wallpaper player stopped"));
+    check("wallpaper", "Wallpaper", if !status.available { Outcome::skip(&status.message) }
+        else if failed { Outcome::warn(&status.message, "Choose Play in the wallpaper settings to try again, or `one-mk wallpaper off`.") }
+        else { Outcome::pass(&status.message) })
+}
+
 pub async fn diagnose(dir: &Path) -> Vec<Check> {
     let os = this_os();
     // The daemon and the config tell the other probes what to look for.
@@ -1345,7 +1440,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
                 let dir = dir.to_owned();
                 move || probe_config(&dir)
             },
-            Config { dir_exists: false, has_identity: false, paired: Err("probe failed".into()), settings: Ok(()), ignored: Vec::new() },
+            Config { dir_exists: false, has_identity: false, identity_problem: None, paired: Err("probe failed".into()), settings: Ok(()), ignored: Vec::new() },
         )
     );
     let paired = config.paired.clone().unwrap_or_default();
@@ -1371,7 +1466,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
         async { if daemon.status().is_some_and(|status| status.discovery == Some(false)) {
             MdnsFacts { join: Ok(()), seen: Ok(Vec::new()) }
         } else { probe_mdns(wanted).await } },
-        probe_firewall(os),
+        probe_firewall(os, paired.iter().map(|p| (p.name.clone(), p.addrs.clone())).collect()),
         async { if non_portal.is_some() { None } else { probe_portals(os, dir.to_owned()).await } },
         blocking(probe_addrs, Vec::new()),
         probe_shortcuts(os),
@@ -1384,8 +1479,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     if let Some(status) = daemon.status().and_then(|status| status.wallpaper.as_ref())
         && (status.plan.is_some() || !status.available)
     {
-        checks.push(check("wallpaper", "Wallpaper", if status.available { Outcome::pass(&status.message) }
-            else { Outcome::skip(&status.message) }));
+        checks.push(wallpaper_check(status));
     }
     let (available, detail) = crate::update::doctor(dir);
     checks.push(check("updates", "Updates", if available { Outcome::warn(detail, "update-now") }
@@ -1400,9 +1494,9 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     checks.extend(config_checks(&config, dir));
     checks.push(port_check(&daemon, &port_facts));
     checks.push(mdns_check(&daemon, &mdns));
-    checks.push(firewall_check(os, &firewall, port));
+    checks.push(firewall_check_for(os, &firewall, port, !daemon.status().is_some_and(|status| status.discovery == Some(false))));
     checks.push(if os == Os::Mac { macos_daemon_permissions(daemon.status()) } else { match non_portal {
-        Some(status) => check("portals", "Permissions", Outcome::skip(format!("this daemon uses the {} backend", status.backend.as_str()))),
+        Some(status) => backend_permissions_check(status.backend.as_str(), &status.input),
         None => portal_check(os, portals.as_ref(), daemon.status().map_or(&[], |s| &s.input)),
     }});
     if let Ok(settings) = crate::settings::Settings::load_lenient(dir) {
@@ -1447,7 +1541,7 @@ pub async fn diagnose(dir: &Path) -> Vec<Check> {
     }
     checks.extend(layout_check(&daemon));
     checks.extend(unrecognised_check(&daemon));
-    checks.push(network_check(&addrs));
+    checks.push(network_check_with(&addrs, &blocking(probe_ipv6, Vec::new()).await));
     checks.push(connection_check(&daemon));
     let seen = mdns.seen.as_deref().unwrap_or_default();
     checks.extend(peer_checks(&daemon, &paired, seen));
@@ -1479,10 +1573,18 @@ fn probe_config(dir: &Path) -> Config {
         t.devices().iter().map(|d| Paired { id: d.short_id(), name: t.display(d), addrs: d.addrs.clone() }).collect()
     });
     let settings = Settings::load(dir);
+    // Only regular files are opened (a FIFO there would block the read); anything else in the
+    // place of one is reported without being touched.
+    let (cert, key) = (dir.join("identity.cert.der"), dir.join("identity.key.der"));
+    let identity = match [&cert, &key].into_iter().find(|p| p.symlink_metadata().is_ok() && !p.is_file()) {
+        Some(p) => Err(anyhow::anyhow!("{} is not a file", p.display())),
+        None => Identity::check(dir),
+    };
     let ignored = if settings.is_err() { Settings::load_lenient(dir).map(|s| s.problems).unwrap_or_default() } else { Vec::new() };
     Config {
         dir_exists: dir.is_dir(),
-        has_identity: dir.join("identity.key.der").is_file() && dir.join("identity.cert.der").is_file(),
+        has_identity: identity.as_ref().is_ok_and(|ok| *ok),
+        identity_problem: identity.err().map(|e| one_line(&format!("{e:#}"))),
         paired,
         settings: settings.map(|_| ()).map_err(|e| one_line(&format!("{e:#}"))),
         ignored,
@@ -1499,10 +1601,13 @@ fn one_line(error: &str) -> String {
 
 fn probe_port(port: u16, dir: &Path) -> PortFacts {
     let mut bind = Bind::Free;
-    // The daemon binds dual-stack, so either address family collides with it.
+    // The daemon binds dual-stack, so IPv4 in use collides with it; an IPv6-only holder does not (it falls back to IPv4).
     for addr in [format!("0.0.0.0:{port}"), format!("[::]:{port}")] {
         match UdpSocket::bind(&addr) {
             Ok(_) => {}
+            // Held on IPv6 only, with IPv4 free (the first probe passed): the daemon's dual-stack
+            // bind fails and it falls back to IPv4, so it runs.
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && addr.starts_with('[') => {}
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
                 bind = Bind::InUse;
                 break;
@@ -1590,7 +1695,8 @@ async fn probe_mdns(wanted: Vec<String>) -> MdnsFacts {
         let id = Identity::ephemeral().map_err(|e| format!("{e:#}"))?;
         let (_discovery, mut rx) = Discovery::browse(&id).map_err(|e| format!("{e:#}"))?;
         let mut seen: Vec<Seen> = Vec::new();
-        let done = |seen: &[Seen]| wanted.iter().all(|w| seen.iter().any(|s| &s.id == w));
+        // With no one in particular to wait for, listen for the whole window to count who is near.
+        let done = |seen: &[Seen]| !wanted.is_empty() && wanted.iter().all(|w| seen.iter().any(|s| &s.id == w));
         let _ = tokio::time::timeout(MDNS_WINDOW, async {
             while !done(&seen) {
                 let Some(Found { fingerprint, addrs, .. }) = rx.recv().await else {
@@ -1614,7 +1720,8 @@ async fn probe_mdns(wanted: Vec<String>) -> MdnsFacts {
     MdnsFacts { join, seen }
 }
 
-async fn probe_firewall(os: Os) -> Firewall {
+/// `peers`: the paired computers, by name, with the addresses they were last seen at.
+async fn probe_firewall(os: Os, peers: Vec<(String, Vec<String>)>) -> Firewall {
     if os == Os::Mac {
         return blocking(|| {
             let global = run_with_timeout("/usr/libexec/ApplicationFirewall/socketfilterfw", &["--getglobalstate"]);
@@ -1629,7 +1736,7 @@ async fn probe_firewall(os: Os) -> Firewall {
         return Firewall::default();
     }
     blocking(
-        || {
+        move || {
             let ufw_active = match std::fs::read_to_string("/etc/ufw/ufw.conf") {
                 Ok(c) => Some(c.lines().any(|l| l.trim().eq_ignore_ascii_case("ENABLED=yes"))),
                 // No such file: ufw is not installed, so it is not on. Anything
@@ -1639,15 +1746,113 @@ async fn probe_firewall(os: Os) -> Firewall {
             };
             let ufw_rules =
                 (ufw_active == Some(true)).then(|| std::fs::read_to_string("/etc/ufw/user.rules").ok()).flatten();
-            let firewalld = run_with_timeout("firewall-cmd", &["--state"])
-                .filter(|s| s.trim() == "running")
-                .and_then(|_| run_with_timeout("firewall-cmd", &["--list-all"]))
-                .map(|all| Firewalld { ports: field(&all, "ports:"), services: field(&all, "services:") });
+            let firewalld = firewalld_facts(&run_with_timeout, &peers);
             Firewall { ufw_active, ufw_rules, firewalld, ..Firewall::default() }
         },
         Firewall::default(),
     )
     .await
+}
+
+/// What firewalld allows where the paired computers' traffic comes in. A firewalld
+/// firewall has zones, and an interface (or a source address range) belongs to one;
+/// what `--list-all` shows without `--zone` is the default zone only. So for each
+/// paired computer the interface its route leaves by (`ip route get`) is looked up in
+/// `--get-active-zones` (a source range that holds its address comes first, as in
+/// firewalld; an interface in no zone is in the default zone), and the rules of those
+/// zones are read. Where no computer is paired, or none can be placed, the default
+/// zone is what is checked, and is said to be.
+fn firewalld_facts(run: &dyn Fn(&str, &[&str]) -> Option<String>, peers: &[(String, Vec<String>)]) -> Vec<Firewalld> {
+    if run("firewall-cmd", &["--state"]).is_none_or(|state| state.trim() != "running") {
+        return Vec::new();
+    }
+    let default = run("firewall-cmd", &["--get-default-zone"]).map(|zone| zone.trim().to_owned()).filter(|zone| !zone.is_empty());
+    let active = run("firewall-cmd", &["--get-active-zones"]).map(|text| parse_active_zones(&text)).unwrap_or_default();
+    let mut wanted: Vec<(Option<String>, ZoneWhy)> = Vec::new();
+    for (name, addrs) in peers {
+        for ip in addrs.iter().filter_map(|addr| addr.parse::<std::net::SocketAddr>().map(|a| a.ip()).ok().or_else(|| addr.parse().ok())).filter(|ip| !ip.is_loopback()) {
+            let peer = if name.is_empty() { ip.to_string() } else { name.clone() };
+            let found = active.iter().find_map(|zone| zone.sources.iter().find(|source| source_holds(source, ip)).map(|source| (zone.name.clone(), ZoneWhy::Source { source: source.clone(), peer: peer.clone() })))
+                .or_else(|| {
+                    let route = run("ip", &["-o", "route", "get", &ip.to_string()])?;
+                    let interface = route_interface(&route).filter(|interface| interface != "lo")?;
+                    let zone = active.iter().find(|zone| zone.interfaces.contains(&interface)).map(|zone| zone.name.clone()).or_else(|| default.clone());
+                    Some((zone?, ZoneWhy::Interface { interface, peer: peer.clone() }))
+                });
+            if let Some((zone, why)) = found && !wanted.iter().any(|(known, _)| known.as_deref() == Some(zone.as_str())) {
+                wanted.push((Some(zone), why));
+            }
+        }
+    }
+    if wanted.is_empty() {
+        wanted.push((default, ZoneWhy::Default));
+    }
+    let zones: Vec<Firewalld> = wanted.into_iter().filter_map(|(zone, why)| {
+        let all = match &zone {
+            Some(zone) => run("firewall-cmd", &["--list-all", &format!("--zone={zone}")])?,
+            None => run("firewall-cmd", &["--list-all"])?,
+        };
+        Some(Firewalld { zone, why, ports: field(&all, "ports:"), services: field(&all, "services:") })
+    }).collect();
+    if !zones.is_empty() {
+        return zones;
+    }
+    // A zone could not be read: what firewalld says without being asked for one.
+    run("firewall-cmd", &["--list-all"]).map(|all| Firewalld { zone: None, why: ZoneWhy::Default, ports: field(&all, "ports:"), services: field(&all, "services:") }).into_iter().collect()
+}
+
+/// A zone of `firewall-cmd --get-active-zones` with what is assigned to it.
+#[derive(Debug, PartialEq, Eq)]
+struct ActiveZone {
+    name: String,
+    interfaces: Vec<String>,
+    sources: Vec<String>,
+}
+
+/// `public (default)` / `  interfaces: eth0 wlan0` / `  sources: 10.0.0.0/8`, a zone after another.
+fn parse_active_zones(text: &str) -> Vec<ActiveZone> {
+    let mut zones: Vec<ActiveZone> = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        if !line.starts_with(char::is_whitespace) {
+            zones.push(ActiveZone { name: line.split_whitespace().next().unwrap_or_default().to_owned(), interfaces: Vec::new(), sources: Vec::new() });
+        } else if let Some(zone) = zones.last_mut() {
+            let line = line.trim();
+            if let Some(list) = line.strip_prefix("interfaces:") {
+                zone.interfaces.extend(list.split_whitespace().map(str::to_owned));
+            } else if let Some(list) = line.strip_prefix("sources:") {
+                zone.sources.extend(list.split_whitespace().map(str::to_owned));
+            }
+        }
+    }
+    zones
+}
+
+/// The interface of `ip -o route get <address>`: `192.168.1.5 dev eth0 src ...`.
+fn route_interface(route: &str) -> Option<String> {
+    let mut words = route.split_whitespace();
+    words.find(|word| *word == "dev")?;
+    words.next().map(str::to_owned)
+}
+
+/// Whether a firewalld source (`10.0.0.0/8`, `fe80::/10`, one address) holds `ip`. Other
+/// kinds (`ipset:...`, `mac:...`) are not known to.
+fn source_holds(source: &str, ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    let (net, bits) = match source.split_once('/') {
+        Some((net, bits)) => match bits.parse::<u32>() { Ok(bits) => (net, Some(bits)), Err(_) => return false },
+        None => (source, None),
+    };
+    match (net.parse::<IpAddr>(), ip) {
+        (Ok(IpAddr::V4(net)), IpAddr::V4(ip)) => {
+            let bits = bits.unwrap_or(32);
+            bits <= 32 && (u32::from(net) ^ u32::from(ip)).checked_shr(32 - bits).unwrap_or(0) == 0
+        }
+        (Ok(IpAddr::V6(net)), IpAddr::V6(ip)) => {
+            let bits = bits.unwrap_or(128);
+            bits <= 128 && (u128::from(net) ^ u128::from(ip)).checked_shr(128 - bits).unwrap_or(0) == 0
+        }
+        _ => false,
+    }
 }
 
 fn mac_firewall_enabled(text: &str) -> Option<bool> {
@@ -1735,6 +1940,18 @@ async fn probe_shortcuts(_os: Os) -> Option<Result<u32, String>> {
 #[cfg(not(target_os = "linux"))]
 async fn probe_portals(_os: Os, _dir: std::path::PathBuf) -> Option<Portals> {
     None
+}
+
+/// Up, non-virtual interfaces with an IPv6 address another computer could reach (not loopback or link-local).
+fn probe_ipv6() -> Vec<String> {
+    let mut names: Vec<String> = if_addrs::get_if_addrs().unwrap_or_default().iter()
+        .filter(|i| i.is_oper_up() && !is_virtual_interface(&i.name))
+        .filter(|i| matches!(&i.addr, if_addrs::IfAddr::V6(a) if !a.ip.is_loopback() && !a.ip.is_unspecified() && !a.ip.is_multicast() && !a.ip.is_unicast_link_local()))
+        .map(|i| i.name.clone())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 fn probe_addrs() -> Vec<Addr> {
@@ -1905,7 +2122,7 @@ mod tests {
 
     fn connected(links: &[(&str, u32, u64, u64)]) -> Daemon {
         let mut s = status("aaaa-aaaa", 24900, &links.iter().map(|l| (l.0, true)).collect::<Vec<_>>());
-        s.links = links.iter().map(|(id, rtt_us, lost, sent)| ((*id).into(), one_mk_ctl::status::LinkStats { rtt_us: *rtt_us, lost: *lost, sent: *sent })).collect();
+        s.links = links.iter().map(|(id, rtt_us, lost, sent)| ((*id).into(), one_mk_ctl::status::LinkStats { rtt_us: *rtt_us, lost: *lost, sent: *sent, ..Default::default() })).collect();
         Daemon::Running(Box::new(s))
     }
 
@@ -1930,7 +2147,7 @@ mod tests {
         assert_eq!(st(&connection_check(&connected(&[("1111-1111", 40_001, 0, 100)]))), Status::Warn);
         // A computer that is not connected has no link to judge.
         let mut s = status("aaaa-aaaa", 24900, &[("1111-1111", false)]);
-        s.links = vec![("1111-1111".into(), one_mk_ctl::status::LinkStats { rtt_us: 900_000, lost: 9, sent: 10 })];
+        s.links = vec![("1111-1111".into(), one_mk_ctl::status::LinkStats { rtt_us: 900_000, lost: 9, sent: 10, ..Default::default() })];
         assert_eq!(st(&connection_check(&Daemon::Running(Box::new(s)))), Status::Skip);
     }
 
@@ -1987,7 +2204,7 @@ mod tests {
     }
 
     fn cfg(dir: bool, id: bool, paired: Result<Vec<Paired>, String>) -> Vec<Check> {
-        config_checks(&Config { dir_exists: dir, has_identity: id, paired, settings: Ok(()), ignored: Vec::new() }, Path::new("/x/one-mk"))
+        config_checks(&Config { dir_exists: dir, has_identity: id, identity_problem: None, paired, settings: Ok(()), ignored: Vec::new() }, Path::new("/x/one-mk"))
     }
 
     fn paired(id: &str) -> Paired {
@@ -2012,7 +2229,7 @@ mod tests {
     #[test]
     fn a_settings_file_that_does_not_parse_is_reported() {
         let c = |settings| {
-            let cfg = Config { dir_exists: true, has_identity: true, paired: Ok(vec![]), settings, ignored: Vec::new() };
+            let cfg = Config { dir_exists: true, has_identity: true, identity_problem: None, paired: Ok(vec![]), settings, ignored: Vec::new() };
             config_checks(&cfg, Path::new("/x/one-mk")).remove(0)
         };
         assert_eq!(st(&c(Ok(()))), Status::Pass);
@@ -2021,6 +2238,33 @@ mod tests {
         assert!(bad.outcome.detail.contains("TOML parse error at line 1"), "{}", bad.outcome.detail);
         let fix = bad.outcome.fix.unwrap();
         assert!(fix.contains("delete") && fix.contains("settings.toml"), "{fix}");
+    }
+
+    /// A key and certificate that exist but do not belong together are not "has its identity".
+    #[test]
+    fn a_mismatched_identity_is_not_certified() {
+        let dir = std::env::temp_dir().join(format!("one-mk-doctor-identity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let none = probe_config(&dir);
+        assert!(!none.has_identity && none.identity_problem.is_none());
+        Identity::load_or_create(&dir).unwrap();
+        let good = probe_config(&dir);
+        assert!(good.has_identity && good.identity_problem.is_none());
+        let other = std::env::temp_dir().join(format!("one-mk-doctor-identity-other-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&other);
+        Identity::load_or_create(&other).unwrap();
+        std::fs::copy(other.join("identity.key.der"), dir.join("identity.key.der")).unwrap();
+        let bad = probe_config(&dir);
+        assert!(!bad.has_identity && bad.identity_problem.as_deref().is_some_and(|p| p.contains("damaged")), "{:?}", bad.identity_problem);
+        let check = config_checks(&bad, &dir).remove(1);
+        assert_eq!(st(&check), Status::Fail);
+        assert!(window_check(&check).0.outcome.status == Status::Fail);
+        // Garbage bytes are no different.
+        std::fs::write(dir.join("identity.cert.der"), b"nonsense").unwrap();
+        assert!(probe_config(&dir).identity_problem.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
     }
 
     /// The real probe: a corrupt file in a real folder.
@@ -2193,11 +2437,93 @@ mod tests {
         assert!(!ufw_allows("", 24900));
     }
 
+    #[test]
+    fn a_ufw_rule_for_one_source_or_interface_is_not_general_access() {
+        assert!(!ufw_allows("-A ufw-user-input -p udp --dport 24900 -s 10.9.9.9 -j ACCEPT\n", 24900));
+        assert!(!ufw_allows("-A ufw-user-input -i eth0 -p udp --dport 24900 -j ACCEPT\n", 24900));
+        assert!(!ufw_allows("-A ufw-user-input -d 192.168.1.2 -p udp --dport 24900 -j ACCEPT\n", 24900));
+        assert!(ufw_allows("-A ufw-user-input -p udp --dport 24900 -j ACCEPT\n", 24900));
+    }
+
+    #[test]
+    fn mdns_is_not_required_of_the_firewall_when_discovery_is_off() {
+        let zone = fw(Some(false), None, Some(("24900/udp", "ssh")));
+        let with = firewall_check_for(Os::Linux, &zone, 24900, true);
+        assert_eq!(st(&with), Status::Fail);
+        assert!(with.outcome.fix.unwrap().contains("mdns"));
+        assert_eq!(st(&firewall_check_for(Os::Linux, &zone, 24900, false)), Status::Pass);
+        assert_eq!(st(&firewall_check(Os::Linux, &zone, 24900)), Status::Fail, "the default still wants mDNS");
+        let closed = fw(Some(false), None, Some(("", "ssh")));
+        assert_eq!(st(&firewall_check_for(Os::Linux, &closed, 24900, false)), Status::Fail, "the port itself is still needed");
+    }
+
+    #[test]
+    fn a_non_portal_backend_still_says_what_it_reports() {
+        let quiet = backend_permissions_check("wlroots", &[]);
+        assert_eq!(st(&quiet), Status::Skip);
+        let reports = backend_permissions_check("wlroots", &["reconnecting input".to_owned()]);
+        assert_eq!(st(&reports), Status::Warn);
+        assert!(reports.outcome.detail.contains("reconnecting input"), "{}", reports.outcome.detail);
+    }
+
+    #[test]
+    fn a_wallpaper_player_that_failed_is_not_a_pass() {
+        use one_mk_wallpaper::{Playback, Status as Wallpaper};
+        let status = |message: &str, playback: Option<Playback>| Wallpaper {
+            available: true, message: message.into(),
+            computers: playback.into_iter().map(|p| ("me".to_owned(), p)).collect(), ..Wallpaper::default()
+        };
+        assert_eq!(st(&wallpaper_check(&status("playing", Some(Playback::Ready)))), Status::Pass);
+        assert_eq!(st(&wallpaper_check(&status("the player could not start", Some(Playback::Error("the player could not start".into()))))), Status::Warn);
+        assert_eq!(st(&wallpaper_check(&status("The wallpaper player stopped (exit status: 1). Choose Play to try again.", None))), Status::Warn);
+        assert_eq!(st(&wallpaper_check(&Wallpaper { available: false, message: "no video".into(), ..Wallpaper::default() })), Status::Skip);
+    }
+
+    #[test]
+    fn an_ipv6_only_network_is_not_reported_as_disconnected() {
+        assert_eq!(st(&network_check_with(&[], &[])), Status::Fail);
+        let c = network_check_with(&[], &["eth0".to_owned()]);
+        assert_eq!(st(&c), Status::Pass);
+        assert!(c.outcome.detail.contains("IPv6") && c.outcome.detail.contains("eth0"), "{}", c.outcome.detail);
+        // An IPv4 address still decides as before.
+        assert_eq!(st(&network_check_with(&[addr("wlan0", [169, 254, 1, 1])], &["wlan0".to_owned()])), Status::Warn);
+    }
+
+    /// Something else holds the port on IPv6 only: the daemon falls back to IPv4, so it is not a collision.
+    #[cfg(unix)]
+    #[test]
+    fn a_port_held_only_on_ipv6_is_not_in_use() {
+        use std::os::fd::{FromRawFd, OwnedFd, AsRawFd};
+        // SAFETY: plain socket calls on a descriptor owned here.
+        let fd = unsafe { libc::socket(libc::AF_INET6, libc::SOCK_DGRAM, 0) };
+        if fd < 0 { eprintln!("skipped: no IPv6"); return; }
+        // SAFETY: just opened, owned here.
+        let socket = unsafe { OwnedFd::from_raw_fd(fd) };
+        let on: libc::c_int = 1;
+        // SAFETY: a valid descriptor and an int option of the length given.
+        let set = unsafe { libc::setsockopt(socket.as_raw_fd(), libc::IPPROTO_IPV6, libc::IPV6_V6ONLY, (&raw const on).cast(), std::mem::size_of::<libc::c_int>() as libc::socklen_t) };
+        // SAFETY: an all-zero sockaddr_in6 is the IPv6 wildcard address with port 0.
+        let mut address: libc::sockaddr_in6 = unsafe { std::mem::zeroed() };
+        address.sin6_family = libc::AF_INET6 as libc::sa_family_t;
+        // SAFETY: a valid descriptor and an address of the length given.
+        let bound = unsafe { libc::bind(socket.as_raw_fd(), (&raw const address).cast(), std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t) };
+        if set != 0 || bound != 0 { eprintln!("skipped: could not bind an IPv6-only socket"); return; }
+        let mut length = std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t;
+        // SAFETY: a valid descriptor and room for the address.
+        let named = unsafe { libc::getsockname(socket.as_raw_fd(), (&raw mut address).cast(), &mut length) };
+        assert_eq!(named, 0);
+        let port = u16::from_be(address.sin6_port);
+        // The IPv4 side of the same port must be free for the claim to hold.
+        if UdpSocket::bind(("0.0.0.0", port)).is_err() { eprintln!("skipped: the port is taken on IPv4 too"); return; }
+        let facts = probe_port(port, Path::new("/nonexistent"));
+        assert_ne!(facts.bind, Bind::InUse);
+    }
+
     fn fw(ufw: Option<bool>, rules: Option<&str>, firewalld: Option<(&str, &str)>) -> Firewall {
         Firewall {
             ufw_active: ufw,
             ufw_rules: rules.map(str::to_owned),
-            firewalld: firewalld.map(|(p, s)| Firewalld { ports: p.into(), services: s.into() }),
+            firewalld: firewalld.into_iter().map(|(p, s)| Firewalld { zone: None, why: ZoneWhy::Default, ports: p.into(), services: s.into() }).collect(),
             ..Firewall::default()
         }
     }
@@ -2244,6 +2570,100 @@ mod tests {
         let nothing = firewall_check(Os::Linux, &fw(Some(false), None, Some(("", ""))), 24900);
         let fix = nothing.outcome.fix.unwrap();
         assert!(fix.contains("--add-port=24900/udp") && fix.contains("--add-service=mdns"));
+    }
+
+    /// A firewalld whose answers come from a table: `(arguments joined, answer)`.
+    fn firewalld_says(answers: &'static [(&'static str, &'static str)]) -> impl Fn(&str, &[&str]) -> Option<String> {
+        move |program, args| {
+            let asked = format!("{program} {}", args.join(" "));
+            answers.iter().find(|(question, _)| *question == asked).map(|(_, answer)| (*answer).to_owned())
+        }
+    }
+
+    const ZONES: &[(&str, &str)] = &[
+        ("firewall-cmd --state", "running\n"),
+        ("firewall-cmd --get-default-zone", "home\n"),
+        ("firewall-cmd --get-active-zones", "home (default)\n  interfaces: wlan0\nwork\n  interfaces: eth0\ndocker\n  sources: 172.17.0.0/16\n"),
+        ("firewall-cmd --list-all --zone=home", "home (default, active)\n  ports: 24900/udp\n  services: mdns\n"),
+        ("firewall-cmd --list-all --zone=work", "work (active)\n  ports: \n  services: ssh\n"),
+        ("firewall-cmd --list-all --zone=docker", "docker (active)\n  ports: \n  services: \n"),
+        ("firewall-cmd --list-all", "home (default, active)\n  ports: 24900/udp\n  services: mdns\n"),
+        ("ip -o route get 192.168.1.20", "192.168.1.20 dev eth0 src 192.168.1.2 uid 1000 \\    cache\n"),
+        ("ip -o route get 192.168.7.9", "192.168.7.9 dev wlan0 src 192.168.7.2 uid 1000 \\    cache\n"),
+    ];
+
+    /// The default zone opens the ports, but the interface the other computer is reached
+    /// by is in another zone that does not: the verdict is about that zone.
+    #[test]
+    fn firewalld_is_checked_in_the_zone_of_the_interface_facing_the_peer() {
+        let peers = vec![("Desk".to_owned(), vec!["192.168.1.20:24900".to_owned()])];
+        let zones = firewalld_facts(&firewalld_says(ZONES), &peers);
+        assert_eq!(zones.len(), 1);
+        assert_eq!(zones[0].zone.as_deref(), Some("work"));
+        assert_eq!(zones[0].why, ZoneWhy::Interface { interface: "eth0".into(), peer: "Desk".into() });
+        let check = firewall_check(Os::Linux, &Firewall { ufw_active: Some(false), firewalld: zones, ..Firewall::default() }, 24900);
+        assert_eq!(st(&check), Status::Fail, "the default zone's open port said otherwise");
+        let (detail, fix) = (check.outcome.detail.clone(), check.outcome.fix.clone().unwrap());
+        assert!(detail.contains("blocks") || fix.contains("work"), "{detail} / {fix}");
+        assert!(fix.contains("the zone of eth0, the interface that reaches Desk (`work`)"), "{fix}");
+        assert!(fix.contains("--permanent --zone=work --add-port=24900/udp"), "{fix}");
+        assert!(!fix.contains("default zone"), "{fix}");
+
+        // The peer on the wlan0, whose zone is the open default one: fine.
+        let on_wlan = vec![("Mac".to_owned(), vec!["192.168.7.9:24900".to_owned()])];
+        let zones = firewalld_facts(&firewalld_says(ZONES), &on_wlan);
+        assert_eq!(zones[0].zone.as_deref(), Some("home"));
+        assert_eq!(st(&firewall_check(Os::Linux, &Firewall { ufw_active: Some(false), firewalld: zones, ..Firewall::default() }, 24900)), Status::Pass);
+
+        // Two computers in two zones: both zones are checked, once each.
+        let both = vec![peers[0].clone(), on_wlan[0].clone(), ("Other".to_owned(), vec!["192.168.1.20:24900".to_owned()])];
+        let zones = firewalld_facts(&firewalld_says(ZONES), &both);
+        assert_eq!(zones.iter().map(|z| z.zone.clone().unwrap()).collect::<Vec<_>>(), ["work", "home"]);
+    }
+
+    /// Nobody is paired, or no route is known: the default zone is checked, and said to be.
+    #[test]
+    fn firewalld_falls_back_to_the_default_zone_and_says_so() {
+        for peers in [vec![], vec![("Gone".to_owned(), vec!["10.9.9.9:24900".to_owned()])], vec![("Lo".to_owned(), vec!["127.0.0.1:1".to_owned()])]] {
+            let zones = firewalld_facts(&firewalld_says(ZONES), &peers);
+            assert_eq!((zones.len(), zones[0].zone.as_deref(), &zones[0].why), (1, Some("home"), &ZoneWhy::Default));
+        }
+        let closed = [Firewalld { zone: Some("home".into()), why: ZoneWhy::Default, ports: String::new(), services: String::new() }];
+        let check = firewall_check(Os::Linux, &Firewall { ufw_active: Some(false), firewalld: closed.to_vec(), ..Firewall::default() }, 24900);
+        assert!(check.outcome.fix.unwrap().contains("in its default zone (`home`)"));
+        // firewalld without a name for the default zone: the rules are read without one, as before.
+        let nameless: &'static [(&str, &str)] = &[("firewall-cmd --state", "running"), ("firewall-cmd --list-all", "public\n  ports: 24900/udp\n  services: mdns\n")];
+        let zones = firewalld_facts(&firewalld_says(nameless), &[]);
+        assert_eq!((zones[0].zone.clone(), zones[0].ports.as_str()), (None, "24900/udp"));
+        assert!(firewalld_facts(&firewalld_says(&[]), &[]).is_empty(), "not running");
+    }
+
+    /// A zone that holds the computer's address as a source wins over the interface's zone.
+    #[test]
+    fn firewalld_source_zones_come_before_interface_zones() {
+        let peers = vec![("Box".to_owned(), vec!["172.17.0.5:24900".to_owned()])];
+        let answers: &'static [(&str, &str)] = ZONES;
+        let zones = firewalld_facts(&firewalld_says(answers), &peers);
+        assert_eq!(zones[0].zone.as_deref(), Some("docker"));
+        assert_eq!(zones[0].why, ZoneWhy::Source { source: "172.17.0.0/16".into(), peer: "Box".into() });
+        assert!(zones[0].place().contains("zone that holds the source 172.17.0.0/16, which Box is in"));
+    }
+
+    #[test]
+    fn firewalld_zone_and_route_parsing() {
+        let zones = parse_active_zones("home (default)\n  interfaces: wlan0 wlan1\n  sources: 10.0.0.0/8\ndocker\n  interfaces: docker0\n");
+        assert_eq!(zones, [
+            ActiveZone { name: "home".into(), interfaces: vec!["wlan0".into(), "wlan1".into()], sources: vec!["10.0.0.0/8".into()] },
+            ActiveZone { name: "docker".into(), interfaces: vec!["docker0".into()], sources: vec![] },
+        ]);
+        assert_eq!(route_interface("10.0.0.5 via 10.0.0.1 dev enp3s0 src 10.0.0.2 uid 1000 \\ cache"), Some("enp3s0".into()));
+        assert_eq!(route_interface("RTNETLINK answers: Network is unreachable"), None);
+        let ip = |s: &str| s.parse::<std::net::IpAddr>().unwrap();
+        assert!(source_holds("10.0.0.0/8", ip("10.200.1.1")) && !source_holds("10.0.0.0/8", ip("11.0.0.1")));
+        assert!(source_holds("192.168.1.7", ip("192.168.1.7")) && !source_holds("192.168.1.7", ip("192.168.1.8")));
+        assert!(source_holds("0.0.0.0/0", ip("8.8.8.8")) && source_holds("fe80::/10", ip("fe80::1")));
+        assert!(!source_holds("fe80::/10", ip("fd00::1")) && !source_holds("10.0.0.0/8", ip("fe80::1")));
+        assert!(!source_holds("ipset:lan", ip("10.0.0.1")) && !source_holds("10.0.0.0/33", ip("10.0.0.1")));
     }
 
     #[test]

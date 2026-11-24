@@ -1,10 +1,10 @@
 import { test, test3d, expect, currentProfile } from '../lib/support.ts';
 
-// The 3D desk and keyboard, and what a visitor gets without WebGL or with reduced motion.
+// The 3D desk and keyboard (three.js r169 needs WebGL 2, so a browser with only WebGL 1 counts as having none), and what a visitor gets without WebGL or with reduced motion.
 
 type B = import('@e2e-dev/web').Browser;
 
-const hasWebGL = (browser: B) => browser.evaluate<boolean>(`(function(){ try { var c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (c.getContext('webgl2') || c.getContext('webgl'))); } catch (e) { return false; } })()`);
+const hasWebGL = (browser: B) => browser.evaluate<boolean>(`(function(){ try { var c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && c.getContext('webgl2')); } catch (e) { return false; } })()`);
 
 const heroState = (browser: B) => browser.evaluate(() => {
   const canvas = document.querySelector('[data-desk]') as HTMLCanvasElement;
@@ -83,9 +83,9 @@ test3d('the buttons under the desk move the pointer to that computer, with mouse
     }
   };
   await choose(mac, ['true', 'false', 'false']);
-  await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 5000 }).toEqual([true, false, false]);
+  await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 60_000 }).toEqual([true, false, false]);
   await choose(pc, ['false', 'false', 'true']);
-  await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 5000 }).toEqual([false, false, true]);
+  await expect.poll(async () => (await heroState(browser)).labels.map((l) => l.on), { timeout: 60_000 }).toEqual([false, false, true]);
   // From the keyboard.
   await studio.focus();
   await browser.keyboard.press('Enter');
@@ -241,5 +241,25 @@ test('with motion allowed every entrance finishes: after scrolling past, no bloc
     return out;
   });
   expect(stuck).toEqual([]);
+  await guard.check();
+});
+
+test3d('WebGL 1 only: the poster stays and three.js, which needs WebGL 2, is never fetched', async ({ app, browser, guard }) => {
+  await browser.addInitScript(`(function () { var o = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (t) { return /webgl2/i.test(String(t)) ? null : o.apply(this, arguments); };
+    try { Object.defineProperty(window, 'WebGL2RenderingContext', { value: undefined, configurable: true }); } catch (e) {} })();`);
+  await app.open('/');
+  const shown = (sel: string) => browser.evaluate<boolean>(`(function(){ var i = Array.from(document.querySelectorAll('${sel}')).find(function (x) { return x.offsetWidth > 0; }); return !!i && i.complete && i.naturalWidth > 0; })()`);
+  await expect.poll(() => shown('.stage__poster img'), { timeout: 20_000 }).toBe(true);
+  await browser.evaluate('new Promise(function (r) { setTimeout(r, 800); })');
+  const s = await browser.evaluate(() => ({
+    three: typeof (window as unknown as { THREE?: unknown }).THREE !== 'undefined',
+    live: document.querySelectorAll('canvas.is-live').length,
+    posterOpacity: getComputedStyle(document.querySelector('.stage__poster') as HTMLElement).opacity,
+  }));
+  expect(s.three).toBe(false);
+  expect(s.live).toBe(0);
+  expect(+s.posterOpacity).toBe(1);
+  expect(guard.requests.filter((u) => /three\.min\.js|desk\.js|mouse-mesh\.js/.test(u))).toEqual([]);
   await guard.check();
 });

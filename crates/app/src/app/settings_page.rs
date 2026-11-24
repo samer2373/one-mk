@@ -8,6 +8,7 @@
 use super::pages::{GROUP_LABEL, group_card};
 use super::settings_controls::{HOOK_ROW, SHORTCUT_ROW};
 use super::*;
+use crate::view::{EDGE_CORNER_MAX, EDGE_DWELL_MAX};
 
 const ANALYTICS_NOTE: &str = "Optional, off by default. After enabling/resetting, restart the app and daemon to begin collection. Withdrawal stops new sends immediately. Shares feature outcomes and redacted error/panic diagnostics with a random installation ID. App source locations may be included, never panic messages, input, clipboard, user files/paths or peer identity. Private retry/crash records expire after 24 hours. Off removes pending records and the ID; sent data cannot be recalled.";
 
@@ -356,7 +357,10 @@ impl App {
         ui.ctx().data(|data| data.get_temp::<String>(Id::unique("edge-scope"))).unwrap_or_default()
     }
 
-    /// (corner px, wait ms, key to hold, stay in fullscreen) for `side`.
+    /// (corner px, wait ms, key to hold, stay in fullscreen) for `side`, as
+    /// the daemon applies them (`Prefs::read` already did: a corner or wait
+    /// over the most is the most, a key spelled another way (`Control`) is
+    /// the same key, and one edge's key that is no key is the shared one).
     fn edge_rules(&self, side: &str) -> (u32, u32, String, bool) {
         match self.prefs.edge_sides.iter().find(|(name, _)| name == side) {
             Some((_, rules)) => (rules.corner, rules.dwell, rules.modifier.clone(), rules.fullscreen),
@@ -387,7 +391,7 @@ impl App {
             "swaps-note" => meta("Auto swaps them only between a Mac and a PC.") + 20.0,
             "swaps" => {
                 let peers = self.running().map_or(0, |s| s.peers.len());
-                if peers == 0 { para_h(ui, "Pair a computer to choose how Ctrl and Cmd work when you type on it.", regular(T_BODY), w) + 24.0 } else { super::swap_row_h(w) * peers as f32 + 16.0 }
+                if peers == 0 { para_h(ui, self.swaps_empty_text(), regular(T_BODY), w) + 24.0 } else { super::swap_row_h(w) * peers as f32 + 16.0 }
             }
             k if k.starts_with("hotkey-") => k["hotkey-".len()..].parse::<usize>().ok().filter(|i| *i < self.prefs.hotkeys.len()).map_or(0.0, |_| SHORTCUT_ROW),
             k if k.starts_with("hook-") && k != "hook-shell" => HOOK_ROW,
@@ -442,6 +446,12 @@ impl App {
                 let mut side = self.edge_side(ui);
                 if let Some(k) = self.seg_row(ui, r, "edge-scope", "Which edges cross", "edge-scope", &SCOPE, &side, None) {
                     side = SCOPE[k].0.to_owned();
+                    // What was typed in a number field is for the side it was typed under:
+                    // the click that changes the side ends it here (settled by what the side had).
+                    for key in ["edge-corner", "edge-dwell"] {
+                        self.drafts.remove(key);
+                        ui.memory_mut(|memory| memory.surrender_focus(Id::unique(("field", key))));
+                    }
                     ui.ctx().data_mut(|data| data.insert_temp(Id::unique("edge-scope"), side));
                 }
             }
@@ -589,7 +599,7 @@ impl App {
     fn edge_number_row(&mut self, ui: &mut Ui, key: &str, r: Rect) {
         let side = self.edge_side(ui);
         let (corner, dwell, _, _) = self.edge_rules(&side);
-        let (label, unit, cur, max, flag) = if key == "edge-corner" { ("Don't cross near corners", "px", corner, 500u32, "--corner") } else { ("Wait at the edge", "ms", dwell, 5000, "--dwell") };
+        let (label, unit, cur, max, flag) = if key == "edge-corner" { ("Don't cross near corners", "px", corner, EDGE_CORNER_MAX, "--corner") } else { ("Wait at the edge", "ms", dwell, EDGE_DWELL_MAX, "--dwell") };
         let uw = text_width(ui, "px", mono(T_META)).max(text_width(ui, "ms", mono(T_META))) + 8.0;
         label_help(ui, r, Id::unique(("edge-label", key)), label, key, true, 72.0 + uw + 12.0);
         let fr = Rect::from_min_size(pos2(r.right() - 72.0 - uw, r.center().y - 14.0), vec2(72.0, 28.0));
@@ -638,6 +648,17 @@ impl App {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    // The window tests do not build on Windows (frame_tests is not compiled there).
+    #[cfg(not(windows))]
+    #[test]
+    fn edge_rules_are_the_ones_in_force() {
+        let mut win = super::frame_tests::Win::light(900.0, 700.0);
+        win.app.prefs = crate::view::Prefs::read("[edge]\nmodifier = \"Control\"\ndwell_ms = 8000\ncorner = 900\nwrap = \"ALL\"\n[edge.left]\nmodifier = \"hyper\"\n", "");
+        assert_eq!(win.app.edge_rules(""), (500, 5000, "ctrl".to_owned(), false));
+        assert_eq!(win.app.edge_rules("left"), (500, 5000, "ctrl".to_owned(), false));
+        assert_eq!(win.app.prefs.edge_wrap, "all");
+    }
 
     #[test]
     fn eight_categories_in_the_order_of_the_handoff() {

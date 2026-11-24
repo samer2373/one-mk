@@ -400,7 +400,7 @@ impl App {
             return;
         }
         if code == 1 && down { t.gestures.cancel(); }
-        match t.gestures.button(code, down) {
+        match t.gestures.button_from(code, down, device) {
             ButtonResult::Swallow => {
                 self.send_tuned();
                 if stopped { self.tuned_scroll(ScrollIn::Stop, None); }
@@ -414,8 +414,12 @@ impl App {
             }
             ButtonResult::Pass => {}
         }
-        let out = &mut t.out;
-        t.mapper.key_from(code, down, device, now, &mut |e| out.push(e));
+        // A release went to the mapper above, once: a second call would find the key
+        // held by another device (as `release_of` falls back to) and release that too.
+        if down {
+            let out = &mut t.out;
+            t.mapper.key_from(code, down, device, now, &mut |e| out.push(e));
+        }
         // Held here from any device: what shortcuts and focus watching see.
         if down || !t.mapper.held_anywhere(code) {
             r.held.update(code, down);
@@ -481,7 +485,6 @@ impl App {
         let Some(r) = self.remote.as_mut() else { return };
         let t = &mut r.tune;
         let mut out = std::mem::take(&mut t.out);
-        let mods = t.mapper.mods();
         let tuned = match input {
             ScrollIn::Stop => {
                 let last = t.last_scroll;
@@ -489,11 +492,14 @@ impl App {
             }
             ScrollIn::Smooth(dx, dy) => {
                 t.mapper.interrupt(&mut |e| out.push(e));
+                // After the interrupt: a tap/hold key it just decided is a held modifier now.
+                let mods = t.mapper.mods();
                 t.last_scroll = device;
                 t.scroll(device).smooth(dx, dy, mods)
             }
             ScrollIn::Discrete(dx, dy) => {
                 t.mapper.interrupt(&mut |e| out.push(e));
+                let mods = t.mapper.mods();
                 t.last_scroll = device;
                 t.scroll(device).discrete(dx, dy, mods)
             }

@@ -500,7 +500,7 @@ enum Cmd {
         #[arg(long, default_value_t = 1000)]
         rate: u32,
         /// Echo for a bench on another machine.
-        #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "24901")]
+        #[arg(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "24901", conflicts_with = "connect")]
         serve: Option<u16>,
         /// Measure against `one-mk bench --serve` on another machine, e.g. 192.168.1.20:24901.
         #[arg(long, value_name = "IP:PORT")]
@@ -779,7 +779,7 @@ fn run(cli: Cli) -> Result<()> {
 /// whether it is a custom one. `migrate` (moving an older version's files
 /// into the default folder) runs only when the default folder is the one
 /// used: a custom home never reaches outside itself, not even to look.
-fn select_home(given: Option<&Path>, default: Result<PathBuf>, migrate: impl FnOnce(&Path)) -> Result<(PathBuf, bool)> {
+fn select_home(given: Option<&Path>, default: Result<PathBuf>, migrate: impl FnOnce(&Path) -> Result<()>) -> Result<(PathBuf, bool)> {
     let (dir, custom) = match given {
         // Relative, a folder can't be checked up to the root (and the daemon
         // would see another folder after a `cd`): make it absolute now.
@@ -794,7 +794,7 @@ fn select_home(given: Option<&Path>, default: Result<PathBuf>, migrate: impl FnO
         None => (default?, false),
     };
     if !custom {
-        migrate(&dir);
+        migrate(&dir)?;
     }
     Ok((dir, custom))
 }
@@ -807,21 +807,23 @@ fn same_folder(a: &Path, b: &Path) -> bool {
 
 /// Moves an older version's files into the default home `dir`, once: on
 /// Windows they were kept in the roaming AppData.
-fn migrate_old_home(dir: &Path) {
+fn migrate_old_home(dir: &Path) -> Result<()> {
     #[cfg(windows)]
     if let Some(dirs) = directories::ProjectDirs::from("", "", "one-mk") {
-        migrate_roaming(dirs.config_dir(), dir);
+        return migrate_roaming(dirs.config_dir(), dir);
     }
     #[cfg(not(windows))]
     let _ = dir;
+    Ok(())
 }
 
 /// Earlier versions kept their settings in the roaming AppData; move them
-/// to the local one the first time.
-#[cfg(windows)]
-fn migrate_roaming(old: &Path, new: &Path) {
+/// to the local one the first time. A move that fails is an error: carrying
+/// on would make the command create a new identity next to the old one.
+#[cfg(any(windows, test))]
+fn migrate_roaming(old: &Path, new: &Path) -> Result<()> {
     if old == new || new.join("identity.key.der").exists() || !old.join("identity.key.der").exists() {
-        return;
+        return Ok(());
     }
     let moved = new.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::rename(old, new));
     if let Err(e) = moved {
@@ -829,20 +831,33 @@ fn migrate_roaming(old: &Path, new: &Path) {
         tracing::debug!("moving {} failed ({e}); copying", old.display());
         let copy = || -> std::io::Result<()> {
             std::fs::create_dir_all(new)?;
+            // The identity key goes last, and under another name until it is whole:
+            // its presence in the new folder is what says the migration is done, so a
+            // copy that stops half way (or a key cut short) is tried again.
+            let key = std::ffi::OsStr::new("identity.key.der");
             for entry in std::fs::read_dir(old)? {
                 let entry = entry?;
-                if entry.file_type()?.is_file() {
+                if entry.file_type()?.is_file() && entry.file_name() != key {
                     std::fs::copy(entry.path(), new.join(entry.file_name()))?;
                 }
             }
-            std::fs::remove_dir_all(old)
+            let partial = new.join("identity.key.der.migrating");
+            let published = std::fs::copy(old.join(key), &partial).and_then(|_| std::fs::File::open(&partial)?.sync_all()).and_then(|()| std::fs::rename(&partial, new.join(key)));
+            if published.is_err() {
+                let _ = std::fs::remove_file(&partial);
+            }
+            published
         };
         if let Err(e) = copy() {
-            tracing::warn!("could not move settings from {} to {}: {e}", old.display(), new.display());
-            return;
+            return Err(anyhow::anyhow!("could not move settings from {} to {}: {e}; the old folder is kept, fix this and run the command again", old.display(), new.display()));
+        }
+        // The new folder is complete; the old one is only left behind.
+        if let Err(e) = std::fs::remove_dir_all(old) {
+            tracing::warn!("settings were copied to {}, but {} could not be removed: {e}", new.display(), old.display());
         }
     }
     tracing::info!("moved settings from {} to {}", old.display(), new.display());
+    Ok(())
 }
 
 pub(crate) fn default_downloads() -> Result<PathBuf> {
@@ -879,12 +894,29 @@ fn devices(dir: &Path, verbose: bool) -> Result<()> {
 }
 
 fn forget(dir: &Path, device: &str) -> Result<()> {
-    let d = TrustStore::update(dir, |trust| {
-        let Some(d) = trust.remove(device) else { return Err(manage::not_found(trust, device)) };
-        wallpaper::forget(dir, &d.fingerprint)?;
-        Ok(d)
+    let removed = TrustStore::update(dir, |trust| {
+        match trust.remove(device) {
+            Some(d) => Ok(Some(d)),
+            // Already forgotten, but its wallpaper permission is still there: the full ID
+            // (shown by the warning below) finishes the job.
+            None if device.parse::<one_mk_net::Fingerprint>().is_ok() => Ok(None),
+            None => Err(manage::not_found(trust, device)),
+        }
     })?;
+    let Some(d) = removed else {
+        let fingerprint = device.parse::<one_mk_net::Fingerprint>()?.to_string();
+        if !wallpaper::has_grant(dir, &fingerprint)? {
+            return Err(anyhow::anyhow!("no paired computer or wallpaper permission matches {device}"));
+        }
+        wallpaper::forget(dir, &fingerprint)?;
+        println!("Removed the wallpaper permission of {fingerprint}.");
+        return Ok(());
+    };
     println!("Forgot {}.", one_mk_proto::sanitize_name(d.label()));
+    // After the revocation is saved: a settings file that can't be read must not keep a peer trusted.
+    if let Err(e) = wallpaper::forget(dir, &d.fingerprint) {
+        eprintln!("Warning: its wallpaper permission could not be removed ({e:#}). Fix settings.toml and run `one-mk forget {}` again to remove it.", d.fingerprint);
+    }
     Ok(())
 }
 
@@ -913,7 +945,7 @@ mod tests {
         let default = root.join("default");
         let custom = root.join("scratch");
         let migrated = std::cell::RefCell::new(Vec::new());
-        let note = |dir: &Path| migrated.borrow_mut().push(dir.to_owned());
+        let note = |dir: &Path| { migrated.borrow_mut().push(dir.to_owned()); Ok(()) };
 
         let (dir, is_custom) = select_home(Some(&custom), Ok(default.clone()), note).unwrap();
         assert_eq!((dir, is_custom), (custom.clone(), true));
@@ -932,7 +964,7 @@ mod tests {
 
         assert!(select_home(None, Err(anyhow::anyhow!("no home directory")), note).is_err());
         // A relative --home becomes absolute.
-        let (dir, _) = select_home(Some(Path::new("rel-home")), Ok(root.join("d")), |_| {}).unwrap();
+        let (dir, _) = select_home(Some(Path::new("rel-home")), Ok(root.join("d")), |_| Ok(())).unwrap();
         assert!(dir.is_absolute() && dir.ends_with("rel-home"));
     }
 
@@ -983,6 +1015,71 @@ mod tests {
         for action in ["import", "consent", "doctor"] {
             assert!(Cli::try_parse_from(["one-mk", "wallpaper", action]).is_err());
         }
+    }
+
+    #[test]
+    fn bench_serve_and_connect_are_not_given_together() {
+        assert!(Cli::try_parse_from(["one-mk", "bench", "--serve", "--connect", "1.2.3.4:5"]).is_err());
+        assert!(Cli::try_parse_from(["one-mk", "bench", "--serve"]).is_ok());
+        assert!(Cli::try_parse_from(["one-mk", "bench", "--connect", "1.2.3.4:5"]).is_ok());
+    }
+
+    /// A settings file that does not parse must not keep a revoked peer trusted.
+    #[test]
+    fn forgetting_a_peer_works_with_an_unreadable_settings_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let fingerprint = one_mk_net::Fingerprint([7; 32]).to_string();
+        TrustStore::update(dir.path(), |trust| {
+            trust.upsert(one_mk_net::Device { name: "laptop".into(), fingerprint, ..Default::default() });
+            Ok(())
+        }).unwrap();
+        std::fs::write(dir.path().join("settings.toml"), "[wallpaper\n").unwrap();
+        forget(dir.path(), "laptop").unwrap();
+        assert!(TrustStore::load(dir.path()).unwrap().devices().is_empty());
+    }
+
+    /// The retry the warning asks for reaches the wallpaper permission even
+    /// though the trust entry is already gone.
+    #[test]
+    fn forgetting_again_with_the_full_id_removes_a_stale_wallpaper_grant() {
+        let dir = tempfile::tempdir().unwrap();
+        let fingerprint = one_mk_net::Fingerprint([7; 32]).to_string();
+        TrustStore::update(dir.path(), |trust| {
+            trust.upsert(one_mk_net::Device { name: "laptop".into(), fingerprint: fingerprint.clone(), ..Default::default() });
+            Ok(())
+        }).unwrap();
+        std::fs::write(dir.path().join("settings.toml"), "[wallpaper\n").unwrap();
+        forget(dir.path(), "laptop").unwrap();
+        std::fs::write(dir.path().join("settings.toml"), format!("[wallpaper]\nenabled = true\n[wallpaper.grants]\n{fingerprint} = 1\n")).unwrap();
+        assert!(wallpaper::has_grant(dir.path(), &fingerprint).unwrap());
+        assert!(forget(dir.path(), "laptop").is_err(), "a name still needs a trust entry");
+        forget(dir.path(), &fingerprint).unwrap();
+        assert!(!wallpaper::has_grant(dir.path(), &fingerprint).unwrap());
+        assert!(forget(dir.path(), &fingerprint).is_err(), "nothing left to forget");
+    }
+
+    /// The identity key is what says a migration is done, so it is copied last: a copy that stops
+    /// half way leaves no key and is tried again.
+    #[test]
+    fn an_interrupted_roaming_migration_is_finished_by_the_next_start() {
+        let root = tempfile::tempdir().unwrap();
+        let (old, new) = (root.path().join("roaming"), root.path().join("local/one-mk"));
+        std::fs::create_dir_all(&old).unwrap();
+        for name in ["devices.toml", "settings.toml", "identity.cert.der", "identity.key.der"] {
+            std::fs::write(old.join(name), name).unwrap();
+        }
+        // The new folder exists with something in the way of one file: the rename fails, then so does a copy.
+        std::fs::create_dir_all(new.join("devices.toml")).unwrap();
+        assert!(migrate_roaming(&old, &new).is_err(), "a migration that failed must stop the command, which would create another identity");
+        assert!(!new.join("identity.key.der").exists(), "the key must not be there while files are missing");
+        assert!(old.join("devices.toml").is_file(), "the old folder is kept");
+        std::fs::remove_dir_all(new.join("devices.toml")).unwrap();
+        migrate_roaming(&old, &new).unwrap();
+        for name in ["devices.toml", "settings.toml", "identity.cert.der", "identity.key.der"] {
+            assert_eq!(std::fs::read_to_string(new.join(name)).unwrap(), name);
+        }
+        assert!(!old.exists());
+        assert!(!new.join("identity.key.der.migrating").exists(), "the key was published under its name");
     }
 
     #[test]

@@ -50,6 +50,10 @@ pub(super) fn sits_words(side: Side, touching: Option<usize>, screens: usize) ->
     }
 }
 
+/// How near edges are to count as touching, in pixels: the daemon's
+/// (`one_mk_proto::touching` allows two).
+const TOUCH_PX: f64 = 2.0;
+
 /// How far two spans overlap (0 when they don't).
 fn overlap(a: (f64, f64), b: (f64, f64)) -> f64 {
     (a.1.min(b.1) - a.0.max(b.0)).max(0.0)
@@ -64,10 +68,10 @@ pub(super) fn touching_screen(mine: &[one_mk_proto::Rect], theirs: &[one_mk_wall
         let (x, y, w, h) = (f64::from(screen.x), f64::from(screen.y), f64::from(screen.w), f64::from(screen.h));
         for other in theirs {
             let shared = match side {
-                Side::Left if (other.x + other.width - x).abs() <= 1.0 => overlap((y, y + h), (other.y, other.y + other.height)),
-                Side::Right if (other.x - (x + w)).abs() <= 1.0 => overlap((y, y + h), (other.y, other.y + other.height)),
-                Side::Top if (other.y + other.height - y).abs() <= 1.0 => overlap((x, x + w), (other.x, other.x + other.width)),
-                Side::Bottom if (other.y - (y + h)).abs() <= 1.0 => overlap((x, x + w), (other.x, other.x + other.width)),
+                Side::Left if (other.x + other.width - x).abs() <= TOUCH_PX => overlap((y, y + h), (other.y, other.y + other.height)),
+                Side::Right if (other.x - (x + w)).abs() <= TOUCH_PX => overlap((y, y + h), (other.y, other.y + other.height)),
+                Side::Top if (other.y + other.height - y).abs() <= TOUCH_PX => overlap((x, x + w), (other.x, other.x + other.width)),
+                Side::Bottom if (other.y - (y + h)).abs() <= TOUCH_PX => overlap((x, x + w), (other.x, other.x + other.width)),
                 _ => 0.0,
             };
             if shared > 0.0 && best.is_none_or(|(_, most)| shared > most) {
@@ -78,36 +82,91 @@ pub(super) fn touching_screen(mine: &[one_mk_proto::Rect], theirs: &[one_mk_wall
     best.map(|(index, _)| index)
 }
 
-/// The stretches where screens of different computers share an edge, as
-/// (from, to) points in the canvas' own pixels: where the pointer crosses.
-pub(super) fn touching_edges(canvas: &Canvas) -> Vec<((f64, f64), (f64, f64))> {
-    let mut edges = vec![];
-    for (i, a) in canvas.monitors.iter().enumerate() {
-        for b in &canvas.monitors[i + 1..] {
-            if a.computer == b.computer {
-                continue;
-            }
-            let (a, b) = (a.rect, b.rect);
-            // `a` left of `b`, or `b` left of `a`; then above, below.
-            for (left, right) in [(a, b), (b, a)] {
-                if (left.x + left.width - right.x).abs() <= 1.0 {
-                    let (from, to) = (left.y.max(right.y), (left.y + left.height).min(right.y + right.height));
-                    if to > from {
-                        let x = (left.x + left.width + right.x) / 2.0;
-                        edges.push(((x, from), (x, to)));
+/// A segment of an edge, as (from, to) points in the plan's own pixels.
+type Segment = ((f64, f64), (f64, f64));
+
+/// What the part of an edge that another computer's already covers loses:
+/// `mine` without the stretches of `taken` on the same line, and whether any
+/// was lost. Where two computers' edges overlap, the earlier keeps the shared
+/// stretch, and the later keeps what is left of each edge on either side of
+/// it. (The daemon's `unclaimed`, in `crates/one-mk/src/app.rs`.)
+fn unclaimed(mine: Vec<one_mk_proto::Edge>, taken: &[one_mk_proto::Edge]) -> (Vec<one_mk_proto::Edge>, bool) {
+    let mut lost = false;
+    let mut kept = Vec::new();
+    for edge in mine {
+        let mut pieces = vec![edge];
+        for other in taken.iter().filter(|other| other.side == edge.side && other.at == edge.at) {
+            pieces = pieces
+                .into_iter()
+                .flat_map(|piece| {
+                    if piece.lo < other.hi && other.lo < piece.hi {
+                        lost = true;
+                        let before = (piece.lo < other.lo).then_some(one_mk_proto::Edge { hi: other.lo, ..piece });
+                        let after = (other.hi < piece.hi).then_some(one_mk_proto::Edge { lo: other.hi, ..piece });
+                        before.into_iter().chain(after).collect::<Vec<_>>()
+                    } else {
+                        vec![piece]
                     }
-                }
-                if (left.y + left.height - right.y).abs() <= 1.0 {
-                    let (from, to) = (left.x.max(right.x), (left.x + left.width).min(right.x + right.width));
-                    if to > from {
-                        let y = (left.y + left.height + right.y) / 2.0;
-                        edges.push(((from, y), (to, y)));
-                    }
-                }
-            }
+                })
+                .collect();
         }
+        kept.extend(pieces);
     }
-    edges
+    (kept, lost)
+}
+
+/// The edges of this computer's screens the daemon arms for the computers in
+/// `status` (each placed as the status says), as segments in the plan's own
+/// pixels: where the pointer crosses. It resolves them as the daemon does
+/// (`update_sides` in `crates/one-mk/src/app.rs`): only computers that are
+/// connected and have said their screens take part, in the order of their
+/// ids (the daemon's order: by fingerprint, which the id spells); one at an
+/// exact place arms the exposed edges of its side that face an exposed edge
+/// of its own, within a couple of pixels; one without arms the whole side.
+/// What an earlier computer's edge already covers is not armed again. A
+/// computer the daemon has no place for yet ([`awaits_placement`]) arms
+/// nothing, as there.
+pub(super) fn armed_edges(status: &Status) -> Vec<Segment> {
+    if status.screens.is_empty() {
+        return vec![];
+    }
+    let local = Desktop::new(status.screens.clone());
+    let mut peers: Vec<_> = status.peers.iter().filter(|p| p.online && !p.screens.is_empty() && !awaits_placement(status, p)).collect();
+    peers.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut armed: Vec<one_mk_proto::Edge> = Vec::new();
+    for peer in peers {
+        let theirs = Desktop::new(peer.screens.clone());
+        let mine = match status.offset_of(&peer.id) {
+            Some(offset) => one_mk_proto::touching(&local, &theirs, peer.side, offset),
+            None => local.outer_edges(peer.side).map(|r| one_mk_proto::Edge::of(peer.side, r)).collect(),
+        };
+        armed.extend(unclaimed(mine, &armed).0);
+    }
+    armed
+        .into_iter()
+        .map(|e| {
+            let (at, lo, hi) = (f64::from(e.at), f64::from(e.lo), f64::from(e.hi));
+            if matches!(e.side, Side::Left | Side::Right) { ((at, lo), (at, hi)) } else { ((lo, at), (hi, at)) }
+        })
+        .collect()
+}
+
+/// Whether `peer` is paired but has no place yet (all four sides were taken
+/// when it paired): the daemon skips it when it arms edges, and says so in
+/// its layout warnings as "NAME: placement needed; ... `one-mk layout ARG
+/// ...`" (`pairing_layout::warning` in `crates/one-mk`), ARG being its name
+/// (when that finds only it) or its id. Such a computer has no offset; the
+/// name counts only when no other computer shares it.
+fn awaits_placement(status: &Status, peer: &one_mk_ctl::status::PeerStatus) -> bool {
+    if status.offset_of(&peer.id).is_some() {
+        return false;
+    }
+    let shown = one_mk_proto::sanitize_name(&peer.name);
+    let by_name = status.peers.iter().filter(|other| other.name == peer.name).count() == 1;
+    status.layout.warnings.iter().any(|w| {
+        w.contains("placement needed; ")
+            && (w.contains(&format!("`one-mk layout {} ", peer.id)) || by_name && w.starts_with(&format!("{shown}: ")))
+    })
 }
 
 /// What the warning under a computer says, shortly, when its screens don't
@@ -116,7 +175,7 @@ fn short_warning(apart: bool, warnings: &[String]) -> Option<&'static str> {
     if apart || warnings.iter().any(|w| w.contains("does not overlap")) {
         Some("None of its screens touches yours, so the pointer can't cross to it. Drag it next to a monitor.")
     } else if !warnings.is_empty() {
-        Some("It shares part of an edge with another computer; the pointer goes to the one placed first.")
+        Some("It shares part of an edge with another computer; the pointer goes to only one of them.")
     } else {
         None
     }
@@ -154,7 +213,8 @@ const FIELD_H: f32 = 38.0;
 pub(super) fn parse_place(x: &str, y: &str) -> Result<(i32, i32), &'static str> {
     let num = |s: &str| s.trim().replace('\u{2212}', "-").parse::<i64>().ok();
     let (Some(x), Some(y)) = (num(x), num(y)) else { return Err(PLACE_WHOLE) };
-    if x.abs() > MAX_OFFSET || y.abs() > MAX_OFFSET {
+    // (`abs` of the lowest i64 has no answer: the magnitude is taken unsigned.)
+    if x.unsigned_abs() > MAX_OFFSET as u64 || y.unsigned_abs() > MAX_OFFSET as u64 {
         return Err(PLACE_BOUNDS);
     }
     Ok((x as i32, y as i32))
@@ -201,7 +261,15 @@ pub(super) fn plan_landing(mine: &Desktop, theirs: &Desktop, at: (i32, i32), rea
     let edges: Vec<Edge> = Side::ALL.into_iter().flat_map(|s| mine.exposed_edges(s)).collect();
     let b = theirs.bounds();
     let corner = (f64::from(at.0) + f64::from(b.x), f64::from(at.1) + f64::from(b.y));
-    let dropped = scene::drop_place(&mine.screens, &edges, b, corner, if apart { 0.0 } else { reach });
+    // A desk drop is held within its own size of our desktop; placed apart (an
+    // Exact place far off, moved with the keys) it stays exactly where it is.
+    let m = mine.bounds();
+    let far = |at: f64, from: i32, size: i32, peer: i32| at.round() < f64::from(from - 2 * peer) || at.round() > f64::from(from + size + peer);
+    let dropped = if apart && (far(corner.0, m.x, m.w, b.w) || far(corner.1, m.y, m.h, b.h)) {
+        (side_for(mine, theirs, at), at)
+    } else {
+        scene::drop_place(&mine.screens, &edges, b, corner, if apart { 0.0 } else { reach })
+    };
     scene::landing(mine, theirs, dropped, apart)
 }
 
@@ -303,6 +371,33 @@ pub(super) fn shown_offset(canvas: &Canvas, id: &str) -> Option<(i32, i32)> {
     let m = canvas.monitors.iter().find(|m| m.computer == id)?;
     let local = m.local?;
     Some(((m.rect.x - local.x).round() as i32, (m.rect.y - local.y).round() as i32))
+}
+
+/// The order the plan's screens are painted in, and so take clicks (last is
+/// on top): the carried computer's over the others.
+fn plan_order(canvas: &Canvas, carried: Option<&str>) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..canvas.monitors.len()).collect();
+    order.sort_by_key(|k| carried == Some(canvas.monitors[*k].computer.as_str()));
+    order
+}
+
+/// How far each computer's tiles are drawn from where they are going, in
+/// points of the plan: placed elsewhere (a typed place, a layout chosen), a
+/// computer glides there; carried, it follows the pointer exactly. The
+/// pointer tests the tiles where they are drawn, so it asks this too.
+fn plan_glide(ctx: &egui::Context, canvas: &Canvas, carried: Option<&str>, scale: f64) -> HashMap<String, egui::Vec2> {
+    let mut glide: HashMap<String, egui::Vec2> = HashMap::new();
+    for monitor in &canvas.monitors {
+        if glide.contains_key(&monitor.computer) {
+            continue;
+        }
+        let Some(o) = shown_offset(canvas, &monitor.computer) else { continue };
+        let secs = if carried == Some(monitor.computer.as_str()) { 0.0 } else { motion::space(0.18) };
+        let gx = tween(ctx, Id::unique(("plan-glide", &monitor.computer, 0)), o.0 as f32, secs, motion::out_cubic);
+        let gy = tween(ctx, Id::unique(("plan-glide", &monitor.computer, 1)), o.1 as f32, secs, motion::out_cubic);
+        glide.insert(monitor.computer.clone(), vec2((f64::from(gx - o.0 as f32) * scale) as f32, (f64::from(gy - o.1 as f32) * scale) as f32));
+    }
+    glide
 }
 
 /// `at` moved as little as needed for screens spanning `span` (in their
@@ -563,13 +658,18 @@ impl App {
         let apart = self.plan_free || alt;
         let block = |r: one_mk_wallpaper::Rect| Rect::from_min_max(frame.screen(top_left, r.x, r.y), frame.screen(top_left, r.x + r.width, r.y + r.height)).shrink(2.0);
 
-        // Each block where it is drawn now: what the pointer and keys do.
-        let mut responses = Vec::with_capacity(before.monitors.len());
+        // Each block where it is drawn now (gliding to its place, the carried
+        // one over the others): what the pointer and keys do. Registered in
+        // the order they are painted, so the one on top takes the click.
+        let carried_before = self.plan.as_ref().map(|d| d.id.clone());
+        let glide_before = plan_glide(ui.ctx(), &before, carried_before.as_deref(), frame.scale);
+        let mut responses: Vec<Option<egui::Response>> = vec![None; before.monitors.len()];
         let (mut pick, mut start, mut moved_to, mut let_go, mut nudged, mut focused) = (None, None, None, false, None, None);
-        for monitor in &before.monitors {
+        for (k, monitor) in plan_order(&before, carried_before.as_deref()).into_iter().map(|k| (k, &before.monitors[k])) {
             let can_move = monitor.computer != status.id && movable(&monitor.computer).is_some();
             let id = Id::unique(("plan-screen", &monitor.computer, &monitor.name));
-            let resp = ui.interact(block(monitor.rect), id, widgets::sense(ui, if can_move { Sense::click_and_drag() } else { Sense::click() }));
+            let shown_rect = block(monitor.rect).translate(glide_before.get(&monitor.computer).copied().unwrap_or_default());
+            let resp = ui.interact(shown_rect, id, widgets::sense(ui, if can_move { Sense::click_and_drag() } else { Sense::click() }));
             if resp.clicked() {
                 pick = Some(monitor.computer.clone());
             }
@@ -597,7 +697,7 @@ impl App {
                     }
                 }
             }
-            responses.push(resp);
+            responses[k] = Some(resp);
         }
         if let Some(id) = pick {
             self.select(if id == status.id { "me".to_owned() } else { id });
@@ -607,7 +707,9 @@ impl App {
             && let (Some(theirs), Some(at)) = (movable(&id), shown_offset(&before, &id))
         {
             let px = frame.px(top_left, p);
-            let grab = (px.0 - f64::from(at.0), px.1 - f64::from(at.1));
+            // Held where the tile is drawn, even while it still glides to its place.
+            let glided = glide_before.get(&id).copied().unwrap_or_default();
+            let grab = (px.0 - f64::from(at.0) - f64::from(glided.x) / frame.scale, px.1 - f64::from(at.1) - f64::from(glided.y) / frame.scale);
             self.select(id.clone());
             self.plan = Some(PlanDrag { id, frame, grab: Some(grab), at, landing: plan_landing(&mine, &theirs, at, reach, apart) });
         }
@@ -652,21 +754,12 @@ impl App {
         }
 
         // Painted where it is now.
-        let canvas = one_mk_ctl::wallpaper::canvas(&self.plan_status(status));
+        let shown_status = self.plan_status(status);
+        let canvas = one_mk_ctl::wallpaper::canvas(&shown_status);
         let carried = self.plan.as_ref().map(|d| d.id.clone());
         // Placed elsewhere (a typed place, a layout chosen), a computer
         // glides there; carried, it follows the pointer exactly.
-        let mut glide: HashMap<String, egui::Vec2> = HashMap::new();
-        for monitor in &canvas.monitors {
-            if glide.contains_key(&monitor.computer) {
-                continue;
-            }
-            let Some(o) = shown_offset(&canvas, &monitor.computer) else { continue };
-            let secs = if carried.as_deref() == Some(monitor.computer.as_str()) { 0.0 } else { motion::space(0.18) };
-            let gx = tween(ui.ctx(), Id::unique(("plan-glide", &monitor.computer, 0)), o.0 as f32, secs, motion::out_cubic);
-            let gy = tween(ui.ctx(), Id::unique(("plan-glide", &monitor.computer, 1)), o.1 as f32, secs, motion::out_cubic);
-            glide.insert(monitor.computer.clone(), vec2((f64::from(gx - o.0 as f32) * frame.scale) as f32, (f64::from(gy - o.1 as f32) * frame.scale) as f32));
-        }
+        let glide = plan_glide(ui.ctx(), &canvas, carried.as_deref(), frame.scale);
         let p = ui.painter_at(area.expand(6.0));
         // Each computer is named on its largest screen.
         let mut label_on: HashMap<String, usize> = HashMap::new();
@@ -677,12 +770,10 @@ impl App {
             }
         }
         // The carried computer's screens are painted last, over the others.
-        let mut order: Vec<usize> = (0..canvas.monitors.len()).collect();
-        order.sort_by_key(|k| carried.as_deref() == Some(canvas.monitors[*k].computer.as_str()));
-        for k in order {
+        for k in plan_order(&canvas, carried.as_deref()) {
             let monitor = &canvas.monitors[k];
             let rect = block(monitor.rect).translate(glide.get(&monitor.computer).copied().unwrap_or_default());
-            let Some(response) = responses.get(k) else { continue };
+            let Some(response) = responses.get(k).and_then(Option::as_ref) else { continue };
             let is_me = monitor.computer == status.id;
             let lifted = carried.as_deref() == Some(monitor.computer.as_str());
             let chosen = Some(monitor.computer.as_str()) == selected || (selected == Some("me") && is_me) || lifted;
@@ -774,7 +865,7 @@ impl App {
             }
         }
         // Where the pointer crosses: the accent, on a soft glow, round at its ends.
-        for (from, to) in touching_edges(&canvas) {
+        for (from, to) in armed_edges(&shown_status) {
             let (a, b) = (frame.screen(top_left, from.0, from.1), frame.screen(top_left, to.0, to.1));
             let along = (b - a).normalized() * 2.0;
             let (a, b) = (a + along, b - along);
@@ -967,6 +1058,21 @@ impl App {
         let can = !status.screens.is_empty() && !peer.screens.is_empty();
         let (cx, cy) = offset.map_or((String::new(), String::new()), |(x, y)| (x.to_string(), y.to_string()));
         let hint = shown_offset(&one_mk_ctl::wallpaper::canvas(status), &peer.id).map_or(("X".to_owned(), "Y".to_owned()), |(x, y)| (x.to_string(), y.to_string()));
+        // A place typed in is a draft of both X and Y, made from where it was. If it moves
+        // meanwhile (the other computer changes it), the axis not typed in follows it.
+        let kb = format!("place-base:{}", peer.id);
+        let here = format!("{cx},{cy}");
+        match self.drafts.get(&kb).cloned() {
+            Some(base) if base != here && self.drafts.contains_key(&kx) && self.drafts.contains_key(&ky) => {
+                let (bx, by) = base.split_once(',').unwrap_or_default();
+                for (key, was, now) in [(&kx, bx, &cx), (&ky, by, &cy)] {
+                    if self.drafts.get(key).is_some_and(|draft| draft == was) { self.drafts.insert(key.clone(), now.clone()); }
+                }
+                self.drafts.insert(kb.clone(), here.clone());
+            }
+            None if self.drafts.contains_key(&kx) && self.drafts.contains_key(&ky) => { self.drafts.insert(kb.clone(), here.clone()); }
+            _ => {}
+        }
         let mut xs = self.drafts.get(&kx).cloned().unwrap_or_else(|| cx.clone());
         let mut ys = self.drafts.get(&ky).cloned().unwrap_or_else(|| cy.clone());
         let fy = row.top() + text_top + ch + 12.0;
@@ -981,9 +1087,11 @@ impl App {
         if xs == cx && ys == cy {
             self.drafts.remove(&kx);
             self.drafts.remove(&ky);
+            self.drafts.remove(&kb);
         } else {
             self.drafts.insert(kx.clone(), xs.clone());
             self.drafts.insert(ky.clone(), ys.clone());
+            self.drafts.entry(kb.clone()).or_insert(here);
         }
         let left = rx.lost_focus() || ry.lost_focus();
         let (enter, escape) = ui.input(|i| (i.key_pressed(Key::Enter), i.key_pressed(Key::Escape)));
@@ -991,6 +1099,7 @@ impl App {
             // Esc: back to where it is.
             self.drafts.remove(&kx);
             self.drafts.remove(&ky);
+            self.drafts.remove(&kb);
         }
         let typed = self.place_draft(&peer.id).and_then(Result::ok).filter(|o| Some(*o) != offset);
         let ready = can && typed.is_some();
@@ -999,6 +1108,7 @@ impl App {
         if let Some(o) = typed.filter(|_| ready && (clicked || (left && enter))) {
             self.drafts.remove(&kx);
             self.drafts.remove(&ky);
+            self.drafts.remove(&kb);
             let side = side_for(&Desktop::new(status.screens.clone()), &Desktop::new(peer.screens.clone()), o);
             self.choose_place(&peer.id, side, Some(o), false);
         }
@@ -1016,6 +1126,7 @@ impl App {
             if button(ui, b, Id::unique(("place-anywhere", &peer.id)), &shown, Look::Quiet, true, Some(&format!("Let {} take the pointer anywhere along your {} edge", peer.name, edge_word(side)))).clicked() {
                 self.drafts.remove(&kx);
                 self.drafts.remove(&ky);
+                self.drafts.remove(&kb);
                 self.choose_side(&peer.id, side, false);
             }
             // Placed apart: one step to where the screens touch.
@@ -1250,15 +1361,90 @@ mod tests {
         assert_eq!(touching_screen(&mine, &near, Side::Left), Some(0));
     }
 
+    fn peer(id: &str, side: Side, online: bool, screens: Vec<Px>) -> one_mk_ctl::status::PeerStatus {
+        one_mk_ctl::status::PeerStatus { id: id.into(), name: id.into(), side, os: 0, online, swap: "auto".into(), screens }
+    }
+
+    fn placed(peers: Vec<one_mk_ctl::status::PeerStatus>, offsets: &[(&str, (i32, i32))]) -> Status {
+        Status {
+            id: "me".into(),
+            screens: vec![screen(0, 0, 2560, 1440), screen(2560, 180, 1920, 1080)],
+            peers,
+            offsets: offsets.iter().map(|(id, o)| ((*id).to_owned(), *o)).collect(),
+            ..Default::default()
+        }
+    }
+
     #[test]
-    fn touching_edges_are_where_two_computers_meet() {
-        let canvas = Canvas { monitors: vec![monitor("me", 0.0, 0.0, 2560.0, 1440.0), monitor("me", 2560.0, 180.0, 1920.0, 1080.0), monitor("mac", -1470.0, 120.0, 1470.0, 956.0), monitor("far", 320.0, -2100.0, 1920.0, 1080.0)] };
-        let edges = touching_edges(&canvas);
-        // The Mac meets the first screen along 120..1076; nothing else crosses, and a
-        // computer's own two screens meeting is not an edge to cross.
-        assert_eq!(edges, vec![((0.0, 120.0), (0.0, 1076.0))]);
-        let stacked = Canvas { monitors: vec![monitor("a", 0.0, 0.0, 100.0, 50.0), monitor("b", 40.0, 50.0, 100.0, 50.0)] };
-        assert_eq!(touching_edges(&stacked), vec![((40.0, 50.0), (100.0, 50.0))]);
+    fn armed_edges_are_where_the_pointer_crosses() {
+        // The laptop meets the first screen along 120..1076; a computer far above touches nothing.
+        let status = placed(
+            vec![peer("a-mac", Side::Left, true, vec![screen(0, 0, 1470, 956)]), peer("b-far", Side::Top, true, vec![screen(0, 0, 1920, 1080)])],
+            &[("a-mac", (-1470, 120)), ("b-far", (320, -2100))],
+        );
+        assert_eq!(armed_edges(&status), vec![((0.0, 120.0), (0.0, 1076.0))]);
+        // Its own two screens meeting is not an edge to cross.
+        assert!(armed_edges(&placed(vec![], &[])).is_empty());
+    }
+
+    #[test]
+    fn armed_edges_follow_the_daemons_two_pixel_tolerance_and_exposed_edges() {
+        let theirs = || vec![screen(0, 0, 1000, 600)];
+        // Two pixels apart still crosses, as the daemon arms it; three do not.
+        let near = placed(vec![peer("p", Side::Left, true, theirs())], &[("p", (-1002, 0))]);
+        assert_eq!(armed_edges(&near), vec![((0.0, 0.0), (0.0, 600.0))]);
+        let gap = placed(vec![peer("p", Side::Left, true, theirs())], &[("p", (-1003, 0))]);
+        assert!(armed_edges(&gap).is_empty());
+        // The first screen's right edge is inside the desktop (the second is beside it): not an edge to arm.
+        let inner = placed(vec![peer("p", Side::Right, true, theirs())], &[("p", (2560, 0))]);
+        assert_eq!(armed_edges(&inner), vec![((2560.0, 0.0), (2560.0, 180.0))]);
+        // An offline computer arms nothing.
+        let offline = placed(vec![peer("p", Side::Left, false, theirs())], &[("p", (-1000, 0))]);
+        assert!(armed_edges(&offline).is_empty());
+        // Without an exact place the whole side is armed.
+        let whole = placed(vec![peer("p", Side::Left, true, theirs())], &[]);
+        assert_eq!(armed_edges(&whole), vec![((0.0, 0.0), (0.0, 1440.0))]);
+    }
+
+    #[test]
+    fn a_computer_still_to_be_placed_arms_no_edge() {
+        let warning = |shown: &str, arg: &str| format!("{shown}: placement needed; automatic edge placement is unavailable. Use `one-mk layout {arg} <left|right|top|bottom> --offset DX,DY`.");
+        // "a" is the placeholder-left pending one and sorts first; the real left peer "b" keeps its stretch.
+        let mut status = placed(
+            vec![peer("a", Side::Left, true, vec![screen(0, 0, 800, 800)]), peer("b", Side::Left, true, vec![screen(0, 0, 800, 800)])],
+            &[("b", (-800, 0))],
+        );
+        status.layout.warnings = vec![warning("a", "a")];
+        assert_eq!(armed_edges(&status), vec![((0.0, 0.0), (0.0, 800.0))]);
+        // Told apart by id when another computer shares its name.
+        status.peers[0].name = "desk".into();
+        status.peers[1].name = "desk".into();
+        status.layout.warnings = vec![warning("desk", "a")];
+        assert_eq!(armed_edges(&status), vec![((0.0, 0.0), (0.0, 800.0))]);
+        // An unplaced computer without that warning (an older daemon's) still arms its whole side.
+        status.layout.warnings.clear();
+        status.offsets.clear();
+        assert_eq!(armed_edges(&status), vec![((0.0, 0.0), (0.0, 1440.0))]);
+    }
+
+    #[test]
+    fn armed_edges_give_a_shared_stretch_to_the_earlier_id_only() {
+        // Two computers on the left overlapping along 300..600: the lower id keeps all of
+        // its edge; the other keeps what is left on either side, not the shared part.
+        let status = placed(
+            vec![peer("b", Side::Left, true, vec![screen(0, 0, 800, 800)]), peer("a", Side::Left, true, vec![screen(0, 0, 800, 300)])],
+            &[("b", (-800, 0)), ("a", (-800, 300))],
+        );
+        let mut edges = armed_edges(&status);
+        edges.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        // "a" (300..600) is first; "b" (0..800) keeps 0..300 and 600..800.
+        assert_eq!(edges, vec![((0.0, 0.0), (0.0, 300.0)), ((0.0, 300.0), (0.0, 600.0)), ((0.0, 600.0), (0.0, 800.0))]);
+        // A computer that loses all of its edge to an earlier one arms nothing at all.
+        let status = placed(
+            vec![peer("b", Side::Left, true, vec![screen(0, 0, 800, 300)]), peer("a", Side::Left, true, vec![screen(0, 0, 800, 800)])],
+            &[("b", (-800, 100)), ("a", (-800, 0))],
+        );
+        assert_eq!(armed_edges(&status), vec![((0.0, 0.0), (0.0, 800.0))]);
     }
 
     /// Ours: 2560×1440 and, right of it, 1920×1080 lower by 180. Theirs: a 1470×956 laptop.
@@ -1422,5 +1608,51 @@ mod tests {
         assert!(short_warning(false, &["layout of B does not overlap yours".to_owned()]).unwrap().starts_with("None of its"));
         assert!(short_warning(false, &["B shares an edge".to_owned()]).unwrap().starts_with("It shares part"));
         assert_eq!(short_warning(false, &[]), None);
+    }
+
+    #[test]
+    fn the_lowest_i64_is_out_of_bounds_not_zero() {
+        assert_eq!(parse_place("-9223372036854775808", "0"), Err(PLACE_BOUNDS));
+        assert_eq!(parse_place("0", "-9223372036854775808"), Err(PLACE_BOUNDS));
+        assert_eq!(parse_place("9223372036854775807", "0"), Err(PLACE_BOUNDS));
+    }
+
+    #[test]
+    fn placed_apart_a_computer_far_off_stays_where_it_is() {
+        let mine = Desktop::new(vec![screen(0, 0, 1920, 1080)]);
+        let theirs = Desktop::new(vec![screen(0, 0, 1280, 800)]);
+        // Exact place put it at X 7000, beyond one of its own widths from ours; one more pixel by the keys.
+        assert_eq!(plan_landing(&mine, &theirs, (7001, 0), 50.0, true), scene::Landing::Apart(Side::Right, (7001, 0)));
+        assert_eq!(plan_landing(&mine, &theirs, (-9000, 4000), 50.0, true), scene::Landing::Apart(Side::Left, (-9000, 4000)));
+        // Dropped on the desk it is still held within reach.
+        assert!(matches!(plan_landing(&mine, &theirs, (7001, 0), 50.0, false), scene::Landing::Beside(Side::Right, _)));
+    }
+
+    // The window tests do not build on Windows (frame_tests is not compiled there).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_typed_place_follows_what_the_other_computer_changes_in_the_axis_not_typed() {
+        use super::super::frame_tests::{Win, two};
+        let mut win = Win::light(1400.0, 1000.0);
+        let mut status = two();
+        status.offsets = vec![("p1".into(), (1920, 100))];
+        win.status(Some(status.clone()));
+        win.go(Tab::Arrange);
+        win.app.selected = Some("p1".into());
+        win.settle();
+        // X typed (Y comes with it as a draft, as the window stores them).
+        win.app.drafts.insert("place-x:p1".into(), "2000".into());
+        win.app.drafts.insert("place-y:p1".into(), "100".into());
+        win.frames(3);
+        assert_eq!(win.app.place_draft("p1"), Some(Ok((2000, 100))));
+        // The other computer moves it down: the untouched axis is where it is now.
+        status.offsets = vec![("p1".into(), (1920, 300))];
+        win.status(Some(status.clone()));
+        assert_eq!(win.app.place_draft("p1"), Some(Ok((2000, 300))));
+        // Typing the other axis is kept as typed.
+        win.app.drafts.insert("place-y:p1".into(), "50".into());
+        status.offsets = vec![("p1".into(), (1920, 400))];
+        win.status(Some(status));
+        assert_eq!(win.app.place_draft("p1"), Some(Ok((2000, 50))));
     }
 }

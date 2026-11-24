@@ -13,6 +13,10 @@
 //!   regardless of grabs. Raw events are selected only while capturing
 //!   (and, to notice local input, while controlled), so an idle pointer
 //!   costs nothing.
+//!   A key already down when the grab starts is not told to the peer, and its
+//!   release (the grab window gets it, not the program that saw the press)
+//!   is dropped, not forwarded and not faked: see `docs/INPUT.md`, "Keys
+//!   already held when the pointer crosses".
 //! - Injection: XTest. Key codes are evdev + 8, the X keycodes of the
 //!   evdev and libinput drivers, so the layout set on this machine
 //!   applies. XTest has no smooth scrolling: scrolling becomes wheel
@@ -609,6 +613,11 @@ impl X {
         st.next_id = st.next_id.wrapping_add(1);
         self.grab = Some(Grab { id: st.next_id, window });
         self.devices.clear();
+        // Keys down now were pressed for the program that had the focus, which gets no release
+        // while the grab lasts. They are neither forwarded nor released for it (the X server tells
+        // programs the focus came and went, and takes every modifier from the server): an extra
+        // release could undo a press made since, and waiting for the keys would break crossing
+        // with a modifier held.
         self.pressed.clear();
         self.select(st.controlled, !st.held.is_empty());
         self.conn.flush()?;

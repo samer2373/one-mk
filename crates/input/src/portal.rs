@@ -39,7 +39,7 @@
 
 use crate::common_logic::{Backoff, drain_coalesced};
 use crate::{Backend, CaptureCmd, Event, Inject};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use ashpd::desktop::input_capture::{
     self, Barrier, Capabilities, InputCapture, ReleaseOptions, SetPointerBarriersOptions,
 };
@@ -292,6 +292,18 @@ impl Retry {
         f.await
     }
 
+    /// `asking`, given up when `lost` says the portal (or the session the
+    /// request belongs to) is gone: a restarted portal never answers the
+    /// request it lost, and the dialog with it, so nothing would end the wait.
+    async fn asking_unless<T>(&mut self, f: impl Future<Output = Result<T>>, lost: impl Future<Output = anyhow::Error>) -> Result<T> {
+        tokio::pin!(lost);
+        let asking = self.asking(f);
+        tokio::select! {
+            r = asking => r,
+            e = &mut lost => Err(e),
+        }
+    }
+
     fn after(&mut self, result: Result<()>, ran_for: Duration) -> Next {
         let e = match result {
             Ok(()) => return Next::Stop,
@@ -318,8 +330,12 @@ impl Retry {
         let delay = self.unit * self.backoff.next_delay().as_secs() as u32;
         tracing::info!("{}: {e:#}; trying again in {delay:?}", self.what);
         // A session that was working and just got lost (sleep/wake) is
-        // routine; only tell the user once getting it back fails too.
-        if !self.reported && (!self.ever_ready || ran_for < STABLE) {
+        // routine; only tell the user once getting it back fails too. The
+        // dialog line is never left standing though: the dialog is gone
+        // once its request failed (and the time spent in it must not make
+        // the failure look like a routine loss).
+        let dialog_shown = self.shown.as_deref() == Some(self.dialog);
+        if dialog_shown || (!self.reported && (!self.ever_ready || ran_for < STABLE)) {
             self.reported = true;
             self.show(Some(format!("{}: {e:#}. Retrying in the background.", self.what)));
         }
@@ -411,6 +427,14 @@ async fn close<T: ashpd::desktop::SessionPortal>(session: &Session<T>) {
 /// panic; then the process ending closes the sessions.)
 async fn guarded(what: &str, f: impl Future<Output = Result<()>>) -> Result<()> {
     AssertUnwindSafe(f).catch_unwind().await.unwrap_or_else(|_| Err(anyhow!("{what} crashed")))
+}
+
+/// Waits until `at`, forever if there is no such time.
+async fn barrier_retry(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at.into()).await,
+        None => std::future::pending::<()>().await,
+    }
 }
 
 /// Waits for the next change of `power`, forever once its sender is gone.
@@ -584,6 +608,12 @@ struct Capture<'a> {
     /// New edges are waiting for the capture in progress to end: changing
     /// barriers means disabling capture, which would end it.
     stale: bool,
+    /// When a failed barrier update is tried again, and how many failed in a
+    /// row. Without this a single failed call (the desktop busy during a
+    /// layout change) would leave crossing off until the next edge change.
+    retry_at: Option<Instant>,
+    failures: u32,
+    unit: Duration,
 }
 
 impl Capture<'_> {
@@ -677,19 +707,37 @@ impl Capture<'_> {
             timeout("enabling capture", self.portal.enable(self.session, Default::default())).await?;
         }
         self.enabled = want;
+        // The ones the compositor took are enabled; asking again for the whole set, after the
+        // layout is read once more, is the retry (a layout change can reject any of them).
+        ensure!(failed.is_empty(), "the compositor rejected {} of {} pointer barriers", failed.len(), wanted.len());
         Ok(())
     }
 
+    /// `apply_barriers`, with a failure logged and tried again later with
+    /// backoff (`retry_at`; the session loop waits for it). A session that
+    /// is really gone shows up as a closed libei connection instead.
+    async fn apply(&mut self, edges: &[Edge], capturing: bool) {
+        match self.apply_barriers(edges, capturing).await {
+            Ok(()) => {
+                self.retry_at = None;
+                self.failures = 0;
+            }
+            Err(e) => {
+                let delay = self.unit * (1u32 << self.failures.min(5)).min(30);
+                self.failures = self.failures.saturating_add(1);
+                tracing::warn!("setting pointer barriers: {e:#}; trying again in {delay:?}");
+                self.retry_at = Some(Instant::now() + delay);
+            }
+        }
+    }
+
     /// Re-reads the zones and re-applies the barriers. Failures are logged
-    /// and otherwise ignored: the old layout stays in use, and a session
-    /// that is really gone shows up as a closed libei connection.
+    /// and otherwise ignored: the old layout stays in use.
     async fn refresh(&mut self, edges: &[Edge], capturing: bool) {
         if let Err(e) = self.refresh_zones().await {
             tracing::warn!("reading the screen layout: {e:#}");
         }
-        if let Err(e) = self.apply_barriers(edges, capturing).await {
-            tracing::warn!("setting pointer barriers: {e:#}");
-        }
+        self.apply(edges, capturing).await;
     }
 
     /// Hands the pointer back. If the portal refuses, disabling capture
@@ -708,9 +756,7 @@ impl Capture<'_> {
             .context("couldn't release the pointer")?;
         self.enabled = false;
         self.applied = None;
-        if let Err(e) = self.apply_barriers(edges, false).await {
-            tracing::warn!("setting pointer barriers: {e:#}");
-        }
+        self.apply(edges, false).await;
         Ok(())
     }
 }
@@ -763,6 +809,7 @@ async fn capture_session(
     let portal = timeout("InputCapture", InputCapture::with_connection(conn))
         .await
         .context("InputCapture portal not available")?;
+    let mut portal_owner = portal.receive_owner_changed().await?;
     let caps = Capabilities::Keyboard | Capabilities::Pointer;
     let v2 = portal.version() >= 2;
     let session = if v2 {
@@ -770,16 +817,33 @@ async fn capture_session(
     } else {
         // Version 1 asks the user here, every time.
         let create = portal.create_session(None, input_capture::CreateSessionOptions::default().set_capabilities(caps));
-        retry.asking(create).await.context("permission to capture input was not granted")?.0
+        let lost = async {
+            let owner = portal_owner.next().await;
+            anyhow!("the desktop portal {}", if owner.flatten().is_some() { "restarted" } else { "went away" })
+        };
+        retry
+            .asking_unless(async { Ok(create.await?) }, lost)
+            .await
+            .context("permission to capture input was not granted")?
+            .0
     };
     let result = guarded("input capture", async {
         if v2 {
+            let mut closed = session.receive_closed().await?;
             let start = async |token: Option<String>, retry: &mut Retry| {
                 let opts = input_capture::StartOptions::default()
                     .set_capabilities(caps)
                     .set_persist_mode(PersistMode::ExplicitlyRevoked)
                     .set_restore_token(token);
-                let request = retry.asking(portal.start(&session, None, opts)).await?;
+                let lost = async {
+                    tokio::select! {
+                        _ = closed.next() => anyhow!("the input capture session was closed"),
+                        owner = portal_owner.next() => {
+                            anyhow!("the desktop portal {}", if owner.flatten().is_some() { "restarted" } else { "went away" })
+                        }
+                    }
+                };
+                let request = retry.asking_unless(async { Ok(portal.start(&session, None, opts).await?) }, lost).await?;
                 request.response().context("permission to capture input was not granted")
             };
             with_token(tokens, retry, start, |r| r.restore_token()).await?;
@@ -821,15 +885,16 @@ async fn run_capture(
         enabled: false,
         applied: None,
         stale: false,
+        retry_at: None,
+        failures: 0,
+        unit: env.unit,
     };
     // Without zones there is nothing to put barriers on, so this one is
     // fatal (and retried with a new session).
     cap.refresh_zones().await?;
     st.report_desktop(&cap.desktop);
     // A re-created session starts with no barriers.
-    if let Err(e) = cap.apply_barriers(&st.edges, false).await {
-        tracing::warn!("setting pointer barriers: {e:#}");
-    }
+    cap.apply(&st.edges, false).await;
     retry.ready();
     tracing::info!(screens = ?cap.desktop.screens, "input capture ready");
 
@@ -849,18 +914,14 @@ async fn run_capture(
             hiding &= hide;
         }
         // Edges that changed during a capture take effect once it is over.
-        if cap.stale && st.activation.is_none()
-            && let Err(e) = cap.apply_barriers(&st.edges, false).await
-        {
-            tracing::warn!("setting pointer barriers: {e:#}");
+        if cap.stale && st.activation.is_none() {
+            cap.apply(&st.edges, false).await;
         }
         tokio::select! {
             cmd = cmds.recv() => match cmd {
                 Some(CaptureCmd::SetEdges(edges)) => {
                     st.edges = edges;
-                    if let Err(e) = cap.apply_barriers(&st.edges, st.activation.is_some()).await {
-                        tracing::warn!("setting pointer barriers: {e:#}");
-                    }
+                    cap.apply(&st.edges, st.activation.is_some()).await;
                 }
                 Some(CaptureCmd::Release { id, pos }) => {
                     if let Some((ours, portal_id)) = st.activation
@@ -932,11 +993,14 @@ async fn run_capture(
                     // that can't say where the screens are is no good.
                     cap.refresh_zones().await.context("after waking up")?;
                     st.report_desktop(&cap.desktop);
-                    if let Err(e) = cap.apply_barriers(&st.edges, st.activation.is_some()).await {
-                        tracing::warn!("setting pointer barriers: {e:#}");
-                    }
+                    cap.apply(&st.edges, st.activation.is_some()).await;
                 }
                 was = now;
+            },
+            () = barrier_retry(cap.retry_at) => {
+                // The layout may be what changed under the failed call.
+                cap.refresh(&st.edges, st.activation.is_some()).await;
+                st.report_desktop(&cap.desktop);
             },
             _ = closed.next() => bail!("the input capture session was closed"),
             owner = portal_owner.next() => {
@@ -1094,16 +1158,21 @@ fn push_into_barrier(st: &CaptureState, side: Side) {
 #[derive(Default)]
 struct Devices {
     all: Vec<reis::event::Device>,
+    /// The ones that are resumed (and started emulating): a paused device
+    /// ignores what is sent to it, so it must not shadow a usable one with
+    /// the same capability.
+    ready: Vec<reis::event::Device>,
     /// Devices we have sent events to since the last frame.
     dirty: Vec<reis::event::Device>,
-    /// Regions of the absolute pointer device, if it has any. Positions
-    /// outside them are ignored by the compositor, so moves are clamped in.
+    /// Regions of the absolute pointer device moves are sent to (the one
+    /// `with` picks: a resumed one), if it has any. Positions outside them
+    /// are ignored by the compositor, so moves are clamped in.
     regions: Option<Desktop>,
 }
 
 impl Devices {
     fn with<T: ei::Interface>(&mut self, f: impl FnOnce(&T)) -> bool {
-        let Some(dev) = self.all.iter().find(|d| d.interface::<T>().is_some()) else {
+        let Some(dev) = self.all.iter().find(|d| self.ready.contains(d) && d.interface::<T>().is_some()) else {
             return false;
         };
         f(&dev.interface::<T>().expect("checked above"));
@@ -1114,7 +1183,9 @@ impl Devices {
     }
 
     fn update_regions(&mut self) {
-        self.regions = self.all.iter().find(|d| d.interface::<ei::PointerAbsolute>().is_some()).and_then(|dev| {
+        // The same device `with` sends the motion to: a paused one with other regions must not
+        // decide where the resumed one is clamped.
+        self.regions = self.all.iter().find(|d| self.ready.contains(d) && d.interface::<ei::PointerAbsolute>().is_some()).and_then(|dev| {
             let rects: Vec<Rect> = dev
                 .regions()
                 .iter()
@@ -1284,7 +1355,15 @@ async fn run_inject(
             .set_persist_mode(PersistMode::ExplicitlyRevoked)
             .set_restore_token(token.as_deref());
         timeout("selecting devices", portal.select_devices(session, opts)).await?.response()?;
-        let request = retry.asking(portal.start(session, None, Default::default())).await?;
+        let lost = async {
+            tokio::select! {
+                _ = closed.next() => anyhow!("the remote desktop session was closed"),
+                owner = portal_owner.next() => {
+                    anyhow!("the desktop portal {}", if owner.flatten().is_some() { "restarted" } else { "went away" })
+                }
+            }
+        };
+        let request = retry.asking_unless(async { Ok(portal.start(session, None, Default::default()).await?) }, lost).await?;
         request.response().context("permission to control this computer was not granted")
     };
     let granted = with_token(tokens, retry, start, |s| s.restore_token()).await?;
@@ -1336,9 +1415,19 @@ async fn run_inject(
                     EiEvent::DeviceResumed(d) => {
                         inj.sequence = inj.sequence.wrapping_add(1);
                         d.device.device().start_emulating(d.serial, inj.sequence);
+                        if !inj.devices.ready.contains(&d.device) {
+                            inj.devices.ready.push(d.device.clone());
+                        }
+                        inj.devices.update_regions();
+                    }
+                    EiEvent::DevicePaused(d) => {
+                        inj.devices.ready.retain(|x| *x != d.device);
+                        inj.devices.dirty.retain(|x| *x != d.device);
+                        inj.devices.update_regions();
                     }
                     EiEvent::DeviceRemoved(d) => {
                         inj.devices.all.retain(|x| *x != d.device);
+                        inj.devices.ready.retain(|x| *x != d.device);
                         inj.devices.dirty.retain(|x| *x != d.device);
                         inj.devices.update_regions();
                     }
@@ -1423,9 +1512,16 @@ async fn run_inject(
                                         opened = &mut opening => break opened?,
                                         incoming = rx.recv() => {
                                             let Some(incoming) = incoming else { bail!("input disconnected during keyboard setup"); };
-                                            if matches!(incoming, Inject::Controlled(false) | Inject::Key { down: false, .. }) {
-                                                bail!("input released during keyboard setup");
-                                            }
+                                            // The visit ending, or a held key (Ctrl, Alt, Meta...)
+                                            // coming up, ends the setup with the session. Any
+                                            // other release (Shift, a key never held) is routine
+                                            // typing and waits its turn with the rest.
+                                            let released = match incoming {
+                                                Inject::Controlled(false) => true,
+                                                Inject::Key { code, down: false } => inj.held.keys.contains(&code) && !matches!(code, 42 | 54),
+                                                _ => false,
+                                            };
+                                            if released { bail!("input released during keyboard setup"); }
                                             if queued.len() >= 256 { bail!("input backlog during keyboard setup"); }
                                             queued.push_back(incoming);
                                         }

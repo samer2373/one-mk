@@ -27,7 +27,8 @@ pub enum Step {
 }
 
 pub struct Pairing {
-    child: Child,
+    /// `None` once `finish` has handed it to its reaper.
+    child: Option<Child>,
     stdin: Option<ChildStdin>,
     pub rx: Receiver<Step>,
 }
@@ -101,6 +102,7 @@ impl Pairing {
         std::thread::spawn(move || {
             let mut last_name = String::new();
             let mut over = false;
+            let mut gone = false;
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 let Some(mut step) = parse(&line) else { continue };
                 match &mut step {
@@ -109,20 +111,42 @@ impl Pairing {
                     _ => {}
                 }
                 over |= matches!(step, Step::Paired { .. } | Step::Ended(_));
-                if tx.send(step).is_err() {
-                    return;
+                // Nobody listening any more (the sheet is gone): keep reading
+                // all the same, so a process that goes on talking never
+                // finds its output closed and fails on it.
+                if !gone && tx.send(step).is_err() {
+                    gone = true;
                 }
                 ctx.request_repaint();
             }
             // It exited. If it never said how pairing ended, say so, with
             // its own error if it left one: never leave the sheet waiting.
             let err = errors.join().unwrap_or_default();
-            if !over {
+            if !over && !gone {
                 let _ = tx.send(Step::Ended(if err.is_empty() { STOPPED.into() } else { plain(&err) }));
                 ctx.request_repaint();
             }
         });
-        Ok(Self { stdin: child.stdin.take(), child, rx })
+        Ok(Self { stdin: child.stdin.take(), child: Some(child), rx })
+    }
+
+    /// Pairing is over and it worked: `one-mk` still has things to do after
+    /// its last event (it updates the file manager's entries for the new
+    /// computer), so it is left to end by itself, beside the window, and
+    /// only a process that hangs is stopped, after a while. Dropping a
+    /// `Pairing` instead kills it at once.
+    pub fn finish(mut self) {
+        self.stdin = None;
+        if let Some(mut child) = self.child.take() {
+            std::thread::spawn(move || {
+                let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while child.try_wait().ok().flatten().is_none() && std::time::Instant::now() < end {
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+            });
+        }
     }
 
     pub fn answer(&mut self, yes: bool) {
@@ -150,21 +174,11 @@ impl Method {
                 vec!["join".into(), "--machine".into(), "--service-port".into(), port.to_string()]
             }
             Self::Connect(address) => {
-                use std::net::ToSocketAddrs;
-                let address = address.trim();
-                if address.is_empty() { return Err(std::io::Error::other("Enter the other computer's address.")); }
-                let address = if let Ok(ip) = address.parse::<std::net::IpAddr>() { std::net::SocketAddr::new(ip, one_mk_proto::DEFAULT_PORT).to_string() }
-                    else if address.contains(':') { address.to_owned() } else { format!("{address}:{}", one_mk_proto::DEFAULT_PORT) };
-                // A name needs a lookup, which can hang on a broken network:
-                // it runs beside the window, which waits 1.5 s at most.
-                let (tx, rx) = std::sync::mpsc::channel();
-                let lookup = address.clone();
-                std::thread::spawn(move || {
-                    let _ = tx.send(lookup.to_socket_addrs().map(|mut a| a.next()));
-                });
-                let target = match rx.recv_timeout(std::time::Duration::from_millis(1500)) {
-                    Ok(found) => found?.ok_or_else(|| std::io::Error::other("That computer's address could not be found."))?,
-                    Err(_) => return Err(std::io::Error::other("That computer's name took too long to look up. Try its IP address.")),
+                let target = match connect_target(address)? {
+                    Target::Ready(target) => target,
+                    // The window looks a name up beside itself (`Lookup`) and
+                    // connects to the answer; this waits, for any other caller.
+                    Target::Name(name) => Lookup::start(name, None).wait(LOOKUP_WAIT)?,
                 };
                 vec!["pair".into(), "--machine".into(), "--connect".into(), target.to_string()]
             }
@@ -172,11 +186,80 @@ impl Method {
     }
 }
 
+/// How long a name may take to look up.
+pub const LOOKUP_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Lookups still running: one that times out keeps its thread until the
+/// system's resolver gives up, so only a few are allowed at once.
+static LOOKUPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+const LOOKUPS_AT_MOST: usize = 4;
+
+/// Where Connect goes: an address as it is, or a name that needs a lookup.
+#[derive(Debug, PartialEq)]
+pub enum Target {
+    Ready(std::net::SocketAddr),
+    Name(String),
+}
+
+/// What Connect's text means, with the default port where it names none.
+pub fn connect_target(address: &str) -> std::io::Result<Target> {
+    let address = address.trim();
+    if address.is_empty() { return Err(std::io::Error::other("Enter the other computer's address.")); }
+    let address = if let Ok(ip) = address.parse::<std::net::IpAddr>() { std::net::SocketAddr::new(ip, one_mk_proto::DEFAULT_PORT).to_string() }
+        else if address.contains(':') { address.to_owned() } else { format!("{address}:{}", one_mk_proto::DEFAULT_PORT) };
+    Ok(match address.parse::<std::net::SocketAddr>() {
+        Ok(target) => Target::Ready(target),
+        Err(_) => Target::Name(address),
+    })
+}
+
+/// A name being looked up on a thread of its own: a broken network can keep
+/// it waiting far longer than the window may.
+pub struct Lookup {
+    rx: Receiver<std::io::Result<std::net::SocketAddr>>,
+}
+
+impl Lookup {
+    /// Starts looking `address` (`name:port`) up; `ctx` is woken when it ends.
+    pub fn start(address: String, ctx: Option<egui::Context>) -> Self {
+        let (tx, rx) = channel();
+        if LOOKUPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= LOOKUPS_AT_MOST {
+            LOOKUPS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = tx.send(Err(std::io::Error::other("Other name lookups are still running. Try the IP address.")));
+            return Self { rx };
+        }
+        std::thread::spawn(move || {
+            use std::net::ToSocketAddrs;
+            let found = address.to_socket_addrs().and_then(|mut found| found.next().ok_or_else(|| std::io::Error::other("That computer's address could not be found.")));
+            LOOKUPS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = tx.send(found);
+            if let Some(ctx) = ctx { ctx.request_repaint(); }
+        });
+        Self { rx }
+    }
+
+    /// `None` while it is still looking.
+    pub fn poll(&self) -> Option<std::io::Result<std::net::SocketAddr>> {
+        self.rx.try_recv().ok()
+    }
+
+    fn wait(self, limit: std::time::Duration) -> std::io::Result<std::net::SocketAddr> {
+        self.rx.recv_timeout(limit).unwrap_or_else(|_| Err(too_slow()))
+    }
+}
+
+/// What a lookup that outlasts its limit says.
+pub fn too_slow() -> std::io::Error {
+    std::io::Error::other("That computer's name took too long to look up. Try its IP address.")
+}
+
 impl Drop for Pairing {
     /// Closing the sheet stops pairing.
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -203,6 +286,28 @@ mod tests {
     }
 
     #[test]
+    fn only_a_name_needs_a_lookup() {
+        let port = one_mk_proto::DEFAULT_PORT;
+        assert_eq!(connect_target("10.0.0.5").unwrap(), Target::Ready(format!("10.0.0.5:{port}").parse().unwrap()));
+        assert_eq!(connect_target(" [::1]:32123 ").unwrap(), Target::Ready("[::1]:32123".parse().unwrap()));
+        assert_eq!(connect_target("studio.local").unwrap(), Target::Name(format!("studio.local:{port}")));
+        assert_eq!(connect_target("studio:32123").unwrap(), Target::Name("studio:32123".into()));
+        assert!(connect_target("  ").is_err());
+    }
+
+    #[test]
+    fn a_lookup_answers_without_the_caller_waiting_for_it() {
+        let lookup = Lookup::start("127.0.0.1:32123".into(), None);
+        let started = std::time::Instant::now();
+        let found = loop {
+            if let Some(found) = lookup.poll() { break found; }
+            assert!(started.elapsed() < std::time::Duration::from_secs(5), "no answer");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(found.unwrap(), "127.0.0.1:32123".parse().unwrap());
+    }
+
+    #[test]
     fn a_short_id_is_cut_on_characters_whatever_the_line_holds() {
         assert_eq!(short("0123456789abcdef"), "0123-4567");
         assert_eq!(short("abcd-ef01"), "abcd-ef01", "already short");
@@ -210,6 +315,76 @@ mod tests {
         // Byte 4 is inside a character here.
         assert_eq!(short("abcéfghijk"), "abcéfghijk");
         assert!(matches!(parse("paired\tééééééé\tOffice PC\tright"), Some(Step::Paired { .. })));
+    }
+
+    /// A stand-in for `one-mk`: says "paired", then waits (writing its process
+    /// number down) until the test creates the file `release`, and only then
+    /// writes a marker (what the real one does with the file manager's entries).
+    #[cfg(unix)]
+    fn held_finisher(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("one-mk-fake");
+        let (marker, release, pid) = (dir.join("integrated"), dir.join("release"), dir.join("pid"));
+        std::fs::write(&script, format!(
+            "#!/bin/sh\necho $$ > '{}'\nprintf 'paired\\t0123456789abcdef\\tStudio PC\\tright\\n'\nwhile [ ! -f '{}' ]; do sleep 0.02; done\ntouch '{}'\n",
+            pid.display(), release.display(), marker.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (script, marker, release, pid)
+    }
+
+    #[cfg(unix)]
+    fn start_fake(script: &std::path::Path) -> Pairing {
+        // A script just written can be "busy" for a moment while another test forks.
+        for _ in 0..50 {
+            match Pairing::with_method(script, &[], egui::Context::default(), Method::Search, 1) {
+                Ok(pairing) => return pairing,
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => std::thread::sleep(std::time::Duration::from_millis(20)),
+                Err(e) => panic!("{e}"),
+            }
+        }
+        panic!("the fake one-mk stayed busy");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_finished_pairing_lets_one_mk_end_by_itself() {
+        let dir = std::env::temp_dir().join(format!("omk-pairing-finish-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (script, marker, release, _) = held_finisher(&dir);
+        let pairing = start_fake(&script);
+        assert!(matches!(pairing.rx.recv_timeout(std::time::Duration::from_secs(10)), Ok(Step::Paired { .. })));
+        pairing.finish();
+        // It is still working when the window lets go of it; only then is it let finish.
+        assert!(!marker.exists());
+        std::fs::write(&release, "").unwrap();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !marker.exists() && std::time::Instant::now() < end {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(marker.exists(), "the process was ended before it finished its work");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn closing_the_sheet_still_stops_pairing_at_once() {
+        let dir = std::env::temp_dir().join(format!("omk-pairing-drop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (script, marker, release, pid) = held_finisher(&dir);
+        let pairing = start_fake(&script);
+        assert!(matches!(pairing.rx.recv_timeout(std::time::Duration::from_secs(10)), Ok(Step::Paired { .. })));
+        let pid = std::fs::read_to_string(&pid).unwrap().trim().to_owned();
+        let alive = |pid: &str| std::process::Command::new("kill").args(["-0", pid]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success());
+        assert!(alive(&pid), "the held process is running before the sheet closes");
+        drop(pairing);
+        // Dropping killed and reaped it, however long the test was kept waiting.
+        assert!(!alive(&pid), "a dropped pairing is killed");
+        std::fs::write(&release, "").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(!marker.exists(), "it finished its work after being dropped");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

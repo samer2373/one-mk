@@ -292,6 +292,64 @@ fn native_typing_snapshot_preserves_the_old_map_during_a_hold() {
 }
 
 #[test]
+fn native_typing_snapshots_load_the_keymap_only_when_the_server_says_it_changed() {
+    let Some(server) = Xvfb::start() else { return };
+    let observer = server.observer();
+    assert!(Command::new("setxkbmap").args([
+        "-display", &server.display, "-layout", "us,de", "-option", "", "-option", "grp:alt_shift_toggle",
+    ]).status().unwrap().success());
+    let Some(mut keyboard) = crate::X11Keyboard::connect(&server.display) else {
+        eprintln!("native XKB connection unavailable on this X server: skipping");
+        return;
+    };
+    let initial = keyboard.snapshot().unwrap();
+    assert_eq!(keyboard.loads(), 1);
+    keyboard.snapshot().unwrap();
+    if keyboard.loads() != 1 {
+        eprintln!("this X server sends no XKB events: the keymap is loaded every time, skipping");
+        return;
+    }
+    // The first key from the test's own XTest keyboard makes the server say the core keyboard
+    // changed hands: that is a real notice, and costs one load. Let it pass first.
+    for down in [true, false] {
+        observer.fake(if down { xproto::KEY_PRESS_EVENT } else { xproto::KEY_RELEASE_EVENT }, 42 + 8, observer.root, 0, 0);
+    }
+    keyboard.snapshot().unwrap();
+    keyboard.snapshot().unwrap();
+    let base = keyboard.loads();
+    // Ordinary keys and state changes (the layout group, Caps Lock) need no new keymap and no server grab.
+    for (code, down) in [(56, true), (42, true), (42, false), (56, false)] {
+        observer.fake(if down { xproto::KEY_PRESS_EVENT } else { xproto::KEY_RELEASE_EVENT }, code + 8, observer.root, 0, 0);
+    }
+    let german = keyboard.snapshot().unwrap();
+    assert_eq!(german.masks.group, 1);
+    assert_eq!(german.resolver.resolve(21, german.masks).as_deref(), Some("z"));
+    observer.fake(xproto::KEY_PRESS_EVENT, 58 + 8, observer.root, 0, 0);
+    observer.fake(xproto::KEY_RELEASE_EVENT, 58 + 8, observer.root, 0, 0);
+    let caps = keyboard.snapshot().unwrap();
+    assert_ne!(caps.masks.locked, 0);
+    assert_eq!(caps.resolver.resolve(21, caps.masks).as_deref(), Some("Z"));
+    for _ in 0..10 { keyboard.snapshot().unwrap(); }
+    assert_eq!(keyboard.loads(), base, "no keymap was downloaded again");
+    assert_eq!(initial.resolver.resolve(21, initial.masks).as_deref(), Some("y"), "an earlier snapshot is unchanged");
+    // A new keymap is noticed, and loaded once.
+    assert!(Command::new("setxkbmap").args(["-display", &server.display, "-layout", "fr"]).status().unwrap().success());
+    let french = keyboard.snapshot().unwrap();
+    assert_eq!(keyboard.loads(), base + 1);
+    assert_eq!(french.resolver.resolve(16, crate::LayoutState::default()).as_deref(), Some("a"));
+    keyboard.snapshot().unwrap();
+    assert_eq!(keyboard.loads(), base + 1);
+    // So is one key's changed mapping.
+    let before = observer.conn.get_keyboard_mapping(38, 1).unwrap().reply().unwrap();
+    let width = before.keysyms_per_keycode;
+    let symbols = vec![0x0100_0000 | u32::from('ł'); width as usize];
+    observer.conn.change_keyboard_mapping(1, 38, width, &symbols).unwrap().check().unwrap();
+    let changed = keyboard.snapshot().unwrap();
+    assert_eq!(keyboard.loads(), base + 2);
+    assert_eq!(changed.resolver.resolve(38 - 8, crate::LayoutState::default()).as_deref(), Some("ł"));
+}
+
+#[test]
 fn native_typing_snapshots_read_group_and_caps_lock() {
     let Some(server) = Xvfb::start() else { return };
     let observer = server.observer();

@@ -7,10 +7,20 @@
 #![allow(dead_code)]
 
 use crate::Inject;
+use one_mk_proto::Side;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+// ---------------------------------------------------------- edge requests
+
+/// Whether an activation saved while the local rules hand over (Windows, macOS) is stale: it came
+/// from the pointer touching an edge (`edge_request`; an explicit switch does not depend on where
+/// the pointer is), and the pointer is no longer on that edge (`hit` is the side it touches now).
+pub(crate) fn edge_request_stale(edge_request: bool, saved: Option<Side>, hit: Option<Side>) -> bool {
+    edge_request && saved.is_some_and(|saved| hit != Some(saved))
+}
 
 // ------------------------------------------------------------- coalescing
 
@@ -107,9 +117,13 @@ impl KeyRepeat {
     }
 
     /// `(delay, interval)`, or `None` to not repeat at all. Applies from
-    /// the next key press.
+    /// the next key press; turning repeat off also stops a repeat in
+    /// progress (its deadline would otherwise stay armed and never advance).
     pub(crate) fn set_timing(&mut self, timing: Option<(Duration, Duration)>) {
         self.timing = timing.map(|(d, i)| (d, i.max(Duration::from_millis(5))));
+        if self.timing.is_none() {
+            self.repeating = None;
+        }
     }
 
     /// Records a key event from the peer. Returns false if it must not be
@@ -138,6 +152,7 @@ impl KeyRepeat {
 
     /// When `poll` next has something to do.
     pub(crate) fn deadline(&self) -> Option<Instant> {
+        self.timing?;
         self.repeating.map(|(_, t)| t)
     }
 
@@ -329,6 +344,20 @@ mod tests {
     }
 
     #[test]
+    fn turning_repeat_off_stops_a_repeat_in_progress() {
+        let ms = Duration::from_millis;
+        let t0 = Instant::now();
+        let mut r = KeyRepeat::new(Some((ms(400), ms(30))));
+        assert!(r.key(30, true, t0));
+        assert_eq!(r.deadline(), Some(t0 + ms(400)));
+        r.set_timing(None);
+        assert!(r.key(31, true, t0));
+        assert_eq!(r.deadline(), None, "no armed deadline without timing");
+        assert_eq!(r.poll(t0 + ms(1000)), None);
+        assert_eq!(r.deadline(), None);
+    }
+
+    #[test]
     fn modifiers_and_locks_do_not_repeat_and_duplicates_are_dropped() {
         let t0 = Instant::now();
         let mut r = KeyRepeat::new(None);
@@ -389,5 +418,19 @@ mod tests {
         assert_eq!(secs, vec![1, 2, 4, 8, 16, 30, 30, 30]);
         b.reset();
         assert_eq!(b.next_delay().as_secs(), 1);
+    }
+
+    #[test]
+    fn an_edge_request_goes_stale_when_the_pointer_leaves_its_edge() {
+        use one_mk_proto::Side::{Left, Right};
+        // Still on the edge it asked for: wait for the handover.
+        assert!(!edge_request_stale(true, Some(Right), Some(Right)));
+        // Backed away, or on another edge now: the request is dropped.
+        assert!(edge_request_stale(true, Some(Right), None));
+        assert!(edge_request_stale(true, Some(Right), Some(Left)));
+        // An explicit switch does not care where the pointer is.
+        assert!(!edge_request_stale(false, Some(Right), None));
+        // Nothing saved, nothing to drop.
+        assert!(!edge_request_stale(true, None, None));
     }
 }

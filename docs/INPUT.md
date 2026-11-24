@@ -271,6 +271,25 @@ that change settings refuse until the line is fixed, so a hand edit is never
 overwritten. Out-of-range numbers are clamped and reported. Limits: 8 layers,
 16 steps in a sequence, 4 modifiers plus a key per chord.
 
+## Keys already held when the pointer crosses
+
+Hold Ctrl (or any key), push the pointer across the edge, and let go while the other computer
+has the pointer: what happens to that key depends on the desktop.
+
+- **Windows and macOS:** the key's release is let through to this computer's own programs, so none
+  is left thinking it is still down. Modifiers held at the crossing are told to the other computer
+  (that is what lets a modifier be the key that crosses) but are not pressed there.
+- **X11:** a program that saw the key go down never sees it go up while the other computer has
+  the pointer, because X's keyboard grab sends that release to oneMK, which ignores it (it was not
+  pressed for the other computer, so it is not released there either). Programs normally put
+  their idea of the held keys right again when the grab starts and ends (X tells them the focus
+  was taken and given back), and every modifier state comes from the server, so this only matters
+  for a program that keeps its own table of held keys and ignores those notices (a game, a remote
+  desktop viewer): it can think the key is still down until you press and let go of it once.
+  oneMK does not send that release itself and does not wait for the keys to come up before
+  crossing. A fake release could undo a press another program has since made, and waiting would
+  break crossing with a held modifier.
+
 ## What is tested
 
 Key, button and scroll rules, tap/hold, layers and the "nothing stays held"

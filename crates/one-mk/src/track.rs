@@ -217,6 +217,10 @@ impl Transfers {
             rx.done = rx.done.saturating_add(size.saturating_sub(credited));
             rx.saved.push(name);
             rx.saved_bytes = rx.saved_bytes.saturating_add(size);
+        } else {
+            // Not in place after all (refused at placing, failed its check, cut
+            // short): its bytes were counted as they arrived and are not done.
+            rx.done = rx.done.saturating_sub(credited);
         }
         if rx.complete() {
             let rx = s.rx.remove(&key).expect("just found");
@@ -423,6 +427,24 @@ pub(crate) mod tests {
 
     fn batch(id: u64, files: u32, bytes: u64) -> Batch {
         Batch { id, files, bytes }
+    }
+
+    /// A file whose bytes arrived but that was then refused (a name the disk
+    /// would not take, a failed check) is not progress the rest of the batch
+    /// may count on.
+    #[tokio::test]
+    async fn a_discarded_file_does_not_stay_counted_as_done() {
+        let (t, _) = setup();
+        let b = batch(910, 2, 200);
+        let mut first = t.begin(FP, "desk", b, 100);
+        first.bytes(100);
+        drop(first);
+        let mut second = t.begin(FP, "desk", b, 100);
+        second.bytes(40);
+        let s = &t.snapshot()[0];
+        assert_eq!(s.done, 40, "only the second file's bytes are in place");
+        assert_eq!(s.total, 200);
+        drop(second);
     }
 
     /// Receives a whole file as the inbox would.

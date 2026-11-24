@@ -313,10 +313,66 @@ impl Default for Prefs {
 pub const HOOK_EVENTS: [(&str, &str); 4] =
     [("on_enter", "Pointer arrives"), ("on_leave", "Pointer leaves"), ("on_peer_connect", "A computer connects"), ("on_peer_disconnect", "A computer disconnects")];
 
+/// The value of `key` in `table`, however the file wrote it: under `[table]`
+/// (as one-mk does), as a dotted key (`power.sleep_sync = true`) or inside an
+/// inline table (`power = { sleep_sync = true }`). The first form wins.
+fn find_value<'a>(entries: &'a [Entry], table: &str, key: &str) -> Option<&'a Val> {
+    if let Some(entry) = entries.iter().find(|x| x.table == table && x.key == key) {
+        return Some(&entry.val);
+    }
+    fn inside<'a>(val: &'a Val, path: &str) -> Option<&'a Val> {
+        let Val::Table(pairs) = val else { return None };
+        pairs.iter().find(|(k, _)| k == path).map(|(_, v)| v).or_else(|| {
+            pairs.iter().find_map(|(k, v)| path.strip_prefix(k.as_str()).and_then(|rest| rest.strip_prefix('.')).and_then(|rest| inside(v, rest)))
+        })
+    }
+    let want = if table.is_empty() { key.to_owned() } else { format!("{table}.{key}") };
+    entries.iter().find_map(|x| {
+        let path = if x.table.is_empty() { x.key.clone() } else { format!("{}.{}", x.table, x.key) };
+        if path == want {
+            Some(&x.val)
+        } else {
+            want.strip_prefix(&path).and_then(|rest| rest.strip_prefix('.')).and_then(|rest| inside(&x.val, rest))
+        }
+    })
+}
+
+/// The most `one-mk edge --corner` and `--dwell` take: the saved values are
+/// capped at the same (`MAX_CORNER` and `MAX_DWELL_MS` in `one-mk`'s settings).
+pub const EDGE_CORNER_MAX: u32 = 500;
+pub const EDGE_DWELL_MAX: u32 = 5000;
+
+/// A saved corner or wait as the daemon applies it: never negative, never
+/// over the most.
+fn edge_number(saved: i64, most: u32) -> u32 {
+    saved.clamp(0, i64::from(most)) as u32
+}
+
+/// The key an edge holds as the daemon reads it: `own` if it is a key (any
+/// case; `control` and `option` too), else `shared` (the same), else none;
+/// spelled as the choices are (`none`, `shift`, `ctrl`, `alt`).
+fn edge_modifier(own: &str, shared: &str) -> String {
+    use one_mk_proto::Modifier;
+    own.parse::<Modifier>().or_else(|_| shared.parse()).unwrap_or_default().to_string()
+}
+
+/// `[edge] wrap` as the daemon reads it: `off`, `on` or `all` in any case, or
+/// a bare `true` or `false`; anything else is off.
+fn edge_wrap(saved: Option<&Val>) -> String {
+    match saved {
+        Some(Val::Bool(on)) => if *on { "on" } else { "off" }.to_owned(),
+        Some(Val::Str(word)) => match word.to_ascii_lowercase().as_str() {
+            word @ ("on" | "all") => word.to_owned(),
+            _ => "off".to_owned(),
+        },
+        _ => "off".to_owned(),
+    }
+}
+
 impl Prefs {
     pub fn read(settings: &str, profiles: &str) -> Prefs {
         let e = read_toml(settings);
-        let get = |table: &str, key: &str| e.iter().find(|x| x.table == table && x.key == key).map(|x| &x.val);
+        let get = |table: &str, key: &str| find_value(&e, table, key);
         let flag = |table: &str, key: &str, def: bool| get(table, key).and_then(Val::as_bool).unwrap_or(def);
         let num = |table: &str, key: &str, def: i64| get(table, key).and_then(Val::as_int).unwrap_or(def);
         let text = |table: &str, key: &str, def: &str| get(table, key).and_then(Val::as_str).unwrap_or(def).to_owned();
@@ -353,14 +409,14 @@ impl Prefs {
             drop_zones: num("", "settings_version", 1) >= 3 && flag("drag", "enabled", false),
             broadcast_idle: num("broadcast", "idle_off_minutes", 15).clamp(0, 1440) as u32,
             pointer_draw: text("pointer", "draw_when_no_mouse", "auto"),
-            edge_wrap: get("edge", "wrap").and_then(Val::as_bool).map(|on| if on { "on" } else { "off" }.to_owned()).unwrap_or_else(|| text("edge", "wrap", "off")),
+            edge_wrap: edge_wrap(get("edge", "wrap")),
             edge_learn: text("edge", "learn", "suggest"),
             edge_sides: ["left", "right", "top", "bottom"].into_iter().map(|side| {
                 let table = format!("edge.{side}");
                 (side.to_owned(), EdgePrefs {
-                    corner: num(&table, "corner", num("edge", "corner", 0)).max(0) as u32,
-                    dwell: num(&table, "dwell_ms", num("edge", "dwell_ms", 0)).max(0) as u32,
-                    modifier: text(&table, "modifier", &text("edge", "modifier", "none")),
+                    corner: edge_number(num(&table, "corner", num("edge", "corner", 0)), EDGE_CORNER_MAX),
+                    dwell: edge_number(num(&table, "dwell_ms", num("edge", "dwell_ms", 0)), EDGE_DWELL_MAX),
+                    modifier: edge_modifier(&text(&table, "modifier", ""), &text("edge", "modifier", "none")),
                     fullscreen: flag(&table, "fullscreen_guard", flag("edge", "fullscreen_guard", false)),
                 })
             }).collect(),
@@ -375,9 +431,9 @@ impl Prefs {
                 _ => "physical",
             },
             lock_sync: flag("", "lock_sync", false),
-            edge_corner: num("edge", "corner", 0).max(0) as u32,
-            edge_dwell_ms: num("edge", "dwell_ms", 0).max(0) as u32,
-            edge_modifier: text("edge", "modifier", "none"),
+            edge_corner: edge_number(num("edge", "corner", 0), EDGE_CORNER_MAX),
+            edge_dwell_ms: edge_number(num("edge", "dwell_ms", 0), EDGE_DWELL_MAX),
+            edge_modifier: edge_modifier(&text("edge", "modifier", "none"), ""),
             edge_fullscreen: flag("edge", "fullscreen_guard", false),
             block_screensaver: flag("power", "block_screensaver_on_peers", false),
             sleep_sync: flag("power", "sleep_sync", false),
@@ -669,6 +725,7 @@ pub fn parse_input_devices(text: &str) -> Option<crate::tune::InputDevices> {
                 keyboard: b(d, "keyboard"),
                 pointer: b(d, "pointer"),
                 connected: b(d, "connected"),
+                twins: b(d, "twins"),
             })
         })
         .collect();
@@ -961,6 +1018,25 @@ mod tests {
         assert_eq!(Prefs::read("[edge]\nwrap=true", "").edge_wrap, "on");
     }
 
+    /// What the window shows for hand-edited edge rules is what the daemon
+    /// applies: any case and the aliases for keys and wrap, a corner or wait
+    /// over the most is the most, an edge's key that is no key is the shared one.
+    #[test]
+    fn edge_rules_are_read_as_the_daemon_applies_them() {
+        let prefs = Prefs::read("[edge]\nwrap=\"ALL\"\nmodifier=\"Control\"\ncorner=900\ndwell_ms=8000\n[edge.left]\nmodifier=\"hyper\"\n[edge.right]\nmodifier=\"OPTION\"\ncorner=-4\n[edge.top]\nmodifier=\"Shift\"\ndwell_ms=7\n", "");
+        assert_eq!((prefs.edge_wrap.as_str(), prefs.edge_modifier.as_str(), prefs.edge_corner, prefs.edge_dwell_ms), ("all", "ctrl", 500, 5000));
+        let side = |name: &str| prefs.edge_sides.iter().find(|(side, _)| side == name).unwrap().1.clone();
+        assert_eq!((side("left").modifier.as_str(), side("left").corner, side("left").dwell), ("ctrl", 500, 5000), "no key: the shared one");
+        assert_eq!((side("right").modifier.as_str(), side("right").corner), ("alt", 0), "Option is Alt; a negative corner is none");
+        assert_eq!((side("top").modifier.as_str(), side("top").dwell), ("shift", 7));
+        assert_eq!(side("bottom").modifier, "ctrl");
+        // A shared key that is no key is none; a wrap that is no word is off.
+        let odd = Prefs::read("[edge]\nmodifier=\"hyper\"\nwrap=\"sideways\"\n[edge.left]\nmodifier=\"hyper\"\n", "");
+        assert_eq!((odd.edge_modifier.as_str(), odd.edge_wrap.as_str()), ("none", "off"));
+        assert_eq!(odd.edge_sides[0].1.modifier, "none");
+        assert_eq!(Prefs::read("[edge]\nwrap=\"On\"", "").edge_wrap, "on");
+    }
+
     #[test]
     fn typing_preferences_default_and_parse_only_known_modes() {
         for (settings, expected) in [
@@ -1075,6 +1151,28 @@ name = "Café, 2nd floor"
     }
 
     #[test]
+    fn settings_written_as_dotted_keys_or_inline_tables_read_like_tables() {
+        let tables = Prefs::read("[power]\nsleep_sync = true\nblock_screensaver_on_peers = true\n[clipboard]\nmax_mb = 9\n", "");
+        assert!(tables.sleep_sync && tables.block_screensaver && tables.clip_max_mb == 9);
+        for text in [
+            "power = { sleep_sync = true, block_screensaver_on_peers = true }\nclipboard = { max_mb = 9 }\n",
+            "power.sleep_sync = true\npower.block_screensaver_on_peers = true\nclipboard.max_mb = 9\n",
+            "[power]\nsleep_sync = true\n[x]\n[clipboard]\nmax_mb = 9\n",
+        ] {
+            let prefs = Prefs::read(text, "");
+            assert!(prefs.sleep_sync && prefs.clip_max_mb == 9, "{text:?}");
+        }
+        let nested = Prefs::read("edge = { left = { corner = 3 }, wrap = true }\nsettings_version = 3\ndrag = { enabled = true }\n", "");
+        assert_eq!(nested.edge_sides.iter().find(|(side, _)| side == "left").map(|(_, edge)| edge.corner), Some(3));
+        assert_eq!(nested.edge_wrap, "on");
+        assert!(nested.drop_zones);
+        // The expanded table (what one-mk writes) wins over another spelling of the same key.
+        let both = Prefs::read("power = { sleep_sync = true }\n[power]\nsleep_sync = false\n", "");
+        assert!(!both.sleep_sync);
+        assert!(!Prefs::read("power = { other = true }\n", "").sleep_sync);
+    }
+
+    #[test]
     fn chords_read_like_keys() {
         assert_eq!(chord_label("ctrl+alt+{n}", false), "Ctrl+Alt+1…9");
         assert_eq!(chord_label("ctrl+alt+pagedown", false), "Ctrl+Alt+PageDown");
@@ -1162,6 +1260,9 @@ name = "Café, 2nd floor"
         assert!(d.available && d.note.is_none());
         assert_eq!(d.devices.len(), 1, "an entry without a fingerprint is skipped");
         assert_eq!((d.devices[0].name.as_str(), d.devices[0].pointer, d.devices[0].connected), ("Mouse \"M\"", true, true));
+        assert!(!d.devices[0].twins);
+        let twins = parse_input_devices(r#"{"available":true,"devices":[{"fingerprint":"usb/1:2//M","name":"M","twins":true}]}"#).unwrap();
+        assert!(twins.devices[0].twins, "a shared identity is kept");
         let off = parse_input_devices(r#"{"available":false,"note":"merged","devices":[]}"#).unwrap();
         assert_eq!((off.available, off.note.as_deref()), (false, Some("merged")));
         assert_eq!(parse_input_devices("one-mk: error"), None);

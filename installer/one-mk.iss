@@ -226,6 +226,37 @@ begin
     '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"', '', SW_HIDE, ewWaitUntilTerminated, Code);
 end;
 
+{ Whether a oneMK daemon (`one-mk.exe run`, however it was started: by the tray,
+  the window or a terminal) with the default settings folder (no --home) runs
+  now: 1 yes, 0 no, -1 when it cannot be told. Own: one that runs from the
+  install folder (compared by full path, like EndRunningPrograms); otherwise one
+  from anywhere else, such as a portable copy. The tray and the window do not
+  count: they talk to whichever daemon owns the default settings, theirs or
+  another copy's. }
+function DaemonState(Own: Boolean): Integer;
+var
+  Folder, Here, Script: string;
+  Code: Integer;
+begin
+  Result := -1;
+  Folder := ExpandConstant('{app}');
+  StringChangeEx(Folder, '''', '''''', True);
+  Here := '$_.ExecutablePath.StartsWith(''' + Folder + '\'', [StringComparison]::OrdinalIgnoreCase)';
+  if not Own then
+    Here := '-not ' + Here;
+  { Exit codes 10 and 20, not 0 and 1: a script that fails to run ends with 1. }
+  Script := 'if (@(Get-CimInstance Win32_Process | Where-Object { $_.Name -ieq ''one-mk.exe'' -and $_.ExecutablePath -and $_.CommandLine -match ''one-mk\.exe.?\s+run(\s|$)'' -and $_.CommandLine -notmatch ''--home'' -and ' + Here +
+    ' }).Count -gt 0) { exit 10 } else { exit 20 }';
+  if Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "' + Script + '"', '', SW_HIDE, ewWaitUntilTerminated, Code) then
+  begin
+    if Code = 10 then
+      Result := 1
+    else if Code = 20 then
+      Result := 0;
+  end;
+end;
+
 { `one-mk uninstall` took the start-at-sign-in entry out already; this is for
   when it could not run. Only a value that starts a program from this folder
   goes. }
@@ -249,10 +280,18 @@ end;
   failure here never stops the uninstall.
   1. `one-mk uninstall`: no start at sign-in, no Explorer "Send to" entries
      (they would point at the deleted one-mk.exe), the wallpaper off and the
-     person's own back. It asks the running oneMK, so it goes first.
+     person's own back. It asks the running oneMK, so it goes first. Another
+     copy of oneMK (a portable one) may be the daemon that owns the default
+     settings; its wallpaper and its sharing are not this install's to touch,
+     so then only the "Send to" entries go (`one-mk integrate --remove`) and the
+     start-at-sign-in entry goes in step 3, if it is this install's.
   2. The tray and window end (nothing starts the daemon again), the daemon is
      asked to stop, and whatever still runs from this folder is ended, so no
-     file stays in use and is left behind.
+     file stays in use and is left behind. The daemon is asked only when a
+     daemon from this folder was running when the uninstall began: `stop`
+     reaches whichever copy owns the default settings, and neither a window
+     from this folder (it can be talking to another copy's daemon) nor a copy
+     elsewhere that is sharing must be stopped by removing this one.
   3. The start-at-sign-in entry, if one is still there, and the PATH entry.
   The settings folder (pairings, keys) is kept, so installing again keeps the
   computer paired. }
@@ -260,14 +299,23 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Code: Integer;
   Exe: string;
+  Ours, Other: Boolean;
 begin
   if CurUninstallStep <> usUninstall then
     Exit;
   Exe := ExpandConstant('{app}\one-mk.exe');
+  Ours := DaemonState(True) = 1;
+  { Not told: treated as another copy's, which is left alone. }
+  Other := (not Ours) and (DaemonState(False) <> 0);
   if FileExists(Exe) then
-    Exec(Exe, 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  begin
+    if Other then
+      Exec(Exe, 'integrate --remove', '', SW_HIDE, ewWaitUntilTerminated, Code)
+    else
+      Exec(Exe, 'uninstall', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  end;
   EndRunningPrograms(True);
-  if FileExists(Exe) then
+  if Ours and FileExists(Exe) then
     Exec(Exe, 'stop', '', SW_HIDE, ewWaitUntilTerminated, Code);
   EndRunningPrograms(False);
   RemoveStartAtSignIn;

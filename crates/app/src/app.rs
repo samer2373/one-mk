@@ -8,6 +8,7 @@ mod cells;
 mod clipboard_history;
 mod keys;
 mod links;
+mod paste_key;
 mod page_ui;
 mod pages;
 mod place;
@@ -103,7 +104,9 @@ pub(crate) fn swap_row_h(inner_w: f32) -> f32 {
 enum Drag {
     /// `place` is set when both computers' monitors are known: then the
     /// drag puts it at an exact place beside this computer's monitors.
-    Device { i: usize, start: Pos2, x0: f32, place: Option<Box<Placing>> },
+    /// `i` is where it stands in the scene's list this frame (`keep_drag`
+    /// finds it again by `id`: the list closes up when another one leaves).
+    Device { id: String, i: usize, start: Pos2, x0: f32, place: Option<Box<Placing>> },
     Orbit,
 }
 
@@ -231,20 +234,36 @@ pub struct App {
     /// `None` until the first look at the daemon. Shared: a frame hands it
     /// to every part of the page that wants a copy, which is a count, not a clone.
     status: Option<Option<Arc<Status>>>,
+    /// Since when the window has had no answer from the daemon at all (the
+    /// first look hasn't come back): `not_answering` after `LOOK_GRACE`.
+    looking_since: Option<f64>,
+    /// Ctrl+V and Cmd+V as the key recorder hears them (paste_key.rs).
+    paste_key: paste_key::PasteKey,
     clipboard_history: Option<Result<Vec<crate::daemon::HistoryItem>, String>>,
     clipboard_reveal: Option<(u64, String)>,
     clipboard_clear_confirm: bool,
     clipboard_reveal_epoch: u64,
+    /// The item whose preview was asked for and the epoch it was asked in,
+    /// until the answer comes: its Show waits meanwhile.
+    clipboard_reveal_pending: Option<(u64, u64)>,
+    /// Why the last Show failed, shown in the History card until the next try.
+    clipboard_reveal_error: Option<String>,
     autostart: Option<bool>,
     scene: Scene,
     tab: Tab,
     drag: Option<Drag>,
     /// While dragging: the side the computer would go to if let go now.
     drag_side: Option<(String, Side)>,
-    menu_for: Option<usize>,
+    /// The computer whose right-click menu is open (by id: the scene's list closes up).
+    menu_for: Option<String>,
     pairing: Option<PairUi>,
+    /// A name Connect was given, being looked up (and when it began).
+    pair_lookup: Option<(crate::pairing::Lookup, f64)>,
     /// Files dropped where it wasn't clear which computer they were for, and when.
     pending_drop: Option<(Vec<PathBuf>, f64)>,
+    /// The frame (its time) in which files let go over the window were taken:
+    /// the page that follows in that frame doesn't read them again.
+    drop_taken: Option<f64>,
     /// A computer (id, name) the sheet is asking whether to remove, and since when.
     removing: Option<(String, String, f64)>,
     /// A saved layout the sheet is asking whether to delete, and since when.
@@ -270,6 +289,14 @@ pub struct App {
     /// Sides (and offsets) chosen here and not yet reported back by the
     /// daemon, and when.
     pending_side: HashMap<String, (Side, Offset, f64)>,
+    /// The last place asked of the daemon for each computer (side, exact
+    /// offset and the request's number): a failure undoes the desk only when
+    /// it belongs to this last request, not to an older one.
+    layout_asked: HashMap<String, (Side, Offset, u64)>,
+    /// The number of the last Ctrl and Cmd change asked for each computer.
+    swap_asked: HashMap<String, u64>,
+    /// The last number given to a layout or swap request.
+    requests: u64,
     /// Layout learning's question (computer id, side) answered here, and
     /// hidden until the daemon stops asking it.
     answered: Option<(String, Side)>,
@@ -381,6 +408,11 @@ fn edge_word(side: Side) -> &'static str {
 /// Room between neighbouring devices on the desk, in centimetres: enough
 /// for the crossing to read as an arc.
 const GAP: f32 = 26.0;
+/// What to do about a daemon that doesn't answer.
+pub(super) const NOT_ANSWERING_HELP: &str = "The window can't get a reply from it. Open Health to see why, or stop oneMK and start it again.";
+/// How long the window waits for the daemon's first answer before it says
+/// the daemon isn't answering (the watcher asks again every second or so).
+const LOOK_GRACE: f64 = 10.0;
 
 /// Where each computer stands, from the sides set in the layout. Each
 /// entry is (id, side, half width); this computer is at the origin, and
@@ -492,6 +524,8 @@ impl App {
             clipboard_reveal: None,
             clipboard_clear_confirm: false,
             clipboard_reveal_epoch: 0,
+            clipboard_reveal_pending: None,
+            clipboard_reveal_error: None,
             autostart: None,
             update_available: None,
             update_output: None,
@@ -505,7 +539,9 @@ impl App {
             drag_side: None,
             menu_for: None,
             pairing: None,
+            pair_lookup: None,
             pending_drop: None,
+            drop_taken: None,
             removing: None,
             deleting_profile: None,
             settings_cat: settings_page::Cat::General,
@@ -521,6 +557,9 @@ impl App {
             failed_measure: HashSet::new(),
             measuring: None,
             pending_side: HashMap::new(),
+            layout_asked: HashMap::new(),
+            swap_asked: HashMap::new(),
+            requests: 0,
             answered: None,
             apart: HashSet::new(),
             plan: None,
@@ -554,6 +593,8 @@ impl App {
             fonts: Fallbacks::default(),
             size: vec2(size[0], size[1]),
             now: 0.0,
+            looking_since: None,
+            paste_key: Default::default(),
             ctx,
             guide: crate::guide::Overlay::from_env(),
         }
@@ -609,16 +650,35 @@ impl App {
         matches!(job, Job::Layout { .. } | Job::Swap { .. } | Job::TakeBack | Job::Start | Job::Autostart(_) | Job::Set { .. } | Job::Wallpaper(_) | Job::Appearance(_) | Job::Open)
     }
 
+    /// Whether a newer move or Ctrl and Cmd choice for the same computer
+    /// replaced this job: what the person chose last is what stands.
+    fn superseded(&self, job: &Job) -> bool {
+        match job {
+            Job::Layout { id, seq, .. } => self.layout_asked.get(id).is_some_and(|(_, _, last)| last != seq),
+            Job::Swap { id, seq, .. } => self.swap_asked.get(id).is_some_and(|last| last != seq),
+            _ => false,
+        }
+    }
+
+    /// Asks for a Ctrl and Cmd change, and shows it at once.
+    fn ask_swap(&mut self, id: &str, name: &str, swap: &str) {
+        self.requests += 1;
+        let seq = self.requests;
+        self.pending_swap.insert(id.to_owned(), swap.to_owned());
+        self.swap_asked.insert(id.to_owned(), seq);
+        self.busy.push(Job::Swap { id: id.into(), name: name.into(), swap: swap.into(), seq });
+        self.link.set_swap(id, name, swap, seq);
+        self.sync_scene();
+    }
+
     /// Runs a failed job again, as the control that asked for it did.
     fn retry(&mut self, job: Job) {
         match job.clone() {
-            Job::Layout { id, side, .. } => self.choose_side(&id, side, true),
-            Job::Swap { id, name, swap } => {
-                self.pending_swap.insert(id.clone(), swap.clone());
-                self.busy.push(job);
-                self.link.set_swap(&id, &name, &swap);
-                self.sync_scene();
-            }
+            // The whole place that was asked for (an exact offset stays
+            // exact), unless a newer choice for this computer replaced it.
+            Job::Layout { id, side, offset, .. } if !self.superseded(&job) => self.choose_place(&id, side, offset, true),
+            Job::Swap { id, name, swap, .. } if !self.superseded(&job) => self.ask_swap(&id, &name, &swap),
+            Job::Layout { .. } | Job::Swap { .. } => {}
             Job::TakeBack => {
                 self.busy.push(job);
                 self.link.take_back();
@@ -637,7 +697,7 @@ impl App {
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
                 self.link.set(&what, &args);
             }
-            Job::Wallpaper(command) => self.link.wallpaper(command),
+            Job::Wallpaper(command) => self.wallpaper_command(command),
             Job::Open => {
                 self.busy.push(job);
                 self.link.open_downloads();
@@ -657,11 +717,20 @@ impl App {
                     self.clipboard_history = Some(history);
                 }
                 Event::ClipboardReveal(id, epoch, content) => {
+                    if self.clipboard_reveal_pending == Some((id, epoch)) { self.clipboard_reveal_pending = None; }
                     if self.clipboard_reveal_epoch == epoch && self.tab == Tab::Files
-                        && self.clipboard_history.as_ref().and_then(|items| items.as_ref().ok()).is_some_and(|items| items.iter().any(|item| item.id == id))
-                        && let Ok(content) = content {
-                        self.fonts.cover(&self.ctx, std::iter::once(content.as_str()));
-                        self.clipboard_reveal = Some((id, content));
+                        && self.clipboard_history.as_ref().and_then(|items| items.as_ref().ok()).is_some_and(|items| items.iter().any(|item| item.id == id)) {
+                        match content {
+                            Ok(content) => {
+                                self.fonts.cover(&self.ctx, std::iter::once(content.as_str()));
+                                self.clipboard_reveal = Some((id, content));
+                            }
+                            // Said in the History card, not dropped: a Show that failed looked like a click that did nothing.
+                            Err(message) => {
+                                self.fonts.cover(&self.ctx, std::iter::once(message.as_str()));
+                                self.clipboard_reveal_error = Some(message);
+                            }
+                        }
                     }
                 }
                 Event::Status(s) => {
@@ -688,16 +757,14 @@ impl App {
                     // oneMK started or stopped, or a computer came or went:
                     // checks made before say nothing now, so they run again
                     // (Health and the top bar's "check Health" tell the truth).
-                    let mut basis = online;
-                    basis.sort();
-                    let basis = (self.running().is_some(), basis);
-                    // (While a check runs, the change waits for the next status.)
-                    if self.health_basis.as_ref() != Some(&basis) {
+                    let basis = self.health_basis_now();
+                    // (While a check runs, the change waits until it ends: see Event::Done.)
+                    // (`recheck` takes the basis a check starts with, and keeps it until the check ends.)
+                    if self.health_basis.as_ref() != Some(&basis) && !self.busy.contains(&Job::Doctor) {
                         if self.doctor.is_none() || self.health_basis.is_none() {
                             self.health_basis = Some(basis);
-                        } else if !self.busy.contains(&Job::Doctor) {
+                        } else {
                             self.recheck();
-                            self.health_basis = Some(basis);
                         }
                     }
                     self.sync_scene();
@@ -730,7 +797,16 @@ impl App {
                 }
                 Event::Done { what, error } => {
                     self.busy.retain(|j| j != &what);
+                    let check = what == Job::Doctor;
                     self.finished(what, error, now);
+                    // What changed while the check ran may not send another
+                    // status (a state that then stays put): check again now.
+                    if check {
+                        let basis = self.health_basis_now();
+                        if self.health_basis.as_ref().is_some_and(|was| *was != basis) && !self.busy.contains(&Job::Doctor) {
+                            self.recheck();
+                        }
+                    }
                 }
                 Event::Prefs(p) => {
                     self.appearance_choice.read(p.appearance);
@@ -757,6 +833,7 @@ impl App {
             self.pending_broadcast = None;
         }
         self.pairing_steps(now);
+        self.pairing_lookup_step(now);
         // A side the daemon never confirmed: show what it really has.
         let before = self.pending_side.len();
         self.pending_side.retain(|_, (_, _, t)| now - *t < 5.0);
@@ -764,6 +841,13 @@ impl App {
             self.sync_scene();
         }
         self.sync_pairing_scene(now);
+    }
+
+    /// What a Health report depends on: whether oneMK runs, and which computers are online.
+    fn health_basis_now(&self) -> (bool, Vec<String>) {
+        let mut online: Vec<String> = self.running().map_or(vec![], |s| s.peers.iter().filter(|p| p.online).map(|p| p.id.clone()).collect());
+        online.sort();
+        (self.running().is_some(), online)
     }
 
     /// A command finished: say how it went, and undo what it promised if it failed.
@@ -785,7 +869,7 @@ impl App {
             return;
         };
         let e = Some(e);
-        let again = Self::retryable(&what).then(|| what.clone());
+        let again = (Self::retryable(&what) && !self.superseded(&what)).then(|| what.clone());
         self.finished_error(what, e, now);
         if let (Some(t), Some(job)) = (self.toast.as_mut(), again)
             && t.error
@@ -805,16 +889,21 @@ impl App {
                 self.measuring = None;
                 self.failed_measure.insert(id);
             }
-            Job::Layout { id, name, side } => {
-                self.pending_side.remove(&id);
+            Job::Layout { id, name, side, offset, seq } => {
+                // A newer change for it is still on its way: the desk keeps showing that one.
+                if !self.superseded(&Job::Layout { id: id.clone(), name: name.clone(), side, offset, seq }) {
+                    self.pending_side.remove(&id);
+                }
                 self.sync_scene();
                 self.toast_error(format!("Couldn't move {name} {}. The desk went back to where it was; try again.", to_side(side)), e, now);
             }
             Job::Send { to, count } => {
                 self.toast_error(format!("Couldn't send {} to {to}. Check that {to} is online, then drop the files again.", items(count)), e, now);
             }
-            Job::Swap { id, name, .. } => {
-                self.pending_swap.remove(&id);
+            Job::Swap { id, name, swap, seq } => {
+                if !self.superseded(&Job::Swap { id: id.clone(), name: name.clone(), swap, seq }) {
+                    self.pending_swap.remove(&id);
+                }
                 self.sync_scene();
                 self.toast_error(format!("Couldn't change Ctrl and Cmd for {name}. Try again."), e, now);
             }
@@ -895,7 +984,11 @@ impl App {
                     }
                     Step::Paired { id, name } => {
                         finished = Some((id.clone(), name.clone()));
-                        p.proc = None;
+                        // It still has work after this line (the file manager's
+                        // entries for the new computer): let it end by itself.
+                        if let Some(proc) = p.proc.take() {
+                            proc.finish();
+                        }
                         p.step = Step::Paired { id, name };
                         p.since = now;
                     }
@@ -959,8 +1052,8 @@ impl App {
     /// Side and offset to show: where a drag would put it, or what was
     /// chosen here but not yet confirmed, or what the daemon reports.
     fn place_shown(&self, id: &str, reported: (Side, Option<(i32, i32)>)) -> (Side, Option<(i32, i32)>) {
-        if let Some(Drag::Device { i, place: Some(pl), .. }) = &self.drag
-            && self.scene.devices.get(*i).is_some_and(|d| d.id == id)
+        if let Some(Drag::Device { id: held, place: Some(pl), .. }) = &self.drag
+            && held == id
         {
             return (pl.now.0, Some(pl.now.1));
         }
@@ -1180,6 +1273,12 @@ impl App {
     fn sheet_open(&self) -> bool {
         self.pairing.is_some() || self.pending_drop.is_some() || self.removing.is_some() || self.deleting_profile.is_some()
     }
+
+    /// Whether something owns the window (a sheet or Search): files let go
+    /// over its scrim are not for the page behind it, on any page.
+    fn drops_blocked(&self) -> bool {
+        self.sheet_open() || self.palette.open
+    }
 }
 
 /// Whether the pointer has left the window without the window being told:
@@ -1249,8 +1348,11 @@ impl App {
         if self.place_of(id) != Some((side, offset)) {
             let name = self.name_of(id);
             self.pending_side.insert(id.to_owned(), (side, offset, self.now));
-            self.busy.push(Job::Layout { id: id.into(), name: name.clone(), side });
-            self.link.set_side(id, &name, side, offset);
+            self.requests += 1;
+            let seq = self.requests;
+            self.layout_asked.insert(id.to_owned(), (side, offset, seq));
+            self.busy.push(Job::Layout { id: id.into(), name: name.clone(), side, offset, seq });
+            self.link.set_side(id, &name, side, offset, seq);
             if hop {
                 self.hop = Some(id.to_owned());
             }
@@ -1260,7 +1362,7 @@ impl App {
 
     /// Whether the computer with this id is being dragged on the desk.
     fn dragging(&self, id: &str) -> bool {
-        matches!(&self.drag, Some(Drag::Device { i, .. }) if self.scene.devices.get(*i).is_some_and(|d| d.id == id))
+        matches!(&self.drag, Some(Drag::Device { id: held, .. }) if held == id)
     }
 
     /// A computer placed apart, moved beside the nearest edge of ours (or
@@ -1334,6 +1436,13 @@ impl App {
     /// with a pointer position that can't be trusted), ask which one,
     /// unless only one could take them.
     fn drop_files(&mut self, paths: Vec<PathBuf>, at: Option<Pos2>, now: f64) {
+        // A sheet (pairing, a question) or Search is modal: files let go over
+        // its scrim are not for the page behind it, nor for a second sheet on top.
+        if self.drops_blocked() {
+            return;
+        }
+        // This frame's drop is taken: a page drawn later in it must not read it again.
+        self.drop_taken = Some(self.now);
         let online = self.online_targets();
         match at.and_then(|p| self.scene.hit(p)) {
             Some(i) if i != 0 && self.draggable(i) && !self.scene.devices[i].online => {
@@ -1406,6 +1515,7 @@ impl App {
         let locked = widgets::locked(ui);
         self.desk_keys(ui, rect, now);
         let resp = ui.interact(rect, Id::unique("desk"), if locked { Sense::hover() } else { Sense::CLICK | Sense::DRAG });
+        self.keep_drag(now);
         let pointer = resp.hover_pos().filter(|_| !locked);
         let hovering_files = ui.input(|i| !i.raw.hovered_files.is_empty());
         self.scene.drop_targets = hovering_files;
@@ -1425,7 +1535,10 @@ impl App {
         }
 
         if resp.drag_started() {
-            let start = resp.interact_pointer_pos().unwrap_or_default();
+            // Where the button went down: egui starts a drag only once the
+            // pointer has moved a few points, and what was under it then may
+            // be another computer, or none.
+            let start = ui.input(|i| i.pointer.press_origin()).or_else(|| resp.interact_pointer_pos()).unwrap_or_default();
             self.drag = match self.scene.hit(start) {
                 Some(i) if self.draggable(i) => {
                     let place = self.placing(rect, i, start);
@@ -1433,29 +1546,17 @@ impl App {
                     // Picked up: it lifts a little and its shadow softens.
                     d.lift.go(motion::space(2.5), now, 0.12, motion::out_cubic);
                     d.pop.go(if motion::reduced() { 1.0 } else { 1.02 }, now, 0.12, motion::out_cubic);
-                    Some(Drag::Device { i, start, x0: d.pos.x, place })
+                    Some(Drag::Device { id: d.id.clone(), i, start, x0: d.pos.x, place })
                 }
                 _ => Some(Drag::Orbit),
             };
         }
         if resp.dragged() {
-            match &mut self.drag {
-                Some(Drag::Device { i, start, x0, place }) => {
-                    let (i, start, x0) = (*i, *start, *x0);
-                    if let Some(pl) = place {
-                        // In our monitors' plane, snapping beside the nearest.
-                        if let Some((x, y)) = resp.interact_pointer_pos().and_then(|p| self.scene.wall_px(rect, &pl.fit.map, p)) {
-                            pl.now = scene::drop_place(&pl.mine.screens, &pl.edges, pl.peer, (x + pl.grab.0, y + pl.grab.1), pl.fit.reach());
-                            let d = &mut self.scene.devices[i];
-                            d.pos = pl.fit.pos(pl.now.1);
-                            d.scale = pl.fit.scale;
-                        }
-                    } else if let Some(p) = resp.interact_pointer_pos() {
-                        let ax = self.scene.x_axis(rect, i);
-                        let d = p - start;
-                        let dx = (d.x * ax.x + d.y * ax.y) / ax.length_sq().max(1e-3);
-                        let me_x = self.scene.devices[0].pos.x;
-                        self.scene.devices[i].pos.x = (x0 + dx).clamp(me_x - SPACING * 4.0, me_x + SPACING * 4.0);
+            match &self.drag {
+                Some(Drag::Device { i, .. }) => {
+                    let i = *i;
+                    if let Some(p) = resp.interact_pointer_pos() {
+                        self.drag_to(rect, p);
                     }
                     self.make_room(i);
                 }
@@ -1468,34 +1569,57 @@ impl App {
             }
         }
         if resp.drag_stopped() {
-            if let Some(Drag::Device { i, place, .. }) = &self.drag
-                && *i < self.scene.devices.len()
-            {
-                let i = *i;
-                let side = self.side_at(i);
-                // Where the screens touch, or beside the nearest edge of
-                // ours; never apart by accident.
-                let theirs = &self.scene.devices[i].screens;
-                let landing = match place.as_ref().filter(|_| !theirs.is_empty()) {
-                    Some(pl) => scene::landing(&pl.mine, &Desktop::new(theirs.clone()), (side, pl.now.1), false),
-                    None => scene::Landing::Along(side),
-                };
-                let d = &mut self.scene.devices[i];
-                d.lift.go(0.0, now, motion::space(0.16), motion::out_cubic);
-                d.pop.go(1.0, now, 0.16, motion::out_cubic);
-                let id = d.id.clone();
-                self.drag_side = None;
-                // Snapped: it glides from where it was let go to its place.
-                match landing {
-                    scene::Landing::Beside(side, o) => self.choose_place(&id, side, Some(o), false),
-                    scene::Landing::Apart(side, o) => {
-                        self.choose_place(&id, side, Some(o), false);
-                        self.placed_apart(&id, now);
+            if ui.input(|i| i.pointer.primary_down()) {
+                // egui ends a drag on Escape with the button still down:
+                // that is a change of mind, not a drop.
+                self.cancel_drag(now);
+            } else {
+                // The pointer may have moved in the very frame it was let go.
+                if let Some(p) = resp.interact_pointer_pos() {
+                    self.drag_to(rect, p);
+                }
+                let dropped = match &self.drag {
+                    Some(Drag::Device { i, place, .. }) if *i < self.scene.devices.len() => {
+                        let i = *i;
+                        let side = self.side_at(i);
+                        // Where the screens touch, or beside the nearest edge of
+                        // ours; never apart by accident.
+                        let theirs = &self.scene.devices[i].screens;
+                        let landing = match place.as_ref().filter(|_| !theirs.is_empty()) {
+                            Some(pl) => scene::landing(&pl.mine, &Desktop::new(theirs.clone()), (side, pl.now.1), false),
+                            None => scene::Landing::Along(side),
+                        };
+                        Some((i, landing))
                     }
-                    scene::Landing::Along(side) => self.choose_side(&id, side, false),
+                    _ => None,
+                };
+                // Let go before choosing: the desk then follows what is saved
+                // (or asked), not the spot the drag was last at; a drop that
+                // changes nothing still goes back to where the computer is.
+                self.drag = None;
+                if let Some((i, landing)) = dropped {
+                    let d = &mut self.scene.devices[i];
+                    d.lift.go(0.0, now, motion::space(0.16), motion::out_cubic);
+                    d.pop.go(1.0, now, 0.16, motion::out_cubic);
+                    let id = d.id.clone();
+                    self.drag_side = None;
+                    // Snapped: it glides from where it was let go to its place.
+                    match landing {
+                        scene::Landing::Beside(side, o) => self.choose_place(&id, side, Some(o), false),
+                        scene::Landing::Apart(side, o) => {
+                            self.choose_place(&id, side, Some(o), false);
+                            self.placed_apart(&id, now);
+                        }
+                        scene::Landing::Along(side) => self.choose_side(&id, side, false),
+                    }
                 }
             }
             self.drag = None;
+        }
+        // A drag whose button is up and that no longer has the pointer (the
+        // release came while the desk was not on screen): nothing holds it.
+        if self.drag.is_some() && !resp.dragged() && !ui.input(|i| i.pointer.primary_down()) {
+            self.cancel_drag(now);
         }
 
         let under = pointer.and_then(|p| self.scene.hit(p));
@@ -1536,7 +1660,7 @@ impl App {
             self.scene.reset_camera();
         }
         if resp.secondary_clicked() {
-            self.menu_for = under.filter(|&i| self.draggable(i));
+            self.menu_for = under.filter(|&i| self.draggable(i)).map(|i| self.scene.devices[i].id.clone());
         }
         resp.context_menu(|ui| self.place_menu(ui));
 
@@ -1568,6 +1692,63 @@ impl App {
         }
     }
 
+    /// The computer in hand is looked up by id each frame, because the
+    /// scene's list closes up when another leaves (an index would then point
+    /// at a different computer, or past the end). It is put down when it
+    /// is gone, or can no longer be placed by its screens.
+    fn keep_drag(&mut self, now: f64) {
+        let Some(Drag::Device { id, place, .. }) = &self.drag else { return };
+        let exact = place.is_some();
+        let at = self.scene.index(id).filter(|&i| self.draggable(i)).filter(|&i| !exact || !(self.scene.devices[i].screens.is_empty() || self.scene.devices[0].screens.is_empty()));
+        match at {
+            Some(at) => {
+                if let Some(Drag::Device { i, .. }) = &mut self.drag {
+                    *i = at;
+                }
+            }
+            None => self.cancel_drag(now),
+        }
+    }
+
+    /// Puts down what is being dragged without placing it: the computer goes
+    /// back to where it is saved (or asked), and nothing is sent to the daemon.
+    fn cancel_drag(&mut self, now: f64) {
+        let held = match self.drag.take() {
+            Some(Drag::Device { id, .. }) => Some(id),
+            _ => None,
+        };
+        if let Some(i) = held.as_deref().and_then(|id| self.scene.index(id)) {
+            let d = &mut self.scene.devices[i];
+            d.lift.go(0.0, now, motion::space(0.16), motion::out_cubic);
+            d.pop.go(1.0, now, 0.16, motion::out_cubic);
+        }
+        let had_side = self.drag_side.take().is_some();
+        if held.is_some() || had_side {
+            self.sync_scene();
+        }
+    }
+
+    /// Moves the computer in hand to the pointer at `p`.
+    fn drag_to(&mut self, rect: Rect, p: Pos2) {
+        let Some(Drag::Device { i, start, x0, place, .. }) = &mut self.drag else { return };
+        let (i, start, x0) = (*i, *start, *x0);
+        if let Some(pl) = place {
+            // In our monitors' plane, snapping beside the nearest.
+            if let Some((x, y)) = self.scene.wall_px(rect, &pl.fit.map, p) {
+                pl.now = scene::drop_place(&pl.mine.screens, &pl.edges, pl.peer, (x + pl.grab.0, y + pl.grab.1), pl.fit.reach());
+                let d = &mut self.scene.devices[i];
+                d.pos = pl.fit.pos(pl.now.1);
+                d.scale = pl.fit.scale;
+            }
+        } else {
+            let ax = self.scene.x_axis(rect, i);
+            let d = p - start;
+            let dx = (d.x * ax.x + d.y * ax.y) / ax.length_sq().max(1e-3);
+            let me_x = self.scene.devices[0].pos.x;
+            self.scene.devices[i].pos.x = (x0 + dx).clamp(me_x - SPACING * 4.0, me_x + SPACING * 4.0);
+        }
+    }
+
     /// While a computer is dragged, the others make room live, so the
     /// result shows before it is let go.
     fn make_room(&mut self, i: usize) {
@@ -1580,7 +1761,7 @@ impl App {
 
     /// The right-click menu on a computer: where it is.
     fn place_menu(&mut self, ui: &mut Ui) {
-        let Some(i) = self.menu_for.filter(|&i| i < self.scene.devices.len()) else {
+        let Some(i) = self.menu_for.as_deref().and_then(|id| self.scene.index(id)).filter(|&i| self.draggable(i)) else {
             ui.close();
             return;
         };
@@ -1648,8 +1829,16 @@ impl App {
                 Tab::Keys => self.keys.release_meshes(),
                 _ => {}
             }
+            // A drag on the desk belongs to the page it began on: its release
+            // would never be seen from another one.
+            self.cancel_drag(self.now);
+            // A shortcut being recorded stops listening when Settings is left:
+            // hidden, it would still swallow the page keys and never see Esc.
+            if self.tab == Tab::Settings {
+                self.ctx.data_mut(|data| data.remove::<usize>(Id::unique("shortcut-recorder")));
+            }
             self.tab = tab;
-            if tab == Tab::Files { self.clipboard_history = None; self.link.history(); }
+            if tab == Tab::Files { self.clipboard_history = None; self.clipboard_reveal_error = None; self.link.history(); }
             // "Sure?" on Clear belongs to the visit: coming back later, it asks again.
             self.clipboard_clear_confirm = false;
             self.tab_at = self.now;
@@ -1662,8 +1851,20 @@ impl App {
 
     // ---------- the panel ----------
 
+    /// The daemon has not answered the window's first look for a while:
+    /// something is holding it up (it takes the control connection and
+    /// never replies, or its control socket can't be used), not just a slow start.
+    pub(super) fn not_answering(&self) -> bool {
+        self.status.is_none() && self.looking_since.is_some_and(|since| self.now - since >= LOOK_GRACE)
+    }
+
     fn headline_text(&self) -> (String, String) {
-        let Some(s) = self.status.as_ref() else { return ("Looking for oneMK…".into(), String::new()) };
+        let Some(s) = self.status.as_ref() else {
+            if self.not_answering() {
+                return ("oneMK isn't answering".into(), NOT_ANSWERING_HELP.into());
+            }
+            return ("Looking for oneMK…".into(), String::new());
+        };
         let Some(s) = s else {
             return ("oneMK isn't running".into(), "Start it to share this computer's mouse, keyboard, clipboard and files.".into());
         };
@@ -1730,12 +1931,22 @@ impl App {
         }
     }
 
+    /// What stands where Ctrl and Cmd's rows would: computers are listed only
+    /// while oneMK runs, so a stopped oneMK does not say none are paired.
+    pub(super) fn swaps_empty_text(&self) -> &'static str {
+        if self.off() {
+            "Start oneMK to choose how Ctrl and Cmd work on the computers you paired."
+        } else {
+            "Pair a computer to choose how Ctrl and Cmd work when you type on it."
+        }
+    }
+
     /// Ctrl and Cmd for every paired computer, a row each, from the top of
     /// `c` (the Settings card sizes itself to fit them).
     pub(super) fn swaps(&mut self, ui: &mut Ui, c: Rect) {
         let peers: Vec<_> = self.running().map(|s| s.peers.clone()).unwrap_or_default();
         if peers.is_empty() {
-            para(ui, c.left_top(), c.width(), "Pair a computer to choose how Ctrl and Cmd work when you type on it.", regular(T_BODY), pal().ink2);
+            para(ui, c.left_top(), c.width(), self.swaps_empty_text(), regular(T_BODY), pal().ink2);
             return;
         }
         let arrowed = self.arrowed;
@@ -1781,10 +1992,7 @@ impl App {
             }
         }
         for (id, name, val) in changes {
-            self.pending_swap.insert(id.clone(), val.to_owned());
-            self.busy.push(Job::Swap { id: id.clone(), name: name.clone(), swap: val.to_owned() });
-            self.link.set_swap(&id, &name, val);
-            self.sync_scene();
+            self.ask_swap(&id, &name, val);
         }
     }
 
@@ -1939,8 +2147,10 @@ impl App {
         let row = view.buttons.iter().map(|(l, _, _)| button_width(ui, l) + 8.0).sum::<f32>() - 8.0 <= inner;
         let mut view = view;
         if !row && view.buttons.first().is_some_and(|b| b.2 == Act::Close) {
+            let n = view.buttons.len();
             view.buttons.rotate_left(1);
-            view.focus = view.focus.saturating_sub(1);
+            // Focus moves with its button: the one that was first is last now.
+            view.focus = (view.focus + n - 1) % n;
         }
         let widths: Vec<f32> = view.buttons.iter().map(|(l, _, _)| button_width(ui, l).min(inner)).collect();
         let button_labels: Vec<_> = view.buttons.iter().map(|(label, look, _)| ui.painter().layout(label.clone(), widgets::button_font(*look), pal().ink, inner - 28.0)).collect();
@@ -2462,6 +2672,15 @@ impl eframe::App for App {
         let ui_started = std::time::Instant::now();
         let now = ui.input(|i| i.time);
         self.now = now;
+        // No answer yet: say so (not "looking" for ever) once it has been a while.
+        if self.status.is_some() {
+            self.looking_since = None;
+        } else {
+            let since = *self.looking_since.get_or_insert(now);
+            if now - since < LOOK_GRACE {
+                ui.ctx().request_repaint_after_secs((since + LOOK_GRACE - now) as f32 + 0.05);
+            }
+        }
         // The theme first: everything below paints with it.
         self.themer.frame(ui.ctx(), self.appearance(), now);
         if self.size.x > 0.0 {
@@ -2503,7 +2722,7 @@ impl eframe::App for App {
         let desk_lay = (self.tab == Tab::Desk).then(|| desk_panel::desk_layout(full, f.bar.bottom()));
         let desk = desk_lay.as_ref().map_or(content, |l| l.scene);
         // Files let go over a page without the desk: ask where they go.
-        if !self.tab.desk() && self.tab != Tab::Wallpaper {
+        if !self.tab.desk() && self.tab != Tab::Wallpaper && !self.drops_blocked() {
             let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
             if !dropped.is_empty() {
                 self.set_tab(Tab::Files);
@@ -2676,6 +2895,9 @@ impl eframe::App for App {
             debug::plan_keys(self, _ctx, raw_input);
             debug::drop_on(self, _ctx, raw_input);
         }
+        // A paste shortcut is egui-winit's: while a key is being recorded, V is heard anyway.
+        let listening = self.keys_grab(_ctx);
+        self.paste_key.mend(&mut raw_input.events, listening, raw_input.focused);
         // Text typed or pasted in any script shows in its own letters (a
         // layout named in Chinese), not as boxes.
         let typed: Vec<&str> = raw_input.events.iter().filter_map(|e| match e { egui::Event::Text(t) | egui::Event::Paste(t) => Some(t.as_str()), egui::Event::Ime(egui::ImeEvent::Commit(t) | egui::ImeEvent::Preedit { text: t, .. }) => Some(t.as_str()), _ => None }).collect();
@@ -2901,7 +3123,7 @@ mod debug {
         }
         if ready && var("ONE_MK_APP_HISTORY").is_some() {
             app.prefs.history_enabled = true;
-            app.clipboard_history = Some(Ok((1..=5).map(|id| crate::daemon::HistoryItem { id, preview: "[hidden]".into(), detail: "text · 96 B · from Studio PC".into(), timestamp: 1793440000 }).collect()));
+            app.clipboard_history = Some(Ok((1..=5).map(|id| crate::daemon::HistoryItem { id, instance: None, preview: "[hidden]".into(), detail: "text · 96 B · from Studio PC".into(), timestamp: 1793440000 }).collect()));
             if var("ONE_MK_APP_HISTORY").as_deref() == Some("revealed") {
                 app.clipboard_reveal = Some((1, "First line — second line with preserved separators and a long Unicode preview…".into()));
             }
@@ -2954,7 +3176,7 @@ mod debug {
             app.toast_error("Couldn't move Studio PC to the left. The desk went back to where it was.", Some("oneMK didn't answer within 3 seconds".into()), now);
             let peer = app.running().and_then(|s| s.peers.first().map(|p| (p.id.clone(), p.name.clone())));
             if let (Some(t), Some((id, name))) = (app.toast.as_mut(), peer) {
-                t.retry = Some(Job::Layout { id, name, side: Side::Left });
+                t.retry = Some(Job::Layout { id, name, side: Side::Left, offset: None, seq: 0 });
             }
         }
         if ready && var("ONE_MK_APP_BROADCAST").is_some() && now > 1.0 && once(&ctx, "broadcast") {
@@ -3046,7 +3268,7 @@ mod debug {
                 let d = &mut app.scene.devices[i];
                 d.lift.go(2.5, now, 0.12, motion::out_cubic);
                 d.pop.go(1.02, now, 0.12, motion::out_cubic);
-                app.drag = Some(Drag::Device { i, start: Pos2::ZERO, x0: d.pos.x, place: None });
+                app.drag = Some(Drag::Device { id: d.id.clone(), i, start: Pos2::ZERO, x0: d.pos.x, place: None });
             }
             if let Some(Drag::Device { x0, .. }) = app.drag {
                 let t = ((now - 1.5) / 1.5).min(1.0) as f32;

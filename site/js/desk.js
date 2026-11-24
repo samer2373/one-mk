@@ -477,11 +477,19 @@
       var size = Math.max(0.24, Math.min(0.32, 0.27 * (s.w / 5)));
       pointer.scale.set(size, size, 1);
       pointer.position.set((u - 0.5) * s.w + size * 0.32, (0.5 - v) * s.h - size * 0.36, 0.004);
-      if (i !== P.on) { P.on = i; onActive(i); }
+      // The chosen computer stays lit while the pointer crosses the ones between; once it arrives, or
+      // a minute is over (a slow renderer may not get there), the chips follow the pointer again. The demo
+      // waits for it too, so it does not walk the pointer away from the computer that was chosen.
+      var settle = false;
+      if (want != null && (i === want || performance.now() > follow + 55000)) { settle = i !== want; want = null; }
+      if (i !== P.on) { P.on = i; if (want == null) onActive(i); }
+      else if (settle) onActive(i);
     }
+    var want = null;
     function goTo(i, still) {
       P.tx = strip[i] + PX[i] * 0.5; P.ty = 0.46; follow = performance.now() + 5000; auto.typing = null;
-      if (still) { P.x = P.tx; P.y = P.ty; }
+      if (still) { P.x = P.tx; P.y = P.ty; want = null; }
+      else { want = i; onActive(i); }
       dirty = true;
     }
     function typeOn(i, now) {
@@ -518,10 +526,10 @@
           } else if (!ty.done) {
             ty.done = true; ty.next = now + 900; press(["enter"], now);
           } else {
-            sc.lines.push(sc.typed); sc.typed = ""; sc.draw(false); auto.typing = null; auto.until = now + 300;
+            sc.lines.push(sc.typed); if (sc.lines.length > 5) sc.lines.shift(); sc.typed = ""; sc.draw(false); auto.typing = null; auto.until = now + 300;
           }
         }
-      } else if (now > follow && now > auto.until) {
+      } else if (now > follow && (want == null || now > follow + 55000) && now > auto.until) {
         var leg = ROUTE[auto.step % ROUTE.length];
         P.tx = strip[leg[0]] + PX[leg[0]] * leg[1]; P.ty = leg[2];
         if (Math.abs(P.x - P.tx) < 12 && Math.abs(P.y - P.ty) < 0.01) {

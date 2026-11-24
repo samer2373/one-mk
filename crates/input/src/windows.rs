@@ -458,6 +458,9 @@ fn capture_thread(
             raw: Default::default(),
         })
     });
+    // The devices' HID strings are asked for by worker threads from here on: the driver may take
+    // long over them, and this thread must keep answering the hooks meanwhile.
+    with_state(|s| s.raw.probe_in_background(s.hwnd));
     with_state(State::devices_changed);
     tracing::info!("input capture ready");
 
@@ -1010,6 +1013,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
                 Some(Guard::Ended(effect)) => apply(effect, hwnd),
             }
+            0
+        }
+        crate::windows_devices::WM_IDENTITY => {
+            with_state(State::devices_changed);
             0
         }
         WM_APP_DEVICES => {

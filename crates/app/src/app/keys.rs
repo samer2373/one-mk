@@ -7,7 +7,7 @@
 //! `settings.toml`. The pure parts are in `crate::tune`.
 
 use super::*;
-use crate::tune::{self, Capture, Device, Facts, Input, KeyRule, Scope, ScrollChange, Tester};
+use crate::tune::{self, Capture, Device, Facts, Input, KeyRule, Scope, ScrollChange, Tester, To};
 use egui::{Event, EventFilter};
 use one_mk_proto::keynames;
 use one_mk_proto::remap::What;
@@ -335,7 +335,7 @@ pub(super) struct KeysUi {
     test_focused: bool,
     n: u64,
     /// Values being dragged or just set, until settings.toml has them.
-    pub drafts: HashMap<&'static str, f64>,
+    pub drafts: HashMap<String, f64>,
     pub device: Option<Device>,
     /// The keyboards and mice seen here, for "For:" (`None`: not asked yet).
     pub devices: Option<Result<tune::InputDevices, String>>,
@@ -787,6 +787,12 @@ impl App {
     /// The page takes the keyboard (a key being pressed for a rule, or the
     /// test box): the window's own shortcuts wait.
     pub(super) fn keys_grab(&self, ctx: &egui::Context) -> bool {
+        // A gesture's recorder lives in the Mouse view's editor, which is not there for another
+        // page, for the Keyboard view or for one device: it is not recording then, and the
+        // window's shortcuts (this is asked before them) are not held for it.
+        if !(self.tab == Tab::Keys && self.keys.view == View::Mouse && !matches!(self.keys.scope, Scope::Device(..))) {
+            ctx.data_mut(|d| d.remove::<bool>(Id::unique("gesture-recording")));
+        }
         self.tab == Tab::Keys && (self.keys.capture.is_some() || ctx.memory(|m| m.has_focus(Id::unique(TEST_ID))))
     }
 
@@ -794,12 +800,43 @@ impl App {
         self.running().map_or(vec![], |s| s.peers.iter().map(|p| tune::Peer { name: p.name.clone(), id: p.id.clone(), os: p.os }).collect())
     }
 
-    fn facts(&self) -> Facts {
-        Facts::of(&self.keys.scope, &self.scope_peers())
+    pub(super) fn facts(&self) -> Facts {
+        let peers = self.scope_peers();
+        let facts = Facts::of(&self.keys.scope, &peers);
+        // A chosen computer has its own Ctrl/Cmd setting (Settings).
+        let mut scope = &self.keys.scope;
+        while let Scope::Device(_, on) = scope {
+            scope = on;
+        }
+        match (scope, self.running()) {
+            (Scope::Peer(q), Some(status)) => match status.peers.iter().find(|p| tune::Peer { name: p.name.clone(), id: p.id.clone(), os: p.os }.matches(q)) {
+                Some(p) => facts.with_swap_setting(&p.swap),
+                None => facts,
+            },
+            _ => facts,
+        }
+    }
+
+    /// A scope in words, a computer named by its id shown by its name.
+    fn scope_label(&self, scope: &Scope) -> String {
+        scope.label_in(&self.scope_peers())
+    }
+
+    /// The name of the computer a saved scope or command names (the name it
+    /// has now, else what was written).
+    fn peer_name(&self, query: &str) -> String {
+        self.scope_peers().into_iter().find(|p| p.matches(query)).map_or_else(|| query.to_owned(), |p| p.name)
     }
 
     fn tuning_busy(&self) -> bool {
         self.busy.iter().any(|j| matches!(j, Job::Tune { .. }))
+    }
+
+    /// What a speed is the speed of: the control, the computers and (for
+    /// scrolling) the kind of device. Drafts and queued writes are kept apart by it.
+    pub(super) fn speed_target(&self, key: &str) -> String {
+        let kind = if key == "scroll-speed" { self.keys.device.map_or(String::new(), |d| format!("{d:?}")) } else { String::new() };
+        format!("{key}|{}|{kind}", self.keys.scope.args().join(" "))
     }
 
     /// Runs `cmds` in order through `one-mk`; an error shows in `area`.
@@ -851,6 +888,15 @@ impl App {
         Some((i, self.prefs.input.keys[i].clone()))
     }
 
+    /// The rule a key gets from a broader scope than the one chosen (what
+    /// the panel shows it doing), if there is one.
+    fn inherited_rule(&self, code: u16) -> Option<KeyRule> {
+        let layer = self.keys.layer.as_deref().map(str::to_ascii_lowercase);
+        let (spec, at) = self.prefs.input.specs(&self.facts()).into_iter()
+            .find(|(s, _)| s.from == keynames::Trigger::key(code) && s.layer.as_deref() == layer.as_deref())?;
+        at.ok().and_then(|i| self.prefs.input.keys.get(i).cloned()).filter(|_| matches!(spec.what, What::To(_) | What::TapHold { .. }))
+    }
+
     /// What `value` (a key, chord or action, as written) does for the
     /// key or button being changed: checked, then saved.
     pub(super) fn choose(&mut self, want: Want, value: String) {
@@ -877,7 +923,16 @@ impl App {
         let rule = match (want, own.as_ref().and_then(|r| r.hold.clone())) {
             (Want::To, Some(hold)) => KeyRule { tap: Some(value), hold: Some(hold), timeout_ms: own.as_ref().and_then(|r| r.timeout_ms), from, ..base },
             (Want::Hold, _) => {
-                let tap = own.as_ref().and_then(tap_of).unwrap_or_else(|| from.clone());
+                // What the key does when tapped stays what it is: its own rule's, else
+                // the one it inherits (shown in the panel), else itself.
+                let inherited = if own.is_some() { None } else { self.inherited_rule(code) };
+                let source = own.as_ref().or(inherited.as_ref());
+                if let Some(To::Many(_)) = source.and_then(|r| r.to.as_ref()) {
+                    let name = tune::key_label(u32::from(code));
+                    self.keys.error = Some(("keyboard", format!("{name} types a sequence, and a key that does something different when held can only tap one key. Choose one key for it first, or reset it.")));
+                    return;
+                }
+                let tap = source.and_then(tap_of).unwrap_or_else(|| from.clone());
                 KeyRule { tap: Some(tap), hold: Some(value), timeout_ms: own.as_ref().and_then(|r| r.timeout_ms), from, ..base }
             }
             _ => KeyRule { to: Some(tune::To::One(value)), from, ..base },
@@ -944,12 +999,18 @@ impl App {
             match input.keymap(&facts) {
                 Ok(map) => {
                     self.keys.tester_error = None;
+                    let swap = facts.swap;
                     match &mut self.keys.tester {
                         Some((t, i, f)) => {
                             t.set_keymap(map, input.tap());
+                            t.set_swap(swap);
                             (*i, *f) = (input.clone(), facts);
                         }
-                        None => self.keys.tester = Some((Tester::new(map, input.tap()), input.clone(), facts)),
+                        None => {
+                            let mut t = Tester::new(map, input.tap());
+                            t.set_swap(swap);
+                            self.keys.tester = Some((t, input.clone(), facts));
+                        }
                     }
                 }
                 Err(e) => {
@@ -974,6 +1035,10 @@ impl App {
                 taken
             })
         };
+        if matches!(self.keys.capture, Some((Want::Hold, _))) && !self.keys.more {
+            // Its recorder is not on screen (the When held row is closed): nothing is waiting for a key.
+            self.keys.capture = None;
+        }
         if let Some((want, mut cap)) = self.keys.capture {
             let id = Id::unique(CAPTURE_ID);
             ui.memory_mut(|m| {
@@ -1030,6 +1095,10 @@ impl App {
         if self.keys.check_due && !self.tuning_busy() {
             self.keys.check_due = false;
             self.link.keymap_check();
+        }
+        if self.keys.picker.is_none() {
+            // The list focuses its field each time it opens: forget it was opened once it is closed.
+            ui.ctx().data_mut(|d| d.remove::<bool>(Id::unique(("field", "key-search")).with("opened")));
         }
         self.keys_input(ui);
         // A tap/hold key in the test box decides when its time is up.
@@ -1202,7 +1271,7 @@ impl App {
     /// "For: All computers ▾": the computers changes are for.
     /// Returns the button's rectangle.
     fn scope_menu(&mut self, ui: &mut Ui, room: Rect) -> Rect {
-        let label = format!("For: {}", self.keys.scope.label());
+        let label = format!("For: {}", self.scope_label(&self.keys.scope));
         // The handoff's: `surface2`, 32 tall, padding 12 and 10, 500 13, a chevron.
         let lw = (text_width(ui, &label, medium(T_BODY)) + 42.0).min(room.width()).min(380.0);
         let r = Rect::from_min_size(pos2(room.right() - lw, room.center().y - 16.0), vec2(lw, 32.0));
@@ -1223,16 +1292,29 @@ impl App {
                 self.link.input_devices();
             }
         }
+        // Asked afresh each time the list opens, and again every couple of seconds while
+        // it stays open: keyboards and mice come and go.
+        let asked = Id::unique("keys-devices-asked");
+        let time = ui.input(|i| i.time);
         if resp.clicked() {
-            // Asked afresh each time: devices come and go.
             self.link.input_devices();
+            ui.ctx().data_mut(|d| d.insert_temp(asked, time));
+        } else if egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp)) {
+            const EVERY: f64 = 2.0;
+            let mut last = ui.ctx().data(|d| d.get_temp::<f64>(asked)).unwrap_or(f64::NEG_INFINITY);
+            if time - last >= EVERY {
+                self.link.input_devices();
+                ui.ctx().data_mut(|d| d.insert_temp(asked, time));
+                last = time;
+            }
+            ui.ctx().request_repaint_after_secs((EVERY - (time - last)).max(0.05) as f32);
         }
         let devices = self.keys.devices.clone();
         let current = self.keys.scope.clone();
         let mut chosen = None;
         egui::Popup::menu(&resp).width(260.0).align(egui::RectAlign::BOTTOM_END).show(|ui| {
             let mut opts = vec![Scope::All, Scope::Os(os::MACOS), Scope::Os(os::WINDOWS), Scope::Os(os::LINUX)];
-            opts.extend(peers.iter().map(|p| Scope::Peer(p.name.clone())));
+            opts.extend(peers.iter().map(|p| Scope::Peer(p.scope_arg())));
             let heading = |ui: &mut Ui, text: &str| widgets::menu_heading(ui, 260.0, text);
             // A choice: a check when it is the one in force, a second line
             // in small type if given.
@@ -1251,7 +1333,7 @@ impl App {
                 if k == 4 {
                     heading(ui, "One computer");
                 }
-                item(ui, s, &s.label(), None);
+                item(ui, s, &s.label_in(&peers), None);
             }
             heading(ui, "One keyboard or mouse");
             let note = |ui: &mut Ui, text: &str| {
@@ -1717,7 +1799,18 @@ impl App {
         let busy = self.tuning_busy();
         let chosen = self.keys.selected.and_then(|code| self.own_rule(code)).map(|(i, _)| i);
         let mut act = None;
+        let peers = self.scope_peers();
+        let mut seen: HashMap<String, usize> = HashMap::new();
         for (i, r) in input.keys.iter().enumerate() {
+            // The widgets are the rule's own (its key, layer, scope and app), not the
+            // row's place in the list: a list that changes under a held click does not
+            // hand that click to another rule. The scope is its own variant and value
+            // (a computer named Macs and all Macs read alike), and a rule written twice
+            // is told apart by which time it is.
+            let key = format!("{:?}", (&r.from, &r.layer, &r.scope, &r.app));
+            let times = seen.entry(key.clone()).or_insert(0);
+            let ident = (key, *times);
+            *times += 1;
             let row = Rect::from_min_size(pos2(left, y), vec2(width, 34.0));
             let (text, ok) = match tune::sentence(input, r) {
                 Ok(s) => (s, true),
@@ -1725,7 +1818,7 @@ impl App {
             };
             let scope_tag = match &r.scope {
                 Scope::All => String::new(),
-                s => s.label(),
+                s => s.label_in(&peers),
             };
             let applies_here = input.local_rules && cfg!(any(windows, target_os = "macos"))
                 && r.scope.includes_local_os(one_mk_proto::os::local());
@@ -1736,9 +1829,9 @@ impl App {
             let edit = Rect::from_center_size(pos2(row.right() - 46.0, row.center().y), vec2(26.0, 26.0));
             let del = Rect::from_center_size(pos2(row.right() - 17.0, row.center().y), vec2(26.0, 26.0));
             // The row: a click opens the rule, as ✎ does.
-            let resp = ui.interact(Rect::from_min_max(row.min, pos2(edit.left() - 4.0, row.bottom())), Id::unique(("rule-text", i)), widgets::sense(ui, Sense::click()));
+            let resp = ui.interact(Rect::from_min_max(row.min, pos2(edit.left() - 4.0, row.bottom())), Id::unique(("rule-text", &ident)), widgets::sense(ui, Sense::click()));
             let lit = ui.rect_contains_pointer(row) || ui.memory(|m| {
-                [Id::unique(("rule-edit", i)), Id::unique(("rule-del", i)), resp.id].iter().any(|id| m.has_focus(*id))
+                [Id::unique(("rule-edit", &ident)), Id::unique(("rule-del", &ident)), resp.id].iter().any(|id| m.has_focus(*id))
             });
             let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(lit), 0.1, motion::out_cubic);
             let fill = if on { pal().accent_soft } else { mix(Color32::TRANSPARENT, pal().hover, hover) };
@@ -1777,16 +1870,16 @@ impl App {
             }
             // ✎ and ✕ show under the pointer (and while one has the keyboard).
             if lit {
-                if widgets::icon_button(ui, edit, Id::unique(("rule-edit", i)), &format!("Change: {text}"), editable && !busy, draw_pencil).clicked() {
+                if widgets::icon_button(ui, edit, Id::unique(("rule-edit", &ident)), &format!("Change: {text}"), editable && !busy, draw_pencil).clicked() {
                     act = Some((i, true));
                 }
-                if widgets::icon_button(ui, del, Id::unique(("rule-del", i)), &format!("Remove: {text}"), !busy, draw_cross).clicked() {
+                if widgets::icon_button(ui, del, Id::unique(("rule-del", &ident)), &format!("Remove: {text}"), !busy, draw_cross).clicked() {
                     act = Some((i, false));
                 }
             } else {
                 // Still reachable with Tab: the buttons stay in the order,
                 // drawn only once they have the keyboard or the pointer.
-                for (rect, id, name) in [(edit, Id::unique(("rule-edit", i)), format!("Change: {text}")), (del, Id::unique(("rule-del", i)), format!("Remove: {text}"))] {
+                for (rect, id, name) in [(edit, Id::unique(("rule-edit", &ident)), format!("Change: {text}")), (del, Id::unique(("rule-del", &ident)), format!("Remove: {text}"))] {
                     let r = ui.interact(rect, id, widgets::sense(ui, Sense::click()));
                     widgets::a11y(&r, Role::Button, &name, None);
                 }
@@ -1837,11 +1930,14 @@ impl App {
             (None, Some(Ok(i))) => {
                 let r = &input.keys[i];
                 let s = tune::sentence(input, r).unwrap_or_default();
-                format!("{} ({})", s.split_once(" → ").map_or(s.as_str(), |(_, t)| t), r.scope.label().to_lowercase())
+                format!("{} ({})", s.split_once(" → ").map_or(s.as_str(), |(_, t)| t), self.scope_label(&r.scope).to_lowercase())
             }
             _ => format!("Types {name}, as it is."),
         };
-        let (tapped, held) = tap_hold_text(effective.as_ref().map(|(s, _)| &s.what), &name);
+        // The rule being changed is shown as it is written, whatever its app (the
+        // rules a computer inherits leave app rules out).
+        let own_what = own.as_ref().and_then(|r| r.spec().ok()).map(|s| s.what);
+        let (tapped, held) = tap_hold_text(own_what.as_ref().or(effective.as_ref().map(|(s, _)| &s.what)), &name);
 
         // The key's chip, its name and what it does now; ✕ lets it go.
         let p = ui.painter().clone();
@@ -1931,6 +2027,15 @@ impl App {
         }
         if resp.clicked() {
             self.keys.more = !open;
+            if open {
+                // Closed, its recorder and list go too: a key pressed later is not theirs.
+                if matches!(self.keys.capture, Some((Want::Hold, _))) {
+                    self.keys.capture = None;
+                }
+                if matches!(self.keys.picker, Some((Want::Hold, _))) {
+                    self.keys.picker = None;
+                }
+            }
         }
         y += 46.0;
         if open {
@@ -2018,7 +2123,7 @@ impl App {
         let scope_note = match &self.keys.scope {
             Scope::All => "Changes here are for every computer.".to_owned(),
             Scope::Os(o) => format!("Changes here are only for {}.", tune::os_plural(*o)),
-            Scope::Peer(p) => format!("Changes here are only for {p}."),
+            Scope::Peer(p) => format!("Changes here are only for {}.", self.peer_name(p)),
             Scope::Device(fp, _) => format!("Changes here are only for keys typed on {}.", tune::device_name(fp)),
         };
         let scope_note = match &self.keys.app {
@@ -2055,7 +2160,9 @@ impl App {
                     self.keys.error = Some(("keyboard", e));
                     return row.bottom();
                 }
-                self.tune_cmds(name, "keyboard", vec![tune::remove_args(r), tune::add_args(&moved)], None);
+                // The new rule is added before the old one goes: if the add fails the
+                // command stops there, and the rule it was moving from is still there.
+                self.tune_cmds(name, "keyboard", vec![tune::add_args(&moved), tune::remove_args(r)], None);
             }
             self.keys.app = new;
         }
@@ -2125,14 +2232,18 @@ impl App {
         let resp = widgets::field(ui, fr, fid, &mut q, "Search: esc, volume, next computer…", "Search for a key or an action", true, false);
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
         if button(ui, Rect::from_min_size(pos2(fr.right() + 8.0, y), vec2(bw, 30.0)), Id::unique("pick-cancel"), "Cancel", Look::Quiet, true, Some("Close the list")).clicked()
-            || (resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)))
+            // Esc closes the list whether or not the field still has the keyboard (the field
+            // lets go of it on Esc before this is looked at).
+            || ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
         {
             self.keys.picker = None;
             ui.ctx().data_mut(|d| d.remove::<bool>(fid.with("opened")));
             return y + 38.0;
         }
         let all = &self.keys.choices.as_ref().expect("filled above").1;
-        let hits: Vec<tune::Choice> = tune::search(all, &q).into_iter().cloned().collect();
+        // The left and right buttons must keep clicking: "Nothing" is not on offer for them.
+        let primary = buttons && self.keys.button.is_some_and(|n| matches!(n, 1 | 2));
+        let hits: Vec<tune::Choice> = tune::search(all, &q).into_iter().filter(|c| !(primary && c.value == "none")).cloned().collect();
         self.keys.picker = Some((want, q));
         let mut picked = enter.then(|| hits.first().map(|c| c.value.clone())).flatten();
         let rows = hits.len().clamp(3, rows);
@@ -2188,7 +2299,7 @@ impl App {
         let intro = match &self.keys.scope {
             Scope::All => "Type in the box to see what every computer would get. Nothing is sent.".to_owned(),
             Scope::Os(o) => format!("Type in the box to see what {} would get. Nothing is sent.", tune::os_plural(*o)),
-            Scope::Peer(p) => format!("Type in the box to see what {p} would get. Nothing is sent."),
+            Scope::Peer(p) => format!("Type in the box to see what {} would get. Nothing is sent.", self.peer_name(p)),
             Scope::Device(fp, _) => format!("Type in the box to see what typing on {} would send. Nothing is sent.", tune::device_name(fp)),
         };
         let mut y = at.y + 22.0;
@@ -2302,15 +2413,7 @@ impl App {
             }
         }
         let busy = self.tuning_busy();
-        let mut rows: Vec<_> = input.autoscroll.iter().filter(|row| row.app.is_none())
-            .filter(|row| !matches!(row.scope, Scope::Device(..)))
-            .filter(|row| !row.button.as_deref().is_some_and(tune::primary_mouse_button))
-            .filter_map(|row| Some((row.scope.rank(facts)?, row))).collect();
-        rows.sort_by_key(|(rank, _)| *rank);
-        let mut enabled = false;
-        let mut speed = 1.0;
-        let mut button = "middle";
-        for (_, row) in rows { enabled = row.enabled.unwrap_or(enabled); speed = row.speed.unwrap_or(speed); button = row.button.as_deref().unwrap_or(button); }
+        let (enabled, speed, button) = tune::autoscroll_shown(input, facts);
         let rect = Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), 46.0));
         if switch_help(ui, rect, Id::unique("autoscroll-toggle"), "Autoscroll", "autoscroll-toggle", enabled, !busy).clicked() {
             let mut args = vec!["autoscroll".into(), if enabled { "--off".into() } else { "--on".into() }];
@@ -2318,7 +2421,7 @@ impl App {
             self.tune_cmds("autoscroll", "mouse-modes", vec![args], None);
         }
         top += 46.0 + 2.0;
-        let instructions = format!("Click {}, then move away to scroll the other computer. Click again or press Esc to stop.", tune::mouse_button_label(button));
+        let instructions = format!("Click {}, then move away to scroll the other computer. Click again or press Esc to stop.", tune::mouse_button_label(&button));
         let height = para(ui, pos2(content.left(), top), content.width(), &instructions, regular(T_META), pal().ink2);
         a11y_text(ui, Id::unique("autoscroll-instructions"), Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), height)), Role::Label, &instructions, None);
         top += height + 4.0;
@@ -2326,7 +2429,7 @@ impl App {
         if let Some(value) = ui.add_enabled_ui(!busy, |ui| self.speed_row(ui, rect, "autoscroll-speed", "Autoscroll speed", speed)).inner {
             let mut args = vec!["autoscroll".into(), format!("--speed={value}")];
             args.extend(self.keys.scope.args());
-            self.tune_cmds("autoscroll speed", "mouse-modes", vec![args], Some("autoscroll-speed".into()));
+            self.tune_cmds("autoscroll speed", "mouse-modes", vec![args], Some(self.speed_target("autoscroll-speed")));
         }
         widgets::hairline(ui.painter(), rect.x_range(), rect.bottom());
         top += 46.0 + 12.0;
@@ -2335,9 +2438,14 @@ impl App {
         let preset = ui.add_enabled_ui(!busy, |ui| chip(ui, rect, Id::unique("gesture-side-swipe"), "Set up side-button desktop swipes", false, true, false)).inner;
         widgets::a11y(&preset, Role::Button, "Set up side-button desktop swipes", None);
         if preset.clicked() {
-            let mut args = vec!["gestures".into(), "preset".into(), "side-swipe".into()];
-            args.extend(self.keys.scope.args());
-            self.tune_cmds("gestures", "mouse-modes", vec![args], None);
+            // `one-mk gestures add` refuses a gesture on autoscroll's button; the preset is held to the same.
+            if let Some(why) = tune::side_swipe_conflict(input, facts) {
+                self.keys.error = Some(("mouse-modes", format!("{why}; nothing was saved")));
+            } else {
+                let mut args = vec!["gestures".into(), "preset".into(), "side-swipe".into()];
+                args.extend(self.keys.scope.args());
+                self.tune_cmds("gestures", "mouse-modes", vec![args], None);
+            }
         }
         top += 38.0;
         let gestures: Vec<_> = input.gestures.iter().filter(|row| !matches!(row.scope, Scope::Device(..)))
@@ -2388,9 +2496,19 @@ impl App {
         let capture = Rect::from_min_size(pos2(left + width - 80.0, top), vec2(80.0, 28.0));
         let started = button(ui, capture, Id::unique("gesture-record"), if recording { "Cancel" } else { "Record" }, Look::Quiet, true, Some("Press a key or shortcut for this gesture")).clicked();
         if started { recording = !recording; }
-        if recording && !started && let Some(result) = super::settings_controls::recorded(&ui.input(|input| input.events.clone()), false) {
-            if let Ok(chord) = result { value = chord; }
-            recording = false;
+        // A Super key is pressed and let go in different frames: it is kept between them.
+        let held = Id::unique("gesture-super");
+        if recording && !started {
+            let (events, focused) = ui.input(|input| (input.events.clone(), input.focused));
+            let mut super_down = focused && ui.ctx().data(|data| data.get_temp::<bool>(held)).unwrap_or(false);
+            let result = super::settings_controls::recorded_holding(&events, false, &mut super_down);
+            ui.ctx().data_mut(|data| data.insert_temp(held, super_down && result.is_none()));
+            if let Some(result) = result {
+                if let Ok(chord) = result { value = chord; }
+                recording = false;
+            }
+        } else {
+            ui.ctx().data_mut(|data| data.remove::<bool>(held));
         }
         ui.ctx().data_mut(|data| data.insert_temp(capture_id, recording));
         self.drafts.insert("gesture-output".into(), value.clone());
@@ -2608,7 +2726,14 @@ impl App {
                     if kind == ButtonKind::AsItIs {
                         self.keys.button_kind = None;
                         if now != ButtonKind::AsItIs {
-                            self.tune_cmds(&name.to_lowercase(), "buttons", vec![tune::button_args(n, None, &self.keys.scope)], None);
+                            // A rule of this scope's own is forgotten; one that comes from a
+                            // broader scope is answered by this scope sending the button as it is.
+                            let cmd = if tune::button_has_own_rule(input, &self.keys.scope, n) {
+                                tune::button_args(n, None, &self.keys.scope)
+                            } else {
+                                tune::button_args(n, Some(&format!("button{n}")), &self.keys.scope)
+                            };
+                            self.tune_cmds(&name.to_lowercase(), "buttons", vec![cmd], None);
                         }
                     } else {
                         self.keys.button_kind = Some((n, kind));
@@ -2692,7 +2817,7 @@ impl App {
                 // The next computer, back here, or one by name.
                 let current = doing.map(|o| o.to_string()).unwrap_or_default();
                 let mut options = vec![("Switch to the next computer".to_owned(), "switch next".to_owned()), ("Come back to this computer".to_owned(), "switch here".to_owned())];
-                options.extend(self.scope_peers().into_iter().map(|p| (p.name.clone(), format!("switch {}", p.name))));
+                options.extend(self.scope_peers().into_iter().map(|p| (p.name.clone(), format!("switch {}", p.switch_arg()))));
                 let widths: Vec<f32> = options.iter().map(|(l, _)| chip_width(ui, l, false).min(w)).collect();
                 let (rects, bottom) = quick_setup_rects(w, 0.0, &widths);
                 for ((label, value), rect) in options.iter().zip(rects) {
@@ -2728,7 +2853,8 @@ impl App {
     fn speed_row(&mut self, ui: &mut Ui, row: Rect, key: &'static str, label: &str, value: f64) -> Option<f64> {
         // One line: the caption stays in the "i" (no room beside a slider).
         let lw = label_help_inline(ui, Rect::from_center_size(row.center(), vec2(row.width(), 36.0)), Id::unique(("speed-label", key)), label, key, true);
-        let shown = self.keys.drafts.get(key).copied().unwrap_or(value);
+        let target = self.speed_target(key);
+        let shown = self.keys.drafts.get(&target).copied().unwrap_or(value);
         let fw = 46.0;
         let suffix = text_width(ui, "×", mono(T_BODY)) + 4.0;
         let fr = Rect::from_min_size(pos2(row.right() - fw - suffix, row.center().y - 14.0), vec2(fw, 28.0));
@@ -2738,7 +2864,7 @@ impl App {
             let (t, apply) = slider(ui, sr, Id::unique(("slider", key)), tune::speed_to_t(shown), label, shown);
             if let Some(t) = t {
                 let x = tune::t_to_speed(t);
-                self.keys.drafts.insert(key, x);
+                self.keys.drafts.insert(target.clone(), x);
                 if apply {
                     out = Some(x);
                 }
@@ -2749,7 +2875,7 @@ impl App {
         if let Some(text) = self.edit_field(ui, fr, key, &cur, "1", &format!("{label}, from 0.1 to 10 times"), true, true) {
             match tune::parse_speed(&text) {
                 Ok(x) => {
-                    self.keys.drafts.insert(key, x);
+                    self.keys.drafts.insert(target, x);
                     out = Some(x);
                 }
                 Err(e) => self.keys.error = Some((if key.starts_with("pointer") { "pointer" } else if key.starts_with("autoscroll") { "mouse-modes" } else { "scroll" }, e)),
@@ -2768,7 +2894,7 @@ impl App {
         let line = |ui: &Ui, y: f32| widgets::hairline(ui.painter(), egui::Rangef::new(at.x, at.x + w), y);
         let (speed, accel) = tune::pointer_shown(input, facts);
         if let Some(x) = self.speed_row(ui, row(y), "pointer-speed", "Pointer speed", speed) {
-            self.tune_cmds("the pointer speed", "pointer", vec![tune::pointer_args(Some(x), None, &self.keys.scope)], Some("pointer-speed".into()));
+            self.tune_cmds("the pointer speed", "pointer", vec![tune::pointer_args(Some(x), None, &self.keys.scope)], Some(self.speed_target("pointer-speed")));
         }
         y += 46.0;
         if tune::RAW_MOTION {
@@ -2838,7 +2964,10 @@ impl App {
             for (k, label) in nat.iter().enumerate() {
                 if widgets::menu_item(ui, 240.0, widgets::MenuItem::choice(label, names[k], k == at_nat)).clicked() {
                     if k != at_nat {
-                        change = Some(ScrollChange::Natural(nat_values[k]));
+                        change = Some(match nat_values[k] {
+                            None => tune::natural_as_here(input, facts, &self.keys.scope, dev),
+                            value => ScrollChange::Natural(value),
+                        });
                     }
                     ui.close();
                 }
@@ -2854,11 +2983,11 @@ impl App {
         y += para(ui, pos2(at.x, y - 6.0), w, explain, regular(T_META), pal().ink3) + 4.0;
         line(ui, y);
         if switch_help(ui, row(y), Id::unique("scroll-shift"), "Shift scrolls sideways", "scroll-shift", s.shift_sideways, true).clicked() {
-            change = Some(ScrollChange::Modifier("shift", if s.shift_sideways { "unchanged" } else { "horizontal" }));
+            change = Some(ScrollChange::Modifier("shift", if s.shift_sideways { "off" } else { "horizontal" }));
         }
         y += 46.0;
         if let Some(ch) = change {
-            let key = matches!(ch, ScrollChange::Speed(_)).then(|| "scroll-speed".to_owned());
+            let key = matches!(ch, ScrollChange::Speed(_)).then(|| self.speed_target("scroll-speed"));
             let cmds = tune::scroll_commands(input, &self.keys.scope, dev, &ch);
             self.tune_cmds("scrolling", "scroll", cmds, key);
         }
@@ -2922,11 +3051,11 @@ impl App {
         line(ui, y);
         let alt = if mac() { "Option" } else { "Alt" };
         if switch_help(ui, row(y), Id::unique("scroll-alt"), &format!("Hold {alt} to scroll 5× faster"), "scroll-alt", s.alt_faster, true).clicked() {
-            change = Some(ScrollChange::Modifier("alt", if s.alt_faster { "unchanged" } else { "x5" }));
+            change = Some(ScrollChange::Modifier("alt", if s.alt_faster { "off" } else { "x5" }));
         }
         y += 46.0;
         if let Some(ch) = change {
-            let key = matches!(ch, ScrollChange::Speed(_)).then(|| "scroll-speed".to_owned());
+            let key = matches!(ch, ScrollChange::Speed(_)).then(|| self.speed_target("scroll-speed"));
             let cmds = tune::scroll_commands(input, &self.keys.scope, dev, &ch);
             self.tune_cmds("scrolling", "scroll", cmds, key);
         }
@@ -2943,6 +3072,6 @@ fn scope_covers(scope: &Scope, peer: &tune::Peer) -> bool {
     match scope {
         // The keyboard it is typed on says nothing about the computer.
         Scope::Device(_, on) => scope_covers(on, peer),
-        scope => scope.rank(&Facts { name: peer.name.clone(), id: peer.id.clone(), os: peer.os, device: None }).is_some(),
+        scope => scope.rank(&Facts { name: peer.name.clone(), id: peer.id.clone(), os: peer.os, device: None, swap: false }).is_some(),
     }
 }

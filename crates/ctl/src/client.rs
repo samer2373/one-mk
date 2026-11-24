@@ -69,6 +69,15 @@ pub enum Request {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HistoryAction {
     List, Show(u64), Copy(u64), Delete(u64), Clear,
+    /// [`Self::Copy`] for a row of a list the window loaded: `(item, instance)`,
+    /// where `instance` is the history instance the list reported. The daemon
+    /// refuses it when it is another instance (it restarted since), because item
+    /// numbers start again at 1 and would name an unrelated item.
+    CopyChecked(u64, u64),
+    /// A short, bounded text preview of an item for the window, checked like
+    /// [`Self::CopyChecked`]: `(item, instance)`. Unlike [`Self::Show`] the
+    /// reply never carries more than a line, however large the item is.
+    Preview(u64, u64),
     /// Answers once every save or removal of the saved history that was
     /// asked for so far has finished: a barrier after turning saving off.
     Flush,
@@ -79,6 +88,7 @@ impl HistoryAction {
         match self {
             Self::List => "list".into(), Self::Clear => "clear".into(), Self::Flush => "flush".into(),
             Self::Show(id) => format!("show {id}"), Self::Copy(id) => format!("copy {id}"), Self::Delete(id) => format!("delete {id}"),
+            Self::CopyChecked(id, instance) => format!("copy {id} {instance}"), Self::Preview(id, instance) => format!("preview {id} {instance}"),
         }
     }
 
@@ -86,11 +96,19 @@ impl HistoryAction {
         match arg {
             "list" => Some(Self::List), "clear" => Some(Self::Clear), "flush" => Some(Self::Flush),
             _ => {
-                let (verb, number) = arg.split_once(' ')?;
-                if number.is_empty() || !number.bytes().all(|byte| byte.is_ascii_digit()) { return None; }
-                let id: u64 = number.parse().ok()?;
-                if id == 0 || id == u64::MAX { return None; }
-                match verb { "show" => Some(Self::Show(id)), "copy" => Some(Self::Copy(id)), "delete" => Some(Self::Delete(id)), _ => None }
+                let (verb, numbers) = arg.split_once(' ')?;
+                // An item number, as digits only (no sign, no other script's digits).
+                let number = |text: &str| -> Option<u64> {
+                    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) { return None; }
+                    text.parse().ok().filter(|&id| id != 0 && id != u64::MAX)
+                };
+                match (verb, numbers.split_once(' ')) {
+                    ("show", None) => Some(Self::Show(number(numbers)?)), ("copy", None) => Some(Self::Copy(number(numbers)?)),
+                    ("delete", None) => Some(Self::Delete(number(numbers)?)),
+                    ("copy", Some((id, instance))) => Some(Self::CopyChecked(number(id)?, number(instance)?)),
+                    ("preview", Some((id, instance))) => Some(Self::Preview(number(id)?, number(instance)?)),
+                    _ => None,
+                }
             }
         }
     }
@@ -274,7 +292,7 @@ impl Request {
         match self {
             Request::LiveWallpaper(_) => Duration::from_secs(660),
             Request::ClipSend(_) | Request::ClipSendSensitive(_) | Request::ClipGet(_) | Request::FetchClipboard
-                | Request::ClipHistory { action: HistoryAction::Copy(_), .. } => Duration::from_secs(45),
+                | Request::ClipHistory { action: HistoryAction::Copy(_) | HistoryAction::CopyChecked(..), .. } => Duration::from_secs(45),
             _ => Duration::from_secs(5),
         }
     }
@@ -369,17 +387,26 @@ mod tests {
 
     #[test]
     fn history_requests_and_hostile_arguments() {
-        for action in [HistoryAction::List, HistoryAction::Show(1), HistoryAction::Copy(13), HistoryAction::Delete(u64::MAX - 1), HistoryAction::Clear, HistoryAction::Flush] {
+        for action in [HistoryAction::List, HistoryAction::Show(1), HistoryAction::Copy(13), HistoryAction::Delete(u64::MAX - 1), HistoryAction::Clear, HistoryAction::Flush,
+            HistoryAction::CopyChecked(2, 9_007_199_254_740_991), HistoryAction::Preview(1, 77), HistoryAction::Preview(u64::MAX - 1, u64::MAX - 1)] {
             for json in [false, true] {
                 let request = Request::ClipHistory { action, json };
                 assert_eq!(Request::parse(&request.line()), Some(request));
             }
         }
         assert_eq!(Request::parse(&Request::FetchClipboard.line()), Some(Request::FetchClipboard));
-        for argument in ["show 0", "show -1", "show +1", "copy 18446744073709551615", "delete 18446744073709551616", "clear extra", "list --json --json", "show 1\nstop", "copy 1\0", "show 1 2", "show ١"] {
+        for argument in ["show 0", "show -1", "show +1", "copy 18446744073709551615", "delete 18446744073709551616", "clear extra", "list --json --json", "show 1\nstop", "copy 1\0", "show 1 2", "show ١",
+            "preview 1", "preview 1 2 3", "preview 0 5", "preview 5 0", "preview 5 -1", "preview 5 ١", "preview  5", "preview 5  6", "preview 18446744073709551615 1",
+            "copy 1 2 3", "copy 1 0", "copy 1 18446744073709551615", "copy 1 x", "delete 1 2", "show 1 2 3", "copy 1\t2"] {
             assert_eq!(Request::parse(&format!("clip-history {argument}")), None, "{argument:?}");
         }
         assert!(Request::parse(&format!("clip-history {}", "x".repeat(10000))).is_none());
+        // What a window and a daemon that know the checked forms say to each other, and what an older daemon says of them.
+        assert_eq!(Request::parse("clip-history preview 3 42 --json"), Some(Request::ClipHistory { action: HistoryAction::Preview(3, 42), json: true }));
+        assert_eq!(Request::parse("clip-history copy 3 42"), Some(Request::ClipHistory { action: HistoryAction::CopyChecked(3, 42), json: false }));
+        assert_eq!(Request::parse("clip-history copy 3"), Some(Request::ClipHistory { action: HistoryAction::Copy(3), json: false }), "the plain forms are unchanged");
+        assert_eq!(Request::ClipHistory { action: HistoryAction::CopyChecked(3, 42), json: false }.reply_timeout(), Request::ClipGet(None).reply_timeout());
+        assert_eq!(Request::ClipHistory { action: HistoryAction::Preview(3, 42), json: false }.reply_timeout(), Duration::from_secs(5));
         let mut state = 123456u64;
         for _ in 0..10000 {
             state = state.wrapping_mul(6364136223846793005).wrapping_add(1);

@@ -68,7 +68,14 @@ async fn inject_loop(
                         warned = true;
                     }
                     controlled.apply(&mut batch);
-                    batch.clear();
+                    // Releases still reach the injector: its held modifiers and buttons (stamped on
+                    // every later event) must not outlive the visit that pressed them, and the
+                    // post itself does nothing without the permission.
+                    for m in batch.drain(..) {
+                        if matches!(m, Inject::Key { down: false, .. } | Inject::CharacterKey { down: false, .. } | Inject::Button { down: false, .. }) {
+                            inj.apply(m);
+                        }
+                    }
                     repeat.clear();
                     text.clear();
                     continue;
@@ -80,7 +87,11 @@ async fn inject_loop(
                         let was = controlled.get();
                         controlled.set(active);
                         if !active { repeat.clear(); }
-                        if !was && active { let _ = CGDisplayShowCursor(kCGNullDirectDisplay); }
+                        if !was && active {
+                            let _ = CGDisplayShowCursor(kCGNullDirectDisplay);
+                            // The Mac's own Caps Lock may have been toggled since the last visit.
+                            inj.sync_caps();
+                        }
                     }
                     if let Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } = m {
                         if down && is_repeatable(code) && now.duration_since(settings_read) > Duration::from_secs(5) {
@@ -105,6 +116,9 @@ async fn inject_loop(
     }
 }
 
+/// How long a posted Caps Lock press is trusted over what the system says.
+const CAPS_SETTLE: Duration = Duration::from_millis(500);
+
 struct Injector {
     source: CFRetained<CGEventSource>,
     pos: CGPoint,
@@ -119,6 +133,8 @@ struct Injector {
     smooth: logic::Accum,
     wheel: logic::Accum,
     epoch: Instant,
+    /// When a Caps Lock press of a peer was last posted: the system takes a moment to show it.
+    caps_toggled: Option<Instant>,
 }
 
 impl Injector {
@@ -136,7 +152,20 @@ impl Injector {
             smooth: logic::Accum::default(),
             wheel: logic::Accum::default(),
             epoch: Instant::now(),
+            caps_toggled: None,
         }
+    }
+
+    /// Takes over the Mac's own Caps Lock state for the flags of injected events, which overwrite
+    /// what the system would use: it starts at off and flips only with a peer's presses, so a
+    /// Caps Lock turned on or off at this Mac's own keyboard left it the wrong way round (the
+    /// peer's letters in the wrong case, and the peer's next Caps Lock press out of step with the
+    /// real one). Not right after a press of ours, whose effect the system may not show yet (also
+    /// at the start of a visit, which comes quickly after the last one's end).
+    fn sync_caps(&mut self) {
+        if self.caps_toggled.is_some_and(|at| at.elapsed() < CAPS_SETTLE) { return; }
+        let state = CGEventSource::flags_state(CGEventSourceStateID::CombinedSessionState);
+        self.mods.sync_caps(state.0 & logic::flags::ALPHA_SHIFT != 0);
     }
 
     fn post(&self, ev: &CGEvent, extra_flags: u64) {
@@ -236,11 +265,14 @@ impl Injector {
                 }
             }
             Inject::Key { code, down } | Inject::CharacterKey { code, down, .. } => {
+                // Also before a Caps Lock press, which flips what the system says now.
+                self.sync_caps();
                 // Each posted Caps Lock press toggles it; a repeat must not.
                 if self.mods.is_caps_repeat(code, down) {
                     return;
                 }
                 self.mods.update(code, down);
+                if code == KEY_CAPSLOCK && down { self.caps_toggled = Some(Instant::now()); }
                 if code == KEY_CAPSLOCK && !down {
                     return; // a toggle: one event per press
                 }

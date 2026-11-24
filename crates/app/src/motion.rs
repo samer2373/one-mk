@@ -23,16 +23,37 @@ pub fn detect() -> bool {
     if let Some(v) = std::env::var_os("ONE_MK_REDUCE_MOTION") {
         return v != "0" && !v.is_empty();
     }
-    let read = |cmd: &str, args: &[&str]| {
-        std::process::Command::new(cmd).args(args).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-    };
-    if cfg!(target_os = "linux") {
-        read("gsettings", &["get", "org.gnome.desktop.interface", "enable-animations"]).is_some_and(|s| s == "false")
-    } else if cfg!(target_os = "macos") {
-        read("defaults", &["read", "com.apple.universalaccess", "reduceMotion"]).is_some_and(|s| s == "1")
-    } else {
-        false
+    #[cfg(windows)]
+    return windows_animations_off();
+    #[cfg(not(windows))]
+    {
+        let read = |cmd: &str, args: &[&str]| {
+            std::process::Command::new(cmd).args(args).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        };
+        if cfg!(target_os = "linux") {
+            read("gsettings", &["get", "org.gnome.desktop.interface", "enable-animations"]).is_some_and(|s| s == "false")
+        } else if cfg!(target_os = "macos") {
+            read("defaults", &["read", "com.apple.universalaccess", "reduceMotion"]).is_some_and(|s| s == "1")
+        } else {
+            false
+        }
     }
+}
+
+/// Windows: Settings → Accessibility → Visual effects → Animation effects
+/// is off (`SPI_GETCLIENTAREAANIMATION` reads false).
+#[cfg(windows)]
+fn windows_animations_off() -> bool {
+    const SPI_GETCLIENTAREAANIMATION: u32 = 0x1042;
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SystemParametersInfoW(action: u32, param: u32, data: *mut std::ffi::c_void, flags: u32) -> i32;
+    }
+    let mut on: i32 = 1;
+    // SAFETY: for this action `data` points to one BOOL (a 32-bit integer), which `on` is.
+    let read = unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut on).cast(), 0) };
+    // A failed read leaves the default: motion on.
+    read != 0 && on == 0
 }
 
 /// Duration for movement through space: none when motion is reduced.

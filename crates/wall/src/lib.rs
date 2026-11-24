@@ -146,8 +146,11 @@ impl Estimator {
             self.drift += (desired - self.drift).clamp(-20.0e-6, 20.0e-6);
         }
         let previous = self.anchor.map(|anchor| anchor.offset + self.drift * (local - anchor.local));
-        self.anchor = Some(Anchor { local, offset: previous.map_or(offset, |old| old + (offset - old).clamp(-0.005, 0.005)) });
-        self.uncertainty = samples.iter().map(|sample| sample.0.2 * 0.5 + (sample.0.1 - offset).abs()).fold(0.0, f64::max);
+        let stored = previous.map_or(offset, |old| old + (offset - old).clamp(-0.005, 0.005));
+        self.anchor = Some(Anchor { local, offset: stored });
+        // Around the offset the map actually uses, not the measured one: while the map slews
+        // (at most 5 ms per burst) the two differ and the bound must include that gap.
+        self.uncertainty = samples.iter().map(|sample| sample.0.2 * 0.5 + (sample.0.1 - stored).abs()).fold(0.0, f64::max);
         self.history.push_back(measured);
         if self.history.len() > self.window {
             self.history.pop_front();

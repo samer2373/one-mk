@@ -21,6 +21,7 @@ mod glass;
 mod help;
 mod guide;
 mod icons;
+mod launch;
 mod motion;
 mod pairing;
 mod rtt;

@@ -176,7 +176,11 @@ impl AppPattern {
         let literal: String = self.glob.iter().filter(|c| **c != '*').collect();
         let exe = self.glob.ends_with(&['.', 'e', 'x', 'e']);
         let dots = literal.matches('.').count();
-        let looks_like_bundle = dots >= 2 && !exe && !literal.contains(' ');
+        // Reverse-DNS prefixes only: Windows program files (`Microsoft.CmdPal.UI`,
+        // `.exe` left off) and window classes (`WindowsForms10.Window.8.app.0.*`)
+        // have many dots too.
+        let reverse_dns = ["com.", "org.", "io.", "net."].iter().any(|p| literal.starts_with(p));
+        let looks_like_bundle = dots >= 2 && !exe && !literal.contains(' ') && reverse_dns;
         match target {
             os::MACOS if exe && !self.negate => Some(format!(
                 "app {:?} never matches on a Mac: macOS names apps by bundle id (com.apple.Terminal) or name (Terminal), not .exe files",
@@ -370,6 +374,12 @@ mod tests {
         assert!(p("com.apple.Terminal").never_on(os::WINDOWS).unwrap().contains("bundle id"));
         assert!(p("com.jetbrains.*").never_on(os::WINDOWS).is_some());
         assert_eq!(p("com.apple.Terminal").never_on(os::MACOS), None);
+        // Dotted Windows program names (`.exe` left off) and window classes.
+        assert_eq!(p("Microsoft.CmdPal.UI").never_on(os::WINDOWS), None);
+        assert_eq!(p("Company.Editor.Tool").never_on(os::WINDOWS), None);
+        assert!(p("Company.Editor.Tool").matches(&["Company.Editor.Tool.exe"]));
+        assert_eq!(p("WindowsForms10.Window.8.app.0.141b42a_r6_ad1").never_on(os::WINDOWS), None);
+        assert_eq!(p("WindowsForms10.*.app.0.*").never_on(os::WINDOWS), None);
         assert_eq!(p("org.gnome.Nautilus").never_on(os::LINUX), None);
         assert_eq!(p("chrome").never_on(os::MACOS), None);
         assert_eq!(p("!chrome.exe").never_on(os::MACOS), None, "always true there, not never");

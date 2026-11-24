@@ -172,12 +172,23 @@ pub struct Clipboard {
     test_limit: Option<usize>,
 }
 
+/// What a read may hand out (see [`Clipboard::read`], [`Clipboard::read_background`],
+/// [`Clipboard::read_explicit`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadMode {
+    Automatic,
+    Marked,
+    Explicit,
+}
+
 enum Cmd {
-    Read { skip: Vec<Digest>, explicit: bool, reply: oneshot::Sender<Result<Read>> },
+    Read { skip: Vec<Digest>, mode: ReadMode, reply: oneshot::Sender<Result<Read>> },
     Digest { reply: oneshot::Sender<Result<Option<Digest>>> },
     #[cfg(target_os = "linux")]
     Capture { skip_history: bool, owner: u32, timestamp: u32 },
-    Write { data: ClipData, origin: String, record: bool, concealed: bool, reply: oneshot::Sender<Result<Digest>> },
+    /// `expected`: write only if the clipboard still holds this (`None` inside: empty);
+    /// the reply is `None` when it does not.
+    Write { data: ClipData, origin: String, record: bool, concealed: bool, expected: Option<Option<Digest>>, reply: oneshot::Sender<Result<Option<Digest>>> },
 }
 
 impl Clipboard {
@@ -266,14 +277,23 @@ impl Clipboard {
     /// Reads the clipboard. Content whose digest is in `skip` is not
     /// encoded or copied, so asking "has it changed?" is cheap.
     pub async fn read(&self, skip: Vec<Digest>) -> Result<Read> {
-        self.call(|reply| Cmd::Read { skip, explicit: false, reply }).await
+        self.call(|reply| Cmd::Read { skip, mode: ReadMode::Automatic, reply }).await
     }
 
     /// Like [`read`](Self::read), for when the user asked for this copy to
     /// be sent: sensitive content is carried too. The formats and size
     /// limit still apply.
     pub async fn read_explicit(&self, skip: Vec<Digest>) -> Result<Read> {
-        self.call(|reply| Cmd::Read { skip, explicit: true, reply }).await
+        self.call(|reply| Cmd::Read { skip, mode: ReadMode::Explicit, reply }).await
+    }
+
+    /// Like [`read`](Self::read), for what is sent without the user asking
+    /// (the push when the pointer crosses, a fetch by a peer): a copy made
+    /// here that was marked as sensitive is returned as
+    /// [`Read::Sensitive`] when the filter lets it go, so it travels marked;
+    /// one a peer sent as sensitive is never returned, whatever the filter.
+    pub async fn read_background(&self, skip: Vec<Digest>) -> Result<Read> {
+        self.call(|reply| Cmd::Read { skip, mode: ReadMode::Marked, reply }).await
     }
 
     /// The digest of the current content, or `None` if empty.
@@ -329,7 +349,18 @@ impl Clipboard {
     }
 
     pub async fn write_from(&self, data: ClipData, origin: String, record: bool) -> Result<Digest> {
-        self.call(|reply| Cmd::Write { data, origin, record, concealed: false, reply }).await
+        let written = self.call(|reply| Cmd::Write { data, origin, record, concealed: false, expected: None, reply }).await?;
+        written.ok_or_else(|| anyhow!("clipboard write skipped"))
+    }
+
+    /// As [`write_from`](Self::write_from) (or [`write_concealed`](Self::write_concealed)
+    /// with `concealed`), but only if the clipboard still holds `expected`
+    /// (`None`: nothing) when the content is about to be installed. The check
+    /// is made on the clipboard thread after the image is decoded, so a copy
+    /// made while content was being fetched or decoded is not overwritten.
+    /// `Ok(None)`: it holds something else, and nothing was written.
+    pub async fn write_if_unchanged(&self, data: ClipData, origin: String, record: bool, concealed: bool, expected: Option<Digest>) -> Result<Option<Digest>> {
+        self.call(|reply| Cmd::Write { data, origin, record, concealed, expected: Some(expected), reply }).await
     }
 
     /// Puts content that another computer marked as sensitive on the
@@ -337,7 +368,8 @@ impl Clipboard {
     /// disk), and, like a local password copy, never pushed or handed on
     /// automatically.
     pub async fn write_concealed(&self, data: ClipData) -> Result<Digest> {
-        self.call(|reply| Cmd::Write { data, origin: String::new(), record: false, concealed: true, reply }).await
+        let written = self.call(|reply| Cmd::Write { data, origin: String::new(), record: false, concealed: true, expected: None, reply }).await?;
+        written.ok_or_else(|| anyhow!("clipboard write skipped"))
     }
 
     async fn call<T>(&self, cmd: impl FnOnce(oneshot::Sender<Result<T>>) -> Cmd) -> Result<T> {
@@ -373,6 +405,29 @@ pub struct Image {
 impl Raw {
     fn is_empty(&self) -> bool {
         self.text.is_none() && self.html.is_none() && self.image.is_none()
+    }
+
+    /// What [`Raw::digest`] of this content is under each combination of
+    /// format switches: a later read with another filter sees the same copy
+    /// by another digest, and has to know it is the same copy.
+    ///
+    /// Works on borrowed views: for a picture this is hashing megabytes up to
+    /// eight times, not copying them as well.
+    fn digests_under_any_filter(&self) -> Vec<Digest> {
+        let base = View::of(self).without_empty_formats();
+        let mut all = Vec::new();
+        for bits in 0..8u8 {
+            let filter = Filter { text: bits & 1 != 0, html: bits & 2 != 0, image: bits & 4 != 0, ..Filter::default() };
+            let seen = base.filtered(&filter).prefer_text();
+            if seen.is_empty() {
+                continue;
+            }
+            let digest = seen.digest();
+            if !all.contains(&digest) {
+                all.push(digest);
+            }
+        }
+        all
     }
 
     /// Drops the formats that are switched off.
@@ -417,6 +472,55 @@ impl Raw {
     }
 
     fn digest(&self) -> Digest {
+        View::of(self).digest()
+    }
+}
+
+/// [`Raw`] by reference, for what only needs its digest under some filter
+/// (the same steps as `Raw`'s own, on borrowed data).
+#[derive(Clone, Copy)]
+struct View<'a> {
+    text: Option<&'a str>,
+    html: Option<&'a str>,
+    image: Option<&'a Image>,
+}
+
+impl<'a> View<'a> {
+    fn of(raw: &'a Raw) -> Self {
+        View { text: raw.text.as_deref(), html: raw.html.as_deref(), image: raw.image.as_ref() }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.text.is_none() && self.html.is_none() && self.image.is_none()
+    }
+
+    fn has_words(&self) -> bool {
+        self.text.is_some_and(|t| !t.is_empty()) || self.html.is_some_and(|h| !h.is_empty())
+    }
+
+    fn without_empty_formats(mut self) -> Self {
+        if self.has_words() || self.image.is_some() {
+            self.text = self.text.filter(|t| !t.is_empty());
+            self.html = self.html.filter(|h| !h.is_empty());
+        }
+        self
+    }
+
+    fn filtered(mut self, f: &Filter) -> Self {
+        if !f.text { self.text = None; }
+        if !f.html { self.html = None; }
+        if !f.image { self.image = None; }
+        self
+    }
+
+    fn prefer_text(mut self) -> Self {
+        if self.has_words() {
+            self.image = None;
+        }
+        self.without_empty_formats()
+    }
+
+    fn digest(&self) -> Digest {
         let mut h = blake3::Hasher::new();
         let mut field = |tag: u8, bytes: Option<&[u8]>| {
             if let Some(b) = bytes {
@@ -425,9 +529,9 @@ impl Raw {
                 h.update(b);
             }
         };
-        field(1, self.text.as_deref().map(str::as_bytes));
-        field(2, self.html.as_deref().map(str::as_bytes));
-        if let Some(i) = &self.image {
+        field(1, self.text.map(str::as_bytes));
+        field(2, self.html.map(str::as_bytes));
+        if let Some(i) = self.image {
             h.update(&[3]);
             h.update(&(i.width as u64).to_le_bytes());
             h.update(&(i.height as u64).to_le_bytes());
@@ -442,6 +546,7 @@ impl Raw {
 pub struct MemoryClipboard {
     raw: Arc<Mutex<Raw>>,
     writes: Arc<AtomicUsize>,
+    fail_reads: Arc<AtomicUsize>,
 }
 
 impl MemoryClipboard {
@@ -461,6 +566,11 @@ impl MemoryClipboard {
     }
     pub fn text(&self) -> Option<String> {
         self.get().text
+    }
+    /// Makes the next `n` reads fail, as a busy platform clipboard does.
+    #[doc(hidden)]
+    pub fn fail_next_reads(&self, n: usize) {
+        self.fail_reads.store(n, Ordering::SeqCst);
     }
     /// How many times [`Clipboard::write`] changed this clipboard.
     pub fn writes(&self) -> usize {
@@ -540,19 +650,63 @@ fn wayland_data_control() -> bool {
     *KNOWN.get_or_init(|| std::env::var_os("WAYLAND_DISPLAY").is_some() && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok())
 }
 
-/// Refuses text or HTML larger than an X11 clipboard can hand over (see
-/// [`Clipboard::write_limit`]), instead of setting a clipboard nothing can
-/// paste. Images are encoded by arboard, so their size is not known here.
+/// Refuses text, HTML or a picture larger than an X11 clipboard can hand over
+/// (see [`Clipboard::write_limit`]), instead of setting a clipboard nothing can
+/// paste.
 #[cfg(target_os = "linux")]
 fn check_x11_size(raw: &Raw) -> Result<()> {
+    x11_size_error(raw, x11_write_limit())
+}
+
+#[cfg(target_os = "linux")]
+fn x11_size_error(raw: &Raw, limit: Option<usize>) -> Result<()> {
+    let Some(limit) = limit else { return Ok(()) };
     let largest = raw.text.as_ref().map_or(0, String::len).max(raw.html.as_ref().map_or(0, String::len));
-    match x11_write_limit() {
-        Some(limit) if largest > limit => bail!(
-            "{} MB of text is more than this computer's X11 clipboard can hand over ({} MB at most)",
-            largest >> 20, limit >> 20
-        ),
-        _ => Ok(()),
+    if largest > limit {
+        bail!("{} MB of text is more than this computer's X11 clipboard can hand over ({} MB at most)", largest >> 20, limit >> 20);
     }
+    // arboard encodes a picture again before it offers it (see `served_png_len`), so
+    // the size of what came over the wire says little about what has to fit.
+    if raw.text.is_none() && raw.html.is_none() && let Some(image) = &raw.image {
+        let served = served_png_len(image, limit)?;
+        if served > limit {
+            bail!("a {} MB picture is more than this computer's X11 clipboard can hand over ({} MB at most)", served >> 20, limit >> 20);
+        }
+    }
+    Ok(())
+}
+
+/// The size of the PNG that arboard offers for `image`: it encodes the picture again,
+/// as `image`'s PngEncoder does by default (fast compression, adaptive filtering),
+/// not as [`encode_png`] does for the wire (fast compression, the default filter).
+/// The same `png` crate does the work, so the size is the one it will make. Pictures that cannot get over `limit`
+/// even when nothing compresses (the common case) are not encoded at all.
+#[cfg(target_os = "linux")]
+fn served_png_len(image: &Image, limit: usize) -> Result<usize> {
+    // The least that fits, whatever the encoder does: stored blocks add 5 bytes per
+    // 64 KB, a filter byte per row, chunk headers and a trailer; this adds 0.2 %.
+    let worst = image.rgba.len().saturating_add(image.rgba.len() / 512).saturating_add(image.height).saturating_add(4096);
+    if worst <= limit {
+        return Ok(worst);
+    }
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let mut count = Count(0);
+    let mut encoder = png::Encoder::new(&mut count, image.width as u32, image.height as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    encoder.set_filter(png::Filter::Adaptive);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(&image.rgba)?;
+    writer.finish()?;
+    Ok(count.0)
 }
 
 impl Backend {
@@ -560,7 +714,14 @@ impl Backend {
     /// not even fetched.
     fn read(&mut self, filter: &Filter) -> Result<Raw> {
         match self {
-            Backend::Memory(m) => Ok(m.get().filtered(filter)),
+            Backend::Memory(m) => {
+                let failing = m.fail_reads.load(Ordering::SeqCst);
+                if failing > 0 {
+                    m.fail_reads.store(failing - 1, Ordering::SeqCst);
+                    bail!("the clipboard is busy");
+                }
+                Ok(m.get().filtered(filter))
+            }
             Backend::System(cb) => {
                 let handle = open(cb)?;
                 let mut broken = false;
@@ -660,21 +821,79 @@ fn open(cb: &mut Option<arboard::Clipboard>) -> Result<&mut arboard::Clipboard> 
 /// daemon started at login keeps the first file's name in `XAUTHORITY`, so
 /// after XWayland has restarted every X11 connection is refused
 /// ("Authorization required") and the clipboard stops for the rest of the
-/// session. Before the clipboard is opened this points `XAUTHORITY` at the
-/// newest such file when it names another one.
+/// session. Before the clipboard is opened this makes `XAUTHORITY` lead to the
+/// newest such file.
+///
+/// arboard and x11rb take their X11 authority only from that variable, and changing
+/// the environment of a running process is not sound against a thread that reads it
+/// at the same moment, so it is changed at most once in the life of the process: to
+/// a file of ours (see [`sync_xauthority`]) whose contents are replaced, atomically,
+/// at each later restart of XWayland. The variable then names the same file for good
+/// and no thread can see it change.
 #[cfg(target_os = "linux")]
 fn refresh_xauthority() {
     let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from) else { return };
     // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
-    let Some(newest) = newest_xwayland_auth(&dir, uid) else { return };
-    if std::env::var_os("XAUTHORITY").as_deref() != Some(newest.as_os_str()) {
-        tracing::debug!(file = %newest.display(), "XWayland has a new auth file; using it for the clipboard");
-        // SAFETY: only this thread reads the variable (it opens the X11
-        // connection that follows), and it changes only when XWayland has
-        // restarted, which is rare.
-        unsafe { std::env::set_var("XAUTHORITY", &newest) };
+    // One at a time: the clipboard worker and the history watcher both come here.
+    static CHANGING: Mutex<()> = Mutex::new(());
+    let _one_at_a_time = CHANGING.lock().unwrap_or_else(|error| error.into_inner());
+    let current = std::env::var_os("XAUTHORITY");
+    let point_at = match sync_xauthority(&dir, uid, current.as_deref()) {
+        Ok(None) => return,
+        Ok(Some(file)) => file,
+        Err(error) => {
+            // No file of ours (a full or read-only runtime directory): name Mutter's own, as
+            // this once did at every restart.
+            tracing::debug!("keeping the X11 authority in a file of our own failed: {error}");
+            match newest_xwayland_auth(&dir, uid) {
+                Some(newest) if current.as_deref() != Some(newest.as_os_str()) => newest,
+                _ => return,
+            }
+        }
+    };
+    tracing::debug!(file = %point_at.display(), "XWayland has a new auth file; using it for the clipboard");
+    // SAFETY: this is not sound against a thread that reads the environment at the same
+    // moment (C code calling getenv; Rust's own std::env readers are locked against
+    // this). It is reached only when XWayland has restarted since the process began (or
+    // the variable named neither of its files), once for a file of ours, and it replaces
+    // the value of a variable that is already set (the case in which libc swaps the
+    // pointer in place). The daemon links no X11 or other C library that reads it (only
+    // libc, which reads other variables): the window is another process.
+    unsafe { std::env::set_var("XAUTHORITY", &point_at) };
+}
+
+/// The name of our copy of Mutter's XWayland auth file, in `$XDG_RUNTIME_DIR`.
+#[cfg(target_os = "linux")]
+const OWN_XAUTHORITY: &str = ".one-mk-xauthority";
+
+/// Brings our copy of the newest Mutter auth file in `dir` up to date and says which
+/// file `XAUTHORITY` has to name, when it names neither the newest Mutter file nor
+/// our copy; `None` when it needs no change (the copy is rewritten in place when it
+/// differs). `current` is `XAUTHORITY` now.
+#[cfg(target_os = "linux")]
+fn sync_xauthority(dir: &std::path::Path, uid: u32, current: Option<&std::ffi::OsStr>) -> std::io::Result<Option<std::path::PathBuf>> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let Some(newest) = newest_xwayland_auth(dir, uid) else { return Ok(None) };
+    if current == Some(newest.as_os_str()) {
+        return Ok(None);
     }
+    let copy = dir.join(OWN_XAUTHORITY);
+    let wanted = std::fs::read(&newest)?;
+    if std::fs::read(&copy).ok().as_deref() != Some(wanted.as_slice()) {
+        // Written beside it and moved over it: a reader sees the old file or the new, whole.
+        let temporary = dir.join(format!("{OWN_XAUTHORITY}.{}", std::process::id()));
+        let _ = std::fs::remove_file(&temporary);
+        let written = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)
+            .and_then(|mut file| file.write_all(&wanted).and_then(|()| file.sync_all()))
+            .and_then(|()| std::fs::rename(&temporary, &copy));
+        if let Err(error) = written {
+            let _ = std::fs::remove_file(&temporary);
+            return Err(error);
+        }
+    }
+    Ok((current != Some(copy.as_os_str())).then_some(copy))
 }
 
 /// The most recently written Mutter XWayland auth file in `dir` that `uid` owns.
@@ -726,29 +945,22 @@ impl Worker {
                             if matches!(self.backend, Backend::System(_)) && sensitivity::owner().ok() != Some(owner) { continue; }
                             let digest = raw.digest();
                             if self.restored != Some(digest) && skip_history { self.exclude(digest); }
-                            let _ = self.read_raw(raw, &[], false);
+                            let _ = self.read_raw(raw, &[], ReadMode::Automatic);
                         }
                     }
-                    Cmd::Read { skip, explicit, reply } => {
-                        let r = self.read(&skip, explicit);
+                    Cmd::Read { skip, mode, reply } => {
+                        let r = self.read(&skip, mode);
                         let _ = reply.send(r);
                     }
                     Cmd::Digest { reply } => {
                         let r = self.backend_read().map(|raw| (!raw.is_empty()).then(|| raw.digest()));
                         let _ = reply.send(r);
                     }
-                    Cmd::Write { data, origin, record, concealed, reply } => {
+                    Cmd::Write { data, origin, record, concealed, expected, reply } => {
                         let data = data.without_empty_formats();
                         let saved = (record && !concealed).then(|| Arc::new(data.clone()));
-                        let r = self.write(data);
-                        if concealed && let Ok(digest) = &r {
-                            self.exclude(*digest);
-                            if !self.received_sensitive.contains(digest) {
-                                if self.received_sensitive.len() == 32 { self.received_sensitive.pop_front(); }
-                                self.received_sensitive.push_back(*digest);
-                            }
-                        }
-                        if r.is_ok() && let Some(saved) = saved {
+                        let r = self.write(data, concealed, expected);
+                        if matches!(r, Ok(Some(_))) && let Some(saved) = saved {
                             let digest = history::digest(&saved);
                             self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(saved, digest, false, &origin);
                         }
@@ -769,6 +981,9 @@ impl Worker {
         let owner = if matches!(self.backend, Backend::System(_)) && std::env::var_os("WAYLAND_DISPLAY").is_none() { Some(sensitivity::owner()?) } else { None };
         #[cfg(any(windows, target_os = "macos"))]
         let generation = sensitivity::generation();
+        // Before the sensitivity query: a copy made between it and the read is caught (see `sensitivity::Guard`).
+        #[cfg(target_os = "linux")]
+        let guard = if matches!(self.backend, Backend::System(_)) { Some(sensitivity::Guard::begin()?) } else { None };
         let concealed = if matches!(self.backend, Backend::System(_)) {
             let apps = self.history_apps.lock().unwrap_or_else(|error| error.into_inner());
             #[cfg(target_os = "linux")]
@@ -784,6 +999,8 @@ impl Worker {
         });
         #[cfg(target_os = "linux")]
         if let Some(owner) = owner && sensitivity::owner()? != owner { bail!("clipboard owner changed during read; retry"); }
+        #[cfg(target_os = "linux")]
+        if let Some(guard) = guard && r.is_ok() { guard.finish()?; }
         #[cfg(any(windows, target_os = "macos"))]
         if matches!(self.backend, Backend::System(_)) && sensitivity::generation() != generation { bail!("clipboard changed during sensitivity check; retry"); }
         if r.is_err()
@@ -794,9 +1011,9 @@ impl Worker {
         r
     }
 
-    fn read(&mut self, skip: &[Digest], explicit: bool) -> Result<Read> {
+    fn read(&mut self, skip: &[Digest], mode: ReadMode) -> Result<Read> {
         let raw = self.backend_read()?;
-        self.read_raw(raw, skip, explicit)
+        self.read_raw(raw, skip, mode)
     }
 
     fn exclude(&mut self, digest: Digest) {
@@ -811,7 +1028,7 @@ impl Worker {
         }
     }
 
-    fn read_raw(&mut self, raw: Raw, skip: &[Digest], explicit: bool) -> Result<Read> {
+    fn read_raw(&mut self, raw: Raw, skip: &[Digest], mode: ReadMode) -> Result<Read> {
         let max = self.filter().max_bytes();
         let skip_concealed = self.filter().skip_concealed;
         if raw.is_empty() {
@@ -826,13 +1043,13 @@ impl Worker {
         if skip.contains(&digest) {
             return Ok(Read::Unchanged(digest));
         }
-        if concealed && (skip_concealed || received) && !explicit {
+        if concealed && (skip_concealed || received) && mode != ReadMode::Explicit {
             return Ok(Read::Concealed(digest));
         }
         if let Some((d, data)) = &self.cache
             && *d == digest
         {
-            return Ok(marked(sized(digest, data.clone(), max), concealed && explicit));
+            return Ok(marked(sized(digest, data.clone(), max), concealed && mode != ReadMode::Automatic));
         }
         let text_len = raw.text.as_ref().map_or(0, String::len) + raw.html.as_ref().map_or(0, String::len);
         if text_len > max || raw.image.as_ref().is_some_and(|i| i.rgba.len() > MAX_RGBA) {
@@ -846,31 +1063,65 @@ impl Worker {
             self.history.lock().unwrap_or_else(|error| error.into_inner()).record_hashed(data.clone(), history_digest, concealed, "this computer");
         }
         self.cache = Some((digest, data.clone()));
-        Ok(marked(sized(digest, data, max), concealed && explicit))
+        Ok(marked(sized(digest, data, max), concealed && mode != ReadMode::Automatic))
     }
 
-    fn write(&mut self, data: ClipData) -> Result<Digest> {
+    /// Remembers a copy another computer marked as sensitive: it is kept out
+    /// of the history and never handed out by an automatic read.
+    fn mark_sensitive(&mut self, digest: Digest) {
+        self.exclude(digest);
+        if !self.received_sensitive.contains(&digest) {
+            if self.received_sensitive.len() == 32 { self.received_sensitive.pop_front(); }
+            self.received_sensitive.push_back(digest);
+        }
+    }
+
+    /// Puts `data` on the clipboard; `concealed` when its sender marked it as
+    /// sensitive.
+    ///
+    /// `expected`: see [`Clipboard::write_if_unchanged`]; `Ok(None)` when the
+    /// clipboard holds something else now. Checked after the decode, right
+    /// before the platform write, which is the slow part.
+    fn write(&mut self, data: ClipData, concealed: bool, expected: Option<Option<Digest>>) -> Result<Option<Digest>> {
         let saved = Arc::new(data.clone());
         let image = data.png.as_deref().map(decode_png).transpose()?;
         let raw = Raw { text: data.text, html: data.html, image, concealed: false };
+        // Prepared before the check below, which then sits right against the
+        // platform write: hashing a picture takes long enough for a copy made
+        // here meanwhile to be overwritten.
+        let sensitive = if concealed { raw.digests_under_any_filter() } else { Vec::new() };
+        if let Some(expected) = expected {
+            let now = self.backend_read().map(|raw| (!raw.is_empty()).then(|| raw.digest()))?;
+            if now != expected {
+                return Ok(None);
+            }
+        }
         if let Err(e) = self.backend.write(raw) {
             if let Backend::System(cb) = &mut self.backend {
                 *cb = None;
             }
             return Err(e);
         }
+        // The clipboard holds it now: from here on it is marked, however the
+        // read-back below goes and whichever formats are switched on later.
+        for digest in sensitive {
+            self.mark_sensitive(digest);
+        }
         let back = self.backend_read()?;
         let digest = back.digest();
+        if concealed {
+            self.mark_sensitive(digest);
+        }
         self.cache = Some((digest, saved));
         self.restored = Some(digest);
         #[cfg(target_os = "linux")]
         if matches!(self.backend, Backend::System(_)) { self.restored_owner = sensitivity::owner().ok(); }
-        Ok(digest)
+        Ok(Some(digest))
     }
 }
 
 /// A readable copy that the source marked as sensitive is returned as such
-/// (only explicit reads get this far: the others stop at `Concealed`).
+/// (only reads that carry the mark get this far: the others stop at `Concealed`).
 fn marked(read: Read, concealed: bool) -> Read {
     match read {
         Read::Changed { digest, data } if concealed => Read::Sensitive { digest, data },
@@ -899,6 +1150,13 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image> {
     let mut dec = png::Decoder::new_with_limits(std::io::Cursor::new(bytes), png::Limits { bytes: MAX_RGBA });
     dec.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = dec.read_info()?;
+    // The picture as RGBA, which is what is made of it below (and what the
+    // platforms are given), not as the decoder lays it out (1 byte a pixel
+    // for grey, 3 for RGB).
+    let (width, height) = (reader.info().width as usize, reader.info().height as usize);
+    if width.checked_mul(height).and_then(|pixels| pixels.checked_mul(4)).is_none_or(|rgba| rgba > MAX_RGBA) {
+        bail!("image too large");
+    }
     let size = reader.output_buffer_size().context("image too large")?;
     if size > MAX_RGBA {
         bail!("image too large");
@@ -927,6 +1185,51 @@ mod tests {
     /// XWayland restarts with a new auth file and deletes the old one: the
     /// clipboard must follow to the newest, never to another user's or an
     /// unrelated file.
+    /// XAUTHORITY is changed once, to a file of ours; the restarts of XWayland after that
+    /// rewrite that file and leave the variable alone.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn xwayland_restarts_rewrite_our_copy_and_change_the_variable_once() {
+        use std::ffi::OsStr;
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        let dir = tempfile::tempdir().unwrap();
+        let auth = |name: &str, contents: &str, age: u64| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, contents).unwrap();
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(age)).unwrap();
+            path
+        };
+        let copy = dir.path().join(OWN_XAUTHORITY);
+        assert_eq!(sync_xauthority(dir.path(), uid, None).unwrap(), None, "no Mutter file, nothing to do");
+        // The daemon started when XWayland had the first file; it is deleted by the restart.
+        let first = auth(".mutter-Xwaylandauth.AAA111", "cookie one", 100);
+        assert_eq!(sync_xauthority(dir.path(), uid, Some(first.as_os_str())).unwrap(), None, "it names the file that is there");
+        std::fs::remove_file(&first).unwrap();
+        let second = auth(".mutter-Xwaylandauth.BBB222", "cookie two", 50);
+        // The variable names a file that is gone: it has to name ours, once.
+        assert_eq!(sync_xauthority(dir.path(), uid, Some(first.as_os_str())).unwrap(), Some(copy.clone()));
+        assert_eq!(std::fs::read(&copy).unwrap(), b"cookie two");
+        assert_eq!(std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o600);
+        // The next restart: the variable names ours already, only the file changes.
+        std::fs::remove_file(&second).unwrap();
+        auth(".mutter-Xwaylandauth.CCC333", "cookie three", 10);
+        assert_eq!(sync_xauthority(dir.path(), uid, Some(copy.as_os_str())).unwrap(), None, "the variable is not touched again");
+        assert_eq!(std::fs::read(&copy).unwrap(), b"cookie three");
+        // Nothing left over beside them, and another account's files are not copied.
+        let mut names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, [".mutter-Xwaylandauth.CCC333", ".one-mk-xauthority"]);
+        assert_eq!(sync_xauthority(dir.path(), uid.wrapping_add(1), Some(OsStr::new("/gone"))).unwrap(), None);
+        // A directory that can't be written to is an error (the caller then names Mutter's own file).
+        std::fs::remove_file(&copy).unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let denied = if uid == 0 { true } else { sync_xauthority(dir.path(), uid, Some(OsStr::new("/gone"))).is_err() };
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(denied);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn the_newest_xwayland_auth_file_is_found() {
@@ -953,6 +1256,34 @@ mod tests {
         std::fs::remove_file(&new).unwrap();
         let newer = touch(".mutter-Xwaylandauth.NEW444", 1);
         assert_eq!(newest_xwayland_auth(dir.path(), uid), Some(newer));
+    }
+
+    /// A copy made after the caller looked at the clipboard, even one made
+    /// while a picture is still being decoded, is not overwritten.
+    #[tokio::test]
+    async fn a_guarded_write_keeps_a_copy_made_since_the_check() {
+        let (clipboard, memory) = Clipboard::memory();
+        memory.set_text("before");
+        let seen = clipboard.digest().await.unwrap();
+        assert!(seen.is_some());
+        let png = encode_png(&Image { width: 1, height: 1, rgba: vec![1, 2, 3, 255] }).unwrap();
+        let arriving = ClipData { png: Some(png), ..Default::default() };
+        // Unchanged: written.
+        let written = clipboard.write_if_unchanged(arriving.clone(), "peer".into(), true, false, seen).await.unwrap();
+        assert!(written.is_some());
+        assert!(memory.text().is_none());
+        // The user copies something else; the arrival, still expecting the old state, loses.
+        memory.set_text("newer copy");
+        let writes = memory.writes();
+        assert_eq!(clipboard.write_if_unchanged(arriving.clone(), "peer".into(), true, false, seen).await.unwrap(), None);
+        assert_eq!(memory.text().as_deref(), Some("newer copy"));
+        assert_eq!(memory.writes(), writes, "nothing was written");
+        assert_eq!(clipboard.write_if_unchanged(arriving, "peer".into(), true, true, seen).await.unwrap(), None);
+        assert_eq!(memory.text().as_deref(), Some("newer copy"));
+        // An empty clipboard is a state too.
+        memory.set(Raw::default());
+        let empty = clipboard.write_if_unchanged(ClipData { text: Some("x".into()), ..Default::default() }, "peer".into(), true, false, None).await.unwrap();
+        assert!(empty.is_some());
     }
 
     #[cfg(target_os = "linux")]
@@ -1083,7 +1414,53 @@ mod tests {
         cb.write_concealed(ClipData { text: Some("TOPSECRET".into()), ..Default::default() }).await.unwrap();
         assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)), "never an ordinary automatic read");
         assert!(matches!(cb.read_explicit(vec![]).await.unwrap(), Read::Sensitive { .. }), "an explicit send still sees it as sensitive");
+        assert!(matches!(cb.read_background(vec![]).await.unwrap(), Read::Concealed(_)), "the pointer-follow push and a fetch never carry it on");
         assert!(cb.history().lock().unwrap().is_empty(), "never recorded");
+
+        // A copy made on this computer goes out marked when the filter is off.
+        let (cb, mem) = Clipboard::memory();
+        cb.set_filter(Filter { skip_concealed: false, ..Filter::default() });
+        mem.set_text("mine");
+        mem.set_concealed(true);
+        assert!(matches!(cb.read_background(vec![]).await.unwrap(), Read::Sensitive { .. }));
+    }
+
+    /// The mark belongs to the copy, not to the formats that happen to be
+    /// switched on: turning HTML off while a marked text-and-HTML copy is on
+    /// the clipboard must not make its text an ordinary one.
+    #[tokio::test]
+    async fn a_marked_arrival_stays_marked_when_a_format_filter_changes() {
+        let (cb, _mem) = Clipboard::memory();
+        cb.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        let both = ClipData { text: Some("TOPSECRET".into()), html: Some("<b>TOPSECRET</b>".into()), ..Default::default() };
+        cb.write_concealed(both).await.unwrap();
+        for filter in [
+            Filter { html: false, ..Filter::default() },
+            Filter { text: false, ..Filter::default() },
+            Filter { html: false, skip_concealed: false, ..Filter::default() },
+            Filter::default(),
+        ] {
+            cb.set_filter(filter);
+            assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)), "{filter:?}");
+            assert!(cb.history().lock().unwrap().is_empty(), "{filter:?}: kept in the history");
+        }
+        // An ordinary copy of the same text is not caught by it.
+        cb.write_from(ClipData { text: Some("plain".into()), ..Default::default() }, "peer".into(), true).await.unwrap();
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Changed { .. }));
+    }
+
+    /// The clipboard is replaced before it is read back; a read-back that
+    /// fails (a busy clipboard) leaves the send looking failed, but the copy
+    /// is on the clipboard and stays marked.
+    #[tokio::test]
+    async fn a_marked_arrival_stays_marked_when_the_read_back_fails() {
+        let (cb, mem) = Clipboard::memory();
+        cb.history().lock().unwrap().configure(20, history::DEFAULT_BYTES, CEILING_BYTES, None);
+        mem.fail_next_reads(1);
+        assert!(cb.write_concealed(ClipData { text: Some("TOPSECRET".into()), ..Default::default() }).await.is_err());
+        assert_eq!(mem.text().as_deref(), Some("TOPSECRET"));
+        assert!(matches!(cb.read(vec![]).await.unwrap(), Read::Concealed(_)));
+        assert!(cb.history().lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1109,6 +1486,86 @@ mod tests {
     fn image() -> Image {
         let rgba = (0..4 * 3 * 4).map(|i| (i * 7) as u8).collect();
         Image { width: 4, height: 3, rgba }
+    }
+
+    /// A picture of pixels with a lot of order in them, and the PNG of it that a program
+    /// squeezing the file (not oneMK, which sends the fast encoder's) would write.
+    #[cfg(target_os = "linux")]
+    fn gradient(width: usize, height: usize) -> Image {
+        let rgba = (0..width * height * 4).map(|i| ((i / 4) % width + (i / 4) / width + i % 4) as u8).collect();
+        Image { width, height, rgba }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn squeezed_png(image: &Image) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut encoder = png::Encoder::new(&mut out, image.width as u32, image.height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::High);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&image.rgba).unwrap();
+        writer.finish().unwrap();
+        out
+    }
+
+    /// Random pixels, which no encoder makes smaller than they are.
+    #[cfg(target_os = "linux")]
+    fn noise(width: usize, height: usize) -> Image {
+        let mut seed = 12345u64;
+        let rgba = (0..width * height * 4).map(|_| {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as u8
+        }).collect();
+        Image { width, height, rgba }
+    }
+
+    /// The picture the peer sent fits what the X11 clipboard can hand over, but arboard
+    /// encodes it again, and the new PNG does not: it is refused, not set unpasteable.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_picture_that_is_too_big_once_arboard_encodes_it_again_is_refused() {
+        let image = gradient(512, 512);
+        let wire = squeezed_png(&image).len();
+        let served = served_png_len(&image, 0).unwrap();
+        assert!(served > wire * 10, "the scenario needs a squeezed file much smaller than the new one ({served} vs {wire})");
+        let raw = Raw { image: Some(image.clone()), ..Raw::default() };
+        // The wire's size fits, the served one does not.
+        let error = x11_size_error(&raw, Some(wire + 10)).unwrap_err();
+        assert!(format!("{error:#}").contains("picture is more than this computer's X11 clipboard can hand over"), "{error:#}");
+        x11_size_error(&raw, Some(served)).unwrap();
+        x11_size_error(&raw, None).unwrap();
+        // Text next to it is what is written then, not the picture.
+        x11_size_error(&Raw { text: Some("a".into()), image: Some(image), ..Raw::default() }, Some(wire + 10)).unwrap();
+    }
+
+    /// A picture that cannot reach the limit however it is encoded is not encoded to be
+    /// measured, and text and HTML are checked as before.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn small_pictures_pass_without_being_measured_and_big_text_is_still_refused() {
+        let image = noise(64, 64);
+        assert!(served_png_len(&image, 1 << 24).unwrap() >= image.rgba.len());
+        x11_size_error(&Raw { image: Some(image), ..Raw::default() }, Some(1 << 24)).unwrap();
+        assert!(x11_size_error(&Raw { text: Some("x".repeat(101)), ..Raw::default() }, Some(100)).is_err());
+        assert!(x11_size_error(&Raw { html: Some("x".repeat(101)), ..Raw::default() }, Some(100)).is_err());
+        x11_size_error(&Raw { text: Some("x".repeat(100)), ..Raw::default() }, Some(100)).unwrap();
+    }
+
+    /// What arboard really serves has the size `served_png_len` says.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires an explicitly private X11 display and xclip"]
+    async fn real_x11_serves_the_picture_at_the_predicted_size() {
+        assert_eq!(std::env::var("ONE_MK_PRIVATE_X11").as_deref(), Ok("1"));
+        assert!(std::env::var_os("WAYLAND_DISPLAY").is_none());
+        let clipboard = Clipboard::system();
+        for image in [noise(300, 200), noise(1, 1), gradient(300, 200), Image { width: 64, height: 64, rgba: vec![7; 64 * 64 * 4] }] {
+            let expected = served_png_len(&image, 0).unwrap();
+            clipboard.write(ClipData { png: Some(encode_png(&image).unwrap()), ..Default::default() }).await.unwrap();
+            let out = std::process::Command::new("xclip").args(["-selection", "clipboard", "-o", "-t", "image/png"]).output().unwrap();
+            assert_eq!(out.stdout.len(), expected, "{}x{}", image.width, image.height);
+        }
     }
 
     #[test]

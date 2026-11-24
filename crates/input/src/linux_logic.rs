@@ -16,6 +16,8 @@ pub(crate) const BTN_RIGHT: u32 = 0x111;
 pub(crate) const BTN_MIDDLE: u32 = 0x112;
 pub(crate) const BTN_SIDE: u32 = 0x113;
 pub(crate) const BTN_EXTRA: u32 = 0x114;
+pub(crate) const BTN_FORWARD: u32 = 0x115;
+pub(crate) const BTN_BACK: u32 = 0x116;
 
 /// One wheel notch in discrete scroll units (120ths of a notch, as libei,
 /// evdev's hi-res wheel and Windows count them).
@@ -137,8 +139,10 @@ pub(crate) fn evdev_to_x_button(code: u32) -> Option<u8> {
         BTN_LEFT => 1,
         BTN_MIDDLE => 2,
         BTN_RIGHT => 3,
-        BTN_SIDE => 8,
-        BTN_EXTRA => 9,
+        // Some mice report back and forward as BTN_BACK and BTN_FORWARD
+        // (as the macOS mapping accepts them); they are X's buttons 8 and 9.
+        BTN_SIDE | BTN_BACK => 8,
+        BTN_EXTRA | BTN_FORWARD => 9,
         _ => return None,
     })
 }
@@ -463,6 +467,54 @@ impl EdgePush {
     }
 }
 
+/// What the wlroots backend waits for after asking for the layer surfaces that take the keyboard
+/// and the pointer, before telling the daemon that capture began: the compositor has to configure
+/// the surface, give it the keyboard (`wl_keyboard.enter`) and lock the pointer on it (or, with no
+/// pointer constraints, have the pointer enter it). A compositor may refuse any of that (another
+/// client's exclusive surface keeps the keyboard, a lock stays unactivated): the visit would then
+/// have been announced with its keys going to a local program. If it is not all there in
+/// [`Handoff::PATIENCE`], the surfaces are taken down again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Handoff {
+    configured: bool,
+    /// `None`: there is no keyboard to wait for.
+    keyboard: Option<bool>,
+    /// The keyboard's modifiers, which follow its enter, have arrived: what it held when it
+    /// entered. Only waited for with a keyboard.
+    modifiers: bool,
+    /// `None`: there is no pointer to wait for.
+    pointer: Option<bool>,
+    started: std::time::Instant,
+}
+
+impl Handoff {
+    /// How long a compositor gets to hand over.
+    pub(crate) const PATIENCE: std::time::Duration = std::time::Duration::from_secs(2);
+
+    pub(crate) fn new(keyboard: bool, pointer: bool, now: std::time::Instant) -> Self {
+        Self { configured: false, keyboard: keyboard.then_some(false), modifiers: false, pointer: pointer.then_some(false), started: now }
+    }
+    pub(crate) fn configured(&mut self) { self.configured = true; }
+    pub(crate) fn keyboard_entered(&mut self) { if let Some(k) = &mut self.keyboard { *k = true; } }
+    /// The modifiers that came with the keyboard's enter (those before it were another surface's).
+    pub(crate) fn keyboard_modifiers(&mut self) { if self.keyboard == Some(true) { self.modifiers = true; } }
+    /// Whether the keyboard entered and its modifiers are still to come.
+    pub(crate) fn awaits_modifiers(&self) -> bool { self.keyboard == Some(true) && !self.modifiers }
+    pub(crate) fn pointer_ready(&mut self) { if let Some(p) = &mut self.pointer { *p = true; } }
+    pub(crate) fn ready(&self) -> bool {
+        self.configured && self.keyboard.is_none_or(|entered| entered && self.modifiers) && self.pointer.unwrap_or(true)
+    }
+    pub(crate) fn deadline(&self) -> std::time::Instant { self.started + Self::PATIENCE }
+    /// What the compositor has not done yet, in words.
+    pub(crate) fn missing(&self) -> &'static str {
+        if !self.configured { "show the capture surface" }
+        else if self.keyboard == Some(false) { "give it the keyboard" }
+        else if self.awaits_modifiers() { "say which modifiers the keyboard holds" }
+        else if self.pointer == Some(false) { "lock the pointer on it" }
+        else { "finish" }
+    }
+}
+
 /// An absolute position to a virtual pointer's `motion_absolute`
 /// arguments `(x, y, x_extent, y_extent)`: wlroots maps it onto the
 /// bounding box of all outputs. Scaled up 8 times to keep sub-pixel
@@ -646,6 +698,8 @@ mod tests {
         assert_eq!(x_button(7), Some(XButton::Scroll(120, 0)));
         assert_eq!(x_button(12), None);
         assert_eq!(evdev_to_x_button(0x118), None);
+        assert_eq!(evdev_to_x_button(0x116), Some(8), "BTN_BACK");
+        assert_eq!(evdev_to_x_button(0x115), Some(9), "BTN_FORWARD");
     }
 
     #[test]
@@ -881,5 +935,47 @@ mod tests {
         assert_eq!(fp1616(-65536 * 3 / 2), -1.5);
         assert_eq!(absolute_delta(0.0, 32767.0, 0.0, 65535.0, 1920), 32767.0 / 65535.0 * 1920.0);
         assert_eq!(absolute_delta(1.0, 2.0, 5.0, 5.0, 1920), 0.0);
+    }
+
+    #[test]
+    fn a_handoff_is_ready_only_when_the_compositor_did_all_of_it() {
+        let now = std::time::Instant::now();
+        let mut h = Handoff::new(true, true, now);
+        assert!(!h.ready());
+        assert_eq!(h.missing(), "show the capture surface");
+        h.configured();
+        assert_eq!(h.missing(), "give it the keyboard");
+        h.pointer_ready();
+        assert!(!h.ready(), "the pointer alone is not enough");
+        h.keyboard_entered();
+        assert!(!h.ready(), "what the keyboard holds comes after its enter");
+        assert_eq!(h.missing(), "say which modifiers the keyboard holds");
+        h.keyboard_modifiers();
+        assert!(h.ready());
+        assert_eq!(h.deadline(), now + Handoff::PATIENCE);
+    }
+
+    #[test]
+    fn a_handoff_does_not_wait_for_a_device_that_is_not_there() {
+        let mut h = Handoff::new(false, false, std::time::Instant::now());
+        assert!(!h.ready(), "the surface still has to be shown");
+        h.configured();
+        assert!(h.ready());
+        // A keyboard that is there is waited for, a pointer that is not is not.
+        let mut h = Handoff::new(true, false, std::time::Instant::now());
+        h.configured();
+        assert!(!h.ready());
+        assert_eq!(h.missing(), "give it the keyboard");
+        h.keyboard_entered();
+        h.pointer_ready();
+        h.keyboard_modifiers();
+        assert!(h.ready());
+        // Modifiers said before the enter were another surface's.
+        let mut h = Handoff::new(true, false, std::time::Instant::now());
+        h.configured();
+        h.keyboard_modifiers();
+        h.keyboard_entered();
+        assert!(!h.ready());
+        assert!(h.awaits_modifiers());
     }
 }

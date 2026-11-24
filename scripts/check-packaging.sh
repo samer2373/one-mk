@@ -93,9 +93,11 @@ if command -v dpkg-deb >/dev/null; then
     # where the programs cannot start.
     [ "$(grep -c '^Depends: ' "$root/DEBIAN/control")" = 1 ] && ok ".deb has one Depends line" || bad ".deb has no single Depends line"
     depends=$(dpkg-deb -f "$deb" Depends)
-    for want in "libc6 (>= " "libgcc-s1" "libxkbcommon0" "libxkbcommon-x11-0" "libxcursor1" "libxi6" "libegl1 | libgl1"; do
+    for want in "libc6 (>= " "libgcc-s1" "libxkbcommon0" "libxkbcommon-x11-0" "libxcursor1" "libxi6" "libegl1"; do
         case ", $depends," in *", $want"*) ok ".deb Depends has $want" ;; *) bad ".deb Depends is missing $want (Depends: $depends)" ;; esac
     done
+    # EGL is required on its own: "libegl1 | libgl1" lets libgl1 (GLX only) satisfy it, and a Wayland window has no GL context then.
+    case ", $depends," in *"libegl1 |"*|*"| libgl1"*|*"libgl1 |"*) bad ".deb Depends lets an OpenGL loader other than EGL stand in for libegl1 (Depends: $depends)" ;; *) ok ".deb Depends requires libegl1 outright" ;; esac
     case "$(dpkg-deb -f "$deb" Recommends)" in *pkexec*) ok ".deb still recommends pkexec for the update's root step" ;; *) bad ".deb Recommends lost pkexec" ;; esac
     if command -v readelf >/dev/null; then
         # The libc6 floor must not be below the newest glibc symbol any program uses (or it installs where it cannot run).

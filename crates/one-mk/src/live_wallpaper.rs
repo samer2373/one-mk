@@ -16,6 +16,7 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct Peer { pub id: String, pub name: String, pub fingerprint: Fingerprint, pub address: std::net::SocketAddr, pub control: ControlWriter }
 
+#[derive(Clone)]
 pub struct Layout { pub computer: String, pub canvas: one_mk_wallpaper::Canvas, pub paired: BTreeSet<String> }
 impl Layout {
     pub fn from_status(status: &Status) -> Self {
@@ -51,7 +52,15 @@ struct State {
     worker: Option<tokio::task::JoinHandle<()>>,
     directory: Option<PathBuf>,
     connections: BTreeSet<Fingerprint>,
+    /// When the last copy to a computer failed: it is asked again once
+    /// [`COPY_RETRY`] has passed, not at every layout change.
+    copy_failed: BTreeMap<Fingerprint, std::time::Instant>,
     deferred: Option<(PathBuf, Layout, Vec<Peer>, Node)>,
+    /// What the last [`Runtime::reconcile`] was given: a copy that failed is
+    /// asked again from it once [`COPY_RETRY`] has passed, without waiting for
+    /// a layout event that may not come.
+    latest: Option<(PathBuf, Layout, Vec<Peer>, Node)>,
+    retry: Option<tokio::task::JoinHandle<()>>,
     inbox: Option<Arc<crate::transfer::Inbox>>,
     authority_off: bool,
     pending: Option<(Fingerprint, Plan)>,
@@ -110,6 +119,12 @@ struct Saved {
     authority_off: bool,
 }
 
+/// How long a computer whose copy failed is left alone before it is tried again.
+#[cfg(not(test))]
+const COPY_RETRY: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const COPY_RETRY: Duration = Duration::from_millis(700);
+
 /// Why nothing plays while the screen is locked or the computer sleeps.
 const HELD_MESSAGE: &str = "Paused while this computer is locked or asleep; it resumes when you unlock it";
 
@@ -143,6 +158,13 @@ fn check_source(path: &Path) -> Result<()> {
 /// first frame is shown meanwhile (GNOME before its extension is set up).
 fn with_still_note(error: anyhow::Error, still: bool) -> anyhow::Error {
     if still { anyhow::anyhow!("{error} {}", one_mk_wallpaper::GNOME_STILL_SHOWN) } else { error }
+}
+
+/// Whether the still of a video's first frame, shown while video could not
+/// play here, still stands in for it: not once video can play (the GNOME
+/// extension was switched on), or when that is not known to be settled yet.
+fn still_stands(still_fallback: bool, can: Option<Can>, dirty: bool) -> bool {
+    still_fallback && !dirty && can.is_none_or(|can| can.video.is_err())
 }
 
 /// What this computer can show: video (its desktop and its decoder), and a
@@ -402,6 +424,16 @@ fn discard_unused(dir: &Path, hash: &str, keep: &BTreeSet<String>) {
     if keep.contains(hash) { return; }
     if let Ok(path) = cache_path(&cache(dir), hash) { let _ = std::fs::remove_file(path); }
     let _ = std::fs::remove_file(cache(dir).join(format!("{hash}.png")));
+    // A typed link a probe made keeps the video's bytes on disk (a probe that was
+    // killed never got to remove its own). Names being made, `.…part`, are left.
+    if let Ok(entries) = std::fs::read_dir(one_mk_wallpaper::links_dir(&cache(dir))) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !entry.file_name().to_string_lossy().starts_with('.') && path.file_stem().is_some_and(|stem| stem == hash) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
 }
 
 async fn inspect(dir: &Path, hash: &str) -> Result<Media> {
@@ -454,10 +486,16 @@ impl Drop for Prepared {
     }
 }
 
-fn picture_asset(dir: &Path, plan: &Plan, computer: &str) -> Result<String> {
+/// The name of the index file that remembers `computer`'s crop of a picture
+/// plan: it depends on the picture and on the layout and settings it was cut for.
+fn slice_name(plan: &Plan, computer: &str) -> Result<String> {
     let key = ring::digest::digest(&SHA256, &serde_json::to_vec(&(3, &plan.hash, &plan.canvas, plan.fit, plan.spread, computer))?);
     let key: String = key.as_ref().iter().map(|byte| format!("{byte:02x}")).collect();
-    let index = cache(dir).join(format!("{}-{key}.slice", plan.hash));
+    Ok(format!("{}-{key}.slice", plan.hash))
+}
+
+fn picture_asset(dir: &Path, plan: &Plan, computer: &str) -> Result<String> {
+    let index = cache(dir).join(slice_name(plan, computer)?);
     if let Ok(hash) = std::fs::read_to_string(&index) && let Ok(path) = cache_path(&cache(dir), &hash) && digest(&path).ok().as_ref() == Some(&hash) { return Ok(hash); }
     let temporary = cache(dir).join(format!("picture-{}.part", crate::link::random_u64()));
     let result = (|| -> Result<String> {
@@ -505,17 +543,33 @@ fn prune_selection(dir: &Path, plan: &Plan, previous: Option<&str>) -> Result<()
     let mut keep = BTreeSet::from([plan.hash.clone()]);
     keep.extend(previous.map(str::to_owned));
     keep.extend(plan.asset_hash.clone());
+    // Of the chosen picture only the crops for the layout it has now are kept:
+    // the ones cut for screens arranged some other way are never asked for again.
+    let current: BTreeSet<String> = plan.computers.iter().filter_map(|computer| slice_name(plan, computer).ok()).collect();
     for entry in std::fs::read_dir(&root)? {
         let path = entry?.path();
         if path.extension().is_some_and(|extension| extension == "slice") {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
-            if name.starts_with(&plan.hash) || previous.is_some_and(|hash| name.starts_with(hash)) {
+            if current.contains(name.as_ref()) || (!name.starts_with(&plan.hash) && previous.is_some_and(|hash| name.starts_with(hash))) {
                 if let Ok(hash) = std::fs::read_to_string(&path) { keep.insert(hash); }
             } else { std::fs::remove_file(path)?; }
         }
     }
     one_mk_wallpaper::prune_cache_except(&root, &keep)?;
     Ok(())
+}
+
+/// Removes what a conversion, a crop or a still left half made in `root` when
+/// the daemon was killed before it cleaned up after itself (nothing is
+/// running yet when this is asked at start-up).
+fn remove_scratch(root: &Path) {
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !(name.starts_with("prepared-") || name.starts_with("picture-") || name.starts_with("still-") || name.ends_with(".part")) { continue; }
+        let path = entry.path();
+        if path.is_dir() { let _ = std::fs::remove_dir_all(path); } else { let _ = std::fs::remove_file(path); }
+    }
 }
 
 impl Runtime {
@@ -559,6 +613,7 @@ impl Runtime {
                 keep.insert(plan.hash); keep.extend(plan.asset_hash); keep.extend(saved.previous);
             }
             let _ = one_mk_wallpaper::prune_cache_except(&work_root, &keep);
+            remove_scratch(&work_root);
             let _ = std::fs::remove_dir_all(work_root.join(crate::transfer::PARTIAL_DIR));
         };
         prune();
@@ -606,6 +661,7 @@ impl Runtime {
     pub fn reconcile(&self, dir: PathBuf, layout: Layout, peers: Vec<Peer>, node: Node) {
         let mut state = self.state.lock().unwrap();
         if state.coordinator.is_some() { return; }
+        state.latest = Some((dir.clone(), layout.clone(), peers.clone(), node.clone()));
         if state.authority_off {
             let connections = peers.iter().map(|peer| peer.fingerprint).collect();
             if state.connections != connections {
@@ -618,15 +674,31 @@ impl Runtime {
             state.deferred = Some((dir, layout, peers, node));
             return;
         }
-        let Some(plan) = state.status.plan.as_ref() else { return };
+        let Some(plan) = state.status.plan.clone() else { return };
         let mut updated = plan.clone();
         updated.canvas.monitors.retain(|monitor| monitor.computer == layout.computer || layout.paired.contains(&monitor.computer));
         updated.computers.retain(|computer| computer == &layout.computer || layout.paired.contains(computer));
         updated.canvas.update(layout.canvas.monitors);
-        let connections = peers.iter().map(|peer| peer.fingerprint).collect();
-        let changed = !same_playback_plan(&updated, plan);
-        let peers: Vec<_> = peers.into_iter().filter(|peer| changed || !state.connections.contains(&peer.fingerprint)).collect();
+        let mut connections: BTreeSet<Fingerprint> = peers.iter().map(|peer| peer.fingerprint).collect();
+        state.copy_failed.retain(|fingerprint, _| connections.contains(fingerprint));
+        let changed = !same_playback_plan(&updated, &plan);
+        let peers: Vec<_> = peers.into_iter().filter(|peer| {
+            if changed { return true; }
+            if state.connections.contains(&peer.fingerprint) { return false; }
+            // A copy that just failed is asked again after a pause, so the
+            // computer is not recorded as handled (and not tried at every event).
+            if state.copy_failed.get(&peer.fingerprint).is_some_and(|at| at.elapsed() < COPY_RETRY) { connections.remove(&peer.fingerprint); return false; }
+            true
+        }).collect();
         state.connections = connections;
+        if !changed && updated != plan {
+            // Only which computers are online changed: what plays goes on, but
+            // the plan that is shown, counted and saved now says so.
+            if state.applied_picture.as_ref() == Some(&plan) { state.applied_picture = Some(updated.clone()); }
+            state.status.plan = Some(updated.clone());
+            let saved = Saved { status: state.status.clone(), coordinator: None, previous: state.previous.clone(), authority_off: false };
+            if let Err(error) = save_selection(&dir, &saved) { tracing::warn!("Couldn't save the wallpaper selection: {error}"); }
+        }
         if !changed && peers.is_empty() { return; }
         if changed { state.generation += 1; }
         let generation = state.generation;
@@ -667,6 +739,10 @@ impl Runtime {
                 let detail: String = log.lines().next().unwrap_or_default().chars().take(300).collect();
                 if !detail.is_empty() { state.status.message = detail; }
             }
+            // Said by the state too, not only by the words: whoever reads the
+            // state (`one-mk doctor`) must not take a player that is gone for a ready one.
+            let (computer, message) = (state.computer.clone(), state.status.message.clone());
+            if !matches!(state.status.computers.get(&computer), Some(Playback::Error(_))) { state.status.computers.insert(computer, Playback::Error(message)); }
         }
         let mut status = state.status.clone();
         // Counted from what each computer said, not from the plan alone.
@@ -699,7 +775,29 @@ impl Runtime {
         state.generation += 1;
         if let Some(worker) = state.worker.take() { worker.abort(); }
         state.deferred = None;
+        state.latest = None;
+        if let Some(retry) = state.retry.take() { retry.abort(); }
         state.stop();
+    }
+
+    /// Asks again for the copies that failed once [`COPY_RETRY`] has passed:
+    /// the layout events that normally call [`reconcile`](Self::reconcile) may
+    /// not come. Dropped if another selection was made meanwhile; one timer at
+    /// a time, and a computer that disconnected is not asked (the latest
+    /// `reconcile` no longer lists it).
+    fn retry_copies(&self, generation: u64) {
+        let runtime = self.clone();
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(COPY_RETRY).await;
+            let latest = {
+                let mut state = runtime.state.lock().unwrap();
+                state.retry = None;
+                if state.generation != generation { return; }
+                state.latest.clone()
+            };
+            if let Some((dir, layout, peers, node)) = latest { runtime.reconcile(dir, layout, peers, node); }
+        });
+        if let Some(old) = self.state.lock().unwrap().retry.replace(task) { old.abort(); }
     }
 
     pub fn hold(&self, dir: &Path, locked: Option<bool>, asleep: Option<bool>) {
@@ -785,10 +883,11 @@ impl Runtime {
         ensure!(plan.valid(), "The wallpaper layout or video is invalid");
         ensure!(serde_json::to_vec(&Wire::Plan { plan: plan.clone() })?.len() <= 12000, "This wallpaper layout has too many monitors to share");
         if plan.picture && coordinator.is_none() && plan.computers.contains(&computer) { plan.asset_hash = Some(picture_asset(dir, &plan, &computer)?); }
+        let still_stands = self.state.lock().unwrap().still_fallback && can_now().video.is_err();
         {
             let state = self.state.lock().unwrap();
             ensure!(state.generation == generation, "Wallpaper selection changed");
-            if state.coordinator == coordinator && state.status.plan.as_ref() == Some(&plan) && (state.picture_mode == one_mk_wallpaper::picture::Mode::Native && state.applied_picture.as_ref() == Some(&plan) || state.player.is_some() || state.still_fallback) { return Ok(()); }
+            if state.coordinator == coordinator && state.status.plan.as_ref() == Some(&plan) && (state.picture_mode == one_mk_wallpaper::picture::Mode::Native && state.applied_picture.as_ref() == Some(&plan) || state.player.is_some() || still_stands) { return Ok(()); }
         }
         let previous_mode = {
             let state = self.state.lock().unwrap();
@@ -798,7 +897,19 @@ impl Runtime {
         let mut still_shown = false;
         let mode = if plan.picture && plan.computers.contains(&computer) {
             if let Some(mode) = previous_mode { mode } else {
-                one_mk_wallpaper::picture::apply(&helper()?, &plan, &computer, &cache_path(&cache(dir), plan.asset_hash.as_ref().unwrap_or(&plan.hash))?, &cache(dir).join("pictures"))?
+                let applied = one_mk_wallpaper::picture::apply(&helper()?, &plan, &computer, &cache_path(&cache(dir), plan.asset_hash.as_ref().unwrap_or(&plan.hash))?, &cache(dir).join("pictures"));
+                match applied {
+                    Ok(mode) => mode,
+                    Err(error) => {
+                        // A failed apply may have changed some of the desktop's
+                        // settings before it stopped. When nothing of oneMK's own was
+                        // set before, the person's own wallpaper is put back, so the
+                        // desktop does not keep half of a choice that was refused.
+                        let held = { let state = self.state.lock().unwrap(); state.applied_picture.is_some() && state.picture_mode == one_mk_wallpaper::picture::Mode::Native || state.still_fallback };
+                        if !held && let Err(restore) = restore_picture(&cache(dir).join("pictures")) { tracing::warn!("Could not put your own wallpaper back: {restore:#}"); }
+                        return Err(error);
+                    }
+                }
             }
         } else if can_show_still(&plan, &computer) {
             // Setting a still can fail (no gsettings, odd poster): the video's
@@ -840,6 +951,8 @@ impl Runtime {
             let computer = state.computer.clone();
             let error = with_still_note(error, still_shown);
             state.status.computers.insert(computer, Playback::Error(error.to_string()));
+            // The replacement did not start: the player kept to cover it goes too.
+            state.retire();
             return Err(error);
         }
         drop(state);
@@ -860,7 +973,8 @@ impl Runtime {
                 let Some(shared) = shared.upgrade() else { return };
                 let mut state = shared.lock().unwrap();
                 if state.launch != launch { return; }
-                if playback.is_ready() { state.retire(); }
+                // The replacement is ready, or failed: either way the player kept to cover it is done.
+                if playback.is_ready() || matches!(playback, Playback::Error(_)) { state.retire(); }
                 let computer = state.computer.clone();
                 state.status.computers.insert(computer, playback.clone());
                 state.clock_wake.notify_one();
@@ -870,6 +984,7 @@ impl Runtime {
             let mut state = shared.lock().unwrap();
             if state.launch != launch { return; }
             if let Some(mut child) = state.player.take() { let _ = child.wait(); }
+            state.retire();
             state.clock_wake.notify_one();
             if matches!(state.status.computers.get(&state.computer), Some(Playback::Error(_))) { return; }
             let playback = Playback::Error("The wallpaper player stopped. Choose Play to try again.".into());
@@ -908,7 +1023,9 @@ impl Runtime {
         let generation = {
             let mut state = self.state.lock().unwrap();
             state.generation += 1;
-            if let Some(worker) = state.worker.take() { worker.abort(); }
+            // An announced plan whose worker is stopped here is no longer being
+            // waited for: the same announcement must be able to start it again.
+            if let Some(worker) = state.worker.take() { worker.abort(); state.pending = None; }
             state.computer = status.id.clone();
             if command == Command::Off {
                 state.stop();
@@ -943,6 +1060,14 @@ impl Runtime {
     async fn execute(&self, dir: &Path, status: Status, command: Command, peers: Vec<Peer>, node: Node, generation: u64) -> Result<()> {
         let mut preparation_notice = None;
         if command == Command::Off {
+            // The choice to turn off is made durable before anything is changed on
+            // the desktop: a crash during the restore then still starts as off, and
+            // start-up finishes putting the person's own wallpaper back.
+            let saved = {
+                let state = self.state.lock().unwrap();
+                ensure!(state.generation == generation, "Wallpaper selection changed");
+                save_selection(dir, &Saved { status: state.status.clone(), coordinator: None, previous: state.previous.clone(), authority_off: true })
+            };
             for peer in peers { send(&peer.control, &Wire::Off); }
             let (runtime, root) = (self.clone(), cache(dir).join("pictures"));
             let restored = tokio::task::spawn_blocking(move || {
@@ -950,11 +1075,8 @@ impl Runtime {
                 ensure!(runtime.state.lock().unwrap().generation == generation, "Wallpaper selection changed");
                 restore_picture(&root)
             }).await?;
-            let state = self.state.lock().unwrap();
-            ensure!(state.generation == generation, "Wallpaper selection changed");
-            let saved = Saved { status: state.status.clone(), coordinator: None, previous: state.previous.clone(), authority_off: true };
-            save_selection(dir, &saved)?;
-            return restored;
+            restored?;
+            return saved;
         }
         let mut plan = self.state.lock().unwrap().status.plan.clone();
         if let Command::Set { path } = command {
@@ -1030,7 +1152,29 @@ impl Runtime {
         Ok(())
     }
 
+    /// [`deliver`](Self::deliver), remembering a failure: the computer is shown
+    /// as failed (not left at Preparing, which counts as playing) and asked
+    /// again later, instead of being recorded as handled.
     async fn distribute(&self, dir: &Path, plan: &Plan, peer: &Peer, node: &Node, generation: u64) -> Result<()> {
+        let result = self.deliver(dir, plan, peer, node, generation).await;
+        let mut state = self.state.lock().unwrap();
+        let mut retry = false;
+        match &result {
+            Ok(()) => { state.copy_failed.remove(&peer.fingerprint); }
+            Err(error) if state.generation == generation => {
+                state.connections.remove(&peer.fingerprint);
+                state.copy_failed.insert(peer.fingerprint, std::time::Instant::now());
+                if state.status.computers.get(&peer.id) == Some(&Playback::Preparing) { state.status.computers.insert(peer.id.clone(), Playback::Error(error.to_string())); }
+                retry = true;
+            }
+            Err(_) => {}
+        }
+        drop(state);
+        if retry { self.retry_copies(generation); }
+        result
+    }
+
+    async fn deliver(&self, dir: &Path, plan: &Plan, peer: &Peer, node: &Node, generation: u64) -> Result<()> {
         if !plan.computers.contains(&peer.id) { send(&peer.control, &Wire::Off); return Ok(()); }
         self.state.lock().unwrap().status.computers.insert(peer.id.clone(), Playback::Preparing);
         let connection = tokio::time::timeout(Duration::from_secs(5), node.connect_pinned(peer.address, peer.fingerprint)).await??;
@@ -1120,13 +1264,14 @@ impl Runtime {
                 if !plan.valid() { return; }
                 let inbox = self.inbox(&dir);
                 let hash = plan.asset_hash.as_ref().unwrap_or(&plan.hash).clone();
+                let (can, dirty) = { let kept = kept(); (kept.can, kept.dirty) };
                 let generation = {
                     let mut state = self.state.lock().unwrap();
                     let current = state.status.plan.as_ref().map(|plan| plan.asset_hash.as_ref().unwrap_or(&plan.hash).as_str());
                     inbox.expect_wallpaper(sender, current, &hash);
                     send(&control, &Wire::PlanReady { hash: hash.clone() });
                     if state.pending.as_ref().is_some_and(|(peer, pending)| *peer == sender && same_playback_plan(pending, &plan)) { return; }
-                    if state.coordinator == Some(sender) && state.status.plan.as_ref().is_some_and(|active| same_playback_plan(active, &plan)) && (state.player.is_some() || state.still_fallback || state.picture_mode == one_mk_wallpaper::picture::Mode::Native && state.applied_picture.is_some()) {
+                    if state.coordinator == Some(sender) && state.status.plan.as_ref().is_some_and(|active| same_playback_plan(active, &plan)) && (state.player.is_some() || still_stands(state.still_fallback, can, dirty) || state.picture_mode == one_mk_wallpaper::picture::Mode::Native && state.applied_picture.is_some()) {
                         state.report_to = Some(control.clone());
                         if let Some(playback) = state.status.computers.get(&computer) { send(&control, &Wire::Playback { hash: plan.hash.clone(), playback: playback.clone() }); }
                         return;
@@ -1182,34 +1327,7 @@ impl Runtime {
                     }
                     let weak = Arc::downgrade(&runtime.state);
                     drop(runtime);
-                    loop {
-                        let (active, clock_wake) = {
-                            let Some(shared) = weak.upgrade() else { return };
-                            let state = shared.lock().unwrap();
-                            if state.generation != generation { return; }
-                            (state.player.is_some() && state.status.computers.get(&state.computer) == Some(&Playback::Ready), state.clock_wake.clone())
-                        };
-                        if !active { clock_wake.notified().await; continue; }
-                        for _ in 0..5 {
-                            let sent_ms = now_ms();
-                            {
-                                let Some(shared) = weak.upgrade() else { return };
-                                let mut state = shared.lock().unwrap();
-                                if state.generation != generation { return; }
-                                if state.status.computers.get(&state.computer) != Some(&Playback::Ready) { break; }
-                                state.clocks.insert(sender, sent_ms);
-                            }
-                            send(&control, &Wire::Clock { sent_ms });
-                            tokio::select! { _ = tokio::time::sleep(Duration::from_millis(250)) => {}, _ = clock_wake.notified() => { break; } }
-                        }
-                        if let Some(shared) = weak.upgrade() {
-                            let state = shared.lock().unwrap();
-                            if state.status.computers.get(&state.computer) != Some(&Playback::Ready) { continue; }
-                        }
-                        tokio::select! { _ = tokio::time::sleep(Duration::from_secs(30)) => {}, _ = clock_wake.notified() => {} }
-                        let Some(shared) = weak.upgrade() else { return };
-                        shared.lock().unwrap().best_rtt = None;
-                    }
+                    keep_clock(weak, sender, control, generation).await;
                 });
                 state.worker = Some(task);
             }
@@ -1240,6 +1358,42 @@ impl Runtime {
         }
         ensure!(self.state.lock().unwrap().best_rtt.is_some(), "Could not synchronize the wallpaper clock before playback. Try again.");
         Ok(())
+    }
+}
+
+/// Keeps this computer's clock in step with `sender`'s while the wallpaper
+/// plays: asked again every 30 s. Asked over the link `sender` last announced
+/// its plan on (`report_to`), so a link that came back with the same plan is
+/// used, not the one this worker started on.
+async fn keep_clock(weak: std::sync::Weak<Mutex<State>>, sender: Fingerprint, control: ControlWriter, generation: u64) {
+    loop {
+        let (active, clock_wake) = {
+            let Some(shared) = weak.upgrade() else { return };
+            let state = shared.lock().unwrap();
+            if state.generation != generation { return; }
+            (state.player.is_some() && state.status.computers.get(&state.computer) == Some(&Playback::Ready), state.clock_wake.clone())
+        };
+        if !active { clock_wake.notified().await; continue; }
+        for _ in 0..5 {
+            let sent_ms = now_ms();
+            let link = {
+                let Some(shared) = weak.upgrade() else { return };
+                let mut state = shared.lock().unwrap();
+                if state.generation != generation { return; }
+                if state.status.computers.get(&state.computer) != Some(&Playback::Ready) { break; }
+                state.clocks.insert(sender, sent_ms);
+                state.report_to.clone().unwrap_or_else(|| control.clone())
+            };
+            send(&link, &Wire::Clock { sent_ms });
+            tokio::select! { _ = tokio::time::sleep(Duration::from_millis(250)) => {}, _ = clock_wake.notified() => { break; } }
+        }
+        if let Some(shared) = weak.upgrade() {
+            let state = shared.lock().unwrap();
+            if state.status.computers.get(&state.computer) != Some(&Playback::Ready) { continue; }
+        }
+        tokio::select! { _ = tokio::time::sleep(Duration::from_secs(30)) => {}, _ = clock_wake.notified() => {} }
+        let Some(shared) = weak.upgrade() else { return };
+        shared.lock().unwrap().best_rtt = None;
     }
 }
 
@@ -1334,14 +1488,20 @@ async fn run(dir: &Path, action: Action) -> Result<serde_json::Value> {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
-    Ok(match Status::decode(&reply) {
-        Some(status) => {
-            let wallpaper = status.wallpaper.unwrap_or_default();
-            let message = if wallpaper.plan.is_some() { wallpaper.message.clone() } else { "Wallpaper is off".into() };
-            serde_json::json!({"ok": true, "running": true, "message": message, "experimental": wallpaper.experimental, "wallpaper": wallpaper})
-        }
-        None => serde_json::json!({"ok": true, "running": true, "message": "Wallpaper updated."}),
-    })
+    status_json(&reply)
+}
+
+/// What the running oneMK's status reply says about the wallpaper. A reply
+/// that is empty (it ran out of time) or in a form this version cannot read is
+/// an error, never a success.
+fn status_json(reply: &str) -> Result<serde_json::Value> {
+    let Some(status) = Status::decode(reply) else {
+        bail!("{}", if reply.trim().is_empty() { "oneMK did not answer in time. Try again in a moment.".to_owned() }
+            else { "oneMK answered in a form this version cannot read. Update oneMK, restart it, then try again.".to_owned() });
+    };
+    let wallpaper = status.wallpaper.unwrap_or_default();
+    let message = if wallpaper.plan.is_some() { wallpaper.message.clone() } else { "Wallpaper is off".into() };
+    Ok(serde_json::json!({"ok": true, "running": true, "message": message, "experimental": wallpaper.experimental, "wallpaper": wallpaper}))
 }
 
 /// `one-mk uninstall`: the wallpaper goes off and the person's own picture
@@ -1562,13 +1722,24 @@ mod tests {
             std::fs::write(cache_path(&cache(directory.path()), hash).unwrap(), b"x").unwrap();
             std::fs::write(cache(directory.path()).join(format!("{hash}.png")), b"x").unwrap();
         }
+        // A probe's typed link to each, and a link being made for the refused one.
+        let links = one_mk_wallpaper::links_dir(&cache(directory.path()));
+        std::fs::create_dir_all(&links).unwrap();
+        for hash in [&bad, &chosen] {
+            std::fs::hard_link(cache_path(&cache(directory.path()), hash).unwrap(), links.join(format!("{hash}.mp4"))).unwrap();
+        }
+        let making = links.join(format!(".{bad}-1.part"));
+        std::fs::write(&making, b"x").unwrap();
         let keep = BTreeSet::from([chosen.clone(), before.clone()]);
         discard_unused(directory.path(), &bad, &keep);
         assert!(!cache_path(&cache(directory.path()), &bad).unwrap().exists() && !cache(directory.path()).join(format!("{bad}.png")).exists());
+        assert!(!links.join(format!("{bad}.mp4")).exists(), "the refused video's typed link no longer holds its bytes");
+        assert!(making.exists(), "a name still being made is left to its maker");
         // Choosing the file that already plays, and failing, must not delete it.
         discard_unused(directory.path(), &chosen, &keep);
         discard_unused(directory.path(), &before, &keep);
         assert!(cache_path(&cache(directory.path()), &chosen).unwrap().exists() && cache_path(&cache(directory.path()), &before).unwrap().exists());
+        assert!(links.join(format!("{chosen}.mp4")).exists(), "the chosen video keeps its link");
     }
 
     #[cfg(unix)]
@@ -1789,5 +1960,264 @@ mod tests {
             }
             assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1, "{reason}");
         }
+    }
+
+    #[cfg(unix)]
+    fn two_monitor_layout(plan: &Plan, remote_online: bool) -> Layout {
+        let monitors = if remote_online { plan.canvas.monitors.clone() } else { vec![plan.canvas.monitors[0].clone()] };
+        Layout { computer: "host".into(), canvas: one_mk_wallpaper::Canvas { monitors }, paired: BTreeSet::from(["remote".into()]) }
+    }
+
+    /// A computer that went offline (or came back) without being forgotten is
+    /// shown and saved that way, while what plays is left alone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_connection_only_change_updates_the_online_markers_and_keeps_the_player() {
+        let (_control, _incoming, _peer, node, _remote) = controls().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Runtime::default();
+        let plan = plan();
+        let child = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let pid = child.id();
+        { let mut state = runtime.state.lock().unwrap(); state.status.plan = Some(plan.clone()); state.player = Some(child); state.computer = "host".into(); state.status.computers.insert("host".into(), Playback::Ready); }
+        runtime.reconcile(directory.path().to_owned(), two_monitor_layout(&plan, false), Vec::new(), node.clone());
+        {
+            let state = runtime.state.lock().unwrap();
+            let shown = &state.status.plan.as_ref().unwrap().canvas.monitors;
+            assert!(shown[0].online && !shown[1].online, "{shown:?}");
+            assert_eq!((state.generation, state.player.as_ref().unwrap().id()), (0, pid));
+            assert!(state.worker.is_none());
+        }
+        let saved: Saved = serde_json::from_slice(&std::fs::read(cache(directory.path()).join("selection.json")).unwrap()).unwrap();
+        assert!(!saved.status.plan.unwrap().canvas.monitors[1].online);
+        runtime.reconcile(directory.path().to_owned(), two_monitor_layout(&plan, true), Vec::new(), node);
+        let state = runtime.state.lock().unwrap();
+        assert!(state.status.plan.as_ref().unwrap().canvas.monitors.iter().all(|monitor| monitor.online));
+        assert_eq!(state.player.as_ref().unwrap().id(), pid);
+    }
+
+    /// A copy that fails is shown as failed (not as playing), the computer is not
+    /// recorded as handled, and it is tried again once the pause is over.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_reconnect_copy_is_shown_as_failed_and_tried_again() {
+        let (control, _incoming, peer, node, _remote) = controls().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Runtime::default();
+        let plan = plan();
+        let child = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        { let mut state = runtime.state.lock().unwrap(); state.status.plan = Some(plan.clone()); state.player = Some(child); state.computer = "host".into(); state.status.computers.insert("host".into(), Playback::Ready); }
+        let remote = || Peer { id: "remote".into(), name: "remote".into(), fingerprint: peer.fingerprint, address: "127.0.0.1:9".parse().unwrap(), control: control.clone() };
+        runtime.reconcile(directory.path().to_owned(), two_monitor_layout(&plan, true), vec![remote()], node.clone());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while runtime.state.lock().unwrap().worker.is_some() { assert!(std::time::Instant::now() < deadline, "the copy neither finished nor failed"); tokio::time::sleep(Duration::from_millis(20)).await; }
+        {
+            let state = runtime.state.lock().unwrap();
+            assert!(!state.connections.contains(&peer.fingerprint), "a failed copy is not recorded as handled");
+            assert!(matches!(state.status.computers.get("remote"), Some(Playback::Error(_))), "{:?}", state.status.computers);
+        }
+        // Within the pause nothing is tried, and the computer stays unhandled.
+        runtime.reconcile(directory.path().to_owned(), two_monitor_layout(&plan, true), vec![remote()], node.clone());
+        { let state = runtime.state.lock().unwrap(); assert!(state.worker.is_none() && !state.connections.contains(&peer.fingerprint)); }
+        // After it, the next layout event delivers again.
+        runtime.state.lock().unwrap().copy_failed.insert(peer.fingerprint, std::time::Instant::now() - COPY_RETRY - Duration::from_secs(1));
+        runtime.reconcile(directory.path().to_owned(), two_monitor_layout(&plan, true), vec![remote()], node);
+        let state = runtime.state.lock().unwrap();
+        assert!(state.worker.is_some() && state.connections.contains(&peer.fingerprint));
+    }
+
+    /// A player that exited and left a line in its log is an error for this computer, whatever the
+    /// line says, so what reads the state sees a player that is gone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_exited_player_is_an_error_state_with_the_log_line_as_its_message() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(cache(directory.path())).unwrap();
+        std::fs::write(cache(directory.path()).join("player.log"), "no display\nmore\n").unwrap();
+        let runtime = Runtime::default();
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        { let mut state = runtime.state.lock().unwrap(); state.player = Some(child); state.computer = "host".into(); state.directory = Some(directory.path().to_owned()); state.status.computers.insert("host".into(), Playback::Ready); }
+        let status = runtime.status();
+        // What the player said is kept in the state. The text `status()` hands out is replaced by
+        // "needs an X11 desktop" on a machine without a usable display, so it is not read here.
+        assert_eq!(runtime.state.lock().unwrap().status.message, "no display");
+        assert_eq!(status.computers.get("host"), Some(&Playback::Error("no display".into())));
+    }
+
+    /// A copy that failed is asked again once the pause is over without any
+    /// layout event to call `reconcile`: the input link and the monitors
+    /// stay as they are.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_copy_is_retried_without_a_layout_event() {
+        let (control, _incoming, peer, node, _remote) = controls().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Runtime::default();
+        let plan = plan();
+        let child = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        { let mut state = runtime.state.lock().unwrap(); state.status.plan = Some(plan.clone()); state.player = Some(child); state.computer = "host".into(); state.status.computers.insert("host".into(), Playback::Ready); }
+        let remote = Peer { id: "remote".into(), name: "remote".into(), fingerprint: peer.fingerprint, address: "127.0.0.1:9".parse().unwrap(), control: control.clone() };
+        runtime.reconcile(directory.path().to_owned(), two_monitor_layout(&plan, true), vec![remote], node);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let first = loop {
+            if let Some(at) = runtime.state.lock().unwrap().copy_failed.get(&peer.fingerprint).copied() { break at; }
+            assert!(std::time::Instant::now() < deadline, "the copy never failed");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        // No reconcile call from here on: only the timer can ask again.
+        loop {
+            if runtime.state.lock().unwrap().copy_failed.get(&peer.fingerprint).is_some_and(|at| *at > first) { break; }
+            assert!(std::time::Instant::now() < deadline, "the failed copy was never tried again");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        runtime.shutdown();
+    }
+
+    /// The clock requests of a plan that went on across a reconnect use the new link.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_clock_worker_follows_the_link_the_plan_was_last_announced_on() {
+        let (old, _old_incoming, peer, _node, _remote) = controls().await;
+        let (new, mut new_incoming, _peer, _node_two, _remote_two) = controls().await;
+        let runtime = Runtime::default();
+        let child = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        { let mut state = runtime.state.lock().unwrap(); state.player = Some(child); state.computer = "host".into(); state.status.computers.insert("host".into(), Playback::Ready); state.report_to = Some(new); }
+        let worker = tokio::spawn(keep_clock(Arc::downgrade(&runtime.state), peer.fingerprint, old, 0));
+        let mut bytes = Vec::new();
+        let frame = tokio::time::timeout(Duration::from_secs(3), one_mk_net::read_frame(&mut new_incoming, &mut bytes)).await.expect("no clock request on the new link").unwrap();
+        worker.abort();
+        let Some(Control::LiveWallpaper(json)) = frame else { panic!("not a wallpaper message") };
+        assert!(matches!(serde_json::from_str::<Wire>(&json).unwrap(), Wire::Clock { .. }), "{json}");
+    }
+
+    /// A local command that stops the worker waiting for an announced video also
+    /// forgets that it is waited for, so the same announcement starts it again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_local_command_does_not_leave_an_announced_plan_looking_started() {
+        let (control, _incoming, peer, node, _remote) = controls().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Runtime::default();
+        let plan = plan();
+        runtime.receive(directory.path().to_owned(), "host".into(), peer.fingerprint, control.clone(), Wire::Plan { plan: plan.clone() });
+        { let state = runtime.state.lock().unwrap(); assert!(state.pending.is_some() && state.worker.as_ref().is_some_and(|worker| !worker.is_finished())); }
+        let (reply, answered) = tokio::sync::oneshot::channel();
+        runtime.request(directory.path().to_owned(), Status { id: "host".into(), ..Default::default() }, Command::Pause { paused: true }, Vec::new(), node, reply);
+        assert!(runtime.state.lock().unwrap().pending.is_none());
+        assert!(answered.await.unwrap().starts_with("error"));
+        runtime.receive(directory.path().to_owned(), "host".into(), peer.fingerprint, control, Wire::Plan { plan });
+        let state = runtime.state.lock().unwrap();
+        assert!(state.pending.is_some() && state.worker.as_ref().is_some_and(|worker| !worker.is_finished()), "the announcement was ignored");
+    }
+
+    #[test]
+    fn a_still_of_a_video_stands_only_while_video_cannot_play() {
+        let cannot = Can { video: Err("no"), picture: true };
+        let can = Can { video: Ok(()), picture: true };
+        assert!(still_stands(true, Some(cannot), false) && still_stands(true, None, false));
+        assert!(!still_stands(true, Some(can), false), "the bridge is on now");
+        assert!(!still_stands(true, Some(cannot), true), "not settled yet");
+        assert!(!still_stands(false, Some(cannot), false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_the_crops_for_the_current_layout_are_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = cache(directory.path());
+        std::fs::create_dir_all(&root).unwrap();
+        let mut picture = plan();
+        picture.picture = true;
+        let [current, stale, other, previous] = ["1", "2", "3", "4"].map(|digit| digit.repeat(64));
+        let mut moved = picture.clone();
+        moved.canvas.monitors[1].rect.x += 100.0;
+        let name = |plan: &Plan, computer: &str| slice_name(plan, computer).unwrap();
+        assert_ne!(name(&picture, "host"), name(&moved, "host"));
+        let before = "e".repeat(64);
+        let writes = [(name(&picture, "host"), &current), (name(&moved, "host"), &stale), (format!("{}-ffff.slice", picture.hash), &other), (format!("{before}-aaaa.slice"), &previous)];
+        for (slice, crop) in &writes {
+            std::fs::write(root.join(slice), crop).unwrap();
+            std::fs::write(cache_path(&root, crop).unwrap(), b"x").unwrap();
+        }
+        std::fs::write(cache_path(&root, &picture.hash).unwrap(), b"x").unwrap();
+        prune_selection(directory.path(), &picture, Some(&before)).unwrap();
+        assert!(root.join(&writes[0].0).exists() && cache_path(&root, &current).unwrap().exists());
+        for stale in [&writes[1].0, &writes[2].0] { assert!(!root.join(stale).exists(), "{stale}"); }
+        assert!(!cache_path(&root, &writes[1].1.clone()).unwrap().exists() && !cache_path(&root, &writes[2].1.clone()).unwrap().exists());
+        // The previous picture keeps its crops, and the chosen picture itself stays.
+        assert!(root.join(&writes[3].0).exists() && cache_path(&root, &previous).unwrap().exists() && cache_path(&root, &picture.hash).unwrap().exists());
+    }
+
+    /// What a killed daemon left half made is removed at start-up, the files in use are not.
+    #[test]
+    fn start_up_removes_scratch_files_a_killed_daemon_left_behind() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = cache(directory.path());
+        std::fs::create_dir_all(&root).unwrap();
+        let kept = "a".repeat(64);
+        let saved = Saved { status: one_mk_wallpaper::Status { message: "Wallpaper is off".into(), ..Default::default() }, coordinator: None, previous: None, authority_off: true };
+        std::fs::write(root.join("selection.json"), serde_json::to_vec(&saved).unwrap()).unwrap();
+        for name in ["prepared-123.mp4", "prepared-123.mp4.sb-abc", "picture-9.part", "still-x.png", "777.part", "player.log"] { std::fs::write(root.join(name), b"x").unwrap(); }
+        std::fs::create_dir_all(root.join("still-y.part")).unwrap();
+        std::fs::write(root.join("still-y.part/inner"), b"x").unwrap();
+        std::fs::write(root.join(format!("{kept}.video")), b"x").unwrap();
+        Runtime::default().restore(directory.path(), "computer".into());
+        for name in ["prepared-123.mp4", "prepared-123.mp4.sb-abc", "picture-9.part", "still-x.png", "777.part", "still-y.part"] { assert!(!root.join(name).exists(), "{name}"); }
+        assert!(root.join("player.log").exists() && root.join("selection.json").exists());
+    }
+
+    /// A replacement that fails ends the player that was kept to cover it.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_replacement_ends_the_player_kept_to_cover_it() {
+        // It says it failed and stays up, or it ends without a word.
+        for script in ["printf '%s\\n' '{\"state\":\"error\",\"message\":\"Cannot present\"}'; exec sleep 60", "exit 1"] {
+            let runtime = Runtime::default();
+            let previous = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+            let previous_pid = previous.id();
+            let current = std::process::Command::new("sh").args(["-c", script]).stdout(Stdio::piped()).spawn().unwrap();
+            { let mut state = runtime.state.lock().unwrap(); state.retiring.push(previous); state.player = Some(current); state.computer = "host".into(); }
+            runtime.listen();
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while !runtime.state.lock().unwrap().retiring.is_empty() { assert!(std::time::Instant::now() < deadline, "{script}"); std::thread::sleep(Duration::from_millis(5)); }
+            assert_eq!(unsafe { libc::kill(previous_pid as i32, 0) }, -1, "{script}");
+            assert!(matches!(runtime.state.lock().unwrap().status.computers.get("host"), Some(Playback::Error(_))), "{script}");
+        }
+    }
+
+    /// Turning off is saved as the choice before the desktop is touched.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn turning_off_is_saved_before_the_desktop_is_restored() {
+        let (_control, _incoming, _peer, node, _remote) = controls().await;
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Runtime::default();
+        let saved = Saved { status: one_mk_wallpaper::Status { plan: Some(plan()), ..Default::default() }, coordinator: None, previous: None, authority_off: false };
+        save_selection(directory.path(), &saved).unwrap();
+        // The restore waits for this lock, held on a thread of its own meanwhile.
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn({ let runtime = runtime.clone(); move || { let _work = runtime.picture_work.lock().unwrap(); let _ = hold.recv(); } });
+        while runtime.picture_work.try_lock().is_ok() { tokio::time::sleep(Duration::from_millis(5)).await; }
+        let task = tokio::spawn({ let (runtime, dir) = (runtime.clone(), directory.path().to_owned()); async move { runtime.execute(&dir, Status::default(), Command::Off, Vec::new(), node, 0).await } });
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let after = loop {
+            let after: Saved = serde_json::from_slice(&std::fs::read(cache(directory.path()).join("selection.json")).unwrap()).unwrap();
+            if after.authority_off || std::time::Instant::now() > deadline { break after; }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert!(!task.is_finished(), "the restore is still waiting");
+        assert!(after.authority_off && after.status.plan.is_none(), "off was not saved before the restore");
+        drop(release);
+        holder.join().unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    #[test]
+    fn an_empty_or_unreadable_status_reply_is_an_error_not_a_success() {
+        assert!(status_json("").unwrap_err().to_string().contains("did not answer in time"));
+        assert!(status_json("garbage\n").unwrap_err().to_string().contains("cannot read"));
+        let ok = status_json("ok\n").unwrap();
+        assert_eq!((ok["ok"].as_bool(), ok["message"].as_str()), (Some(true), Some("Wallpaper is off")));
     }
 }

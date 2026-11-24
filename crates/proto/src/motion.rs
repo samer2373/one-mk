@@ -16,6 +16,17 @@ pub enum Step {
     Still,
 }
 
+/// Where relative motion starts, carried by the reliable
+/// [`Control::PointerMode`](crate::Control::PointerMode) that switches to it:
+/// the sender's running sum (wrapping 1/256 px) at the switch, and the `seq`
+/// of the datagram that announces it. Only movement past the sum counts, so
+/// losing that datagram cannot swallow the movement the next one carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RelativeBase {
+    pub seq: u32,
+    pub sum: (i32, i32),
+}
+
 /// The sender's model of the pointer on a remote desktop.
 ///
 /// Motion is sent as absolute positions, so every datagram is
@@ -86,6 +97,13 @@ impl RemoteCursor {
         self.relative = on;
         self.seq = self.seq.wrapping_add(1);
         true
+    }
+
+    /// The baseline of the current relative stretch, for the
+    /// [`Control::PointerMode`](crate::Control::PointerMode) that announces
+    /// it; `None` in absolute mode.
+    pub fn relative_base(&self) -> Option<RelativeBase> {
+        self.relative.then(|| RelativeBase { seq: self.seq, sum: (wrapping_fixed(self.sum.0), wrapping_fixed(self.sum.1)) })
     }
 
     pub fn pos(&self) -> Pos {
@@ -211,6 +229,23 @@ pub struct MotionReceiver {
     epoch: Option<u16>,
     last_seq: u32,
     rel: RelativeSum,
+    /// An absolute position was applied after the last relative sum: the
+    /// next sum is the new baseline, not a distance from the old one (what
+    /// the old one missed is already in that position).
+    rebase: bool,
+    /// The relative datagram that was taken as the baseline for want of one
+    /// (see `rebase`), kept until the reliable message that holds the real
+    /// baseline arrives or is no longer due.
+    fallback: Option<Fallback>,
+}
+
+/// A relative datagram taken as the baseline: its `seq`, the `seq` applied
+/// before it and its sum.
+#[derive(Clone, Copy, Debug)]
+struct Fallback {
+    seq: u32,
+    prev_seq: u32,
+    sum: (i32, i32),
 }
 
 /// Turns the sender's running sums into whole-pixel moves. What has been
@@ -228,16 +263,22 @@ struct RelativeSum {
 
 impl RelativeSum {
     fn apply(&mut self, sum: (i32, i32)) -> (i32, i32) {
-        let step = |last: &mut i32, total: &mut i64, moved: &mut i64, now: i32| {
-            *total += i64::from(now.wrapping_sub(*last));
-            *last = now;
+        let by = (sum.0.wrapping_sub(self.last.0), sum.1.wrapping_sub(self.last.1));
+        self.last = sum;
+        self.advance(by)
+    }
+
+    /// Counts `by` (1/256 px) more movement, without a new wire sum.
+    fn advance(&mut self, by: (i32, i32)) -> (i32, i32) {
+        let step = |total: &mut i64, moved: &mut i64, by: i32| {
+            *total += i64::from(by);
             let target = (*total + 128).div_euclid(256);
             let d = target - *moved;
             *moved = target;
             i32::try_from(d).unwrap_or(if d < 0 { i32::MIN } else { i32::MAX })
         };
-        let dx = step(&mut self.last.0, &mut self.total.0, &mut self.moved.0, sum.0);
-        let dy = step(&mut self.last.1, &mut self.total.1, &mut self.moved.1, sum.1);
+        let dx = step(&mut self.total.0, &mut self.moved.0, by.0);
+        let dy = step(&mut self.total.1, &mut self.moved.1, by.1);
         (dx, dy)
     }
 }
@@ -247,6 +288,8 @@ impl MotionReceiver {
         self.epoch = Some(epoch);
         self.last_seq = 0;
         self.rel = RelativeSum::default();
+        self.rebase = false;
+        self.fallback = None;
     }
 
     pub fn leave(&mut self) {
@@ -262,6 +305,8 @@ impl MotionReceiver {
             Received::Stale
         } else if newer(seq, self.last_seq) {
             self.last_seq = seq;
+            self.rebase = true;
+            self.fallback = None;
             Received::Move(pos)
         } else if seq == self.last_seq {
             Received::Repeat
@@ -275,13 +320,51 @@ impl MotionReceiver {
         if self.epoch != Some(epoch) {
             RelReceived::Stale
         } else if newer(seq, self.last_seq) {
+            let prev_seq = self.last_seq;
             self.last_seq = seq;
+            if std::mem::take(&mut self.rebase) {
+                self.rel.last = sum;
+                self.fallback = Some(Fallback { seq, prev_seq, sum });
+            }
             let (dx, dy) = self.rel.apply(sum);
             RelReceived::MoveBy { dx, dy }
         } else if seq == self.last_seq {
             RelReceived::Repeat
         } else {
             RelReceived::Stale
+        }
+    }
+
+    /// The owner switched visit `epoch` to relative motion at `base`
+    /// ([`Control::PointerMode`](crate::Control::PointerMode)). Movement is
+    /// counted from there, whether or not the datagram that announced the
+    /// switch arrived: without this the first one that does would be taken
+    /// as the baseline, and the movement it carries lost.
+    ///
+    /// When it arrives after a later datagram was already taken as the
+    /// baseline (and moved nothing), what that datagram carried since `base`
+    /// is returned as the move still to make. Otherwise nothing is: the
+    /// reliable message can also arrive after the datagram that announced the
+    /// switch, or anything newer.
+    pub fn relative_from(&mut self, epoch: u16, base: RelativeBase) -> (i32, i32) {
+        if self.epoch != Some(epoch) {
+            return (0, 0);
+        }
+        if newer(base.seq, self.last_seq) {
+            self.last_seq = base.seq;
+            self.rel.last = base.sum;
+            self.rebase = false;
+            self.fallback = None;
+            return (0, 0);
+        }
+        match self.fallback.take() {
+            Some(f) if newer(base.seq, f.prev_seq) && !newer(base.seq, f.seq) => {
+                self.rel.advance((f.sum.0.wrapping_sub(base.sum.0), f.sum.1.wrapping_sub(base.sum.1)))
+            }
+            other => {
+                self.fallback = other;
+                (0, 0)
+            }
         }
     }
 
@@ -600,6 +683,95 @@ mod tests {
         assert!(c.set_relative(false));
         assert!(matches!(c.current(), Datagram::Motion { pos, seq: s, .. } if pos == Pos::new(0.0, 540.0) && s > seq));
         assert!(matches!(c.motion(-1.0, 0.0), Step::Leave { .. }));
+    }
+
+    #[test]
+    fn relative_motion_dropped_before_absolute_mode_is_not_replayed() {
+        let mut c = enter(desk(), 0.5, 1);
+        let mut r = MotionReceiver::default();
+        r.enter(1);
+        c.set_relative(true);
+        let rel = |c: &RemoteCursor, r: &mut MotionReceiver| {
+            let Datagram::MotionBy { epoch, seq, sum_x, sum_y } = c.current() else { panic!() };
+            r.accept_relative(epoch, seq, (sum_x, sum_y))
+        };
+        let Step::Move(Datagram::MotionBy { epoch, seq, sum_x, sum_y }) = c.motion(10.0, 0.0) else { panic!() };
+        assert_eq!(r.accept_relative(epoch, seq, (sum_x, sum_y)), RelReceived::MoveBy { dx: 10, dy: 0 });
+        // The last relative packet is lost; absolute mode takes over.
+        assert!(matches!(c.motion(7.0, 0.0), Step::Move(_)));
+        c.set_relative(false);
+        let Datagram::Motion { epoch, seq, pos } = c.current() else { panic!() };
+        assert_eq!(r.accept(epoch, seq, pos), Received::Move(pos));
+        // Relative again without moving: nothing to apply.
+        c.set_relative(true);
+        assert_eq!(rel(&c, &mut r), RelReceived::MoveBy { dx: 0, dy: 0 });
+        let Step::Move(Datagram::MotionBy { epoch, seq, sum_x, sum_y }) = c.motion(3.0, 0.0) else { panic!() };
+        assert_eq!(r.accept_relative(epoch, seq, (sum_x, sum_y)), RelReceived::MoveBy { dx: 3, dy: 0 });
+    }
+
+    /// Absolute to relative: the datagram that announces the switch is lost
+    /// (or overtaken), so the first one to arrive already carries movement.
+    /// The reliable mode message holds the baseline, so none is lost.
+    #[test]
+    fn a_lost_switch_packet_does_not_swallow_the_first_relative_movement() {
+        // When the reliable mode message arrives: before the first datagram, never (a peer that
+        // predates it), or after it.
+        for (name, before, after, first, second) in [
+            ("mode message first", true, false, (4, 2), (1, 1)),
+            ("no mode baseline (an older sender)", false, false, (0, 0), (1, 1)),
+            ("mode message late", false, true, (0, 0), (1, 1)),
+        ] {
+            let mut c = enter(desk(), 0.5, 1);
+            let mut r = MotionReceiver::default();
+            r.enter(1);
+            // A relative stretch, then absolute mode, then relative again.
+            c.set_relative(true);
+            let Step::Move(Datagram::MotionBy { epoch, seq, sum_x, sum_y }) = c.motion(10.0, 0.0) else { panic!() };
+            assert_eq!(r.accept_relative(epoch, seq, (sum_x, sum_y)), RelReceived::MoveBy { dx: 10, dy: 0 });
+            c.set_relative(false);
+            let Step::Move(Datagram::Motion { epoch, seq, pos }) = c.motion(5.0, 0.0) else { panic!() };
+            assert_eq!(r.accept(epoch, seq, pos), Received::Move(pos));
+            assert!(c.set_relative(true));
+            let base = c.relative_base().expect("relative");
+            // The switch datagram (`c.current()`) is lost; the first movement is not.
+            let rel = |c: &mut RemoteCursor, r: &mut MotionReceiver, dx: f64, dy: f64| {
+                let Step::Move(Datagram::MotionBy { epoch, seq, sum_x, sum_y }) = c.motion(dx, dy) else { panic!() };
+                match r.accept_relative(epoch, seq, (sum_x, sum_y)) {
+                    RelReceived::MoveBy { dx, dy } => (dx, dy),
+                    other => panic!("{other:?}"),
+                }
+            };
+            if before {
+                r.relative_from(1, base);
+            }
+            assert_eq!(rel(&mut c, &mut r, 4.0, 2.0), first, "{name}");
+            if after {
+                // What the first datagram carried comes with the baseline.
+                assert_eq!(r.relative_from(1, base), (4, 2), "{name}");
+            }
+            assert_eq!(rel(&mut c, &mut r, 1.0, 1.0), second, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_mode_baseline_is_ignored_for_another_visit_and_after_newer_datagrams() {
+        let base = RelativeBase { seq: 1, sum: (1000 * 256, 0) };
+        let mut r = MotionReceiver::default();
+        r.enter(2);
+        r.relative_from(1, base); // an earlier visit's message
+        assert_eq!(r.accept_relative(2, 1, (256, 0)), RelReceived::MoveBy { dx: 1, dy: 0 }, "nothing taken from another visit");
+        // The datagram of that very switch (or a newer one) is applied already.
+        let mut r = MotionReceiver::default();
+        r.enter(2);
+        assert_eq!(r.accept_relative(2, 5, (256, 0)), RelReceived::MoveBy { dx: 1, dy: 0 });
+        r.relative_from(2, RelativeBase { seq: 5, sum: (-256, 0) });
+        r.relative_from(2, RelativeBase { seq: 3, sum: (-256, 0) });
+        assert_eq!(r.accept_relative(2, 6, (512, 0)), RelReceived::MoveBy { dx: 1, dy: 0 });
+        let mut c = enter(desk(), 0.5, 1);
+        c.set_relative(true);
+        assert_eq!(c.relative_base().map(|b| (b.seq, b.sum)), Some((1, (0, 0))));
+        c.set_relative(false);
+        assert_eq!(c.relative_base(), None);
     }
 
     #[test]

@@ -5,7 +5,8 @@
 //! refreshed when the pointer enters or clicks the icon (Windows reports
 //! both before the user can pick anything) and, on macOS, where the menu is
 //! drawn by the system without any event, also every 5 seconds while the
-//! daemon is running. Nothing else wakes the process.
+//! daemon is running (and every 30 seconds while it is not, to notice it
+//! start). Nothing else wakes the process.
 
 use crate::core::Ctx;
 use crate::icon::{self, IconState};
@@ -19,6 +20,9 @@ use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, Predefin
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 const SLOW_REFRESH: Option<Duration> = if cfg!(target_os = "macos") { Some(Duration::from_secs(5)) } else { None };
+/// macOS with no daemon answering: slower, but never given up, so a daemon
+/// that started later, or one that missed a look, is found without a touch.
+const IDLE_REFRESH: Option<Duration> = if cfg!(target_os = "macos") { Some(Duration::from_secs(30)) } else { None };
 /// Hovering and clicking send several events in a row; one look is enough.
 const MIN_GAP: Duration = Duration::from_millis(800);
 
@@ -26,7 +30,10 @@ enum Ev {
     Menu(MenuEvent),
     /// The pointer touched the icon: look at the daemon.
     Touched,
-    Snapshot(Box<Snapshot>),
+    /// A look at the daemon, and whether it follows a menu choice (the
+    /// menu is then drawn again whatever it says, since the system has
+    /// already flipped the checkmark that was clicked).
+    Snapshot(Box<Snapshot>, bool),
 }
 
 fn icon(state: IconState) -> Icon {
@@ -97,10 +104,11 @@ fn add(parent: &dyn Parent, e: &Entry, actions: &mut HashMap<MenuId, Action>) {
 fn refresh(ctx: &Arc<Ctx>, proxy: &EventLoopProxy<Ev>, after: Option<Action>) {
     let (ctx, proxy) = (ctx.clone(), proxy.clone());
     std::thread::spawn(move || {
+        let acted = after.is_some();
         if let Some(a) = after {
             ctx.perform(&a);
         }
-        let _ = proxy.send_event(Ev::Snapshot(Box::new(ctx.snapshot())));
+        let _ = proxy.send_event(Ev::Snapshot(Box::new(ctx.snapshot()), acted));
     });
 }
 
@@ -174,10 +182,10 @@ pub fn run(ctx: Arc<Ctx>, start_daemon: bool) -> anyhow::Result<()> {
                 }
                 None => {}
             },
-            Event::UserEvent(Ev::Snapshot(s)) => {
+            Event::UserEvent(Ev::Snapshot(s, acted)) => {
                 let s = *s;
                 last_look = Instant::now();
-                if let (Some(t), true) = (&tray, s != snap) {
+                if let (Some(t), true) = (&tray, acted || !s.looks_like(&snap)) {
                     actions.clear();
                     t.set_menu(Some(Box::new(build(&model::menu(&s), &mut actions))));
                     set_icon(t, s.icon_state());
@@ -190,7 +198,7 @@ pub fn run(ctx: Arc<Ctx>, start_daemon: bool) -> anyhow::Result<()> {
             }
             _ => {}
         }
-        let next = SLOW_REFRESH.filter(|_| snap.running()).map(|d| Instant::now() + d);
+        let next = (if snap.running() { SLOW_REFRESH } else { IDLE_REFRESH }).map(|d| Instant::now() + d);
         *flow = next.map_or(ControlFlow::Wait, ControlFlow::WaitUntil);
     });
 }

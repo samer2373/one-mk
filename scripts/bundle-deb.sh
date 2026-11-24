@@ -72,9 +72,10 @@ install -m 644 "$1" "$root/$app_entry"
 # Added by hand are the libraries the window opens at run time, which
 # dpkg-shlibdeps cannot see. Found by installing the package on a clean Ubuntu
 # with --no-install-recommends and starting the window on an X server
-# (docs/PACKAGING.md): libxkbcommon (keyboard layouts), one OpenGL loader (the
-# window draws with OpenGL; libegl1 pulls in the Wayland client library, libgl1
-# the X11 one), and for X11 sessions libxi6, libxcursor1 and libxkbcommon-x11-0
+# (docs/PACKAGING.md): libxkbcommon (keyboard layouts), libegl1 (the
+# window draws with OpenGL, and a native Wayland window can only get its context
+# through EGL; libgl1 alone, the GLX stack, would satisfy an "or" and leave a
+# Wayland session without one), and for X11 sessions libxi6, libxcursor1 and libxkbcommon-x11-0
 # (without them the window stops at start with "Failed to load one of xlib's
 # shared libraries" or a panic). All of these names exist in Ubuntu 22.04 and
 # Debian 12.
@@ -86,7 +87,7 @@ case "$shlibs" in
     "libc6 (>= "*) ;;
     *) echo "bundle-deb.sh: dpkg-shlibdeps found no libc6 dependency (got: $shlibs)" >&2; exit 1 ;;
 esac
-depends="$shlibs, libxkbcommon0, libxkbcommon-x11-0, libxcursor1, libxi6, libegl1 | libgl1"
+depends="$shlibs, libxkbcommon0, libxkbcommon-x11-0, libxcursor1, libxi6, libegl1"
 
 cat > "$root/DEBIAN/control" <<CONTROL
 Package: one-mk

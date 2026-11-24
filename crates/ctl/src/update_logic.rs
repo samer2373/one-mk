@@ -119,7 +119,10 @@ pub struct State {
 }
 
 pub fn startup_due(last_attempt: u64, now: u64) -> bool {
-    now.saturating_sub(last_attempt) >= 24 * 60 * 60
+    const DAY: u64 = 24 * 60 * 60;
+    // An attempt more than a day ahead of the clock was stamped by a wrong clock (dead RTC battery,
+    // restored VM) that has since been corrected: count it as due, or checks wait until that date.
+    now.saturating_sub(last_attempt) >= DAY || last_attempt.saturating_sub(now) > DAY
 }
 
 pub fn accept(manifest: &Manifest, current: &str, state: &State, digest: &str, floor: u64) -> Result<bool> {
@@ -362,6 +365,10 @@ mod tests {
         assert!(!startup_due(100_000, 99_999));
         assert!(!startup_due(100_000, 186_399));
         assert!(startup_due(100_000, 186_400));
+        // A clock that was far ahead at the last check does not postpone checks until that date.
+        assert!(startup_due(u64::MAX / 2, 1_000_000));
+        assert!(!startup_due(1_000_000 + 86_400, 1_000_000));
+        assert!(startup_due(1_000_000 + 86_401, 1_000_000));
         for (path, home, expected) in [
             ("/usr/bin/one-mk", "/home/me", InstallKind::Deb),
             ("/opt/homebrew/bin/one-mk", "/Users/me", InstallKind::Homebrew),

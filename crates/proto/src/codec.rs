@@ -1,7 +1,7 @@
 //! Compact little-endian binary encoding. Positions are fixed-point with
 //! 1/256 px precision.
 
-use crate::{PROTOCOL_VERSION, Pos, Rect, Side};
+use crate::{PROTOCOL_VERSION, Pos, Rect, RelativeBase, Side};
 use std::fmt;
 
 /// First byte of every QUIC stream, saying what the stream carries.
@@ -230,7 +230,15 @@ pub enum Control {
     /// The controller switches visit `epoch` to relative motion
     /// ([`Datagram::MotionBy`]) or back to absolute positions. While
     /// relative, a `Button`'s `pos` means nothing and is not applied.
-    PointerMode { epoch: u16, relative: bool },
+    ///
+    /// Switching to relative also carries `base`, the sender's running sum
+    /// at the switch, as trailing bytes: the datagram that announces the
+    /// switch is unreliable, and when it is lost the first one that arrives
+    /// already holds new movement, which the receiver would otherwise take
+    /// as its baseline and drop. A peer that predates `base` neither sends
+    /// nor reads it (frames with trailing bytes are fine), and then the
+    /// first datagram is the baseline as before.
+    PointerMode { epoch: u16, relative: bool, base: Option<RelativeBase> },
     /// Lock your screen. `id` names the lock event, so a computer that
     /// passes it on never gets it back as a new one. `all`: someone ran
     /// `one-mk lock-all`, which every computer obeys; otherwise it is lock
@@ -364,10 +372,15 @@ impl Control {
                 w.u8(14);
                 w.u32(*bits);
             }
-            Control::PointerMode { epoch, relative } => {
+            Control::PointerMode { epoch, relative, base } => {
                 w.u8(15);
                 w.u16(*epoch);
                 w.u8(u8::from(*relative));
+                if let (true, Some(base)) = (*relative, base) {
+                    w.u32(base.seq);
+                    w.i32(base.sum.0);
+                    w.i32(base.sum.1);
+                }
             }
             Control::Lock { id, all } => {
                 w.u8(16);
@@ -475,7 +488,16 @@ impl Control {
                 },
             },
             14 => Control::Caps(r.u32()?),
-            15 => Control::PointerMode { epoch: r.u16()?, relative: r.u8()? != 0 },
+            15 => {
+                let (epoch, relative) = (r.u16()?, r.u8()? != 0);
+                // A cut-off tail is the older form without one.
+                let base = if relative && r.0.len() >= 12 {
+                    Some(RelativeBase { seq: r.u32()?, sum: (r.i32()?, r.i32()?) })
+                } else {
+                    None
+                };
+                Control::PointerMode { epoch, relative, base }
+            }
             16 => Control::Lock { id: r.u64()?, all: r.flag_or(true)? },
             17 => Control::Focus { epoch: r.u16()?, fullscreen: r.u8()? != 0, apps: r.app_names()? },
             18 => {
@@ -791,8 +813,9 @@ mod tests {
             Control::Layout { side_of_you: Side::Bottom, version: 1_700_000_000_123, offset: None, clear_offset: false },
             Control::Layout { side_of_you: Side::Left, version: 7, offset: Some((-3432, 98)), clear_offset: false },
             Control::Caps(caps::LOCAL),
-            Control::PointerMode { epoch: 3, relative: true },
-            Control::PointerMode { epoch: 3, relative: false },
+            Control::PointerMode { epoch: 3, relative: true, base: None },
+            Control::PointerMode { epoch: 3, relative: true, base: Some(RelativeBase { seq: u32::MAX, sum: (i32::MIN, 7) }) },
+            Control::PointerMode { epoch: 3, relative: false, base: None },
             Control::Lock { id: u64::MAX, all: true },
             Control::Lock { id: 7, all: false },
             Control::Focus { epoch: 4, fullscreen: true, apps: vec![] },
@@ -909,7 +932,7 @@ mod tests {
         };
         let new = [
             Control::Caps(0),
-            Control::PointerMode { epoch: 0, relative: true },
+            Control::PointerMode { epoch: 0, relative: true, base: None },
             Control::Lock { id: 0, all: true },
             Control::Focus { epoch: 0, fullscreen: false, apps: vec![] },
             Control::WatchFocus { epoch: 0, on: true, app: false, fullscreen: true },
@@ -1031,6 +1054,29 @@ mod tests {
         bad.extend_from_slice(&i32::MIN.to_le_bytes());
         bad.extend_from_slice(&0i32.to_le_bytes());
         assert_eq!(Control::decode(&bad), Err(DecodeError::Invalid("offset")));
+    }
+
+    /// The relative baseline of `PointerMode` is a tail: a frame without it
+    /// (an older sender) decodes as none, one without a baseline encodes as
+    /// the old four bytes, and what an older reader takes from a new frame is
+    /// the same epoch and mode.
+    #[test]
+    fn pointer_mode_baseline_is_an_optional_tail() {
+        let old = [15, 4, 0, 1];
+        assert_eq!(Control::decode(&old), Ok(Control::PointerMode { epoch: 4, relative: true, base: None }));
+        let mut buf = Vec::new();
+        Control::PointerMode { epoch: 4, relative: true, base: None }.encode_frame(&mut buf);
+        assert_eq!(&buf[2..], &old);
+        let base = RelativeBase { seq: 7, sum: (-3, 9) };
+        buf.clear();
+        Control::PointerMode { epoch: 4, relative: true, base: Some(base) }.encode_frame(&mut buf);
+        assert_eq!(&buf[2..6], &old, "the first bytes are the old message");
+        assert_eq!(&buf[6..], &[7, 0, 0, 0, 0xFD, 0xFF, 0xFF, 0xFF, 9, 0, 0, 0]);
+        assert_eq!(Control::decode(&buf[2..]), Ok(Control::PointerMode { epoch: 4, relative: true, base: Some(base) }));
+        // Back to absolute carries none, even if given one.
+        buf.clear();
+        Control::PointerMode { epoch: 4, relative: false, base: Some(base) }.encode_frame(&mut buf);
+        assert_eq!(&buf[2..], &[15, 4, 0, 0]);
     }
 
     #[test]

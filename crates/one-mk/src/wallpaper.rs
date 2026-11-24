@@ -228,6 +228,10 @@ pub fn summary(settings: &WallpaperSettings) -> String {
         if settings.enabled { "enabled (scaffolding only)" } else { "off" }, settings.grants.len(), if settings.grants.len() == 1 { "" } else { "s" })
 }
 
+pub fn has_grant(dir: &Path, fingerprint: &str) -> Result<bool> {
+    Ok(crate::settings::Settings::load(dir)?.wallpaper.grants.contains_key(fingerprint))
+}
+
 pub fn forget(dir: &Path, fingerprint: &str) -> Result<()> {
     if crate::settings::Settings::load(dir)?.wallpaper.grants.contains_key(fingerprint) {
         crate::settings::Settings::update(dir,|settings| { settings.wallpaper.grants.remove(fingerprint); Ok(()) })?;

@@ -6,7 +6,7 @@
 // - file:// and a sub-path (/one-mk/): the 3D starts and nothing is missing,
 // - keyboard: the skip link comes first, tabs answer the arrow keys,
 // - every request stays on this host,
-// - the download chooser: 18 platforms as pure unit tests of js/detect.js, and
+// - the download chooser: every platform in CASES as pure unit tests of js/detect.js, and
 //   7 of them in the browser with faked user agent, client hints, touch and GPU.
 import { launch, serve } from "./cdp.mjs";
 import { mkdirSync, mkdtempSync, symlinkSync, rmSync, readFileSync } from "node:fs";
@@ -49,9 +49,14 @@ const CASES = [
   ["Windows 11 Edge", { ua: UA.winEdge, platform: "Win32", uaData: { platform: "Windows", mobile: false }, hints: { architecture: "x86", bitness: "64", platformVersion: "15.0.0" } }, "windows", F.win, "Download for Windows", true],
   ["Windows Firefox", { ua: UA.winFirefox, platform: "Win32" }, "windows", F.win, "Download for Windows", false],
   ["Windows on ARM (client hints)", { ua: UA.winChrome, platform: "Win32", uaData: { platform: "Windows", mobile: false }, hints: { architecture: "arm", bitness: "64", platformVersion: "15.0.0" } }, "windows", null, "See the Windows downloads", true],
+  ["Windows 32-bit (client hints)", { ua: UA.winChrome.replace("; Win64; x64", ""), platform: "Win32", uaData: { platform: "Windows", mobile: false }, hints: { architecture: "x86", bitness: "32", platformVersion: "10.0.0" } }, "windows", null, "See the Windows downloads", true],
+  ["Windows 7 32-bit Firefox (no client hints)", { ua: "Mozilla/5.0 (Windows NT 6.1; rv:115.0) Gecko/20100101 Firefox/115.0", platform: "Win32" }, "windows", null, "See the Windows downloads", false],
+  ["32-bit Chrome on 64-bit Windows (WOW64)", { ua: UA.winChrome.replace("Win64; x64", "WOW64"), platform: "Win32", uaData: { platform: "Windows", mobile: false }, hints: { architecture: "x86", bitness: "32", platformVersion: "10.0.0" } }, "windows", F.win, "Download for Windows", true],
   ["Ubuntu Firefox", { ua: UA.ubuntuFirefox, platform: "Linux x86_64" }, "linux", F.deb, "Download for Linux (.deb)", true],
   ["Fedora Firefox", { ua: UA.fedoraFirefox, platform: "Linux x86_64" }, "linux", F.appImage, "Download for Linux (AppImage)", true],
   ["Fedora Chrome (no distro in the UA)", { ua: UA.linuxChrome, platform: "Linux x86_64", uaData: { platform: "Linux", mobile: false }, hints: { architecture: "x86" } }, "linux", F.deb, "Download for Linux (.deb)", true],
+  ["Linux 32-bit (i686)", { ua: "Mozilla/5.0 (X11; Linux i686; rv:144.0) Gecko/20100101 Firefox/144.0", platform: "Linux i686" }, "linux", null, "See the Linux downloads", true],
+  ["32-bit Firefox on 64-bit Linux", { ua: "Mozilla/5.0 (X11; Ubuntu; Linux i686 on x86_64; rv:144.0) Gecko/20100101 Firefox/144.0", platform: "Linux i686 on x86_64" }, "linux", F.deb, "Download for Linux (.deb)", true],
   ["Linux aarch64", { ua: UA.linuxArm, platform: "Linux aarch64" }, "linux", null, "See the Linux downloads", true],
   ["Android", { ua: UA.android, platform: "Linux armv8l", uaData: { platform: "Android", mobile: true } }, null, null, "Get oneMK for your computer", false],
   ["iPhone", { ua: UA.iphone, platform: "iPhone", maxTouchPoints: 5 }, null, null, "Get oneMK for your computer", false],
@@ -132,6 +137,43 @@ b = await launch({ gl: false });
   p.close();
 }
 await b.close();
+// 3a. WebGL 1 only: three.js r169 needs WebGL 2, so the page must not fetch it.
+b = await launch();
+{
+  const p = await b.page(); await p.size(1440, 900, 1);
+  await p.send("Page.addScriptToEvaluateOnNewDocument", { source: `(function () { var o = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (t) { return /webgl2/i.test(String(t)) ? null : o.apply(this, arguments); };
+    try { Object.defineProperty(window, 'WebGL2RenderingContext', { value: undefined, configurable: true }); } catch (e) {} })();` });
+  await p.goto(srv.url + "/", 4000);
+  const st = await p.eval("({ live: !!document.querySelector('canvas.is-live'), three: !!window.THREE })");
+  const fetched = p.requests.some((r) => /three\.min/.test(r.url));
+  ok("WebGL 1 only: poster fallback, three.js not fetched", !st.live && !st.three && !fetched, JSON.stringify({ ...st, fetched }));
+  ok("no console errors (WebGL 1 only)", real(p.logs).length === 0, real(p.logs).join(" | "));
+  p.close();
+}
+await b.close();
+// 3a'. The copy buttons without the async clipboard: a refused copy is not "Copied",
+// and a second click while "Copied" shows still restores the original label.
+b = await launch();
+{
+  const p = await b.page(); await p.size(1440, 900, 1);
+  await p.send("Page.addScriptToEvaluateOnNewDocument", { source: `(function () {
+    Object.defineProperty(Navigator.prototype, 'clipboard', { get: function () { return undefined; }, configurable: true });
+    window.__copyResult = false; document.execCommand = function () { return window.__copyResult; }; })();` });
+  await p.goto(srv.url + "/", 1500);
+  const label = await p.eval("document.querySelector('[data-copy]').getAttribute('aria-label')");
+  await p.eval("document.querySelector('[data-copy]').click()");
+  const refused = await p.eval("document.querySelector('[data-copy]').getAttribute('aria-label')");
+  ok("copy refused: the button does not say Copied", refused === label, `${label} -> ${refused}`);
+  await p.eval("window.__copyResult = true; document.querySelector('[data-copy]').click()");
+  await p.sleep(800);
+  await p.eval("document.querySelector('[data-copy]').click()");
+  await p.sleep(1900);
+  const after = await p.eval("document.querySelector('[data-copy]').getAttribute('aria-label')");
+  ok("copied twice quickly: the original label comes back", after === label, `${label} -> ${after}`);
+  p.close();
+}
+await b.close();
 // 3b. Download detection in the page, with the browser faking each platform.
 {
   const pick = ["Mac Chrome, Apple silicon (client hints)", "Mac Safari, Intel GPU", "Mac Firefox, nothing known", "Windows 11 Edge", "Windows on ARM (client hints)", "Fedora Firefox", "iPad asking for the desktop site"];
@@ -180,3 +222,5 @@ b = await launch();
 }
 await b.close(); srv.close();
 console.log(results.join("\n"));
+// A failed check fails the run (the workflow gates on this exit status).
+if (results.some((r) => r.startsWith("FAIL"))) process.exitCode = 1;

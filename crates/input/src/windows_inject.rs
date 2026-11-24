@@ -44,6 +44,9 @@ async fn inject_loop(
     // SendInput doesn't auto-repeat; held keys and native characters repeat here.
     let mut repeat = KeyRepeat::new(repeat_setting());
     let mut failing = false;
+    // Releases Windows refused (a lock screen or UAC prompt had the input desktop), tried again
+    // until they go out: the daemon sends each release once.
+    let mut owed = crate::win_logic::Owed::<Release>::default();
     let mut text = crate::typing::NativeText::default();
     loop {
         let deadline = repeat.deadline();
@@ -72,6 +75,7 @@ async fn inject_loop(
                     for message in text.input(m) { build(&mut inputs, message, &space, &mut scroll, &mut rel); }
                 }
             }
+            _ = tokio::time::sleep(OWED_RETRY), if owed.any_due() => {}
             _ = tokio::time::sleep_until(wake), if deadline.is_some() => {
                 let Some(code) = repeat.poll(std::time::Instant::now()) else { continue };
                 let Ok(space) = shared.lock() else { return };
@@ -82,16 +86,92 @@ async fn inject_loop(
                 }
             }
         }
-        send_inputs(&mut inputs, &tx, &mut failing);
+        send_inputs(&mut inputs, &tx, &mut failing, &mut owed);
     }
 }
 
-fn send_inputs(inputs: &mut Vec<INPUT>, tx: &mpsc::UnboundedSender<Event>, failing: &mut bool) {
+/// How often a refused release is tried again.
+const OWED_RETRY: Duration = Duration::from_secs(1);
+
+/// What lets a pressed key or mouse button go again. (`INPUT` is a union and cannot be compared.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Release {
+    kind: u32,
+    vk: u16,
+    scan: u16,
+    flags: u32,
+    data: u32,
+}
+
+impl Release {
+    fn input(self) -> INPUT {
+        if self.kind == INPUT_KEYBOARD { key(self.vk, self.scan, self.flags) } else { mouse(0, 0, self.data, self.flags) }
+    }
+}
+
+/// For a key or mouse button input: the release that undoes its press, and whether this input is
+/// the press (`true`) or that release. Moves and wheels leave nothing held, so they are `None`.
+fn release_of(input: &INPUT) -> Option<(Release, bool)> {
+    // SAFETY: the union member read is the one the type says is set.
+    unsafe {
+        if input.r#type == INPUT_KEYBOARD {
+            let k = input.Anonymous.ki;
+            let release = Release { kind: INPUT_KEYBOARD, vk: k.wVk, scan: k.wScan, flags: k.dwFlags | KEYEVENTF_KEYUP, data: 0 };
+            return Some((release, k.dwFlags & KEYEVENTF_KEYUP == 0));
+        }
+        if input.r#type != INPUT_MOUSE {
+            return None;
+        }
+        let m = input.Anonymous.mi;
+        let (up, down, data) = match m.dwFlags {
+            MOUSEEVENTF_LEFTDOWN => (MOUSEEVENTF_LEFTUP, true, 0),
+            MOUSEEVENTF_LEFTUP => (MOUSEEVENTF_LEFTUP, false, 0),
+            MOUSEEVENTF_RIGHTDOWN => (MOUSEEVENTF_RIGHTUP, true, 0),
+            MOUSEEVENTF_RIGHTUP => (MOUSEEVENTF_RIGHTUP, false, 0),
+            MOUSEEVENTF_MIDDLEDOWN => (MOUSEEVENTF_MIDDLEUP, true, 0),
+            MOUSEEVENTF_MIDDLEUP => (MOUSEEVENTF_MIDDLEUP, false, 0),
+            MOUSEEVENTF_XDOWN => (MOUSEEVENTF_XUP, true, m.mouseData),
+            MOUSEEVENTF_XUP => (MOUSEEVENTF_XUP, false, m.mouseData),
+            _ => return None,
+        };
+        Some((Release { kind: INPUT_MOUSE, vk: 0, scan: 0, flags: up, data }, down))
+    }
+}
+
+/// Sends again the releases Windows refused earlier, one at a time; stops at the first refusal.
+fn retry_owed(owed: &mut crate::win_logic::Owed<Release>) {
+    for release in owed.due() {
+        let input = release.input();
+        // SAFETY: one initialized INPUT.
+        if unsafe { SendInput(1, &input, size_of::<INPUT>() as i32) } != 1 {
+            return;
+        }
+        tracing::info!("a release Windows had refused went out");
+        owed.sent(&release);
+    }
+}
+
+fn send_inputs(inputs: &mut Vec<INPUT>, tx: &mpsc::UnboundedSender<Event>, failing: &mut bool, owed: &mut crate::win_logic::Owed<Release>) {
+    retry_owed(owed);
     if inputs.is_empty() {
         return;
     }
     // SAFETY: `inputs` is a valid slice of initialized INPUTs.
     let sent = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+    // What went out is held (or let go) now; a release that did not go out stays owed.
+    let accepted = (sent as usize).min(inputs.len());
+    for input in &inputs[..accepted] {
+        match release_of(input) {
+            Some((release, true)) => owed.down(release),
+            Some((release, false)) => owed.sent(&release),
+            None => {}
+        }
+    }
+    for input in &inputs[accepted..] {
+        if let Some((release, false)) = release_of(input) {
+            owed.refused(&release);
+        }
+    }
     if (sent as usize) < inputs.len() {
         let err = unsafe { GetLastError() };
         if sent > 0 {
@@ -100,7 +180,11 @@ fn send_inputs(inputs: &mut Vec<INPUT>, tx: &mpsc::UnboundedSender<Event>, faili
                 let keyboard = unsafe { last.Anonymous.ki };
                 if keyboard.dwFlags & (KEYEVENTF_UNICODE | KEYEVENTF_KEYUP) == KEYEVENTF_UNICODE {
                     let release = key(0, keyboard.wScan, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP);
-                    unsafe { SendInput(1, &release, size_of::<INPUT>() as i32) };
+                    if unsafe { SendInput(1, &release, size_of::<INPUT>() as i32) } == 1
+                        && let Some((release, _)) = release_of(&release)
+                    {
+                        owed.sent(&release);
+                    }
                 }
             }
         }
@@ -135,6 +219,11 @@ pub(crate) fn key(vk: u16, scan: u16, flags: u32) -> INPUT {
     }
 }
 
+/// Some mice (and the computers sending them) call the thumb buttons BTN_BACK and BTN_FORWARD
+/// instead of BTN_SIDE and BTN_EXTRA; they are the same two buttons, as on Linux and macOS.
+const BTN_FORWARD: u32 = 0x115;
+const BTN_BACK: u32 = 0x116;
+
 /// `rel` keeps the fraction of a physical pixel that relative moves (in
 /// logical pixels) did not use yet, so scaling never drifts.
 fn build(out: &mut Vec<INPUT>, m: Inject, space: &Space, scroll: &mut SmoothScroll, rel: &mut (f64, f64)) {
@@ -164,10 +253,10 @@ fn build(out: &mut Vec<INPUT>, m: Inject, space: &Space, scroll: &mut SmoothScro
                 (BTN_RIGHT, false) => (MOUSEEVENTF_RIGHTUP, 0),
                 (BTN_MIDDLE, true) => (MOUSEEVENTF_MIDDLEDOWN, 0),
                 (BTN_MIDDLE, false) => (MOUSEEVENTF_MIDDLEUP, 0),
-                (BTN_SIDE, true) => (MOUSEEVENTF_XDOWN, u32::from(XBUTTON1)),
-                (BTN_SIDE, false) => (MOUSEEVENTF_XUP, u32::from(XBUTTON1)),
-                (BTN_EXTRA, true) => (MOUSEEVENTF_XDOWN, u32::from(XBUTTON2)),
-                (BTN_EXTRA, false) => (MOUSEEVENTF_XUP, u32::from(XBUTTON2)),
+                (BTN_SIDE | BTN_BACK, true) => (MOUSEEVENTF_XDOWN, u32::from(XBUTTON1)),
+                (BTN_SIDE | BTN_BACK, false) => (MOUSEEVENTF_XUP, u32::from(XBUTTON1)),
+                (BTN_EXTRA | BTN_FORWARD, true) => (MOUSEEVENTF_XDOWN, u32::from(XBUTTON2)),
+                (BTN_EXTRA | BTN_FORWARD, false) => (MOUSEEVENTF_XUP, u32::from(XBUTTON2)),
                 _ => {
                     tracing::debug!(button, "no Windows equivalent for mouse button");
                     return;

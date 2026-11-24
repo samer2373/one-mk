@@ -10,6 +10,9 @@ on:
       - "site/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
+  # Sent by the release workflow once a release is public (its sizes are on the page).
+  repository_dispatch:
+    types: [release-published]
 
 permissions:
   contents: read
@@ -37,16 +40,28 @@ jobs:
           cp -R site/. _site/
           rm -rf _site/tools _site/README.md _site/css/fonts-file.css
 
-      - name: Read the download sizes from the latest release
+      # The download buttons point at the latest release, so the version and
+      # the sizes the page shows are that release's (main can be ahead of, or
+      # behind, what is published). The release workflow starts this one after
+      # it publishes. When the release cannot be read, the checkout's version
+      # and the sizes in the source stay.
+      - name: Read the version and download sizes of the latest release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/latest" \
-            | python3 -c 'import json, sys; [print(a["name"], a["size"], sep="\t") for a in json.load(sys.stdin)["assets"]]' > sizes.tsv \
-            || { echo "::warning::could not read the latest release; keeping the sizes in the source"; : > sizes.tsv; }
+          version=$(sh scripts/version.sh)
+          if curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/latest" > release.json \
+            && published=$(python3 -c 'import json, re; t = json.load(open("release.json"))["tag_name"]; assert re.fullmatch(r"v[0-9]+[.][0-9]+[.][0-9]+", t); print(t[1:])') \
+            && python3 -c 'import json; [print(a["name"], a["size"], sep="\t") for a in json.load(open("release.json"))["assets"]]' > sizes.tsv; then
+            version=$published
+          else
+            echo "::warning::could not read the latest release; keeping the checkout's version and the sizes in the source"
+            : > sizes.tsv
+          fi
+          echo "$version" > version.txt
 
       - name: Stamp the release version, the address and the sizes
-        run: sh site/tools/stamp.sh _site "$(sh scripts/version.sh)" "$SITE_URL" sizes.tsv
+        run: sh site/tools/stamp.sh _site "$(cat version.txt)" "$SITE_URL" sizes.tsv
 
       - name: Check every local link resolves
         run: |

@@ -431,6 +431,9 @@ impl App {
     /// The panel's contents in `c`; how tall they are.
     fn panel_body(&mut self, ui: &mut Ui, c: Rect, now: f64) -> f32 {
         let Some(status) = self.status.clone() else {
+            if self.not_answering() {
+                return self.panel_words(ui, c, "oneMK isn't answering", super::NOT_ANSWERING_HELP, "not-answering");
+            }
             let h = para(ui, c.min, c.width(), "Looking for oneMK…", semibold(T_TITLE), pal().ink);
             return h;
         };
@@ -739,18 +742,18 @@ impl App {
             }
         });
         if let Some(val) = chosen.filter(|v| *v != current) {
-            self.pending_swap.insert(peer.id.clone(), val.to_owned());
-            self.busy.push(Job::Swap { id: peer.id.clone(), name: peer.name.clone(), swap: val.to_owned() });
-            self.link.set_swap(&peer.id, &peer.name, val);
-            self.sync_scene();
+            self.ask_swap(&peer.id, &peer.name, val);
         }
         widgets::hairline(ui.painter(), c.x_range(), row.bottom());
         // Its keys: how many are changed for it; the Keys page, for it.
-        let facts = crate::tune::Facts::of(&crate::tune::Scope::Peer(peer.name.clone()), &[crate::tune::Peer { name: peer.name.clone(), id: peer.id.clone(), os: peer.os }]);
+        let tune_peer = crate::tune::Peer { name: peer.name.clone(), id: peer.id.clone(), os: peer.os };
+        // A scope names a computer by its name, or by its id when the name shown is the decorated one.
+        let scope = crate::tune::Scope::Peer(tune_peer.scope_arg());
+        let facts = crate::tune::Facts::of(&scope, &[tune_peer]);
         let n = self.prefs.input.specs(&facts).iter().filter(|(_, at)| at.is_ok()).count();
         let row = Rect::from_min_size(pos2(c.left(), row.bottom()), vec2(c.width(), ROW));
         if self.value_row(ui, row, &format!("keys-{}", peer.id), keys_label(peer.os), &changed_words(n)).on_hover_text(format!("Change keys for {}", peer.name)).clicked() {
-            self.keys.scope = crate::tune::Scope::Peer(peer.name.clone());
+            self.keys.scope = scope;
             self.set_tab(Tab::Keys);
         }
         widgets::hairline(ui.painter(), c.x_range(), row.bottom());

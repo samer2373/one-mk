@@ -82,10 +82,13 @@ fn canonical(source: &str) -> String {
 
 #[test]
 fn capture_activation_is_main_plus_device_metadata_not_worker_admission() {
+    // `edge_request` only drops a saved edge activation that the pointer backed away from.
     let windows = function(WINDOWS, "activate_now").replace("activate_now(", "activate(")
+        .replace("self.edge_request = false;", "")
         .replace("unsafe { PostMessageW(self.hwnd, WM_APP_DEVICES, 0, 0) };", "");
     assert_eq!(canonical(&windows), canonical(include_str!("fixtures/windows-main-capture.txt")));
     let macos = function(MACOS, "start_now").replace("start_now(", "start(")
+        .replace("st.edge_request = false;", "")
         .replace("self.hid.capture(true);", "");
     assert_eq!(canonical(&macos), canonical(include_str!("fixtures/macos-main-capture.txt")));
     let windows = function(include_str!("../src/windows.rs"), "activate")

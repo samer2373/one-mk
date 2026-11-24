@@ -126,30 +126,49 @@ async fn within<T>(what: &str, f: impl std::future::Future<Output = zbus::Result
     tokio::time::timeout(DBUS_TIMEOUT, f).await.unwrap_or_else(|_| Err(zbus::Error::Failure(format!("{what}: no answer"))))
 }
 
+/// Takes what `acquire` takes and keeps it until `released` completes (its sender dropped).
+/// A release that comes while the acquisition is still going ends it there, which drops its
+/// pending calls and their connections: nothing is taken after the visit ended. `None` for
+/// that; otherwise what was taken, for the caller to give back.
+async fn until_released<T>(acquire: impl std::future::Future<Output = T>, mut released: tokio::sync::oneshot::Receiver<()>) -> Option<T> {
+    let taken = tokio::select! {
+        taken = acquire => taken,
+        _ = &mut released => return None,
+    };
+    let _ = released.await;
+    Some(taken)
+}
+
 /// Holds the inhibitors until `released` completes (its sender dropped).
 async fn hold(reason: &str, released: tokio::sync::oneshot::Receiver<()>) -> zbus::Result<()> {
-    let saver = within("screensaver", async {
-        let conn = zbus::Connection::session().await?;
-        let proxy = zbus::Proxy::new(&conn, SCREENSAVER, "/org/freedesktop/ScreenSaver", SCREENSAVER).await?;
-        let cookie: u32 = proxy.call("Inhibit", &("one-mk", reason)).await?;
-        zbus::Result::Ok((proxy, cookie))
-    })
-    .await;
-    let idle = within("logind", async {
-        let conn = zbus::Connection::system().await?;
-        let manager = zbus::Proxy::new(&conn, LOGIN1, "/org/freedesktop/login1", "org.freedesktop.login1.Manager").await?;
-        let fd: zbus::zvariant::OwnedFd = manager.call("Inhibit", &("idle", "one-mk", reason, "block")).await?;
-        zbus::Result::Ok(fd)
-    })
-    .await;
-    if let (Err(a), Err(b)) = (&saver, &idle) {
-        tracing::warn!("no screensaver inhibitor ({a}) and no logind one ({b})");
-    }
-    let _ = released.await;
+    // Both are asked for at once, so one slow service does not delay the other, and a release
+    // that arrives meanwhile cancels what is still pending.
+    let acquire = async {
+        let saver = within("screensaver", async {
+            let conn = zbus::Connection::session().await?;
+            let proxy = zbus::Proxy::new(&conn, SCREENSAVER, "/org/freedesktop/ScreenSaver", SCREENSAVER).await?;
+            let cookie: u32 = proxy.call("Inhibit", &("one-mk", reason)).await?;
+            zbus::Result::Ok((proxy, cookie))
+        });
+        let idle = within("logind", async {
+            let conn = zbus::Connection::system().await?;
+            let manager = zbus::Proxy::new(&conn, LOGIN1, "/org/freedesktop/login1", "org.freedesktop.login1.Manager").await?;
+            let fd: zbus::zvariant::OwnedFd = manager.call("Inhibit", &("idle", "one-mk", reason, "block")).await?;
+            zbus::Result::Ok(fd)
+        });
+        let (saver, idle) = tokio::join!(saver, idle);
+        if let (Err(a), Err(b)) = (&saver, &idle) {
+            tracing::warn!("no screensaver inhibitor ({a}) and no logind one ({b})");
+        }
+        (saver, idle)
+    };
+    let Some((saver, idle)) = until_released(acquire, released).await else { return Ok(()) };
+    // Closing the file descriptor releases logind's inhibitor: first, so that a screensaver that
+    // does not answer cannot keep it held.
+    drop(idle);
     if let Ok((proxy, cookie)) = saver {
         let _ = within("screensaver", proxy.call::<_, _, ()>("UnInhibit", &(cookie,))).await;
     }
-    drop(idle); // closing the file descriptor releases logind's inhibitor
     Ok(())
 }
 
@@ -185,48 +204,98 @@ impl DisplaySleeper for Dpms {
     }
 }
 
+/// What is known about the display being off: the monitor (GNOME's
+/// `PowerSaveMode`, when something reports it) and the computer being
+/// suspended are separate, and the display is asleep when either says so. A
+/// computer that wakes for maintenance with the monitor still off, or a
+/// monitor that comes back while resuming, must not be taken for the other.
+#[derive(Default)]
+struct DisplayState {
+    monitor_asleep: Option<bool>,
+    suspended: bool,
+    /// What was last reported (the display starts awake).
+    told: bool,
+}
+
+impl DisplayState {
+    fn asleep(&self) -> bool {
+        self.suspended || self.monitor_asleep == Some(true)
+    }
+
+    /// The new state, if it differs from the one reported last.
+    fn changed(&mut self) -> Option<bool> {
+        let now = self.asleep();
+        (std::mem::replace(&mut self.told, now) != now).then_some(now)
+    }
+
+    /// The monitor's state; the first value is the state, not a change.
+    fn monitor(&mut self, asleep: bool) -> Option<bool> {
+        let first = self.monitor_asleep.replace(asleep).is_none();
+        if first {
+            self.told = self.asleep();
+            return None;
+        }
+        self.changed()
+    }
+
+    fn suspend(&mut self, suspended: bool) -> Option<bool> {
+        self.suspended = suspended;
+        self.changed()
+    }
+}
+
+/// Updates the shared state and tells the consumer of the change as one step: the two sources run
+/// on different workers, and if each sent after letting go of the lock, the older state could
+/// arrive last while the state says otherwise. False when the consumer is gone.
+fn publish(
+    events: &mpsc::UnboundedSender<PowerEvent>,
+    state: &std::sync::Mutex<DisplayState>,
+    update: impl FnOnce(&mut DisplayState) -> Option<bool>,
+) -> bool {
+    let Ok(mut state) = state.lock() else { return true };
+    match update(&mut state) {
+        Some(asleep) => events.send(PowerEvent::DisplayAsleep(asleep)).is_ok(),
+        None => true,
+    }
+}
+
 /// Reports the display sleeping (GNOME's `PowerSaveMode` leaving 0) and the
 /// computer suspending or resuming (logind's `PrepareForSleep`) as
 /// `PowerEvent::DisplayAsleep`. Event-driven, like [`watch_lock`].
 pub(super) fn watch_display(events: mpsc::UnboundedSender<PowerEvent>) {
-    let tx = events.clone();
+    let state = Arc::new(std::sync::Mutex::new(DisplayState::default()));
+    let (tx, shared) = (events.clone(), state.clone());
     tokio::spawn(async move {
-        if let Err(e) = watch_power_save(&tx).await {
+        if let Err(e) = watch_power_save(&tx, &shared).await {
             tracing::debug!("not watching the display power state: {e}");
         }
     });
     tokio::spawn(async move {
-        if let Err(e) = watch_suspend(&events).await {
+        if let Err(e) = watch_suspend(&events, &state).await {
             tracing::debug!("not watching for suspend: {e}");
         }
     });
 }
 
-async fn watch_power_save(events: &mpsc::UnboundedSender<PowerEvent>) -> zbus::Result<()> {
+async fn watch_power_save(events: &mpsc::UnboundedSender<PowerEvent>, state: &std::sync::Mutex<DisplayState>) -> zbus::Result<()> {
     let conn = zbus::Connection::session().await?;
     let proxy = zbus::Proxy::new(&conn, MUTTER_DISPLAY, MUTTER_PATH, MUTTER_DISPLAY).await?;
     let mut changes = proxy.receive_property_changed::<i32>("PowerSaveMode").await;
-    let mut last = None;
     while let Some(change) = changes.next().await {
         let Ok(mode) = change.get().await else { continue };
-        // -1 is "not supported", 0 on; the first value is the state, not a change.
-        let asleep = mode > 0;
-        if last.replace(asleep).is_some_and(|was| was != asleep) && events.send(PowerEvent::DisplayAsleep(asleep)).is_err() {
-            break;
-        }
+        // -1 is "not supported", 0 on.
+        if !publish(events, state, |state| state.monitor(mode > 0)) { break; }
     }
     Ok(())
 }
 
-async fn watch_suspend(events: &mpsc::UnboundedSender<PowerEvent>) -> zbus::Result<()> {
+async fn watch_suspend(events: &mpsc::UnboundedSender<PowerEvent>, state: &std::sync::Mutex<DisplayState>) -> zbus::Result<()> {
     let conn = zbus::Connection::system().await?;
     let manager = zbus::Proxy::new(&conn, LOGIN1, "/org/freedesktop/login1", "org.freedesktop.login1.Manager").await?;
     let mut signals = manager.receive_signal("PrepareForSleep").await?;
     while let Some(msg) = signals.next().await {
         let Ok(suspending) = msg.body().deserialize::<bool>() else { continue };
-        if events.send(PowerEvent::DisplayAsleep(suspending)).is_err() {
-            break;
-        }
+        if !publish(events, state, |state| state.suspend(suspending)) { break; }
     }
     Ok(())
 }
@@ -611,6 +680,63 @@ impl X11 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_resume_does_not_wake_a_display_that_is_still_off() {
+        let mut state = DisplayState::default();
+        assert_eq!(state.monitor(false), None, "the first value is the state");
+        assert_eq!(state.monitor(true), Some(true), "the monitor goes off");
+        assert_eq!(state.suspend(true), None, "already asleep");
+        // An automatic wake: the computer resumes, the monitor stays off.
+        assert_eq!(state.suspend(false), None);
+        assert!(state.asleep());
+        assert_eq!(state.monitor(false), Some(false), "the monitor comes back");
+        // Suspending with the monitor on, then resuming.
+        assert_eq!(state.suspend(true), Some(true));
+        assert_eq!(state.suspend(false), Some(false));
+    }
+
+    /// A guard dropped while the inhibitors are still being asked for takes nothing: the pending
+    /// calls are cancelled at once, not waited for (the screensaver's answer can take 5 s).
+    #[tokio::test]
+    async fn a_release_during_acquisition_cancels_it() {
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        drop(release);
+        let taken = tokio::time::timeout(Duration::from_secs(1), until_released(std::future::pending::<u8>(), released)).await;
+        assert_eq!(taken, Ok(None));
+        // Once taken, it is kept until the release and then handed back.
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let holding = tokio::spawn(until_released(std::future::ready(7u8), released));
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!holding.is_finished(), "released before it was asked to");
+        drop(release);
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), holding).await.unwrap().unwrap(), Some(7));
+    }
+
+    /// Two workers reporting at once: what the consumer sees last is what the state says.
+    #[test]
+    fn concurrent_reports_reach_the_consumer_in_the_order_the_state_changed() {
+        for _ in 0..200 {
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            let state = std::sync::Mutex::new(DisplayState::default());
+            publish(&tx, &state, |state| state.monitor(false));
+            std::thread::scope(|scope| {
+                scope.spawn(|| for i in 0..50 { publish(&tx, &state, |state| state.suspend(i % 2 == 0)); });
+                scope.spawn(|| for i in 0..50 { publish(&tx, &state, |state| state.monitor(i % 3 == 0)); });
+            });
+            let mut last = false;
+            while let Ok(PowerEvent::DisplayAsleep(asleep)) = rx.try_recv() { last = asleep; }
+            assert_eq!(last, state.lock().unwrap().asleep());
+        }
+    }
+
+    #[test]
+    fn without_a_monitor_report_suspend_alone_decides() {
+        let mut state = DisplayState::default();
+        assert_eq!(state.suspend(true), Some(true));
+        assert_eq!(state.suspend(false), Some(false));
+        assert_eq!(state.suspend(false), None);
+    }
+
     use super::*;
 
     /// Runs against whatever X server `DISPLAY` names, if any: it must not

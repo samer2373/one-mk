@@ -19,22 +19,69 @@ use std::sync::atomic::{AtomicU32, Ordering};
 const FILE: &str = "settings.toml";
 /// Held while settings are changed (see [`Settings::update`]).
 const LOCK_FILE: &str = "settings.toml.lock";
+/// A migration that happened in a load that was then saved (by whichever
+/// command came first) leaves one of these, so the one-time notice about it
+/// is still shown by the first `one-mk clipboard`, `status` or `doctor`.
+const FETCH_NOTICE_PENDING: &str = ".clipboard-fetch-update-pending";
+const FETCH_NOTICE_NOTICED: &str = ".clipboard-fetch-update-noticed";
+const HISTORY_NOTICE_PENDING: &str = ".clipboard-history-update-pending";
+const HISTORY_NOTICE_NOTICED: &str = ".clipboard-history-update-noticed";
 
-fn ignored_components(path: &serde_ignored::Path<'_>) -> Option<Vec<String>> {
+/// Where a save must write for `path`: the file itself, or the file a
+/// symlink at `path` points to (a settings file kept in a dotfiles repo),
+/// so the link survives the rename.
+pub(crate) fn write_target(path: &Path) -> PathBuf {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned()),
+        _ => path.to_owned(),
+    }
+}
+
+/// A step on the way to an ignored key: a table's key, or an array's index.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Step {
+    Key(String),
+    Index(usize),
+}
+
+fn ignored_components(path: &serde_ignored::Path<'_>) -> Option<Vec<Step>> {
     match path {
         serde_ignored::Path::Root => Some(Vec::new()),
         serde_ignored::Path::Map { parent, key } => {
             let mut components = ignored_components(parent)?;
-            components.push(key.clone());
+            components.push(Step::Key(key.clone()));
+            Some(components)
+        }
+        serde_ignored::Path::Seq { parent, index } => {
+            let mut components = ignored_components(parent)?;
+            components.push(Step::Index(*index));
             Some(components)
         }
         serde_ignored::Path::Some { parent }
         | serde_ignored::Path::NewtypeStruct { parent }
         | serde_ignored::Path::NewtypeVariant { parent } => ignored_components(parent),
-        serde_ignored::Path::Seq { .. } => None,
     }
 }
 
+/// Removes what `steps` names from `value` (a table's key, an array's element).
+fn remove_step(value: &mut toml::Value, steps: &[Step]) {
+    let Some((first, rest)) = steps.split_first() else { return };
+    match (first, value) {
+        (Step::Key(key), toml::Value::Table(table)) => {
+            if rest.is_empty() { table.remove(key); } else if let Some(inner) = table.get_mut(key) { remove_step(inner, rest); }
+        }
+        (Step::Index(index), toml::Value::Array(items)) => {
+            if let Some(inner) = items.get_mut(*index) && !rest.is_empty() { remove_step(inner, rest); }
+        }
+        _ => {}
+    }
+}
+
+/// What a newer one-mk wrote that this one doesn't know. Inside an array
+/// of tables (`[[input.keymap.rule]]`) there are no names to hang it on: each
+/// element with unknown fields becomes `{ index, known, extra }`, where
+/// `known` is the part of the element this version understood, so the
+/// extra fields are put back only on an element that is still the same.
 fn unknown_settings(source: &toml::Table, known: &toml::Table) -> toml::Table {
     let mut unknown = toml::Table::new();
     for (key, value) in source {
@@ -46,17 +93,87 @@ fn unknown_settings(source: &toml::Table, known: &toml::Table) -> toml::Table {
                 let extra = unknown_settings(table, schema);
                 if !extra.is_empty() { unknown.insert(key.clone(), toml::Value::Table(extra)); }
             },
+            Some(toml::Value::Array(schema)) => if let Some(items) = value.as_array() {
+                let mut kept = Vec::new();
+                for (index, (item, schema)) in items.iter().zip(schema).enumerate() {
+                    let (Some(item), Some(schema)) = (item.as_table(), schema.as_table()) else { continue };
+                    let extra = unknown_settings(item, schema);
+                    if extra.is_empty() { continue; }
+                    let mut element = toml::Table::new();
+                    element.insert("index".into(), toml::Value::Integer(index as i64));
+                    element.insert("known".into(), toml::Value::Table(schema.clone()));
+                    element.insert("extra".into(), toml::Value::Table(extra));
+                    kept.push(toml::Value::Table(element));
+                }
+                if !kept.is_empty() { unknown.insert(key.clone(), toml::Value::Array(kept)); }
+            },
             _ => {}
         }
     }
     unknown
 }
 
+/// Whether every value `known` has is in `target` too (`target` may have more).
+fn contains_known(target: &toml::Table, known: &toml::Table) -> bool {
+    known.iter().all(|(key, value)| match (target.get(key), value) {
+        (Some(toml::Value::Table(target)), toml::Value::Table(known)) => contains_known(target, known),
+        (Some(target), value) => target == value,
+        (None, _) => false,
+    })
+}
+
+/// Whether `element` is one of the `{ index, known, extra }` records
+/// `unknown_settings` makes for an element of an array of tables.
+fn is_element_record(element: &toml::Value) -> bool {
+    element.as_table().is_some_and(|table| {
+        table.get("index").is_some_and(toml::Value::is_integer)
+            && table.get("known").is_some_and(toml::Value::is_table)
+            && table.get("extra").is_some_and(toml::Value::is_table)
+    })
+}
+
+/// `value` as it is written into a place the file no longer has: the
+/// element records mean nothing without the array they point into (the
+/// rule they were kept for is gone), so they are left out, and the tables
+/// that held only them. `None` when nothing is left.
+fn without_element_records(value: &toml::Value) -> Option<toml::Value> {
+    match value {
+        toml::Value::Array(items) if !items.is_empty() && items.iter().all(is_element_record) => None,
+        toml::Value::Table(table) => {
+            let kept: toml::Table = table.iter().filter_map(|(key, value)| Some((key.clone(), without_element_records(value)?))).collect();
+            if kept.is_empty() && !table.is_empty() { None } else { Some(toml::Value::Table(kept)) }
+        }
+        other => Some(other.clone()),
+    }
+}
+
 fn merge_unknown(target: &mut toml::Table, unknown: &toml::Table) {
     for (key, value) in unknown {
         match (target.get_mut(key), value) {
             (Some(toml::Value::Table(table)), toml::Value::Table(extra)) => merge_unknown(table, extra),
-            (None, _) => { target.insert(key.clone(), value.clone()); }
+            (Some(toml::Value::Array(items)), toml::Value::Array(elements)) => {
+                let mut taken = vec![false; items.len()];
+                for element in elements.iter().filter_map(toml::Value::as_table) {
+                    let (Some(index), Some(known), Some(extra)) = (
+                        element.get("index").and_then(toml::Value::as_integer).and_then(|index| usize::try_from(index).ok()),
+                        element.get("known").and_then(toml::Value::as_table),
+                        element.get("extra").and_then(toml::Value::as_table),
+                    ) else { continue };
+                    // Onto the element the fields were written in (where it
+                    // was, or wherever it moved to): one that was changed or
+                    // removed since takes them along rather than lend them
+                    // to another.
+                    let same = |at: usize| !taken[at] && matches!(&items[at], toml::Value::Table(item) if contains_known(item, known));
+                    let Some(at) = Some(index).filter(|at| *at < items.len() && same(*at)).or_else(|| (0..items.len()).find(|at| same(*at))) else { continue };
+                    taken[at] = true;
+                    if let toml::Value::Table(item) = &mut items[at] {
+                        merge_unknown(item, extra);
+                    }
+                }
+            }
+            (None, _) => {
+                if let Some(value) = without_element_records(value) { target.insert(key.clone(), value); }
+            }
             _ => {}
         }
     }
@@ -715,7 +832,7 @@ fn create_settings_dir(dir: &Path) -> Result<()> {
 /// Says a thing about the settings file on stderr, once per process: `doctor`
 /// and the daemon read the file many times, and the same line for each read
 /// buried what else they print (and in a daemon, its log).
-fn say_once(line: String) {
+pub(crate) fn say_once(line: String) {
     static SAID: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     let mut said = SAID.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if !said.contains(&line) && said.len() < 64 {
@@ -773,8 +890,8 @@ impl Settings {
                     for component in section.split('.') { value = value.and_then(|value| value.get(component)); }
                     if let Some(table) = value.and_then(toml::Value::as_table) {
                         for key in table.keys().filter(|key| !allowed.contains(&key.as_str())) {
-                            let mut components: Vec<String> = section.split('.').map(str::to_owned).collect();
-                            components.push(key.clone());
+                            let mut components: Vec<Step> = section.split('.').map(|part| Step::Key(part.to_owned())).collect();
+                            components.push(Step::Key(key.clone()));
                             ignored.push((format!("{section}.{key}"), Some(components)));
                         }
                     }
@@ -785,12 +902,7 @@ impl Settings {
                 for (key, components) in ignored {
                     say_once(format!("one-mk: unknown setting {key:?} in {}; not applied", path.display()));
                     let Some(components) = components else { continue };
-                    let mut table = known.as_table_mut();
-                    for (index, component) in components.iter().enumerate() {
-                        let Some(current) = table else { break };
-                        if index + 1 == components.len() { current.remove(component); break; }
-                        table = current.get_mut(component).and_then(toml::Value::as_table_mut);
-                    }
+                    remove_step(&mut known, &components);
                 }
                 settings.unknown = unknown_settings(fields.as_table().expect("settings table"), known.as_table().expect("settings table"));
                 // An upgrade is a file an older one-mk saved (it carries
@@ -799,13 +911,22 @@ impl Settings {
                 let saved_by_one_mk = fields.get("settings_version").is_some() || fields.get("hotkeys").is_some();
                 settings.shortcut_upgrade = (saved_by_one_mk && fields.get("hotkeys").is_none_or(|keys| keys.get("broadcast").is_none() || keys.get("fetch_clipboard").is_none()))
                     || dir.join(".wave5-shortcuts-pending").exists();
-                if fields.get("clipboard").and_then(|clipboard| clipboard.get("history_max")).is_none() {
-                    settings.clipboard.history_notice = Some(dir.join(".clipboard-history-update-noticed"));
+                // The notices belong to an install that was upgraded: a file
+                // an older one-mk saved. One that only holds what the window
+                // wrote (`[window] appearance`) is a new install's. A save
+                // that came before anyone looked leaves a marker (see `save`)
+                // so the notice is still there.
+                let history_unset = fields.get("clipboard").and_then(|clipboard| clipboard.get("history_max")).is_none();
+                if (history_unset && (saved_by_one_mk || fields.get("clipboard").is_some())) || dir.join(HISTORY_NOTICE_PENDING).exists() {
+                    settings.clipboard.history_notice = Some(dir.join(HISTORY_NOTICE_NOTICED));
                 }
                 if settings.settings_version < 2 && settings.clipboard.allow_pull {
                     settings.clipboard.allow_pull = false;
                     settings.clipboard.fetch_migrated = true;
-                    settings.clipboard.fetch_notice = Some(dir.join(".clipboard-fetch-update-noticed"));
+                    settings.clipboard.fetch_notice = Some(dir.join(FETCH_NOTICE_NOTICED));
+                } else if dir.join(FETCH_NOTICE_PENDING).exists() {
+                    settings.clipboard.fetch_migrated = true;
+                    settings.clipboard.fetch_notice = Some(dir.join(FETCH_NOTICE_NOTICED));
                 }
                 settings.problems = problems;
                 // Until version 3 a `true` here was usually the default written
@@ -853,7 +974,10 @@ impl Settings {
     pub fn save(&self, dir: &Path) -> Result<()> {
         static N: AtomicU32 = AtomicU32::new(0);
         create_settings_dir(dir)?;
-        let tmp = dir.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        // Through a symlink the file it points to is replaced, not the link.
+        let target = write_target(&path(dir));
+        let folder = target.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(dir).to_owned();
+        let tmp = folder.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         let write = || -> Result<()> {
             use std::io::Write;
             let mut options = std::fs::OpenOptions::new();
@@ -870,8 +994,7 @@ impl Settings {
             // On disk before it replaces the old file: a crash leaves one or the other.
             file.sync_all().with_context(|| format!("flushing {}", tmp.display()))?;
             drop(file);
-            if self.shortcut_upgrade && !dir.join(".wave5-shortcuts-noticed").exists() {
-                let pending = dir.join(".wave5-shortcuts-pending");
+            let leave_marker = |name: &str| {
                 let mut marker = std::fs::OpenOptions::new();
                 marker.write(true).create_new(true);
                 #[cfg(unix)]
@@ -879,15 +1002,28 @@ impl Settings {
                     use std::os::unix::fs::OpenOptionsExt;
                     marker.mode(0o600);
                 }
-                match marker.open(&pending) {
+                marker.open(dir.join(name))
+            };
+            if self.shortcut_upgrade && !dir.join(".wave5-shortcuts-noticed").exists() {
+                let pending = dir.join(".wave5-shortcuts-pending");
+                match leave_marker(".wave5-shortcuts-pending") {
                     Ok(_) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(error) => return Err(error).with_context(|| format!("preserving shortcut upgrade notice in {}", pending.display())),
                 }
             }
-            std::fs::rename(&tmp, path(dir)).with_context(|| format!("saving {}", path(dir).display()))?;
+            // The clipboard notices live in the load that did the migration:
+            // once this file is saved, the next load no longer sees the
+            // reason. Best effort, like showing them.
+            if self.clipboard.fetch_migrated && !dir.join(FETCH_NOTICE_NOTICED).exists() {
+                let _ = leave_marker(FETCH_NOTICE_PENDING);
+            }
+            if self.clipboard.history_notice.is_some() && self.clipboard.history_max == 0 && !dir.join(HISTORY_NOTICE_NOTICED).exists() {
+                let _ = leave_marker(HISTORY_NOTICE_PENDING);
+            }
+            std::fs::rename(&tmp, &target).with_context(|| format!("saving {}", target.display()))?;
             // And the folder, so the new name survives a crash too.
-            one_mk_net::sync_dir(dir)
+            one_mk_net::sync_dir(&folder)
         };
         write().inspect_err(|_| {
             let _ = std::fs::remove_file(&tmp);
@@ -917,6 +1053,59 @@ impl Settings {
         settings.save(dir)?;
         Ok(out)
     }
+}
+
+impl Settings {
+    /// Switches the keyboard rules on this computer off in the file, the
+    /// emergency exit (`Event::LocalRulesOff`): unlike [`Settings::update`] it
+    /// does not need the rest of the file to read. The daemon runs on a
+    /// lenient read that tolerates a typo anywhere, so a file it works with
+    /// can be one the strict read refuses; the flag must still be saved, or
+    /// the next reload grabs the keyboard again. Only this key is changed;
+    /// everything else stays as it is.
+    pub fn local_rules_off_within(dir: &Path, wait: std::time::Duration) -> Result<()> {
+        create_settings_dir(dir)?;
+        let _lock = one_mk_net::lock_file(&dir.join(LOCK_FILE), wait)?;
+        let file = path(dir);
+        let mut table = match crate::hooks::read_settings(&file) {
+            Ok((text, _)) => toml::from_str::<toml::Table>(&text).with_context(|| format!("reading {} (it is not TOML; nothing was changed)", file.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
+        };
+        let Some(input) = table.entry("input").or_insert_with(|| toml::Value::Table(toml::Table::new())).as_table_mut() else {
+            bail!("[input] in {} is not a table; fix it, then try again", file.display());
+        };
+        input.insert("local_rules".into(), toml::Value::Boolean(false));
+        replace_file(dir, toml::to_string_pretty(&table)?.as_bytes())
+    }
+}
+
+/// Replaces `settings.toml` (or what a symlink at its place points to) with
+/// `bytes` through a file of its own, on disk before it is renamed over it.
+fn replace_file(dir: &Path, bytes: &[u8]) -> Result<()> {
+    static N: AtomicU32 = AtomicU32::new(0);
+    use std::io::Write;
+    let target = write_target(&path(dir));
+    let folder = target.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(dir).to_owned();
+    let tmp = folder.join(format!("{FILE}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    let write = || -> Result<()> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        file.write_all(bytes).with_context(|| format!("writing {}", tmp.display()))?;
+        file.sync_all().with_context(|| format!("flushing {}", tmp.display()))?;
+        drop(file);
+        std::fs::rename(&tmp, &target).with_context(|| format!("saving {}", target.display()))?;
+        one_mk_net::sync_dir(&folder)
+    };
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// A count from the command line (`--corner`, `--dwell`): a negative one
@@ -1080,7 +1269,9 @@ impl EdgeArgs {
 
 /// Asks a running daemon to apply the saved settings.
 pub(crate) async fn apply(dir: &Path) -> Result<()> {
-    if control::request(dir, Request::Reload).await.map_err(control::NotAnswering::saved)?.is_some() {
+    let reply = control::request(dir, Request::Reload).await.map_err(control::NotAnswering::saved)?;
+    if let Some(reply) = &reply { crate::manage::reload_confirmed(reply)?; }
+    if reply.is_some() {
         println!("Applied right away.");
     } else {
         println!("one-mk is not running; this takes effect the next time it starts.");
@@ -1415,6 +1606,130 @@ draw_when_no_mouse = "auto"
         assert!(Settings::load(&dir).unwrap().clipboard.allow_pull);
         assert!(!toml::to_string(&ClipSettings::default()).unwrap().contains("allow_pull"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Fields a newer one-mk wrote inside a rule survive an unrelated edit
+    /// of an older one, on the rule they were written in.
+    #[test]
+    fn unknown_fields_inside_rule_arrays_survive_unrelated_edits() {
+        let dir = temp_dir("future-rule-field");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[[input.keymap.rule]]\nfrom = \"capslock\"\nto = \"esc\"\n\n[[input.keymap.rule]]\nfrom = \"f1\"\nto = \"f2\"\nfuture_field = \"x\"\n\n[[input.pointer]]\nspeed = 1.5\nnewer = 3\n").unwrap();
+        let rules = |dir: &Path| -> Vec<toml::Value> {
+            let saved: toml::Table = toml::from_str(&std::fs::read_to_string(dir.join(FILE)).unwrap()).unwrap();
+            saved["input"]["keymap"]["rule"].as_array().unwrap().clone()
+        };
+        Settings::update(&dir, |s| { s.lock_sync = true; Ok(()) }).unwrap();
+        let saved = rules(&dir);
+        assert_eq!(saved.len(), 2);
+        assert_eq!(saved[1]["future_field"].as_str(), Some("x"));
+        assert!(saved[0].get("future_field").is_none());
+        let pointer: toml::Table = toml::from_str(&std::fs::read_to_string(dir.join(FILE)).unwrap()).unwrap();
+        assert_eq!(pointer["input"]["pointer"][0]["newer"].as_integer(), Some(3));
+        // Another rule removed: the field stays with its own rule.
+        Settings::update(&dir, |s| { s.input.keymap.rule.remove(0); Ok(()) }).unwrap();
+        let saved = rules(&dir);
+        assert_eq!((saved.len(), saved[0]["from"].as_str(), saved[0]["future_field"].as_str()), (1, Some("f1"), Some("x")));
+        // Its own rule changed: what the old version cannot judge is dropped.
+        Settings::update(&dir, |s| { s.input.keymap.rule[0].to = Some(crate::tuning::To::One("f3".into())); Ok(()) }).unwrap();
+        assert!(rules(&dir)[0].get("future_field").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Clearing the only rule that has a field from a newer one-mk leaves no
+    /// trace of the bookkeeping kept for it: the file stays valid.
+    #[test]
+    fn removing_the_last_rule_with_an_unknown_field_leaves_no_metadata() {
+        let dir = temp_dir("future-rule-cleared");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[[input.keymap.rule]]\nfrom = \"f1\"\nto = \"f2\"\nfuture_field = \"x\"\n").unwrap();
+        Settings::update(&dir, |s| { s.input.keymap.rule.clear(); Ok(()) }).unwrap();
+        let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        assert!(!text.contains("known") && !text.contains("extra"), "{text}");
+        let loaded = Settings::load(&dir).unwrap();
+        assert!(loaded.input.keymap.rule.is_empty() && loaded.problems.is_empty(), "{:?}", loaded.problems);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A settings.toml that only holds what the window wrote is a new
+    /// install's: no "upgraded install" privacy notice.
+    #[test]
+    fn a_window_only_settings_file_is_not_an_upgrade() {
+        let dir = temp_dir("window-only");
+        one_mk_ctl::settings_file::set_window_appearance(&dir, "dark").unwrap();
+        let clipboard = Settings::load(&dir).unwrap().clipboard;
+        assert!(clipboard.history_notice.is_none());
+        assert!(!clipboard.summary().contains("privacy update"));
+        // A file an older one-mk saved still gets it.
+        std::fs::write(dir.join(FILE), "settings_version = 2\nnotify_files = true\n").unwrap();
+        assert!(Settings::load(&dir).unwrap().clipboard.summary().contains("privacy update"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Another command saving first does not lose the one-time notices of
+    /// the migrations it applied silently.
+    #[test]
+    fn upgrade_notices_survive_a_save_by_another_command() {
+        let dir = temp_dir("notices-after-save");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[clipboard]\nallow_pull = true\n").unwrap();
+        Settings::update(&dir, |s| { s.lock_sync = true; Ok(()) }).unwrap();
+        let reloaded = Settings::load(&dir).unwrap();
+        assert!(!reloaded.clipboard.allow_pull);
+        let summary = reloaded.clipboard.summary();
+        assert!(summary.contains("clipboard fetching was switched off by this update"), "{summary}");
+        assert!(summary.contains("privacy update:"), "{summary}");
+        // Said once, then never again, whatever saves in between.
+        Settings::update(&dir, |s| { s.lock_sync = false; Ok(()) }).unwrap();
+        let again = Settings::load(&dir).unwrap().clipboard.summary();
+        assert!(!again.contains("switched off") && !again.contains("privacy update"), "{again}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Saving through a symlinked settings.toml (a dotfiles manager) writes
+    /// the file it points to and leaves the link.
+    #[cfg(unix)]
+    #[test]
+    fn saving_keeps_a_symlinked_settings_file_a_symlink() {
+        let dir = temp_dir("save-through-symlink");
+        let dotfiles = temp_dir("save-through-symlink-target");
+        let real = dotfiles.join("one-mk-settings.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dotfiles).unwrap();
+        std::fs::write(&real, "notify_files = false\n").unwrap();
+        std::os::unix::fs::symlink(&real, dir.join(FILE)).unwrap();
+        Settings::update(&dir, |s| { s.lock_sync = true; Ok(()) }).unwrap();
+        assert!(std::fs::symlink_metadata(dir.join(FILE)).unwrap().file_type().is_symlink(), "the link was replaced by a file");
+        let saved: toml::Table = toml::from_str(&std::fs::read_to_string(&real).unwrap()).unwrap();
+        assert_eq!(saved["lock_sync"].as_bool(), Some(true));
+        assert_eq!(saved["notify_files"].as_bool(), Some(false));
+        assert!(std::fs::read_dir(&dotfiles).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().ends_with(".tmp")));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dotfiles);
+    }
+
+    /// The emergency "local rules off" is saved even when the file has a
+    /// mistake the strict read refuses (the daemon reads around it).
+    #[test]
+    fn local_rules_off_is_saved_despite_an_unrelated_typo() {
+        let dir = temp_dir("local-rules-off");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FILE), "[input]\nlocal_rules = true\n\n[edge]\nwrap = \"sideways\"\n\n[clipboard]\nmax_mb = 5\n").unwrap();
+        assert!(Settings::load(&dir).is_err(), "the strict read refuses this file");
+        assert!(Settings::load_lenient(&dir).unwrap().input.local_rules);
+        let wait = std::time::Duration::from_secs(2);
+        assert!(Settings::update_within(&dir, wait, |s| { s.input.local_rules = false; Ok(()) }).is_err());
+        Settings::local_rules_off_within(&dir, wait).unwrap();
+        let after = Settings::load_lenient(&dir).unwrap();
+        assert!(!after.input.local_rules, "the next reload does not grab the keyboard again");
+        assert_eq!(after.clipboard.max_mb, 5, "everything else is as it was");
+        let text = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        assert!(text.contains("sideways"), "{text}");
+        // A file that is not TOML at all is left alone.
+        std::fs::write(dir.join(FILE), "this is = = not toml").unwrap();
+        assert!(Settings::local_rules_off_within(&dir, wait).is_err());
+        assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), "this is = = not toml");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]

@@ -248,6 +248,13 @@ const fn rgba(hex: u32, alpha: f32) -> Color32 {
 }
 
 impl Palette {
+    /// The label of a resting, enabled choice in a segmented control: a touch
+    /// darker than `ink2` (which is 4.45:1 on the light track, just under the
+    /// 4.5:1 of text), still quieter than the chosen one.
+    pub fn segment_ink(&self) -> Color32 {
+        mix(self.ink2, self.ink, 0.15)
+    }
+
     /// Daylight: warm paper, white surfaces, ink text, cobalt.
     pub fn light() -> Palette {
         let (bg, surface, surface2, ink, ink2, ink3) = (rgb(0xF4F3F0), rgb(0xFFFFFF), rgb(0xEFEEEA), rgb(0x16171A), rgb(0x6B6D73), rgb(0x8E9096));
@@ -501,16 +508,64 @@ pub struct Themer {
     shown: Option<Theme>,
     from: Option<Palette>,
     since: f64,
-    /// Linux: the desktop's colour scheme, read at start and whenever the
-    /// window comes to the front (winit doesn't report it there).
+    /// Linux: the desktop's colour scheme, read at start, whenever the
+    /// window comes to the front and whenever the desktop says it changed
+    /// (winit doesn't report it there).
     desktop: Arc<std::sync::Mutex<Option<Theme>>>,
     focused: bool,
+    /// Linux: the `gsettings monitor` that tells of changes is running; its
+    /// stdin, which ends it when this (or the whole app) goes.
+    watching: Option<Option<std::process::ChildStdin>>,
 }
 
 impl Default for Themer {
     fn default() -> Self {
-        Themer { shown: None, from: None, since: 0.0, desktop: Arc::default(), focused: false }
+        Themer { shown: None, from: None, since: 0.0, desktop: Arc::default(), focused: false, watching: None }
     }
+}
+
+/// The theme a `color-scheme` value or `gsettings monitor` line names
+/// (`'prefer-dark'`, `'default'`, `color-scheme: 'prefer-light'`).
+fn desktop_theme(said: &str) -> Option<Theme> {
+    if said.contains("dark") {
+        Some(Theme::Dark)
+    } else if said.contains("light") || said.contains("default") {
+        Some(Theme::Light)
+    } else {
+        None
+    }
+}
+
+/// `gsettings monitor` for the colour scheme, ended by its parent: the
+/// shell holds it until its stdin closes (we close it, or the app goes,
+/// however it goes), then stops it, so none is left behind.
+fn follow_command() -> std::process::Command {
+    let mut command = std::process::Command::new("sh");
+    command.args(["-c", "gsettings monitor org.gnome.desktop.interface color-scheme & monitor=$!; cat >/dev/null; kill $monitor"]);
+    command
+}
+
+/// Runs `command` and reads the desktop's theme from each line it prints,
+/// asking for a new frame when it changes. The returned stdin keeps
+/// `command` going: dropping it (with the process, or the Themer) closes it.
+/// `None` when it can't run (the first reading and the one at focus remain).
+fn watch_desktop(mut command: std::process::Command, slot: Arc<std::sync::Mutex<Option<Theme>>>, ctx: egui::Context) -> Option<std::process::ChildStdin> {
+    use std::io::BufRead;
+    use std::process::Stdio;
+    let mut child = command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let (stdin, stdout) = (child.stdin.take()?, child.stdout.take()?);
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            let Some(theme) = desktop_theme(&line) else { continue };
+            let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+            if *slot != Some(theme) {
+                *slot = Some(theme);
+                ctx.request_repaint();
+            }
+        }
+        let _ = child.wait();
+    });
+    Some(stdin)
 }
 
 /// How long the theme cross-fade takes.
@@ -525,6 +580,10 @@ impl Themer {
             return appearance.theme(None);
         }
         let focused = ctx.input(|i| i.focused);
+        if cfg!(target_os = "linux") && !cfg!(test) && self.watching.is_none() {
+            // Asked once, and the desktop tells of every change after that: no polling.
+            self.watching = Some(watch_desktop(follow_command(), self.desktop.clone(), ctx.clone()));
+        }
         if cfg!(target_os = "linux") && (self.shown.is_none() || (focused && !self.focused)) {
             self.ask_desktop(ctx);
         }
@@ -538,10 +597,7 @@ impl Themer {
         let (slot, ctx) = (self.desktop.clone(), ctx.clone());
         std::thread::spawn(move || {
             let read = std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.interface", "color-scheme"]).output();
-            let theme = read.ok().filter(|o| o.status.success()).and_then(|o| {
-                let said = String::from_utf8_lossy(&o.stdout);
-                if said.contains("dark") { Some(Theme::Dark) } else if said.contains("light") || said.contains("default") { Some(Theme::Light) } else { None }
-            });
+            let theme = read.ok().filter(|o| o.status.success()).and_then(|o| desktop_theme(&String::from_utf8_lossy(&o.stdout)));
             let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
             if *slot != theme {
                 *slot = theme;
@@ -768,7 +824,8 @@ pub fn fit(painter: &Painter, text: &str, font: &FontId, max_w: f32) -> String {
         if width(&cut(mid)) <= max_w { lo = mid } else { hi = mid - 1 }
     }
     // Never end on a combining mark that lost its letter.
-    while lo > 0 && is_combining(chars[lo]) {
+    // (`lo` is `chars.len()` when the whole text fits once its trailing spaces are cut.)
+    while lo > 0 && chars.get(lo).is_some_and(|c| is_combining(*c)) {
         lo -= 1;
     }
     cut(lo)
@@ -1112,6 +1169,43 @@ fn parse_match(text: &str) -> Option<Found> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_desktops_colour_scheme_is_read_from_its_words() {
+        assert_eq!(desktop_theme("'prefer-dark'\n"), Some(Theme::Dark));
+        assert_eq!(desktop_theme("color-scheme: 'prefer-dark'"), Some(Theme::Dark));
+        assert_eq!(desktop_theme("color-scheme: 'prefer-light'"), Some(Theme::Light));
+        assert_eq!(desktop_theme("'default'"), Some(Theme::Light));
+        assert_eq!(desktop_theme("color-scheme: 'sepia'"), None);
+        assert_eq!(desktop_theme(""), None);
+    }
+
+    /// A theme change the desktop announces is seen without the window
+    /// changing focus, and the watcher ends when it is let go.
+    #[cfg(unix)]
+    #[test]
+    fn a_desktop_theme_change_is_followed_while_the_window_keeps_focus() {
+        let slot: Arc<std::sync::Mutex<Option<Theme>>> = Arc::default();
+        let mut command = std::process::Command::new("sh");
+        // Says dark, then light, as `gsettings monitor` does at each change; ends when its stdin does.
+        command.args(["-c", "echo \"color-scheme: 'prefer-dark'\"; sleep 0.2; echo \"color-scheme: 'prefer-light'\"; cat >/dev/null"]);
+        let stdin = watch_desktop(command, slot.clone(), egui::Context::default());
+        assert!(stdin.is_some(), "the watcher starts");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (mut saw_dark, mut saw_light) = (false, false);
+        while std::time::Instant::now() < deadline && !saw_light {
+            match *slot.lock().unwrap() {
+                Some(Theme::Dark) => saw_dark = true,
+                Some(Theme::Light) => saw_light = saw_dark,
+                None => {}
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(saw_dark && saw_light, "dark, then light");
+        drop(stdin);
+        // One that can't run leaves the first reading and the focus one.
+        assert!(watch_desktop(std::process::Command::new("/nonexistent/gsettings"), slot, egui::Context::default()).is_none());
+    }
+
     fn cjk() -> Found {
         Found { path: "/fonts/cjk.ttc".into(), index: 2, covers: Some(vec![(0x20, 0x7e), (0x4e00, 0x9fff)]) }
     }
@@ -1269,6 +1363,7 @@ mod tests {
                 ("ink2 on an overlay", p.ink2, p.raised),
                 ("ink2 on the chosen tab", p.ink2, p.tab_on),
                 ("ink on the chosen segment", p.ink, p.seg_on),
+                ("a resting segment's label on the track", p.segment_ink(), p.surface2),
                 ("ink on a hovered quiet button", p.ink, p.surface2_hover),
                 ("accent text on accent soft", p.accent_text, p.accent_soft),
 
@@ -1293,6 +1388,28 @@ mod tests {
                 assert!(c >= 3.0, "{:?}: {what}: {c:.2}:1", p.theme);
             }
         }
+    }
+
+    /// A title that ends in spaces is as wide with them as the painter measures
+    /// it, but cut to a word and an ellipsis it fits: that cut is the whole
+    /// text, and nothing may be read past its end.
+    #[test]
+    fn fitting_a_title_that_ends_in_spaces_never_reads_past_it() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let painter = ui.painter();
+            let font = regular(12.0);
+            let width = |s: &str| painter.layout_no_wrap(s.to_owned(), font.clone(), Color32::PLACEHOLDER).size().x;
+            let title = format!("Holiday{}", " ".repeat(57));
+            let (short, full) = (width("Holiday…"), width(&title));
+            assert!(short < full, "trailing spaces count in the width: {short} {full}");
+            let room = (short + full) / 2.0;
+            assert_eq!(fit(painter, &title, &font, room), "Holiday…");
+            assert_eq!(fit(painter, "plain", &font, 500.0), "plain");
+            assert_eq!(fit(painter, "a longer title than the room", &font, width("a lon…")), "a lon…");
+        });
+        out.textures_delta.clear();
     }
 
     #[test]

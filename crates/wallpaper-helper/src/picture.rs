@@ -111,6 +111,43 @@ pub(super) fn unrestored<Entry>(saved: Vec<Entry>, mut restore: impl FnMut(&Entr
     saved.into_iter().filter(|entry| !restore(entry)).collect()
 }
 
+/// What turning wallpaper off does with one monitor's saved original picture.
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Restore {
+    /// The picture on the monitor is one oneMK put there: put the original back.
+    Now,
+    /// The monitor was not changed by oneMK, or the user has picked another
+    /// picture since: that choice stays, and nothing is left to restore.
+    Leave,
+    /// oneMK's picture may still be there but the monitor can't be asked now
+    /// (disconnected): try again when it is back.
+    Later,
+}
+
+/// `applied` and `previous_applied` are the pictures oneMK set on each monitor
+/// (the latest, and the one before when that had replaced a oneMK picture);
+/// `current` is what the monitor shows now, `None` when it is not connected. A
+/// journal from before this was recorded has neither map and is restored as it
+/// always was, since ownership cannot be told.
+#[cfg(any(windows, test))]
+pub(super) fn restore_step(applied: &std::collections::BTreeMap<String, String>, previous_applied: &std::collections::BTreeMap<String, String>,
+    monitor: &str, current: Option<&str>) -> Restore {
+    let legacy = applied.is_empty() && previous_applied.is_empty();
+    if !legacy && !applied.contains_key(monitor) && !previous_applied.contains_key(monitor) { return Restore::Leave; }
+    let Some(current) = current else { return Restore::Later };
+    // Windows paths do not care about case.
+    let ours = [applied, previous_applied].iter().any(|owned| owned.get(monitor).is_some_and(|path| path.eq_ignore_ascii_case(current)));
+    if legacy || ours { Restore::Now } else { Restore::Leave }
+}
+
+/// Whether turning off should put the layout (fill, stretch...) back: only when oneMK still owns
+/// a picture on some monitor (one it put back now, or one it must try again for), since the
+/// layout is global and a picture chosen after ours is shown the way the user left it. A legacy
+/// journal reads as owned for every monitor, so it is restored as it always was.
+#[cfg(any(windows, test))]
+pub(super) fn owns_the_layout(steps: &[Restore]) -> bool { steps.iter().any(|step| *step != Restore::Leave) }
+
 #[cfg(any(target_os = "macos", windows, test))]
 pub(super) fn native_or_overlay<Prepared>(prepared: Result<Prepared>, apply: impl FnOnce(Prepared) -> Result<()>) -> Result<one_mk_wallpaper::picture::Mode> {
     use one_mk_wallpaper::picture::Mode;
@@ -393,9 +430,20 @@ fn slices(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<Vec<(
     Ok(files)
 }
 
+/// Whether a picture is shown by a window of ours (on a Wayland desktop that
+/// can host one) rather than through the desktop's own wallpaper settings.
+/// `available` is asked last. On a desktop with settings of its own (GNOME)
+/// the settings are the stable way and are used even when the oneMK video
+/// extension is enabled: that extension answers `available` for video, and a
+/// picture must not start needing its bridge.
+#[cfg(target_os = "linux")]
+fn overlay_picture(wayland: bool, settings_desktop: bool, available: impl FnOnce() -> bool) -> bool {
+    wayland && !settings_desktop && available()
+}
+
 pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<one_mk_wallpaper::picture::Mode> {
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() && one_mk_wallpaper::wayland::available().is_ok() {
+    if overlay_picture(std::env::var_os("WAYLAND_DISPLAY").is_some(), one_mk_wallpaper::picture::gnome_desktop(), || one_mk_wallpaper::wayland::available().is_ok()) {
         return Ok(one_mk_wallpaper::picture::Mode::Overlay);
     }
     std::fs::create_dir_all(root)?;
@@ -435,8 +483,18 @@ pub fn apply(plan: &Plan, computer: &str, path: &Path, root: &Path) -> Result<on
         let snapshot = root.join("previous.json");
         if !snapshot.exists() { atomic_write(&snapshot, &serde_json::to_vec(&gnome_snapshot(root)?)?)?; }
         let uri = file_uri(&path)?;
-        for key in ["picture-uri", "picture-uri-dark"] { settings("set", key, Some(&uri))?; }
-        settings("set", "picture-options", Some("spanned"))?;
+        // What the desktop shows now, so that a write that fails half way does not leave it half changed.
+        // A key still at the desktop's default is put back with a reset, so it keeps following it.
+        let before = GNOME_KEYS.into_iter().map(|key| {
+            let value = settings("get", key, None)?.trim().to_owned();
+            Ok((key, (default_setting(key).as_deref() != Some(value.as_str())).then_some(value)))
+        }).collect::<Result<Vec<_>>>()?;
+        let wanted = [("picture-uri", uri.as_str()), ("picture-uri-dark", uri.as_str()), ("picture-options", "spanned")];
+        // The new picture file stays (the next change or Off prunes what nothing refers to).
+        set_or_roll_back(&before, &wanted, &mut |key, value| match value {
+            Some(value) => settings("set", key, Some(value)),
+            None => settings("reset", key, None),
+        }.map(drop))?;
         atomic_write(&root.join("current.json"), &serde_json::to_vec(&[&path])?)?;
         prune_pictures(root, &[path])?;
         Ok(one_mk_wallpaper::picture::Mode::Native)
@@ -463,6 +521,25 @@ pub fn restore(root: &Path) -> Result<()> {
     for entry in std::fs::read_dir(root)? {
         let path = entry?.path();
         if path.extension().is_some_and(|extension| extension == "png") { let _ = std::fs::remove_file(path); }
+    }
+    Ok(())
+}
+
+/// Writes `wanted` in order; if one fails, the keys already written are put back to their value in
+/// `before` (`None`: the key had no value of the person's own, so it is reset) and the first failure
+/// is returned. A key that was not written is not touched, so it keeps following the desktop's
+/// default. (The snapshot for `Off` is kept either way.)
+#[cfg(target_os = "linux")]
+fn set_or_roll_back(before: &[(&str, Option<String>)], wanted: &[(&str, &str)], set: &mut impl FnMut(&str, Option<&str>) -> Result<()>) -> Result<()> {
+    let mut written = Vec::new();
+    for (key, value) in wanted {
+        if let Err(error) = set(key, Some(value)) {
+            for key in written.into_iter().rev() {
+                if let Some((_, value)) = before.iter().find(|(name, _)| *name == key) { let _ = set(key, value.as_deref()); }
+            }
+            return Err(error);
+        }
+        written.push(*key);
     }
     Ok(())
 }
@@ -530,6 +607,37 @@ mod tests {
         assert_eq!(native_or_overlay(Ok(()), |_| { writes.set(1); Ok(()) }).unwrap(), Mode::Native);
         assert_eq!(writes.get(), 1);
         assert!(native_or_overlay(Ok(()), |_| anyhow::bail!("OS write failed")).unwrap_err().to_string().contains("OS write failed"));
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_picture_write_that_fails_half_way_puts_the_desktop_back() {
+        // The dark key is at the desktop's default (no value of the person's own).
+        let before = [("picture-uri", Some("'file:///old.png'".to_owned())), ("picture-uri-dark", None), ("picture-options", Some("'zoom'".to_owned()))];
+        let wanted = [("picture-uri", "file:///new.png"), ("picture-uri-dark", "file:///new.png"), ("picture-options", "spanned")];
+        // What the desktop stores: `None` is "not set".
+        let stored = || -> std::collections::BTreeMap<String, Option<String>> { before.iter().map(|(key, value)| ((*key).to_owned(), value.clone())).collect() };
+        let mut desktop = stored();
+        let mut calls = Vec::new();
+        // The options key is locked: the other two were already written when it fails.
+        let error = set_or_roll_back(&before, &wanted, &mut |key, value| {
+            calls.push((key.to_owned(), value.is_some()));
+            anyhow::ensure!(key != "picture-options" || value.is_none(), "locked");
+            desktop.insert(key.to_owned(), value.map(str::to_owned));
+            Ok(())
+        }).unwrap_err();
+        assert_eq!(error.to_string(), "locked");
+        // Back as it was, and the formerly unset key is unset again, not pinned to its default.
+        assert_eq!(desktop, stored(), "{desktop:?}");
+        assert!(desktop["picture-uri-dark"].is_none());
+        // The light key is locked: nothing was written, so nothing is written back.
+        let mut touched = Vec::new();
+        let error = set_or_roll_back(&before, &wanted, &mut |key, _| { touched.push(key.to_owned()); anyhow::bail!("locked {key}") }).unwrap_err();
+        assert_eq!(error.to_string(), "locked picture-uri");
+        assert_eq!(touched, ["picture-uri"], "keys that never changed are left alone");
+        // Without a failure everything is written, in order.
+        let mut written = Vec::new();
+        set_or_roll_back(&before, &wanted, &mut |key, _| { written.push(key.to_owned()); Ok(()) }).unwrap();
+        assert_eq!(written, ["picture-uri", "picture-uri-dark", "picture-options"]);
     }
     #[test]
     fn macos_guard_refuses_opaque_dynamic_and_per_space_settings() {
@@ -755,5 +863,44 @@ mod tests {
         assert_eq!(slice.get_pixel(0, 0).0, [0, 0, 0, 255]);
         assert_eq!(slice.get_pixel(0, 1).0, [255, 0, 0, 255]);
         restore(&root.0).unwrap();
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnome_pictures_use_its_settings_even_with_the_video_extension_enabled() {
+        // GNOME Wayland with the extension: the video bridge answers `available`, the picture still goes native.
+        assert!(!overlay_picture(true, true, || panic!("not asked on a desktop with wallpaper settings")));
+        // Another layer-shell desktop: a window of ours, if it can host one.
+        assert!(overlay_picture(true, false, || true));
+        assert!(!overlay_picture(true, false, || false));
+        // X11 never uses it.
+        assert!(!overlay_picture(false, false, || panic!("not asked without Wayland")));
+    }
+    #[test]
+    fn turning_off_restores_only_pictures_one_mk_still_owns() {
+        use std::collections::BTreeMap;
+        let map = |entries: &[(&str, &str)]| entries.iter().map(|(monitor, path)| ((*monitor).to_owned(), (*path).to_owned())).collect::<BTreeMap<_, _>>();
+        let applied = map(&[("A", "C:\\cache\\a.png")]);
+        let earlier = map(&[("A", "C:\\cache\\old.png"), ("B", "C:\\cache\\b-old.png")]);
+        // Still the picture oneMK set (or the one before it): the original goes back.
+        assert_eq!(restore_step(&applied, &earlier, "A", Some("C:\\cache\\a.png")), Restore::Now);
+        assert_eq!(restore_step(&applied, &earlier, "A", Some("c:\\CACHE\\a.png")), Restore::Now);
+        assert_eq!(restore_step(&applied, &earlier, "A", Some("C:\\cache\\old.png")), Restore::Now);
+        // The user picked another picture afterwards: it stays.
+        assert_eq!(restore_step(&applied, &earlier, "A", Some("C:\\Users\\me\\new.jpg")), Restore::Leave);
+        // A monitor oneMK never changed keeps whatever it shows, connected or not.
+        assert_eq!(restore_step(&applied, &BTreeMap::new(), "C", Some("C:\\x.jpg")), Restore::Leave);
+        assert_eq!(restore_step(&applied, &BTreeMap::new(), "C", None), Restore::Leave);
+        // A disconnected monitor oneMK did change is retried when it returns.
+        assert_eq!(restore_step(&applied, &earlier, "A", None), Restore::Later);
+        // A journal without ownership records is restored as it always was.
+        assert_eq!(restore_step(&BTreeMap::new(), &BTreeMap::new(), "A", Some("C:\\anything.png")), Restore::Now);
+        assert_eq!(restore_step(&BTreeMap::new(), &BTreeMap::new(), "A", None), Restore::Later);
+    }
+    #[test]
+    fn the_layout_goes_back_only_while_one_mk_owns_a_picture() {
+        assert!(owns_the_layout(&[Restore::Now, Restore::Leave]));
+        assert!(owns_the_layout(&[Restore::Leave, Restore::Later]), "a disconnected monitor still has ours");
+        assert!(!owns_the_layout(&[Restore::Leave, Restore::Leave]), "the user chose the picture, and its layout");
+        assert!(!owns_the_layout(&[]));
     }
 }

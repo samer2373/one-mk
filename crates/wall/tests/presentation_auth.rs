@@ -275,6 +275,29 @@ fn repeated_refusals_end_the_session() {
 }
 
 #[test]
+fn an_empty_layout_is_inactive_not_a_fault() {
+    let mut publisher = publisher();
+    let mut session = Session::new(owner(), record(), RENDERER.into(), 1, Vec::new(), 0).unwrap();
+    let empty = publisher.plan(7, 1, &[], false).unwrap();
+    for round in 0..3 * auth::MAX_CONSECUTIVE_REFUSALS {
+        assert_eq!(deliver(&mut session, [round as u8; 32], true, 7, &empty), Outcome::Unchanged, "round {round}");
+    }
+    assert!(!session.active() && session.ended().is_none());
+    // Consent changes and owner loss are still noticed while there are no outputs.
+    assert_eq!(deliver(&mut session, [1; 32], true, 8, &empty), Outcome::Teardown(Teardown::Revoked));
+    let mut session = Session::new(owner(), record(), RENDERER.into(), 1, Vec::new(), 0).unwrap();
+    assert_eq!(deliver(&mut session, [2; 32], false, 7, &empty), Outcome::Teardown(Teardown::Revoked));
+    let mut session = Session::new(owner(), record(), RENDERER.into(), 1, Vec::new(), 0).unwrap();
+    assert_eq!(session.owner_lost(), Teardown::OwnerLost);
+    // When an output returns, a fresh plan is admitted as usual.
+    let mut session = Session::new(owner(), record(), RENDERER.into(), 1, Vec::new(), 0).unwrap();
+    assert_eq!(deliver(&mut session, [3; 32], true, 7, &empty), Outcome::Unchanged);
+    session.layout(2, monitors()).unwrap();
+    let fresh = publisher.plan(7, 2, &monitors(), false).unwrap();
+    assert!(matches!(deliver(&mut session, [4; 32], true, 7, &fresh), Outcome::Accepted { active: true, .. }));
+}
+
+#[test]
 fn layout_and_pause_changes_require_fresh_plans() {
     let mut publisher = publisher();
     let mut session = session();

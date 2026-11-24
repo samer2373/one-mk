@@ -110,7 +110,7 @@ impl Group {
             return Err("delegated cgroup root must already enable memory and pids controllers; no host controllers were changed".into());
         }
         if read_control(&parent, "cgroup.type")?.trim() != "domain" { return Err("cgroup root must be a domain".into()); }
-        if purpose == Purpose::Playback { remove_stale(&parent, purpose)?; }
+        remove_stale(&parent, purpose)?;
         let cpu = purpose == Purpose::Playback && controllers.split_whitespace().any(|entry| entry == "cpu");
         let name = std::ffi::CString::new(format!("{}{}-{}", purpose.prefix(), std::process::id(), NEXT_GROUP.fetch_add(1, Ordering::Relaxed))).map_err(|_| "invalid group name")?;
         if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {

@@ -7,7 +7,7 @@ use one_mk_proto::typing::LayoutDescriptor;
 use one_mk_proto::wallpaper::{self, Kind};
 use one_mk_proto::{
     Batch, ClipFormat, ClipHeader, Control, Datagram, DecodeError, FileMsg, MAX_SCREENS, PROTOCOL_VERSION, Pos, Rect,
-    Side, StreamKind, caps, os,
+    RelativeBase, Side, StreamKind, caps, os,
 };
 
 /// xorshift64*: deterministic, no dependencies.
@@ -112,7 +112,8 @@ fn catalogue() -> Vec<Control> {
         Control::Revoked { epoch: 2 },
         Control::IdleRevoked { epoch: 3 },
         Control::Caps(u32::MAX),
-        Control::PointerMode { epoch: 4, relative: true },
+        Control::PointerMode { epoch: 4, relative: true, base: None },
+        Control::PointerMode { epoch: 4, relative: true, base: Some(RelativeBase { seq: 9, sum: (-256, i32::MAX) }) },
         Control::Lock { id: 0, all: false },
         Control::Inhibit { epoch: 5, on: false },
         Control::Sleep { id: 1 },
@@ -181,7 +182,11 @@ fn random_control(rng: &mut Rng) -> Control {
             Control::Layout { side_of_you: Side::ALL[rng.below(4) as usize], version: rng.next(), offset, clear_offset }
         }
         14 => Control::Caps(rng.next() as u32),
-        15 => Control::PointerMode { epoch: rng.next() as u16, relative: rng.flag() },
+        15 => {
+            let relative = rng.flag();
+            let base = (relative && rng.flag()).then(|| RelativeBase { seq: rng.next() as u32, sum: (rng.next() as i32, rng.next() as i32) });
+            Control::PointerMode { epoch: rng.next() as u16, relative, base }
+        }
         16 => Control::Lock { id: rng.next(), all: rng.flag() },
         17 => Control::Focus { epoch: rng.next() as u16, fullscreen: rng.flag(), apps: Vec::new() },
         18 => Control::WatchFocus { epoch: rng.next() as u16, on: rng.flag(), app: rng.flag(), fullscreen: rng.flag() },
@@ -228,7 +233,7 @@ fn every_truncation_is_rejected_or_the_older_shorter_form() {
                 Err(_) => {}
                 Ok(shorter) => {
                     let tag = encoded[0];
-                    assert!(matches!(tag, 13 | 16 | 17 | 18), "{message:?} cut to {cut} bytes decoded as {shorter:?}");
+                    assert!(matches!(tag, 13 | 15 | 16 | 17 | 18), "{message:?} cut to {cut} bytes decoded as {shorter:?}");
                     // Never a message of another kind.
                     assert_eq!(
                         std::mem::discriminant(&shorter),
@@ -255,7 +260,11 @@ fn tails_after_a_fixed_message_are_ignored_but_typing_messages_are_strict() {
         // those bytes, so the result may legitimately differ; they must not panic.
         let optional_tail = matches!(
             message,
-            Control::Layout { .. } | Control::Lock { .. } | Control::Focus { .. } | Control::WatchFocus { .. }
+            Control::Layout { .. }
+                | Control::Lock { .. }
+                | Control::Focus { .. }
+                | Control::WatchFocus { .. }
+                | Control::PointerMode { .. }
         );
         match Control::decode(&long) {
             Ok(same) if !strict && !optional_tail => assert_eq!(same, message),

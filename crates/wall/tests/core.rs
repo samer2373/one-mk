@@ -90,6 +90,22 @@ fn bounded_slew_and_consistent_liar_limitation() {
 }
 
 #[test]
+fn uncertainty_includes_the_gap_to_the_offset_still_being_slewed_in() {
+    // Two honest clocks agree (true offset 0). The first burst came over an asymmetric
+    // path and says +40 ms; the second, clean burst says 0, but the map moves 5 ms per burst.
+    let mut estimator = Estimator::new(1, 1);
+    estimator.observe(&burst(100.0, 0.040, 0.0, 1, 0)).expect("asymmetric burst");
+    estimator.observe(&burst(110.0, 0.0, 0.0, 1, 8)).expect("clean burst");
+    let error = (estimator.coordinator_time(111.0).expect("map") - 111.0).abs();
+    assert!(error > 0.030, "the map is still far off: {error}");
+    let bound = estimator.uncertainty(111.0).expect("uncertainty");
+    assert!(bound >= error, "bound {bound} must cover the {error} s error");
+    // Once the map has slewed in, the bound is small again.
+    for step in 0..10 { estimator.observe(&burst(120.0 + step as f64 * 10.0, 0.0, 0.0, 1, 16 + step * 8)).expect("clean burst"); }
+    assert!(estimator.uncertainty(211.0).expect("uncertainty") < 0.005);
+}
+
+#[test]
 fn asymmetry_is_not_offset_identifiable() {
     let probes: Vec<_> = (0..8).map(|sequence| Probe { session: 1, generation: 1, sequence, t1: 100.0, t2: 102.010, t3: 102.010, t4: 100.010 }).collect();
     let mut estimator = Estimator::new(1, 1);

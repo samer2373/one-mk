@@ -74,9 +74,18 @@ impl App {
             }
         }
         let status = self.running_shared();
-        let dropped: Vec<PathBuf> = ui.input(|input| input.raw.dropped_files.iter().map(|file| file.path().to_path_buf()).collect());
+        // Not while a sheet or Search is up (it owns the window), and not what the
+        // window already took this frame from a page without the desk.
+        let dropped: Vec<PathBuf> = if self.drops_blocked() || self.drop_taken == Some(self.now) {
+            vec![]
+        } else {
+            ui.input(|input| input.raw.dropped_files.iter().map(|file| file.path().to_path_buf()).collect())
+        };
         let pointer = ui.input(|input| input.pointer.hover_pos());
         let hovering = ui.input(|input| !input.raw.hovered_files.is_empty());
+        if hovering {
+            self.drop_pos_fresh |= ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO);
+        }
         let mut drop_id = None;
         // Where the desk was drawn (when shown), and whether the pointer's
         // place over it is fresh (as the desk worked it out last frame).
@@ -152,7 +161,9 @@ impl App {
                         context.request_repaint();
                     });
                 }
-                if peer.online && pointer.is_some_and(|pointer| row.expand2(vec2(page_ui::CARD_PAD, 0.0)).contains(pointer)) {
+                // Only the part of the row the page shows, under a pointer that moved
+                // during the drag (some systems don't move it for a drag from another app).
+                if peer.online && fresh && pointer.is_some_and(|pointer| row.expand2(vec2(page_ui::CARD_PAD, 0.0)).intersect(ui.clip_rect()).contains(pointer)) {
                     if hovering {
                         ui.painter().rect_stroke(row.expand2(vec2(page_ui::CARD_PAD - 4.0, -3.0)), CornerRadius::same(R_INNER), Stroke::new(2.0, pal().accent), StrokeKind::Inside);
                     }
@@ -216,6 +227,9 @@ impl App {
                 FilesDrop::Desk(p) => self.drop_files(dropped, Some(p), self.now),
                 FilesDrop::Ask => self.drop_files(dropped, None, self.now),
             }
+        }
+        if !hovering {
+            self.drop_pos_fresh = false;
         }
     }
 

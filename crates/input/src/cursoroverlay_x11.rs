@@ -21,19 +21,35 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::rust_connection::RustConnection;
 
+/// How long the X server may take to set the pointer window up.
+const OPEN_WITHIN: std::time::Duration = std::time::Duration::from_millis(1000);
+
 pub(crate) struct X11 {
     /// `None`: `$DISPLAY`.
     display: Option<String>,
+    /// A thread is still setting a window up. A server that never answers keeps it blocked, so
+    /// at most one is ever started: later tries fail at once instead of piling up threads and
+    /// connections (and each waiting out `OPEN_WITHIN` under the controller lock).
+    opening: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Clears `X11::opening` when the setup thread ends, however it ends.
+struct Opening(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for Opening {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl X11 {
     pub(crate) fn from_env() -> Self {
-        X11 { display: None }
+        X11 { display: None, opening: Default::default() }
     }
 
     #[cfg(test)]
     fn on(display: &str) -> Self {
-        X11 { display: Some(display.to_owned()) }
+        X11 { display: Some(display.to_owned()), opening: Default::default() }
     }
 }
 
@@ -42,8 +58,31 @@ impl Platform for X11 {
         Probe { pointing_device: None, os_cursor: OsCursor::Shown }
     }
 
+    /// Setting the window up is a number of round trips to the X server,
+    /// and the daemon calls this while holding its controller lock: a server
+    /// that stops answering must cost a failed overlay, not the event loop.
+    /// The opening runs on a thread of its own and is given up after
+    /// `OPEN_WITHIN`; a window that opens later is closed again there.
     fn create(&mut self, at: Pos) -> Result<Box<dyn Overlay>> {
-        Ok(Box::new(Window::open(self.display.as_deref(), at)?))
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.opening.swap(true, SeqCst) {
+            anyhow::bail!("the X server has not answered the last try to set the pointer window up");
+        }
+        let display = self.display.clone();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let opening = Opening(self.opening.clone());
+        std::thread::Builder::new()
+            .name("one-mk-x11-overlay".into())
+            .spawn(move || {
+                let _opening = opening;
+                let _ = tx.send(Window::open(display.as_deref(), at));
+            })
+            // The closure, and the guard in it, are dropped when the spawn fails.
+            .context("can't start the pointer window thread")?;
+        match rx.recv_timeout(OPEN_WITHIN) {
+            Ok(window) => Ok(Box::new(window?)),
+            Err(_) => anyhow::bail!("the X server did not answer within {OPEN_WITHIN:?}"),
+        }
     }
 }
 
@@ -223,6 +262,49 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("timed out");
+    }
+
+    #[test]
+    fn an_unresponsive_x_server_does_not_block_creating_the_overlay() {
+        use std::os::unix::net::UnixListener;
+        let dir = std::path::Path::new("/tmp/.X11-unix");
+        if !dir.is_dir() {
+            eprintln!("no /tmp/.X11-unix: skipping");
+            return;
+        }
+        let number = 30000 + std::process::id() % 20000;
+        let socket = dir.join(format!("X{number}"));
+        let Ok(listener) = UnixListener::bind(&socket) else {
+            eprintln!("cannot make an X socket: skipping");
+            return;
+        };
+        // Accepts and never answers the connection setup.
+        let held_connections = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = held_connections.clone();
+        let held = std::thread::spawn(move || {
+            let mut open = Vec::new();
+            listener.set_nonblocking(true).unwrap();
+            let until = std::time::Instant::now() + Duration::from_secs(3);
+            while std::time::Instant::now() < until {
+                if let Ok((stream, _)) = listener.accept() {
+                    open.push(stream);
+                    counted.store(open.len(), std::sync::atomic::Ordering::SeqCst);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let mut x11 = X11::on(&format!(":{number}"));
+        let started = std::time::Instant::now();
+        let result = x11.create(Pos::new(1.0, 1.0));
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_millis(2500), "took {:?}", started.elapsed());
+        // Still stuck: another try does not start another thread, and fails at once.
+        let again = std::time::Instant::now();
+        assert!(x11.create(Pos::new(1.0, 1.0)).is_err());
+        assert!(again.elapsed() < Duration::from_millis(200), "took {:?}", again.elapsed());
+        assert_eq!(held_connections.load(std::sync::atomic::Ordering::SeqCst), 1, "a second connection was opened");
+        let _ = std::fs::remove_file(&socket);
+        drop(held);
     }
 
     #[test]

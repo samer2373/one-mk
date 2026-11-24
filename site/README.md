@@ -124,7 +124,7 @@ is hidden. With scripts `js/detect.js` picks one, in this order of trust:
 - Phones, tablets (including an iPad asking for the desktop site), ChromeOS and unknown agents get a note
   that oneMK is a desktop program and a button to copy or share the link; the downloads stay below.
 
-`node site/tools/checks.mjs OUT` runs 19 platforms through `detect()` and 7 of them through the real page
+`node site/tools/checks.mjs OUT` runs 24 platforms through `detect()` and 7 of them through the real page
 with a faked user agent, client hints, touch and GPU.
 
 ## Deploying (GitHub Pages)
@@ -142,10 +142,10 @@ build job:
 
 1. copies `site/` to `_site/`, leaving out `tools/`, this README and `css/fonts-file.css` (the
    `file://`-only fonts);
-2. reads the file sizes of the latest release from the GitHub API (if that fails, the sizes in the source
-   stay);
-3. runs `tools/stamp.sh _site <version> <SITE_URL> sizes.tsv`: the version from `sh scripts/version.sh`
-   goes into `<html data-version>`, every `<span data-version>` (hero and footer) and the JSON-LD; the
+2. reads the latest release from the GitHub API (the page's download buttons point at it): its version
+   and the file sizes of its assets (if that fails, `sh scripts/version.sh`'s version and the sizes in
+   the source stay);
+3. runs `tools/stamp.sh _site <version> <SITE_URL> sizes.tsv`: that version goes into `<html data-version>`, every `<span data-version>` (hero and footer) and the JSON-LD; the
    address replaces `https://samer2373.github.io/one-mk/` in the canonical link, Open Graph and Twitter
    tags, JSON-LD, `404.html`, `robots.txt` and `sitemap.xml` (whose date becomes the deploy date);
 4. checks that every local `src`, `href` and `srcset` in `index.html` and `404.html` exists;

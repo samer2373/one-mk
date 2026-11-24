@@ -17,6 +17,7 @@
 //! display, y down (macOS's CoreGraphics space). How it behaves, what is
 //! unverified and how to test it on a Mac: docs/PERMISSION-GUIDE.md.
 
+use crate::launch::Launch;
 use crate::motion;
 use crate::style::*;
 use crate::widgets::{self, Look};
@@ -361,6 +362,8 @@ pub struct Guide {
     /// The phase the card was in when closed by hand.
     dismissed_from: Phase,
     finished: bool,
+    /// How the daemon was started: what System Settings lists to switch on.
+    launch: Launch,
 }
 
 /// What the card shows.
@@ -386,6 +389,8 @@ pub struct View {
     pub anchor: Option<Frame>,
     /// What comes after this step, if anything.
     pub next: Option<Permission>,
+    /// What System Settings lists the permission under (how the daemon was started).
+    pub launch: Launch,
 }
 
 impl Guide {
@@ -412,6 +417,7 @@ impl Guide {
             anchor: None,
             dismissed_from: Phase::Waiting,
             finished: false,
+            launch: Launch::default(),
         };
         for p in Permission::ALL {
             g.granted[p.index()] = granted(p);
@@ -432,6 +438,12 @@ impl Guide {
 
     pub fn finished(&self) -> bool {
         self.finished
+    }
+
+    /// Says how the daemon was started: from a terminal, that app is what
+    /// System Settings lists, not `one-mk`.
+    pub fn set_launch(&mut self, launch: Launch) {
+        self.launch = launch;
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -611,6 +623,7 @@ impl Guide {
             covered,
             anchor: self.anchor,
             next,
+            launch: self.launch,
         })
     }
 }
@@ -631,21 +644,35 @@ enum Footer {
 
 fn words(v: &View) -> Words {
     let p = v.permission;
+    // What to find in the list: `one-mk`, or the terminal app it was started from.
+    let listed = v.launch.listed();
     match v.shown {
         Phase::Waiting => Words {
             title: "Turn on oneMK".into(),
-            body: match p {
-                Permission::Accessibility => {
+            body: match (p, v.launch.terminal()) {
+                (Permission::Accessibility, false) => {
                     format!(
-                        "Find {LIST_NAME} in the {} list and switch it on, so oneMK can {}.",
+                        "Find {listed} in the {} list and switch it on, so oneMK can {}.",
+                        p.name(),
+                        p.ability()
+                    )
+                }
+                // oneMK was started from a terminal: macOS gives the permission to that app.
+                (Permission::Accessibility, true) => {
+                    format!(
+                        "You started oneMK from a terminal, so macOS lists that app, not {LIST_NAME}. Find {listed} in the {} list and switch it on, so oneMK can {}.",
                         p.name(),
                         p.ability()
                     )
                 }
                 // The daemon gives the same advice (crates/input/src/macos.rs):
                 // quitting would stop sharing until it is started again.
-                Permission::InputMonitoring => format!(
-                    "Find {LIST_NAME} in the {} list and switch it on. If macOS offers to quit and reopen it, choose Later.",
+                (Permission::InputMonitoring, false) => format!(
+                    "Find {listed} in the {} list and switch it on. If macOS offers to quit and reopen it, choose Later.",
+                    p.name()
+                ),
+                (Permission::InputMonitoring, true) => format!(
+                    "You started oneMK from a terminal, so macOS lists that app, not {LIST_NAME}. Find {listed} in the {} list and switch it on. If macOS offers to quit and reopen it, choose Later.",
                     p.name()
                 ),
             },
@@ -669,7 +696,7 @@ fn words(v: &View) -> Words {
         },
         Phase::SettingsGone { hidden: false } | Phase::Done { dismissed: true, .. } => Words {
             title: "System Settings closed".into(),
-            body: format!("{} isn't on yet. Open it again to switch on {LIST_NAME}.", p.name()),
+            body: format!("{} isn't on yet. Open it again to switch on {listed}.", p.name()),
             footer: Footer::Button("Open Settings again"),
         },
     }
@@ -888,7 +915,8 @@ fn draw_card(
             } else if now - v.phase_at > STUCK_AFTER {
                 // macOS can show a switch as on for an entry made by an
                 // older version of the app, and still refuse it.
-                "Already on? Remove it (−), reopen oneMK"
+                // (Reopening the window does not ask macOS again: the sharing service asks once per run.)
+                "Already on? Remove it (−), then Stop and Start oneMK"
             } else {
                 "Watching for the switch…"
             };
@@ -961,6 +989,10 @@ pub struct Overlay {
     /// The card was shown for the permission gap that is still open, so it
     /// is not shown again (after "close") until a status says all is granted.
     offered: bool,
+    /// How the daemon was started, once known (looked up when a guide starts).
+    launch: Launch,
+    /// The look-up in progress: where it leaves its answer.
+    probe: Option<std::sync::Arc<std::sync::Mutex<Option<Launch>>>>,
 }
 
 impl Default for Overlay {
@@ -981,6 +1013,8 @@ impl Default for Overlay {
             started_at: 0.0,
             covered: motion::Tween::new(0.0),
             offered: false,
+            launch: Launch::default(),
+            probe: None,
         }
     }
 }
@@ -1028,7 +1062,37 @@ impl Overlay {
         self.next_window_poll = now;
         self.next_source_poll = now + 0.5;
         self.covered = motion::Tween::new(0.0);
+        if let Some(g) = &mut self.guide {
+            g.set_launch(self.launch);
+        }
+        // Where the permission goes depends on how the daemon was started: ask the system (a program
+        // runs, so off the UI thread) and say it on the card when it answers.
+        if cfg!(target_os = "macos") && matches!(self.windows, Windows::Real) {
+            self.look_up_launch(Launch::detect);
+        }
         self.run(fx, None);
+    }
+
+    /// Finds how the daemon was started with `detect`, on a thread.
+    fn look_up_launch(&mut self, detect: impl FnOnce() -> Launch + Send + 'static) {
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        self.probe = Some(slot.clone());
+        std::thread::spawn(move || {
+            let launch = detect();
+            *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(launch);
+        });
+    }
+
+    /// Takes the look-up's answer, when it has come, to the card.
+    fn take_launch(&mut self) {
+        let answer = self.probe.as_ref().and_then(|slot| slot.lock().unwrap_or_else(|e| e.into_inner()).take());
+        if let Some(launch) = answer {
+            self.probe = None;
+            self.launch = launch;
+            if let Some(g) = &mut self.guide {
+                g.set_launch(launch);
+            }
+        }
     }
 
     /// Whether the card is up (or leaving).
@@ -1061,7 +1125,9 @@ impl Overlay {
             if enabled && self.active() {
                 self.offered = true;
             }
-        } else if !self.active() {
+        } else {
+            // Every permission is on: the gap is over, whether or not the card is
+            // still showing its success (it may be the last status for a while).
             self.offered = false;
         }
         self.set_status_input(input, now);
@@ -1127,6 +1193,7 @@ impl Overlay {
     }
 
     fn poll(&mut self, ctx: &egui::Context, now: f64) {
+        self.take_launch();
         let Some(g) = &self.guide else { return };
         if g.finished() {
             return;
@@ -1238,7 +1305,7 @@ impl Overlay {
             || leave < 1.0
             || self.covered.moving(now)
             || now - view.phase_at < 1.4
-            || (waiting && nudging);
+            || keeps_nudging(waiting, nudging, shown);
         if busy {
             ctx.request_repaint();
         } else {
@@ -1575,7 +1642,9 @@ mod debug {
             Permission::InputMonitoring => "Apps below may watch your keyboard and mouse.",
         };
         p.text(pos2(x0, r.top() + 66.0), Align2::LEFT_CENTER, note, regular(T_META), ink2);
-        let rows = ["Terminal", LIST_NAME, "Script Editor", "Shortcuts"];
+        // The row to switch on is the one macOS lists for how the daemon was started.
+        let target = view.launch.row();
+        let rows = [if target == "Terminal" { "Automator" } else { "Terminal" }, target, "Script Editor", "Shortcuts"];
         let list_top = r.top() + 86.0;
         let row_h = 44.0;
         let list = Rect::from_min_size(pos2(x0, list_top), vec2(w, row_h * rows.len() as f32));
@@ -1590,7 +1659,8 @@ mod debug {
                     Stroke::new(1.0, line),
                 );
             }
-            let ours = *name == LIST_NAME;
+            let is_target = *name == target;
+            let ours = is_target && !view.launch.terminal();
             let icon = Rect::from_center_size(pos2(x0 + 22.0, cy), vec2(24.0, 24.0));
             // Ours is the app icon: the light key on a cobalt tile.
             p.rect_filled(icon, CornerRadius::same(6), if ours { MAC_OURS } else { ink2.gamma_multiply(0.5) });
@@ -1598,7 +1668,7 @@ mod debug {
                 crate::icons::symbol_in(p, icon.min + vec2(3.0, 3.0), 18.0, &Palette::dark());
             }
             p.text(pos2(x0 + 44.0, cy), Align2::LEFT_CENTER, *name, regular(T_BODY), ink);
-            let on = !ours || granted;
+            let on = !is_target || granted;
             let track = Rect::from_center_size(pos2(list.right() - 34.0, cy), vec2(38.0, 22.0));
             p.rect_filled(track, CornerRadius::same(11), if on { MAC_BLUE } else { off });
             let knob = if on { track.right() - 11.0 } else { track.left() + 11.0 };
@@ -2096,12 +2166,60 @@ mod tests {
     }
 }
 
+/// Whether the arrow's nudges ask for frames: not once the card has
+/// faded away (covered by another window), when nothing of it is drawn.
+fn keeps_nudging(waiting: bool, nudging: bool, shown: f32) -> bool {
+    waiting && nudging && shown > 0.0
+}
+
 #[cfg(test)]
 mod on_status_tests {
     use super::*;
 
     fn missing() -> Vec<String> {
         vec!["one-mk needs Accessibility permission to share this Mac's mouse and keyboard. Open System Settings".into()]
+    }
+
+    /// Started from a terminal, the card names the terminal app, not `one-mk`
+    /// (macOS lists the app that started the daemon).
+    #[test]
+    fn the_card_names_the_terminal_a_daemon_was_started_from() {
+        use crate::launch::App;
+        let (mut g, _) = Guide::new(&[Permission::Accessibility, Permission::InputMonitoring], |_| false, 0.0);
+        let installed = words(&g.view().unwrap());
+        assert!(installed.body.starts_with("Find one-mk in the Accessibility list"), "{}", installed.body);
+        for (launch, name) in [(Launch::Terminal(App::Terminal), "Terminal"), (Launch::Terminal(App::ITerm), "iTerm"), (Launch::Terminal(App::Other), "the terminal app you started oneMK from")] {
+            g.set_launch(launch);
+            let view = g.view().unwrap();
+            assert_eq!(view.launch, launch);
+            let waiting = words(&view).body;
+            assert!(waiting.contains(&format!("Find {name} in the Accessibility list")) && waiting.contains("not one-mk"), "{waiting}");
+            let gone = words(&View { shown: Phase::SettingsGone { hidden: false }, ..view }).body;
+            assert!(gone.contains(&format!("switch on {name}")) && !gone.contains("switch on one-mk"), "{gone}");
+            let monitoring = words(&View { permission: Permission::InputMonitoring, ..view }).body;
+            assert!(monitoring.contains(&format!("Find {name} in the Input Monitoring list")) && monitoring.contains("choose Later"), "{monitoring}");
+        }
+    }
+
+    /// The look-up's answer reaches an open card (without ever blocking the window).
+    #[test]
+    fn the_launch_look_up_reaches_the_open_card() {
+        use crate::launch::App;
+        let mut o = Overlay::default();
+        o.on_status_if(true, &missing(), 0.0);
+        assert_eq!(o.guide.as_ref().unwrap().view().unwrap().launch, Launch::Installed, "until it is known");
+        o.look_up_launch(|| Launch::Terminal(App::Terminal));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while o.probe.is_some() && std::time::Instant::now() < deadline {
+            o.take_launch();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(o.guide.as_ref().unwrap().view().unwrap().launch, Launch::Terminal(App::Terminal));
+        // A guide that starts later begins with what is known.
+        o.stop();
+        o.on_status_if(true, &[], 1.0);
+        o.on_status_if(true, &missing(), 2.0);
+        assert_eq!(o.guide.as_ref().unwrap().view().unwrap().launch, Launch::Terminal(App::Terminal));
     }
 
     #[test]
@@ -2119,6 +2237,26 @@ mod on_status_tests {
         o.on_status_if(true, &[], 3.0);
         o.on_status_if(true, &missing(), 4.0);
         assert!(o.active());
+    }
+
+    #[test]
+    fn a_gap_after_a_guide_that_finished_is_offered_again() {
+        let mut o = Overlay::default();
+        o.on_status_if(true, &missing(), 0.0);
+        assert!(o.active());
+        // Everything granted while the card is still up; no other status follows.
+        o.on_status_if(true, &[], 0.5);
+        o.stop(); // the card finished and went
+        o.on_status_if(true, &missing(), 60.0);
+        assert!(o.active(), "revoked later: the card comes back");
+    }
+
+    #[test]
+    fn a_covered_card_asks_for_no_frames_for_its_nudges() {
+        assert!(keeps_nudging(true, true, 1.0));
+        assert!(!keeps_nudging(true, true, 0.0), "faded away: nothing is drawn");
+        assert!(!keeps_nudging(false, true, 1.0));
+        assert!(!keeps_nudging(true, false, 1.0));
     }
 
     #[test]

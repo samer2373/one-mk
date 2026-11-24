@@ -50,6 +50,15 @@ impl Stored {
         self.valid() && identity_for(home, config).as_deref() == Some(&self.id) && self.destination == config.destination()
             && self.created <= now().saturating_add(60) && now().saturating_sub(self.created) <= TTL
     }
+    /// Whether this record was queued for `config`'s project, environment and host.
+    pub(super) fn is_for(&self, config: &Config) -> bool { self.destination == config.destination() }
+    /// A record queued for another destination is judged by that destination's own worker.
+    /// Here it is only kept while it is well-formed, fresh and still has attempts left.
+    fn kept(&self, home: &Path, config: &Config) -> bool {
+        self.attempts < ATTEMPTS && if self.is_for(config) { self.permitted(home, config) } else {
+            self.valid() && self.created <= now().saturating_add(60) && now().saturating_sub(self.created) <= TTL
+        }
+    }
     fn valid(&self) -> bool {
         (!matches!(self.event, Event::PanicObserved) || (self.version == env!("CARGO_PKG_VERSION") && self.site_manifest.as_deref() == Some(crash::manifest().as_str())))
             && self.verification_run.as_ref().is_none_or(|v| v.len() == 36 && v.bytes().enumerate().all(|(i, b)| if [8, 13, 18, 23].contains(&i) { b == b'-' } else { b.is_ascii_hexdigit() }))
@@ -89,7 +98,7 @@ impl Stored {
     }
 }
 
-fn lock(home: &Path) -> std::io::Result<std::fs::File> {
+pub(super) fn lock(home: &Path) -> std::io::Result<std::fs::File> {
     crate::private::create_dir_all(home)?;
     let file = crate::private::lock_file(&home.join("analytics-consent.lock"))?;
     // Telemetry must not stall behind another process or a failing filesystem.
@@ -127,7 +136,7 @@ pub(super) fn append(home: &Path, config: &Config, id: &str, event: Event, origi
 pub(super) fn append_items(home: &Path, config: &Config, additions: Vec<Stored>) -> std::io::Result<()> {
     let _lock = lock(home)?;
     let mut items = read(home);
-    items.retain(|v| v.permitted(home, config) && v.attempts < ATTEMPTS);
+    items.retain(|v| v.kept(home, config));
     for item in additions {
         if item.permitted(home, config) { items.push(item); }
     }
@@ -138,14 +147,17 @@ pub(super) fn pump(home: &Path, config: &Config) -> std::io::Result<()> {
     let item = {
         let _lock = lock(home)?;
         let mut items = read(home);
-        items.retain(|v| v.permitted(home, config) && v.attempts < ATTEMPTS);
-        let selected = items.iter_mut().find(|v| v.next <= now()).map(|v| {
+        let before = items.len();
+        items.retain(|v| v.kept(home, config));
+        let selected = items.iter_mut().find(|v| v.is_for(config) && v.next <= now()).map(|v| {
             v.attempts += 1;
             // Lease while HTTP runs, preventing simultaneous process sends.
             v.next = now() + 10;
             v.clone()
         });
-        write(home, &items)?;
+        // An idle or withdrawn queue is not rewritten: no fsync every tick, and a spool
+        // that opting out removed is not recreated.
+        if selected.is_some() || items.len() != before { write(home, &items)?; }
         selected
     };
     let Some(item) = item else { return Ok(()); };
@@ -161,7 +173,7 @@ pub(super) fn pump(home: &Path, config: &Config) -> std::io::Result<()> {
             _ => { items.retain(|v| v.uuid != item.uuid); },
         }
     }
-    items.retain(|v| v.permitted(home, config));
+    items.retain(|v| v.kept(home, config));
     write(home, &items)
 }
 
@@ -197,7 +209,7 @@ mod tests {
     fn retry_identity_timestamp_and_error_contract() {
         let home = tempfile::tempdir().unwrap(); set_enabled(home.path(), true).unwrap();
         let config = config(); let id = identity(home.path()).unwrap();
-        append(home.path(), &config, &id, Event::TransferFinished, Origin::Cli, Outcome::Failed, ErrorCode::Io).unwrap();
+        after_transient_lock(|| append(home.path(), &config, &id, Event::TransferFinished, Origin::Cli, Outcome::Failed, ErrorCode::Io));
         let items = read(home.path()); assert_eq!(items.len(), 2);
         let mut retry = items[1].clone(); retry.attempts += 1; retry.next = now() + 10;
         assert_eq!(items[1].payload(&config), retry.payload(&config));
@@ -233,10 +245,11 @@ mod tests {
     // The production worker retries opportunistic lock contention on its next
     // tick. A parallel test's process spawn can transiently retain a lock FD.
     // Retry only that explicit WouldBlock case, never a transport/I/O failure.
-    fn pump_after_transient_lock(home: &Path, config: &Config) {
+    fn pump_after_transient_lock(home: &Path, config: &Config) { after_transient_lock(|| pump(home, config)) }
+    fn after_transient_lock(mut run: impl FnMut() -> std::io::Result<()>) {
         let until = Instant::now() + Duration::from_secs(1);
         loop {
-            match pump(home, config) {
+            match run() {
                 Ok(()) => return,
                 Err(error) if Instant::now() < until && error.get_ref().is_some_and(|inner|
                     matches!(inner.downcast_ref::<std::fs::TryLockError>(), Some(std::fs::TryLockError::WouldBlock))) => {
@@ -290,6 +303,46 @@ mod tests {
         assert!(std::fs::metadata(home.path().join(FILE)).unwrap().len() <= MAX_BYTES);
         #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; assert_eq!(std::fs::metadata(home.path().join(FILE)).unwrap().permissions().mode() & 0o777, 0o600); }
         set_enabled(home.path(), false).unwrap(); assert!(!home.path().join(FILE).exists());
+    }
+    #[test]
+    fn an_idle_or_withdrawn_queue_is_never_rewritten() {
+        let home = tempfile::tempdir().unwrap(); set_enabled(home.path(), true).unwrap();
+        let config = config(); let id = identity(home.path()).unwrap();
+        // Nothing queued: pumping must not create the file.
+        pump_after_transient_lock(home.path(), &config);
+        assert!(!home.path().join(FILE).exists());
+        // Queued but not due: the stored bytes stay as they are.
+        after_transient_lock(|| append(home.path(), &config, &id, Event::AppOpened, Origin::Desktop, Outcome::Success, ErrorCode::None));
+        let mut items = read(home.path()); items[0].next = now() + 3600; write(home.path(), &items).unwrap();
+        let before = std::fs::read(home.path().join(FILE)).unwrap();
+        crate::private::write(&home.path().join(FILE), [&before[..], b" "].concat()).unwrap();
+        pump_after_transient_lock(home.path(), &config);
+        assert_eq!(std::fs::read(home.path().join(FILE)).unwrap().len(), before.len() + 1);
+        // Withdrawn: the purged spool is not recreated by the next pass.
+        set_enabled(home.path(), false).unwrap();
+        pump_after_transient_lock(home.path(), &config);
+        assert!(!home.path().join(FILE).exists());
+    }
+    #[test]
+    fn another_destinations_queued_events_survive_and_are_never_sent_by_this_one() {
+        let home = tempfile::tempdir().unwrap();
+        set_enabled_for(home.path(), true, "production").unwrap();
+        set_enabled_for(home.path(), true, "development").unwrap();
+        let production = Config::scoped("phc_test_only", "https://eu.i.posthog.com", "production").unwrap();
+        let development = Config::scoped("phc_test_only", "https://eu.i.posthog.com", "development").unwrap();
+        let id = identity_for(home.path(), "production").unwrap();
+        after_transient_lock(|| append(home.path(), &production, &id, Event::AppOpened, Origin::Desktop, Outcome::Success, ErrorCode::None));
+        let dev_id = identity_for(home.path(), "development").unwrap();
+        after_transient_lock(|| append(home.path(), &development, &dev_id, Event::SettingsOpened, Origin::Desktop, Outcome::Success, ErrorCode::None));
+        assert_eq!(read(home.path()).len(), 2);
+        // Pumping with a destination that has nothing due leaves the other's row alone.
+        let mut items = read(home.path());
+        for item in items.iter_mut().filter(|v| v.is_for(&development)) { item.next = now() + 3600; }
+        write(home.path(), &items).unwrap();
+        pump_after_transient_lock(home.path(), &development);
+        let items = read(home.path());
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|v| v.is_for(&production) && v.attempts == 0));
     }
     #[test]
     fn oversized_and_unknown_field_storage_is_rejected() {

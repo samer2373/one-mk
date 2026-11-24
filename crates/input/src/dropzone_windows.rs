@@ -1,4 +1,4 @@
-use super::{Drop, Zone};
+use super::{Drop, Gesture, Zone};
 use anyhow::Result;
 use one_mk_proto::{Pos, drag::{Change, Drag}};
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
@@ -8,6 +8,55 @@ use windows::core::{implement, w, Ref};
 use windows::Win32::{Foundation::*, System::{Com::*, Ole::*, SystemServices::MODIFIERKEYS_FLAGS, Threading::GetCurrentThreadId},
     UI::{Shell::{DragQueryFileW, HDROP}, WindowsAndMessaging::*}};
 
+mod scale { include!("dropzone_scale.rs"); }
+
+/// How many physical pixels one pixel of the space the daemon sees is: the primary monitor's DPI
+/// over 96, as `win_logic::Space` does. The hook and the window work in physical pixels.
+fn primary_scale() -> f64 {
+    use windows_sys::Win32::{Foundation::POINT, Graphics::Gdi::{MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint}, UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI}};
+    let (mut x, mut y) = (0u32, 0u32);
+    // SAFETY: plain calls with out-pointers that outlive them.
+    let found = unsafe { GetDpiForMonitor(MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY), MDT_EFFECTIVE_DPI, &mut x, &mut y) } >= 0;
+    if found && x != 0 { f64::from(x) / 96.0 } else { 1.0 }
+}
+
+/// The monitors in physical pixels (this thread is per-monitor DPI aware), for snapping a zone
+/// that touches a screen edge to it.
+fn monitors() -> Vec<one_mk_proto::Rect> {
+    use windows_sys::Win32::{Foundation::{LPARAM, RECT}, Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO}};
+    unsafe extern "system" fn each(mon: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> i32 {
+        // SAFETY: `data` is the `&mut Vec` passed below, alive for the call.
+        let found = unsafe { &mut *(data as *mut Vec<one_mk_proto::Rect>) };
+        let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..unsafe { std::mem::zeroed() } };
+        // SAFETY: valid monitor handle from the enumeration; `mi` is sized.
+        if unsafe { GetMonitorInfoW(mon, &mut mi) } != 0 {
+            let r = mi.rcMonitor;
+            found.push(one_mk_proto::Rect::new(r.left, r.top, r.right - r.left, r.bottom - r.top));
+        }
+        1
+    }
+    let mut found = Vec::new();
+    // SAFETY: the callback only touches `found`, which outlives the call.
+    unsafe { EnumDisplayMonitors(std::ptr::null_mut(), std::ptr::null(), Some(each), &mut found as *mut Vec<one_mk_proto::Rect> as LPARAM) };
+    found
+}
+
+/// The zones in physical pixels, from the space the daemon sees.
+fn physical(zones: Vec<Zone>) -> Vec<Zone> {
+    let (scale, screens) = (primary_scale(), monitors());
+    zones.into_iter().map(|zone| Zone { rect: scale::to_physical(zone.rect, scale, &screens), ..zone }).collect()
+}
+
+fn set_thread_dpi_awareness() {
+    use windows_sys::Win32::UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext};
+    // SAFETY: plain calls with predefined contexts (v1 gives the same coordinates before Windows 10 1703).
+    unsafe {
+        if SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2).is_null() {
+            SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+        }
+    }
+}
+
 thread_local! { static ACTIVE: RefCell<Option<Rc<RefCell<State>>>> = const { RefCell::new(None) }; }
 
 struct State {
@@ -16,6 +65,8 @@ struct State {
     shown: Option<usize>,
     drag: Drag,
     held: bool,
+    /// Whether the held button is a drag that began outside the zones, not a click on a control.
+    gesture: Gesture,
     accepts: bool,
     dropped: mpsc::Sender<Drop>,
 }
@@ -28,8 +79,14 @@ impl State {
     }
 
     fn pointer(&mut self, point: POINT) {
-        let zone = self.zones.iter().position(|zone| zone.rect.contains(Pos::new(point.x.into(), point.y.into())));
-        match self.drag.pointer(self.held, zone) {
+        let at = Pos::new(point.x.into(), point.y.into());
+        let zone = self.zones.iter().position(|zone| zone.rect.contains(at));
+        // The window takes the input over the strip, and Windows has no signal that a file is being
+        // dragged before it is there: only a button that went down outside the zones and has moved
+        // as far as Windows asks for a drag counts, so a click or a scroll bar in the strip is safe.
+        let slop = f64::from(unsafe { GetSystemMetrics(SM_CXDRAG).max(GetSystemMetrics(SM_CYDRAG)) }.max(4));
+        let held = self.held && self.gesture.dragging(at, slop);
+        match self.drag.pointer(held, zone) {
             Change::Show(index) => {
                 self.hide();
                 let rect = self.zones[index].rect;
@@ -59,11 +116,15 @@ unsafe extern "system" fn mouse(code: i32, message: WPARAM, data: LPARAM) -> LRE
                 WM_LBUTTONDOWN => {
                     if state.drag.pointer(false, None) == Change::Hide { state.hide(); }
                     state.held = true;
+                    let at = Pos::new(event.pt.x.into(), event.pt.y.into());
+                    let inside = state.zones.iter().any(|zone| zone.rect.contains(at));
+                    state.gesture.press(at, inside);
                     state.pointer(event.pt);
                 }
                 WM_MOUSEMOVE if state.held => state.pointer(event.pt),
                 WM_LBUTTONUP => {
                     state.held = false;
+                    state.gesture.release();
                     if state.shown.is_some() { unsafe { SetTimer(Some(state.hwnd), 1, 300, None); } }
                     else { state.drag.pointer(false, None); }
                 }
@@ -164,6 +225,7 @@ pub(super) fn start(mut zones: watch::Receiver<Vec<Zone>>, dropped: mpsc::Sender
     let (ready, initialized) = std::sync::mpsc::sync_channel(1);
     std::thread::Builder::new().name("one-mk-drop".into()).spawn(move || {
         let mut run = || -> windows::core::Result<()> {
+            set_thread_dpi_awareness();
             unsafe {
                 OleInitialize(None)?;
                 let mut resources = Resources { hwnd: HWND::default(), mouse: HHOOK::default(), keyboard: HHOOK::default() };
@@ -175,8 +237,8 @@ pub(super) fn start(mut zones: watch::Receiver<Vec<Zone>>, dropped: mpsc::Sender
                 let hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, class.lpszClassName,
                     w!("Drop files to paired computer"), WS_POPUP, 0, 0, 1, 1, None, None, Some(instance), None)?;
                 resources.hwnd = hwnd;
-                let state = Rc::new(RefCell::new(State { hwnd, zones: zones.borrow_and_update().clone(), shown: None,
-                    drag: Drag::default(), held: false, accepts: false, dropped: dropped.clone() }));
+                let state = Rc::new(RefCell::new(State { hwnd, zones: physical(zones.borrow_and_update().clone()), shown: None,
+                    drag: Drag::default(), held: false, gesture: Gesture::default(), accepts: false, dropped: dropped.clone() }));
                 let target: IDropTarget = OleTarget { state: state.clone() }.into();
                 RegisterDragDrop(hwnd, &target)?;
                 resources.mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse), Some(instance), 0)?;
@@ -189,7 +251,7 @@ pub(super) fn start(mut zones: watch::Receiver<Vec<Zone>>, dropped: mpsc::Sender
                     if message.message == WM_APP {
                         let mut state = state.borrow_mut();
                         state.cancel();
-                        state.zones = zones.borrow_and_update().clone();
+                        state.zones = physical(zones.borrow_and_update().clone());
                     } else { let _ = TranslateMessage(&message); DispatchMessageW(&message); }
                 }
                 ACTIVE.with(|active| *active.borrow_mut() = None);

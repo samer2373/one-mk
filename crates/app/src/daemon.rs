@@ -240,6 +240,10 @@ pub enum Event {
 #[derive(Clone, Debug)]
 pub struct HistoryItem {
     pub id: u64,
+    /// The history instance (daemon run) the daemon listed it under, sent back
+    /// with Copy and Preview so a daemon that restarted since refuses the row.
+    /// `None` from a daemon that does not say: the plain requests are used then.
+    pub instance: Option<u64>,
     pub preview: String,
     pub detail: String,
     pub timestamp: u64,
@@ -253,8 +257,10 @@ pub enum Job {
     UpdateCheck,
     UpdateSettings,
     Start,
-    Layout { id: String, name: String, side: one_mk_proto::Side },
-    Swap { id: String, name: String, swap: String },
+    /// Moving a computer; `seq` tells this request from every other one
+    /// for it (two moves to the same side differ only in their offset).
+    Layout { id: String, name: String, side: one_mk_proto::Side, offset: Option<(i32, i32)>, seq: u64 },
+    Swap { id: String, name: String, swap: String, seq: u64 },
     TakeBack,
     Stop,
     Forget(String),
@@ -321,6 +327,9 @@ pub struct Link {
     /// The input tuning worker, started on first use.
     tuning: std::sync::Arc<std::sync::Mutex<Option<Sender<Tuning>>>>,
     pub showing: Showing,
+    /// The number of the newest history list asked for: an older list that
+    /// arrives after it is dropped, not shown over it.
+    history_latest: Arc<std::sync::Mutex<u64>>,
 }
 
 impl Link {
@@ -330,19 +339,29 @@ impl Link {
             let response = client::request(&link.dir, Request::LiveWallpaper(json), Duration::from_secs(660))?
                 .ok_or_else(|| anyhow::anyhow!("Start oneMK first"))?;
             anyhow::ensure!(!response.starts_with("error "), "{}", response.trim_start_matches("error ").trim());
+            // A change the service answers "ok" to is done. No answer at all is what the one
+            // it dropped for a newer change (or one that took too long) gets: not a success.
+            anyhow::ensure!(!response.trim().is_empty(), "Another wallpaper change came first, or this one took too long. Choose again if you still want it");
             Ok(())
         });
     }
     pub fn pair_with(&self, method: crate::pairing::Method, port: u16) -> std::io::Result<crate::pairing::Pairing> {
         crate::pairing::Pairing::with_method(&self.daemon, &self.home_args(), self.ctx.clone(), method, port)
     }
-    pub fn history_reveal(&self, id: u64, epoch: u64) {
+    /// Fetches a short preview of one item for the row's Show. Asks the daemon
+    /// for a bounded preview (never the whole item), checked against the
+    /// history instance the row came from; a daemon that does not give one
+    /// has only the full `show`, which is then used as before.
+    pub fn history_reveal(&self, id: u64, instance: Option<u64>, epoch: u64) {
         let link = self.clone();
         std::thread::spawn(move || {
-            let content = client::request(&link.dir, Request::ClipHistory { action: client::HistoryAction::Show(id), json: false }, Duration::from_secs(5))
-                .map_err(|_| "Could not reveal this item. Try Refresh.".to_owned())
-                .and_then(|reply| reply.and_then(|reply| reply.strip_prefix("ok\n").map(|body| history_preview(body.trim_end_matches('\n')))).ok_or_else(|| "This item is no longer available.".to_owned()));
+            let action = instance.map_or(client::HistoryAction::Show(id), |instance| client::HistoryAction::Preview(id, instance));
+            let reply = client::request(&link.dir, Request::ClipHistory { action, json: false }, Duration::from_secs(5));
+            let stale = matches!(&reply, Ok(Some(reply)) if reply.starts_with("error "));
+            let content = reveal_result(reply);
             link.send(Event::ClipboardReveal(id, epoch, content));
+            // The daemon refused the row (it restarted, or the item is gone): the list shows what is there now.
+            if stale { link.history(); }
         });
     }
 
@@ -352,6 +371,11 @@ impl Link {
             self.send(Event::ClipboardHistory(Ok(Vec::new())));
             return;
         }
+        let seq = {
+            let mut latest = self.history_latest.lock().unwrap_or_else(|error| error.into_inner());
+            *latest += 1;
+            *latest
+        };
         let link = self.clone();
         std::thread::spawn(move || {
             let read = || -> Result<Vec<HistoryItem>, String> {
@@ -361,15 +385,26 @@ impl Link {
                 let body = response.strip_prefix("ok\n").ok_or_else(|| response.trim_start_matches("error ").trim().to_owned())?;
                 parse_history(body)
             };
-            link.send(Event::ClipboardHistory(read()));
+            let history = read();
+            // Under the lock, so a newer request cannot be asked between the look and the send.
+            let latest = link.history_latest.lock().unwrap_or_else(|error| error.into_inner());
+            if *latest == seq { link.send(Event::ClipboardHistory(history)); }
         });
     }
 
-    pub fn history_change(&self, id: Option<u64>) {
+    /// Copies one item here (`id`, with the history `instance` its row came
+    /// from when the daemon said one), or clears the history (`None`); the
+    /// list is read again either way, a refusal of a stale row included.
+    pub fn history_change(&self, id: Option<u64>, instance: Option<u64>) {
         self.job(Job::Set { what: "clipboard history".into(), args: Vec::new() }, move |link| {
-            link.ask(Request::ClipHistory { action: id.map_or(client::HistoryAction::Clear, client::HistoryAction::Copy), json: false })?;
+            let action = match (id, instance) {
+                (None, _) => client::HistoryAction::Clear,
+                (Some(id), Some(instance)) => client::HistoryAction::CopyChecked(id, instance),
+                (Some(id), None) => client::HistoryAction::Copy(id),
+            };
+            let result = link.ask(Request::ClipHistory { action, json: false });
             link.history();
-            Ok(())
+            result
         });
     }
     pub fn new(home: Option<PathBuf>, tx: Sender<Event>, ctx: egui::Context) -> anyhow::Result<Self> {
@@ -384,7 +419,7 @@ impl Link {
         let me = running_executable()?;
         let daemon = install::sibling(&me, "one-mk").unwrap_or_else(|| PathBuf::from("one-mk"));
         let tray = install::sibling(&me, "one-mk-tray");
-        Ok(Self { dir, custom_home, daemon, tray, tx, ctx, tuning: Default::default(), showing: Showing::new() })
+        Ok(Self { dir, custom_home, daemon, tray, tx, ctx, tuning: Default::default(), showing: Showing::new(), history_latest: Default::default() })
     }
 
     /// A link for the window's own tests: it names a folder of its own, never
@@ -394,7 +429,7 @@ impl Link {
     pub fn detached(dir: PathBuf, tx: Sender<Event>, ctx: egui::Context) -> Self {
         // Relative: never found on a path, and a login entry refuses it.
         let daemon = PathBuf::from("one-mk-absent-in-tests");
-        Self { dir, custom_home: true, daemon, tray: None, tx, ctx, tuning: Default::default(), showing: Showing::new() }
+        Self { dir, custom_home: true, daemon, tray: None, tx, ctx, tuning: Default::default(), showing: Showing::new(), history_latest: Default::default() }
     }
 
     /// The settings folder a login entry for this window names: `None`
@@ -577,7 +612,7 @@ impl Link {
     }
 
     /// `one-mk <args>` exactly as given.
-    fn run_one_mk(&self, args: &[&str]) -> anyhow::Result<String> {
+    fn run_one_mk<S: AsRef<std::ffi::OsStr>>(&self, args: &[S]) -> anyhow::Result<String> {
         let mut cmd = Command::new(&self.daemon);
         cmd.args(args).stdin(Stdio::null());
         let out = proc::hide_window(&mut cmd).output()?;
@@ -815,16 +850,23 @@ impl Link {
 
     /// Moves a peer to `side`: with an offset, to that exact place; without,
     /// anywhere along it.
-    pub fn set_side(&self, peer: &str, name: &str, side: one_mk_proto::Side, offset: Option<(i32, i32)>) {
+    pub fn set_side(&self, peer: &str, name: &str, side: one_mk_proto::Side, offset: Option<(i32, i32)>, seq: u64) {
         let (id, word) = (peer.to_owned(), side.to_string());
         let at = offset.map_or_else(|| "--offset=none".to_owned(), |(x, y)| format!("--offset={x},{y}"));
-        self.job(Job::Layout { id: peer.into(), name: name.into(), side }, move |l| l.one_mk(&["layout", &id, &word, &at]).map(drop));
+        self.layout_job(Job::Layout { id: peer.into(), name: name.into(), side, offset, seq }, vec!["layout".into(), id, word, at]);
     }
 
-    pub fn set_swap(&self, peer: &str, name: &str, swap: &str) {
+    pub fn set_swap(&self, peer: &str, name: &str, swap: &str, seq: u64) {
         let (id, value) = (peer.to_owned(), swap.to_owned());
-        let what = Job::Swap { id: peer.into(), name: name.into(), swap: swap.into() };
-        self.job(what, move |l| l.one_mk(&["layout", &id, "--swap-ctrl-cmd", &value]).map(drop));
+        let what = Job::Swap { id: peer.into(), name: name.into(), swap: swap.into(), seq };
+        self.layout_job(what, vec!["layout".into(), id, "--swap-ctrl-cmd".into(), value]);
+    }
+
+    /// Runs a layout or swap change after every change asked before it, one
+    /// at a time: separate processes started together finish in any order,
+    /// and the one asked first could land last and win.
+    fn layout_job(&self, what: Job, args: Vec<String>) {
+        self.tuning_send(Tuning::Run { job: what, cmds: vec![args], key: None });
     }
 
     /// `one-mk profile use|save|delete <name>`.
@@ -1066,7 +1108,8 @@ impl Link {
             let done = if on {
                 l.login_launch().and_then(|launch| install::install(&launch))
             } else {
-                install::uninstall()
+                // The login entry only: sharing that is going on is stopped by Stop.
+                install::disable_login()
             };
             l.send(Event::Autostart(install::is_installed_for(l.login_home().as_deref())));
             done.map(drop)
@@ -1077,9 +1120,11 @@ impl Link {
         let peer = peer.to_owned();
         let what = Job::Send { to: name.to_owned(), count: paths.len() };
         self.job(what, move |l| {
-            let mut args = vec!["send".to_owned(), "--to".into(), peer];
-            args.extend(paths.iter().map(|p| p.display().to_string()));
-            l.one_mk(&args.iter().map(String::as_str).collect::<Vec<_>>()).map(drop)
+            // The paths as they are: a name that is not Unicode would not survive being written out as text.
+            let mut args: Vec<std::ffi::OsString> = vec!["send".into(), "--to".into(), peer.into()];
+            args.extend(paths.into_iter().map(PathBuf::into_os_string));
+            args.extend(l.home_args().into_iter().map(Into::into));
+            l.run_one_mk(&args).map(drop)
         });
     }
 
@@ -1114,10 +1159,33 @@ impl Link {
     }
 }
 
+const PREVIEW_SLOW: &str = "The preview took too long. Try Show again, or Refresh.";
+
+/// What the window shows for the daemon's answer to a preview request: the
+/// preview, or the sentence saying why there is none.
+fn reveal_result(reply: anyhow::Result<Option<String>>) -> Result<String, String> {
+    match reply {
+        Err(error) if timed_out(&error) => Err(PREVIEW_SLOW.to_owned()),
+        Err(_) => Err("Could not reveal this item. Try Refresh.".to_owned()),
+        Ok(None) => Err("Start oneMK to see this item.".to_owned()),
+        // The control server gives up on a request after its own 5 s and closes without a word.
+        Ok(Some(reply)) if reply.trim().is_empty() => Err(PREVIEW_SLOW.to_owned()),
+        Ok(Some(reply)) => match reply.strip_prefix("ok\n") {
+            Some(body) => Ok(history_preview(body.trim_end_matches('\n'))),
+            None => Err(reply.strip_prefix("error ").map(str::trim).filter(|text| !text.is_empty()).map_or_else(|| "This item is no longer available.".to_owned(), str::to_owned)),
+        },
+    }
+}
+
+/// True when waiting for the daemon's answer ran out (as opposed to no daemon, or a refusal).
+fn timed_out(error: &anyhow::Error) -> bool {
+    error.chain().filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .any(|error| matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock))
+}
+
 fn history_preview(body: &str) -> String {
-    let normalized: String = body.chars().map(|ch| if ch.is_whitespace() { ' ' } else { ch })
-        .filter(|ch| !ch.is_control()).collect();
-    let mut chars = normalized.chars();
+    // Lazily, so a very large item is not copied whole to show 80 characters.
+    let mut chars = body.chars().map(|ch| if ch.is_whitespace() { ' ' } else { ch }).filter(|ch| !ch.is_control());
     let mut preview: String = chars.by_ref().take(80).collect();
     if chars.next().is_some() { preview.push('…'); }
     preview
@@ -1140,6 +1208,8 @@ fn parse_history(body: &str) -> Result<Vec<HistoryItem>, String> {
     #[derive(serde::Deserialize)]
     struct Metadata {
         id: u64,
+        #[serde(default)]
+        instance: Option<u64>,
         kind: String,
         preview: String,
         size: u64,
@@ -1151,13 +1221,13 @@ fn parse_history(body: &str) -> Result<Vec<HistoryItem>, String> {
     let entries: Vec<Metadata> = serde_json::from_str(body).map_err(|_| bad())?;
     if entries.len() > 1000 { return Err(bad()); }
     entries.into_iter().map(|entry| {
-        let Metadata { id, kind, preview, size, timestamp, origin } = entry;
-        if id == 0 || id == u64::MAX || !matches!(kind.as_str(), "text" | "html" | "image")
+        let Metadata { id, instance, kind, preview, size, timestamp, origin } = entry;
+        if id == 0 || id == u64::MAX || instance.is_some_and(|instance| instance == 0 || instance == u64::MAX) || !matches!(kind.as_str(), "text" | "html" | "image")
             || preview != "[hidden; use Show]" || origin.chars().count() > 85 || origin.chars().any(char::is_control) { return Err(bad()); }
         let size = if size >= 1 << 20 { format!("{:.1} MB", size as f64 / f64::from(1 << 20)) }
             else if size >= 1 << 10 { format!("{} KB", size.div_ceil(1 << 10)) }
             else { format!("{size} B") };
-        Ok(HistoryItem { id, preview, detail: format!("{kind} · {size} · from {origin}"), timestamp })
+        Ok(HistoryItem { id, instance, preview, detail: format!("{kind} · {size} · from {origin}"), timestamp })
     }).collect()
 }
 
@@ -1201,7 +1271,7 @@ impl one_mk_ctl::setup::Host for Link {
             // Pairing refreshes the entries for each computer it adds.
             computers: vec![],
         };
-        one_mk_ctl::integrate::install(&setup).map(|o| o.found).map_err(|e| format!("{e:#}"))
+        one_mk_ctl::integrate::install(&setup).map_err(|e| format!("{e:#}")).and_then(integration_result)
     }
 
     fn running(&self) -> bool {
@@ -1358,6 +1428,56 @@ mod tests {
         assert!(link.one_mk(&[]).is_err(), "`one-mk` with nothing to do is refused");
         assert!(!ran.exists());
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// A file whose name is not Unicode reaches `one-mk send` byte for byte,
+    /// not spelled with replacement characters (another file, or none).
+    #[cfg(unix)]
+    #[test]
+    fn files_are_sent_with_their_names_as_they_are() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let (mut link, base) = fake_service("send-names", "for a in \"$@\"; do printf '%s\\0' \"$a\"; done > \"$(dirname \"$0\")/argv\"");
+        let (tx, rx) = std::sync::mpsc::channel();
+        link.tx = tx;
+        let odd = PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/a\xff.txt"));
+        link.send_files("peer-1", "Office", vec![odd.clone(), PathBuf::from("/tmp/plain.txt")]);
+        match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+            Event::Done { error, .. } => assert_eq!(error, None),
+            _ => panic!("expected the job's result"),
+        }
+        let argv = std::fs::read(base.join("argv")).unwrap();
+        let args: Vec<Vec<u8>> = argv.split(|byte| *byte == 0).filter(|arg| !arg.is_empty()).map(<[u8]>::to_vec).collect();
+        assert_eq!(&args[..5], [b"send".to_vec(), b"--to".to_vec(), b"peer-1".to_vec(), odd.into_os_string().into_vec(), b"/tmp/plain.txt".to_vec()]);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// The service answers "ok" to a wallpaper change that is done. One it
+    /// dropped for a newer change gets no answer at all, which is not a success.
+    #[cfg(unix)]
+    #[test]
+    fn a_wallpaper_change_the_service_dropped_is_not_reported_as_done() {
+        use std::io::{BufRead, Write};
+        for (reply, ok) in [("ok\n", true), ("", false), ("error no space\n", false)] {
+            let base = std::env::temp_dir().join(format!("one-mk-app-wall-reply-{}-{}", std::process::id(), ok as u8 + reply.len() as u8));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(&base).unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let link = Link::new(Some(base.clone()), tx, egui::Context::default()).unwrap();
+            let listener = std::os::unix::net::UnixListener::bind(client::unix_socket_path(&base)).unwrap();
+            let server = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                std::io::BufReader::new(&stream).read_line(&mut line).unwrap();
+                (&stream).write_all(reply.as_bytes()).unwrap();
+            });
+            link.wallpaper(one_mk_wallpaper::Command::Off);
+            match rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+                Event::Done { error, .. } => assert_eq!(error.is_none(), ok, "{reply:?}: {error:?}"),
+                _ => panic!("expected the job's result"),
+            }
+            server.join().unwrap();
+            std::fs::remove_dir_all(&base).unwrap();
+        }
     }
 
     #[cfg(unix)]
@@ -1529,6 +1649,76 @@ mod tests {
         assert_eq!(parsed[0].timestamp, 123);
         assert_eq!(parsed[0].preview, "[hidden; use Show]");
         assert!(parse_history("[]\n").unwrap().is_empty());
+        assert_eq!(parsed[0].instance, None, "a daemon from before the instance says none: plain requests are used");
+        let with = r#"[{"id":7,"instance":9007199254740991,"kind":"text","preview":"[hidden; use Show]","size":12,"timestamp":123,"origin":"desk"}]"#;
+        assert_eq!(parse_history(with).unwrap()[0].instance, Some(9_007_199_254_740_991));
+        for bad in ["0", "18446744073709551615", "-1", "\"x\"", "1.5", "null1"] {
+            assert!(parse_history(&with.replace("9007199254740991", bad)).is_err(), "{bad}");
+        }
+        assert_eq!(parse_history(&with.replace("9007199254740991", "null")).unwrap()[0].instance, None);
+    }
+
+    #[test]
+    fn a_preview_says_why_it_failed_and_a_timeout_says_so() {
+        let io = |kind| Err(anyhow::Error::from(std::io::Error::from(kind)).context("could not reach one-mk"));
+        assert!(reveal_result(io(std::io::ErrorKind::TimedOut)).unwrap_err().contains("took too long"));
+        assert!(reveal_result(io(std::io::ErrorKind::WouldBlock)).unwrap_err().contains("took too long"), "a read timeout on a Unix socket is WouldBlock");
+        assert_eq!(reveal_result(io(std::io::ErrorKind::BrokenPipe)).unwrap_err(), "Could not reveal this item. Try Refresh.");
+        assert_eq!(reveal_result(Err(anyhow::anyhow!("no"))).unwrap_err(), "Could not reveal this item. Try Refresh.");
+        assert!(reveal_result(Ok(None)).unwrap_err().contains("Start oneMK"));
+        assert_eq!(reveal_result(Ok(Some("ok\nmulti\nline\n".into()))), Ok("multi line".to_owned()));
+        assert_eq!(reveal_result(Ok(Some("error The clipboard history was reloaded\n".into()))), Err("The clipboard history was reloaded".to_owned()));
+        assert_eq!(reveal_result(Ok(Some("error \n".into()))), Err("This item is no longer available.".to_owned()));
+        assert_eq!(reveal_result(Ok(Some("nonsense".into()))), Err("This item is no longer available.".to_owned()));
+        // A clean close with nothing said is the control server's own timeout, not a missing item.
+        assert!(reveal_result(Ok(Some(String::new()))).unwrap_err().contains("took too long"));
+    }
+
+    #[cfg(unix)]
+    fn rows(first_id: u64) -> String {
+        format!(r#"ok
+[{{"id":{first_id},"instance":5,"kind":"text","preview":"[hidden; use Show]","size":1,"timestamp":1,"origin":"desk"}}]"#)
+    }
+
+    /// An older list that arrives after a newer one must not replace it.
+    #[cfg(unix)]
+    #[test]
+    fn an_older_history_list_arriving_late_is_dropped() {
+        let dir = std::env::temp_dir().join(format!("omk-history-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // The first list asked for is old (item 1) and held back; the second is new (item 2) and answered first.
+        // The fake says when it has read the first request, so which one is first does not depend on thread timing.
+        use std::io::{BufRead, Write};
+        let listener = std::os::unix::net::UnixListener::bind(client::unix_socket_path(&dir)).unwrap();
+        let (read_tx, read_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let read_request = |stream: &std::os::unix::net::UnixStream| {
+                let mut line = String::new();
+                let _ = std::io::BufReader::new(stream).read_line(&mut line);
+            };
+            let (first, _) = listener.accept().unwrap();
+            read_request(&first);
+            read_tx.send(()).unwrap();
+            let (second, _) = listener.accept().unwrap();
+            read_request(&second);
+            (&second).write_all(rows(2).as_bytes()).unwrap();
+            drop(second);
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = (&first).write_all(rows(1).as_bytes());
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        let link = Link::detached(dir.clone(), tx, egui::Context::default());
+        link.history();
+        read_rx.recv_timeout(Duration::from_secs(5)).expect("the first request reached the fake daemon");
+        link.history();
+        let mut ids = Vec::new();
+        while let Ok(event) = rx.recv_timeout(Duration::from_millis(1200)) {
+            if let Event::ClipboardHistory(Ok(items)) = event { ids.extend(items.iter().map(|item| item.id)); }
+        }
+        server.join().unwrap();
+        assert_eq!(ids, vec![2], "only the newest list is shown, and nothing replaces it afterwards");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1619,4 +1809,24 @@ fn mode(m: &std::fs::Metadata) -> u32 {
     return std::os::unix::fs::PermissionsExt::mode(&m.permissions());
     #[cfg(not(unix))]
     return u32::from(m.permissions().readonly());
+}
+
+/// What first-run setup is told of the file manager entries: skipped entries
+/// (something else is in the way) are a failure with the reason, not "done".
+fn integration_result(outcome: one_mk_ctl::integrate::Outcome) -> Result<bool, String> {
+    if outcome.skipped > 0 { Err(outcome.message) } else { Ok(outcome.found) }
+}
+
+#[cfg(test)]
+mod integration_result_tests {
+    use super::*;
+    use one_mk_ctl::integrate::Outcome;
+
+    #[test]
+    fn skipped_entries_fail_setup_with_the_reason() {
+        let outcome = |skipped, found| Outcome { message: "something else is in the way".into(), skipped, found };
+        assert_eq!(integration_result(outcome(0, true)), Ok(true));
+        assert_eq!(integration_result(outcome(0, false)), Ok(false));
+        assert_eq!(integration_result(outcome(2, true)), Err("something else is in the way".into()));
+    }
 }

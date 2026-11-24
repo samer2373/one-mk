@@ -314,6 +314,21 @@ impl Keymap {
     /// warnings. Of two rules for the same key, layer and modifiers, the
     /// first counts.
     pub fn compile(specs: &[RuleSpec], target: Target, tap: Duration) -> Result<Compiled, NameError> {
+        Self::compile_with(specs, target, tap, false)
+    }
+
+    /// Like [`Keymap::compile`], but a rule that can't work (a bad layer
+    /// name, a tap/hold key that needs modifiers, a tap time out of
+    /// bounds, a ninth layer, a sequence of the wrong length) is left out
+    /// with a warning, so that one mistake costs only that rule. Only the
+    /// limits on the whole list are errors. For rules that come from a
+    /// settings file; commands that check a rule as it is added use
+    /// [`Keymap::compile`] on it.
+    pub fn compile_lenient(specs: &[RuleSpec], target: Target, tap: Duration) -> Result<Compiled, NameError> {
+        Self::compile_with(specs, target, tap, true)
+    }
+
+    fn compile_with(specs: &[RuleSpec], target: Target, tap: Duration, lenient: bool) -> Result<Compiled, NameError> {
         if specs.len() > MAX_RULES {
             return err(format!("at most {MAX_RULES} key rules, not {}", specs.len()));
         }
@@ -336,53 +351,68 @@ impl Keymap {
                 Some(l) => format!("{} (layer {l})", spec.from),
                 None => spec.from.to_string(),
             };
-            if u32::from(spec.from.key) >= CODE_LIMIT {
-                return err(format!("{}: no such key", where_()));
-            }
-            let l = match &spec.layer {
-                Some(name) => layer(&mut map, &valid_layer(name)?)?,
-                None => 0,
-            };
-            let out = |map: &mut Keymap, o: &Output, activated: &mut Vec<u8>| -> Result<Out, NameError> {
-                Ok(match o {
-                    Output::None => Out::None,
-                    Output::Chord(c) => Out::Chord(*c),
-                    Output::Nav(n) => Out::Chord(target.nav(*n)),
-                    Output::Sequence(s) => {
-                        if s.is_empty() || s.len() > MAX_SEQUENCE {
-                            return err(format!("{}: a sequence has 1 to {MAX_SEQUENCE} steps", where_()));
-                        }
-                        let start = map.chords.len() as u16;
-                        map.chords.extend_from_slice(s);
-                        Out::Seq { start, len: s.len() as u16 }
-                    }
-                    Output::Action(a) => {
-                        map.actions.push(Arc::new(a.clone()));
-                        Out::Action(map.actions.len() as u16 - 1)
-                    }
-                    Output::Layer(name) => {
-                        let i = layer(map, &valid_layer(name)?)?;
-                        activated.push(i);
-                        Out::Layer(i)
-                    }
-                })
-            };
-            let kind = match &spec.what {
-                What::To(o) => Kind::Plain(out(&mut map, o, &mut activated)?),
-                What::TapHold { tap: t, hold, timeout } => {
-                    if spec.from.has_mods() {
-                        return err(format!("{}: a tap/hold key can't need modifiers", where_()));
-                    }
-                    if matches!(t, Output::Layer(_)) {
-                        return err(format!("{}: `tap` can't be a layer (use `hold = \"layer:...\"`)", where_()));
-                    }
-                    let timeout = timeout.unwrap_or(tap);
-                    let ms = timeout.as_millis();
-                    if !(u128::from(MIN_TAP_MS)..=u128::from(MAX_TAP_MS)).contains(&ms) {
-                        return err(format!("{}: the tap time goes from {MIN_TAP_MS} to {MAX_TAP_MS} ms, not {ms}", where_()));
-                    }
-                    Kind::Dual { tap: out(&mut map, t, &mut activated)?, hold: out(&mut map, hold, &mut activated)?, timeout }
+            let built = (|| -> Result<(u8, Kind), NameError> {
+                if u32::from(spec.from.key) >= CODE_LIMIT {
+                    return err(format!("{}: no such key", where_()));
                 }
+                let l = match &spec.layer {
+                    Some(name) => layer(&mut map, &valid_layer(name)?)?,
+                    None => 0,
+                };
+                let out = |map: &mut Keymap, o: &Output, activated: &mut Vec<u8>| -> Result<Out, NameError> {
+                    Ok(match o {
+                        Output::None => Out::None,
+                        Output::Chord(c) => Out::Chord(*c),
+                        Output::Nav(n) => Out::Chord(target.nav(*n)),
+                        Output::Sequence(s) => {
+                            if s.is_empty() || s.len() > MAX_SEQUENCE {
+                                return err(format!("{}: a sequence has 1 to {MAX_SEQUENCE} steps", where_()));
+                            }
+                            // The table is indexed by u16: past that a sequence would
+                            // start over at the first chords and play the wrong keys.
+                            let Ok(start) = u16::try_from(map.chords.len()) else {
+                                return err(format!("{}: too many key sequences in all", where_()));
+                            };
+                            map.chords.extend_from_slice(s);
+                            Out::Seq { start, len: s.len() as u16 }
+                        }
+                        Output::Action(a) => {
+                            map.actions.push(Arc::new(a.clone()));
+                            Out::Action(map.actions.len() as u16 - 1)
+                        }
+                        Output::Layer(name) => {
+                            let i = layer(map, &valid_layer(name)?)?;
+                            activated.push(i);
+                            Out::Layer(i)
+                        }
+                    })
+                };
+                let kind = match &spec.what {
+                    What::To(o) => Kind::Plain(out(&mut map, o, &mut activated)?),
+                    What::TapHold { tap: t, hold, timeout } => {
+                        if spec.from.has_mods() {
+                            return err(format!("{}: a tap/hold key can't need modifiers", where_()));
+                        }
+                        if matches!(t, Output::Layer(_)) {
+                            return err(format!("{}: `tap` can't be a layer (use `hold = \"layer:...\"`)", where_()));
+                        }
+                        let timeout = timeout.unwrap_or(tap);
+                        let ms = timeout.as_millis();
+                        if !(u128::from(MIN_TAP_MS)..=u128::from(MAX_TAP_MS)).contains(&ms) {
+                            return err(format!("{}: the tap time goes from {MIN_TAP_MS} to {MAX_TAP_MS} ms, not {ms}", where_()));
+                        }
+                        Kind::Dual { tap: out(&mut map, t, &mut activated)?, hold: out(&mut map, hold, &mut activated)?, timeout }
+                    }
+                };
+                Ok((l, kind))
+            })();
+            let (l, kind) = match built {
+                Ok(built) => built,
+                Err(e) if lenient => {
+                    warnings.push(format!("{e}; this rule is not used"));
+                    continue;
+                }
+                Err(e) => return Err(e),
             };
             if !seen.insert((l, spec.from)) {
                 warnings.push(format!("{}: more than one rule; the first one counts", where_()));
@@ -1694,6 +1724,52 @@ mod tests {
     }
 
     #[test]
+    fn a_lenient_compile_leaves_out_only_the_bad_rule() {
+        let slow = RuleSpec {
+            what: What::TapHold { tap: Output::None, hold: Output::None, timeout: Some(Duration::from_secs(5)) },
+            ..dual("b", "b", "c")
+        };
+        let specs = [
+            rule("capslock", "esc"),
+            slow,
+            RuleSpec { from: "ctrl+d".parse().unwrap(), ..dual("d", "b", "c") },
+            in_layer("has space", "h", "left"),
+            RuleSpec { from: "a".parse().unwrap(), layer: None, what: What::To(Output::Layer("no way".into())) },
+            rule("f1", "b"),
+        ];
+        assert!(Keymap::compile(&specs, PC, DEFAULT_TAP).is_err());
+        let c = Keymap::compile_lenient(&specs, PC, DEFAULT_TAP).unwrap();
+        let w = c.warnings.join("\n");
+        for what in ["from 50 to 2000 ms", "can't need modifiers", "layer name \"has space\"", "layer name \"no way\"", "this rule is not used"] {
+            assert!(w.contains(what), "{what} in {w}");
+        }
+        let t0 = Instant::now();
+        let mut t = T { m: Mapper::new(c.map), t0, now: t0, out: Vec::new() };
+        assert_eq!(t.tap(CAPS), [d(ESC), u(ESC)], "the good rules still work");
+        assert_eq!(t.tap(59), [d(48), u(48)]);
+        // The limits on the whole list stay errors.
+        let too_many = vec![rule("a", "b"); MAX_RULES + 1];
+        assert!(Keymap::compile_lenient(&too_many, PC, DEFAULT_TAP).is_err());
+    }
+
+    #[test]
+    fn sequence_offsets_never_wrap() {
+        let steps = ["a"; MAX_SEQUENCE];
+        let both = RuleSpec {
+            what: What::TapHold { tap: Output::sequence(&steps).unwrap(), hold: Output::sequence(&steps).unwrap(), timeout: None },
+            ..dual("b", "b", "c")
+        };
+        // 2048 rules fill the u16 table exactly; one more would start at 0.
+        let mut specs = vec![both; 2049];
+        let e = Keymap::compile(&specs, PC, DEFAULT_TAP).unwrap_err().0;
+        assert!(e.contains("too many key sequences"), "{e}");
+        let c = Keymap::compile_lenient(&specs, PC, DEFAULT_TAP).unwrap();
+        assert!(c.warnings.iter().any(|w| w.contains("too many key sequences")));
+        specs.truncate(2048);
+        assert!(Keymap::compile(&specs, PC, DEFAULT_TAP).is_ok());
+    }
+
+    #[test]
     fn odd_rules_are_warnings() {
         let c = Keymap::compile(&[rule("a", "b"), rule("a", "c"), in_layer("nav", "h", "left"), rule("f1", "layer:empty")], PC, DEFAULT_TAP)
             .unwrap();
@@ -1701,7 +1777,8 @@ mod tests {
         assert!(w.contains("a: more than one rule"), "{w}");
         assert!(w.contains("layer \"nav\" is never switched on"), "{w}");
         assert!(w.contains("layer \"empty\" has no rules"), "{w}");
-        let mut t = T { m: Mapper::new(c.map), t0: Instant::now(), now: Instant::now(), out: Vec::new() };
+        let t0 = Instant::now();
+        let mut t = T { m: Mapper::new(c.map), t0, now: t0, out: Vec::new() };
         assert_eq!(t.tap(A), [d(48), u(48)], "the first rule counts");
     }
 

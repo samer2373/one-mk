@@ -2,20 +2,39 @@ use super::{KeyboardLayout, shortcut};
 use crate::{Composition, LayoutComposer, X11Keyboard, X11LayoutSnapshot};
 use one_mk_proto::{Mods, typing::{LayoutDescriptor, Resolution}};
 
-pub(super) type State = LayoutComposer;
+/// A compose state and the keys fed to it that are still pending (dead
+/// keys), so a sequence that ends up cancelled can give back its text.
+pub(super) struct State {
+    composer: LayoutComposer,
+    pending: Vec<(u32, crate::LayoutState)>,
+}
+
+impl State {
+    fn reset(&mut self) {
+        self.composer.reset();
+        self.pending.clear();
+    }
+}
+
+/// Backspace, Tab, Enter and the keypad's Enter: the keys that, after a dead key, commit the
+/// accent and then act. (Escape is left to cancel the sequence without typing anything.)
+fn flushes_accent(code: u32) -> bool {
+    matches!(code, 14 | 15 | 28 | 96)
+}
 
 pub(super) struct Keyboard {
     keyboard: Option<X11Keyboard>,
     snapshot: Option<X11LayoutSnapshot>,
-    composer: LayoutComposer,
+    composer: State,
 }
 
 impl Keyboard {
-    fn composer() -> Option<LayoutComposer> {
+    fn composer() -> Option<State> {
         let locale = ["LC_ALL", "LC_CTYPE", "LANG"].into_iter()
             .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
             .unwrap_or_else(|| "C.UTF-8".into());
-        LayoutComposer::new(&std::ffi::CString::new(locale).ok()?)
+        let composer = LayoutComposer::new(&std::ffi::CString::new(locale).ok()?)?;
+        Some(State { composer, pending: Vec::new() })
     }
 
     pub(super) fn new() -> Option<Self> {
@@ -66,14 +85,59 @@ impl Keyboard {
         if shortcut(mods, false) { self.reset(); return Resolution::Physical; }
         let Some(snapshot) = &self.snapshot else { return Resolution::Physical };
         let Some(masks) = snapshot.resolver.masks_for(mods, snapshot.masks) else { return Resolution::Physical };
-        match self.composer.feed(&snapshot.resolver, code, masks) {
-            Composition::Text(text) => Resolution::Text(text),
-            Composition::Pending => Resolution::Pending,
-            Composition::Cancelled => {
-                if one_mk_proto::typing::character_key_code(code) { Resolution::Pending }
-                else { Resolution::Physical }
+        match self.composer.composer.feed(&snapshot.resolver, code, masks) {
+            Composition::Text(text) => {
+                self.composer.pending.clear();
+                Resolution::Text(text)
             }
-            Composition::Physical => Resolution::Physical,
+            Composition::Pending => {
+                self.composer.pending.push((code, masks));
+                Resolution::Pending
+            }
+            Composition::Cancelled => {
+                let pending = std::mem::take(&mut self.composer.pending);
+                if one_mk_proto::typing::character_key_code(code) {
+                    Self::cancelled(&snapshot.resolver, &mut self.composer, &pending, code, masks)
+                } else if flushes_accent(code) {
+                    // Enter, Tab or Backspace after a dead key: the accent is typed, then the key does its job.
+                    Self::accent(&snapshot.resolver, &pending).map_or(Resolution::Physical, Resolution::TextThenKey)
+                } else { Resolution::Physical }
+            }
+            Composition::Physical => {
+                self.composer.pending.clear();
+                Resolution::Physical
+            }
+        }
+    }
+
+    /// A sequence was abandoned (a dead key and a key that does not go with
+    /// it): both are typed, the dead key as its spacing accent, as a local
+    /// input method does. The cancelling key may be a dead key itself, which
+    /// then starts the next sequence.
+    fn cancelled(resolver: &crate::LayoutResolver, state: &mut State, pending: &[(u32, crate::LayoutState)], code: u32, masks: crate::LayoutState) -> Resolution {
+        let mut text = Self::accent(resolver, pending).unwrap_or_default();
+        match resolver.resolve(code, masks) {
+            Some(own) => text.push_str(&own),
+            None => match state.composer.feed(resolver, code, masks) {
+                Composition::Pending => state.pending.push((code, masks)),
+                Composition::Text(own) => text.push_str(&own),
+                _ => {}
+            },
+        }
+        if text.is_empty() { Resolution::Pending } else { Resolution::Text(text) }
+    }
+
+    /// What the pending keys type on their own: the compose table's answer
+    /// to those keys followed by Space (`<dead_acute> <space>` is `'`).
+    fn accent(resolver: &crate::LayoutResolver, pending: &[(u32, crate::LayoutState)]) -> Option<String> {
+        let mut scratch = Self::composer()?;
+        let (_, last) = *pending.last()?;
+        for &(code, masks) in pending {
+            if scratch.composer.feed(resolver, code, masks) != Composition::Pending { return None; }
+        }
+        match scratch.composer.feed(resolver, 57, crate::LayoutState { depressed: 0, latched: 0, ..last }) {
+            Composition::Text(text) => Some(text),
+            _ => None,
         }
     }
 }
@@ -116,6 +180,40 @@ mod tests {
         assert_eq!(source.resolve(40, Mods::default()), Resolution::Pending);
         assert_eq!(source.resolve(1, Mods::default()), Resolution::Physical);
         assert_eq!(source.resolve(18, Mods::default()), Resolution::Text("e".into()));
+    }
+
+    #[test]
+    fn typing_cancelled_compose_types_the_accent_and_the_key() {
+        let Some(source) = layout("us(intl)") else { return };
+        // "don't": the apostrophe is a dead key, t does not go with it.
+        assert_eq!(source.resolve(40, Mods::default()), Resolution::Pending);
+        assert_eq!(source.resolve(20, Mods::default()), Resolution::Text("'t".into()));
+        // The sequence is over: t is plain again, and e still composes.
+        assert_eq!(source.resolve(20, Mods::default()), Resolution::Text("t".into()));
+        assert_eq!(source.resolve(40, Mods::default()), Resolution::Pending);
+        assert_eq!(source.resolve(18, Mods::default()), Resolution::Text("é".into()));
+        // A dead key followed by one that does not combine: the first is
+        // typed, the second starts over.
+        assert_eq!(source.resolve(40, Mods::default()), Resolution::Pending);
+        assert_eq!(source.resolve(41, Mods::default()), Resolution::Text("'".into()));
+        assert_eq!(source.resolve(18, Mods::default()), Resolution::Text("è".into()));
+        source.reset();
+        assert_eq!(source.resolve(40, Mods::default()), Resolution::Pending);
+        assert_eq!(source.resolve(1, Mods::default()), Resolution::Physical);
+        assert_eq!(source.resolve(18, Mods::default()), Resolution::Text("e".into()));
+    }
+
+    #[test]
+    fn typing_a_dead_key_before_enter_or_backspace_keeps_the_accent() {
+        let Some(source) = layout("us(intl)") else { return };
+        for code in [28, 14, 15, 96] {
+            assert_eq!(source.resolve(40, Mods::default()), Resolution::Pending);
+            assert_eq!(source.resolve(code, Mods::default()), Resolution::TextThenKey("'".into()), "key {code}");
+            // The sequence is over: e is plain again.
+            assert_eq!(source.resolve(18, Mods::default()), Resolution::Text("e".into()));
+        }
+        // Without a dead key before it Enter is just Enter.
+        assert_eq!(source.resolve(28, Mods::default()), Resolution::Physical);
     }
 
     #[test]

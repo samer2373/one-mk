@@ -234,14 +234,11 @@ fn check_ancestors(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A symbolic link (on Windows also a junction). Not every reparse point: cloud
+/// placeholders (OneDrive) carry the attribute and are real files, and std
+/// tells the two apart by the reparse tag.
 fn redirected(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        metadata.file_attributes() & 0x400 != 0
-    }
-    #[cfg(not(windows))]
-    { metadata.file_type().is_symlink() }
+    metadata.file_type().is_symlink()
 }
 
 #[derive(Default)]

@@ -108,7 +108,16 @@ both service ports, both nonces and 32 bytes of TLS exported keying material
 binds proofs/SAS to the exact TLS connection. The secret itself is never an
 invitation message. `ring::hmac::verify` checks proofs in constant time.
 This pre-merge wire revision is incompatible with earlier invitation builds;
-update both computers. Existing numeric pairing is unchanged.
+update both computers. Existing numeric pairing is unchanged on the wire.
+
+Numeric `one-mk pair` runs the code agreement of every incoming connection in
+its own task, so a computer that connects and says nothing waits out only its
+own step; at most 16 run at once (the oldest is dropped past that), and one
+candidate at a time is then shown its code and asked. If two computers dial
+each other at once (`--connect` on one, discovery on the other), both serve
+both connections and both use the one the lower fingerprint dialed, so they
+cannot end up on different ones. A connection the higher fingerprint dialed
+waits 1.5 s for it when discovery is on, and is used after that.
 
 ## State, limits and clocks
 
@@ -179,11 +188,10 @@ transitions without a configured hook. Still-pending events for that peer
 cannot be overtaken by an earlier due time. Hooks and key actions have separate
 eight-process budgets, so neither consumes the other's capacity.
 
-When the Linux network watcher has never connected to the system bus, five
-consecutive identical connection failures stop automatic retries entirely.
-Manual `profile use` remains available; restart the daemon after fixing an
-initially absent bus to rearm automatic watching. A previously working bus
-continues reconnecting with the bounded 1–60 second backoff.
+When the Linux network watcher cannot reach the system bus (or NetworkManager
+is not running), it keeps retrying with the bounded 1–60 second backoff and says
+so once in the log, so a bus that starts late is picked up without restarting
+the daemon. Manual `profile use` works meanwhile.
 
 Windows startup removal reads the Run value through the wide-character
 registry API rather than decoding `reg query` output. Non-ASCII paths remain

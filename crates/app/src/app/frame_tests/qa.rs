@@ -21,6 +21,8 @@ use std::sync::{Arc, Mutex};
 /// stderr, exit 1) or prints what the files `fail-<first>-<second>`,
 /// `fail-<first>`, `out-<first>-<second>` and `out-<first>` say, the most
 /// specific first. `<second>` is `_` for a call of one word (`update` alone).
+/// While a file `hold-<first>` exists it waits (after writing the call down),
+/// so a test can end a command at the moment it chooses.
 const SCRIPT: &str = r#"#!/bin/sh
 home=""
 prev=""
@@ -43,6 +45,7 @@ for a in "$@"; do
 done
 printf '%s\n' "$line" >> "$state/calls.log"
 [ -n "$second" ] || second="_"
+while [ -f "$state/hold-$first" ]; do sleep 0.02; done
 if [ -f "$state/fail-$first-$second" ]; then cat "$state/fail-$first-$second" >&2; exit 1; fi
 if [ -f "$state/fail-$first" ]; then cat "$state/fail-$first" >&2; exit 1; fi
 if [ -f "$state/out-$first-$second" ]; then cat "$state/out-$first-$second"; elif [ -f "$state/out-$first" ]; then cat "$state/out-$first"; fi
@@ -97,6 +100,15 @@ impl Fake {
     /// Calls starting with `first` (or `first-second`) fail with this message.
     pub fn fail(&self, which: &str, message: &str) {
         std::fs::write(self.state.join(format!("fail-{which}")), message).unwrap();
+    }
+
+    /// Calls starting with `first` wait, once written down, until `release`.
+    pub fn hold(&self, first: &str) {
+        std::fs::write(self.state.join(format!("hold-{first}")), "").unwrap();
+    }
+
+    pub fn release(&self, first: &str) {
+        let _ = std::fs::remove_file(self.state.join(format!("hold-{first}")));
     }
 
     pub fn mend(&self, which: &str) {
@@ -310,6 +322,32 @@ fn pressing_a_new_key_saves_the_rule_and_escape_cancels() {
     // The rules are checked after a change.
     assert!(!fake.calls_with(&["keymap", "check"]).is_empty());
     assert!(win.app.keys.error.is_none());
+}
+
+/// egui-winit takes the key-down of Ctrl+V for itself and says nothing when the
+/// clipboard holds neither text nor a picture: the recorder used to save Ctrl alone.
+#[test]
+fn recording_ctrl_v_with_an_empty_clipboard_records_the_chord() {
+    let (mut win, fake) = keys_window();
+    select_caps(&mut win);
+    win.click("Press the key Caps Lock should become");
+    assert!(win.app.keys.capture.is_some());
+    let ctrl = Modifiers::CTRL;
+    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+    // Ctrl goes down; V goes down too, and egui-winit swallows that (empty clipboard): no event.
+    win.push(key(Key::ControlLeft, true, Modifiers::NONE));
+    win.push(egui::Event::ModifiersChanged(ctrl));
+    win.frames(3);
+    assert!(win.app.keys.capture.is_some(), "still waiting for the key");
+    // V goes up, then Ctrl.
+    win.push(key(Key::V, false, ctrl));
+    win.frames(2);
+    win.push(key(Key::ControlLeft, false, Modifiers::NONE));
+    win.push(egui::Event::ModifiersChanged(Modifiers::NONE));
+    win.frames(3);
+    assert!(win.app.keys.capture.is_none(), "it recorded something");
+    win.quiet();
+    assert_eq!(fake.calls_with(&["keymap", "add"]), vec![args(&["keymap", "add", "--", "capslock", "ctrl+v"])]);
 }
 
 #[test]

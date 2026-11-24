@@ -32,15 +32,19 @@ fn root() -> PathBuf {
         #[cfg(unix)]
         std::fs::set_permissions(&made, std::os::unix::fs::PermissionsExt::from_mode(0o700)).expect("a private scratch folder");
         REGISTER.call_once(|| {
-            #[cfg(unix)]
             // SAFETY: registers a plain function with no arguments that only removes a folder.
-            unsafe { libc::atexit(remove_root) };
+            unsafe { atexit(remove_root) };
         });
         made
     }).clone()
 }
 
-#[cfg(unix)]
+// The C runtime's own `atexit` (also on Windows, where the `libc` crate is
+// not a dependency): the folders were never removed there.
+unsafe extern "C" {
+    fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
+}
+
 extern "C" fn remove_root() {
     // Never wait for a lock at exit: a thread that holds it would hang the program.
     if let Ok(mut root) = ROOT.try_lock() && let Some(root) = root.take() {

@@ -1,5 +1,6 @@
 //! Held-button gestures. No timer or I/O; cancellation never replays clicks.
 
+use crate::device::DeviceRef;
 use std::str::FromStr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +29,7 @@ pub struct Rule<T> {
 pub enum ButtonResult { Pass, Swallow, Replay(u32) }
 
 #[derive(Clone, Debug)]
-struct Press { button: u32, displacement: (f64, f64), fired: bool, moved: bool }
+struct Press { button: u32, holders: Vec<Option<DeviceRef>>, displacement: (f64, f64), fired: bool, moved: bool }
 
 #[derive(Clone, Debug)]
 pub struct Gesture<T> {
@@ -48,14 +49,32 @@ impl<T> Gesture<T> {
 
     pub fn active(&self) -> bool { !self.presses.is_empty() }
 
-    pub fn button(&mut self, button: u32, down: bool) -> ButtonResult {
+    pub fn button(&mut self, button: u32, down: bool) -> ButtonResult { self.button_from(button, down, None) }
+
+    /// A button transition from `source` (`None`: not known). Two devices
+    /// may hold the same button: the press ends with the last release, so
+    /// one mouse letting go doesn't replay a click or drop the hold of the other.
+    pub fn button_from(&mut self, button: u32, down: bool, source: Option<DeviceRef>) -> ButtonResult {
         if let Some(index) = self.presses.iter().position(|press| press.button == button) {
-            if down { return ButtonResult::Swallow; }
+            let press = &mut self.presses[index];
+            if down {
+                if !press.holders.contains(&source) { press.holders.push(source); }
+                return ButtonResult::Swallow;
+            }
+            // A release from a device that never pressed it (or whose id was not known
+            // at the press) ends one hold instead of leaving the press stuck.
+            match press.holders.iter().position(|holder| *holder == source)
+                .or_else(|| press.holders.iter().position(Option::is_none))
+                .or_else(|| source.is_none().then_some(0)) {
+                Some(held) => { press.holders.remove(held); }
+                None => return ButtonResult::Swallow,
+            }
+            if !press.holders.is_empty() { return ButtonResult::Swallow; }
             let press = self.presses.remove(index);
             return if press.fired || press.moved { ButtonResult::Swallow } else { ButtonResult::Replay(button) };
         }
         if !self.rules.iter().any(|rule| rule.button == button) { return ButtonResult::Pass; }
-        if down { self.presses.push(Press { button, displacement: (0.0, 0.0), fired: false, moved: false }); }
+        if down { self.presses.push(Press { button, holders: vec![source], displacement: (0.0, 0.0), fired: false, moved: false }); }
         ButtonResult::Swallow
     }
 
@@ -106,6 +125,46 @@ mod tests {
     fn state() -> Gesture<()> {
         Gesture::new(vec![Rule { button: 0x113, direction: Direction::Left, threshold_px: 60.0, output: () }])
     }
+    #[test]
+    fn a_hold_ends_with_the_last_device_to_let_go() {
+        let (a, b) = (Some(DeviceRef(1)), Some(DeviceRef(2)));
+        let mut state = state();
+        let mut fired = 0;
+        assert_eq!(state.button_from(0x113, true, a), ButtonResult::Swallow);
+        assert_eq!(state.button_from(0x113, true, b), ButtonResult::Swallow);
+        assert_eq!(state.button_from(0x113, true, b), ButtonResult::Swallow, "a repeat is not another hold");
+        assert_eq!(state.button_from(0x113, false, a), ButtonResult::Swallow, "no click while the other still holds");
+        assert!(state.active());
+        state.motion(-60.0, 0.0, &mut |_| fired += 1);
+        assert_eq!(fired, 1, "the swipe still fires");
+        assert_eq!(state.button_from(0x113, false, b), ButtonResult::Swallow);
+        assert!(!state.active());
+        // Untouched, the last release is the click.
+        state.button_from(0x113, true, a);
+        state.button_from(0x113, true, b);
+        assert_eq!(state.button_from(0x113, false, b), ButtonResult::Swallow);
+        assert_eq!(state.button_from(0x113, false, a), ButtonResult::Replay(0x113));
+    }
+
+    #[test]
+    fn a_release_that_names_no_holder_does_not_leave_the_press_stuck() {
+        let (a, other) = (Some(DeviceRef(1)), Some(DeviceRef(9)));
+        let mut state = state();
+        // Pressed without a device id, released with one: still one press.
+        state.button_from(0x113, true, None);
+        assert_eq!(state.button_from(0x113, false, a), ButtonResult::Replay(0x113));
+        assert!(!state.active());
+        // Pressed by a device, released without an id.
+        state.button_from(0x113, true, a);
+        assert_eq!(state.button_from(0x113, false, None), ButtonResult::Replay(0x113));
+        assert!(!state.active());
+        // A device that never pressed it cannot end another's hold.
+        state.button_from(0x113, true, a);
+        assert_eq!(state.button_from(0x113, false, other), ButtonResult::Swallow);
+        assert!(state.active());
+        assert_eq!(state.button_from(0x113, false, a), ButtonResult::Replay(0x113));
+    }
+
     #[test]
     fn click_or_action_never_both_and_cancellation_never_replays() {
         let mut state = state();

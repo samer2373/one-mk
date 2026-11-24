@@ -44,6 +44,13 @@ pub struct Ring {
     samples: VecDeque<Sample>,
     /// The daemon's running count of lost packets at the last sample.
     lost_seen: Option<u64>,
+    /// ... and of packets sent: it only grows within one connection, so a
+    /// lower number is a new connection even when no packet was ever lost.
+    sent_seen: Option<u64>,
+    /// ... and which connection the daemon said it was: another number is
+    /// another connection, whatever its counts (a replacement that has sent
+    /// as many packets as the old one had at the last look is not told apart by them).
+    generation_seen: Option<u64>,
 }
 
 impl Ring {
@@ -58,8 +65,16 @@ impl Ring {
         if self.samples.back().is_some_and(|s| now - s.at > SPAN) {
             self.samples.clear();
             self.lost_seen = None;
+            self.sent_seen = None;
+            self.generation_seen = None;
         }
+        let replaced = self.sent_seen.is_some_and(|before| link.sent < before) || self.generation_seen.is_some_and(|before| link.generation != before);
         let lost = match self.lost_seen {
+            // Another connection under the same name (the counts started over): nothing before it counts.
+            Some(_) if replaced => {
+                self.samples.clear();
+                0
+            }
             Some(before) if link.lost >= before => u32::try_from(link.lost - before).unwrap_or(u32::MAX),
             // The count went down: another connection. Nothing before it counts.
             Some(_) => {
@@ -70,6 +85,8 @@ impl Ring {
             None => 0,
         };
         self.lost_seen = Some(link.lost);
+        self.sent_seen = Some(link.sent);
+        self.generation_seen = Some(link.generation);
         while self.samples.front().is_some_and(|s| now - s.at > SPAN) || self.samples.len() >= CAPACITY {
             self.samples.pop_front();
         }
@@ -227,7 +244,7 @@ pub enum Change {
     /// The reading moved by [`VALUE_STEP_US`] or more: worth a frame, but a
     /// jittery link needn't have one every second.
     Value,
-    /// A computer came or went, packets were lost, or the link crossed
+    /// A computer came or went, its connection was replaced, packets were lost, or the link crossed
     /// into "some stalls" or "slow": say so at once.
     Urgent,
 }
@@ -236,7 +253,7 @@ pub enum Change {
 /// `new`.
 pub fn change(old: &[(String, LinkStats)], new: &[(String, LinkStats)]) -> Change {
     let class = |us: u32| (us >= STALL_US, us >= SLOW_US);
-    if old.len() != new.len() || old.iter().zip(new).any(|((a_id, a), (b_id, b))| a_id != b_id || a.lost != b.lost || class(a.rtt_us) != class(b.rtt_us)) {
+    if old.len() != new.len() || old.iter().zip(new).any(|((a_id, a), (b_id, b))| a_id != b_id || a.lost != b.lost || a.generation != b.generation || class(a.rtt_us) != class(b.rtt_us)) {
         Change::Urgent
     } else if old.iter().zip(new).any(|((_, a), (_, b))| a.rtt_us.abs_diff(b.rtt_us) >= VALUE_STEP_US && ms_number(a.rtt_us) != ms_number(b.rtt_us)) {
         Change::Value
@@ -285,7 +302,7 @@ pub fn scripted(now: f64, text: &str) -> Ring {
         let (t, l) = item.split_once('+').unwrap_or((item, "0"));
         lost += l.parse::<u64>().unwrap_or(0);
         let at = now - (items.len() - 1 - k) as f64 * EVERY;
-        ring.push(at, LinkStats { rtt_us: (t.parse::<f32>().unwrap_or(0.0) * 1000.0) as u32, lost, sent: 0 });
+        ring.push(at, LinkStats { rtt_us: (t.parse::<f32>().unwrap_or(0.0) * 1000.0) as u32, lost, sent: 0, generation: 0 });
     }
     ring
 }
@@ -295,7 +312,7 @@ mod tests {
     use super::*;
 
     fn link(ms: f32, lost: u64) -> LinkStats {
-        LinkStats { rtt_us: (ms * 1000.0) as u32, lost, sent: 0 }
+        LinkStats { rtt_us: (ms * 1000.0) as u32, lost, sent: 0, generation: 0 }
     }
 
     fn named(readings: &[(&str, f32, u64)]) -> Vec<(String, LinkStats)> {
@@ -326,6 +343,57 @@ mod tests {
         assert_eq!(change(&old, &named(&[("a", 4.2, 3), ("b", 4.0, 0)])), Change::Urgent, "a computer joined");
         assert_eq!(change(&old, &named(&[("b", 4.2, 3)])), Change::Urgent, "another computer");
         assert_eq!(change(&[], &old), Change::Urgent, "the first reading");
+    }
+
+    #[test]
+    fn a_connection_replaced_between_looks_starts_the_history_over() {
+        // No packet lost on either: only the sent count tells them apart.
+        let mut rtts = Rtts::default();
+        for k in 0..6u32 {
+            rtts.record(f64::from(k), &[("p".into(), LinkStats { rtt_us: 150_000, lost: 0, sent: 5000 + u64::from(k) * 100, generation: 0 })]);
+        }
+        let before = rtts.of("p").and_then(|r| r.summary(5.0)).expect("history");
+        assert_eq!((before.count, before.p95_us), (6, 150_000));
+        rtts.record(6.0, &[("p".into(), LinkStats { rtt_us: 2000, lost: 0, sent: 10, generation: 0 })]);
+        rtts.record(7.0, &[("p".into(), LinkStats { rtt_us: 2100, lost: 0, sent: 60, generation: 0 })]);
+        let after = rtts.of("p").and_then(|r| r.summary(7.0)).expect("history");
+        assert_eq!(after.count, 2, "the old connection's samples are gone");
+        assert!(after.p95_us < 5000, "{after:?}");
+        assert_eq!(after.lost, 0);
+    }
+
+    #[test]
+    fn a_replacement_with_counts_that_caught_up_still_starts_the_history_over() {
+        // The new connection has sent exactly as much, and then more, than the old one had at the last look,
+        // and lost the same: nothing in the counts says it is not the old one. Only its generation does.
+        let at = |generation, rtt_us, lost, sent| [("p".to_owned(), LinkStats { rtt_us, lost, sent, generation })];
+        for (lost, sent_after) in [(0u64, [9000u64, 9100]), (4, [9000, 9100]), (4, [20_000, 30_000])] {
+            let mut rtts = Rtts::default();
+            for k in 0..6u32 {
+                rtts.record(f64::from(k), &at(7, 150_000, lost, 8000 + u64::from(k) * 200));
+            }
+            let old = rtts.of("p").and_then(|r| r.summary(5.0)).expect("history");
+            assert_eq!((old.count, old.p95_us), (6, 150_000));
+            rtts.record(6.0, &at(8, 2000, lost, sent_after[0]));
+            rtts.record(7.0, &at(8, 2100, lost, sent_after[1]));
+            let new = rtts.of("p").and_then(|r| r.summary(7.0)).expect("history");
+            assert_eq!(new.count, 2, "the old connection's samples are gone ({lost}, {sent_after:?})");
+            assert!(new.p95_us < 5000 && new.lost == 0, "{new:?}");
+        }
+        // The same connection keeps its history; a daemon that does not say (0, 0) keeps the count-based rule.
+        let mut rtts = Rtts::default();
+        for k in 0..6u32 {
+            rtts.record(f64::from(k), &at(7, 3000, 0, 100 * u64::from(k)));
+        }
+        assert_eq!(rtts.of("p").and_then(|r| r.summary(5.0)).map(|s| s.count), Some(6));
+        // A daemon that starts saying (or stops saying) it is a new reading source: a new connection too, not a stale graph.
+        rtts.record(6.0, &at(0, 3000, 0, 700));
+        assert_eq!(rtts.of("p").and_then(|r| r.summary(6.0)).map(|s| s.count), Some(1));
+        // A replacement is something to draw at once.
+        let old = [("p".to_owned(), LinkStats { rtt_us: 3000, lost: 0, sent: 5, generation: 1 })];
+        let new = [("p".to_owned(), LinkStats { generation: 2, ..old[0].1 })];
+        assert_eq!(change(&old, &old), Change::None);
+        assert_eq!(change(&old, &new), Change::Urgent);
     }
 
     fn ring(times: &[f32]) -> (Ring, f64) {
@@ -478,7 +546,7 @@ mod tests {
                 now += [0.0, 0.3, 1.0, 1.0, 1.0, 3.0, 40.0, -5.0, f64::MAX][(next() % 9) as usize];
                 let rtt_us = [0, 1, 999, 4_000, 60_000_000, u32::MAX][(next() % 6) as usize];
                 let lost = [0, 1, 7, u64::MAX, next()][(next() % 5) as usize];
-                r.push(now, LinkStats { rtt_us, lost, sent: next() });
+                r.push(now, LinkStats { rtt_us, lost, sent: next(), generation: next() % 3 });
                 assert!(r.samples.len() <= CAPACITY);
             }
             for at in [now, now + 5.0, now - 1000.0, 0.0, f64::MAX, f64::NAN] {
@@ -518,7 +586,7 @@ mod tests {
 
     #[test]
     fn losses_from_before_a_long_gap_are_not_charged_to_the_new_window() {
-        let stats = |lost, sent| LinkStats { rtt_us: 1000, lost, sent };
+        let stats = |lost, sent| LinkStats { rtt_us: 1000, lost, sent, generation: 0 };
         let mut ring = Ring::default();
         ring.push(0.0, stats(0, 100));
         // The graph was hidden: the daemon's count grew meanwhile.

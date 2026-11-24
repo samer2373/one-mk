@@ -14,7 +14,7 @@
 
 use crate::common_logic::now_ms;
 use crate::devcorr::{Correlated, Correlator, Token, hid_button_to_evdev, windows_path};
-use crate::win_logic::hook_key_to_evdev;
+use crate::win_logic::{ProbeBook, hook_key_to_evdev};
 use crate::{Bus, DeviceRef, Fingerprint, InputDevice, Kinds};
 use windows_sys::Win32::Devices::HumanInterfaceDevice::{HidD_GetProductString, HidD_GetSerialNumberString};
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM};
@@ -24,10 +24,15 @@ use windows_sys::Win32::UI::Input::{
     RAWINPUTHEADER, RID_INPUT, RIDEV_DEVNOTIFY, RIDEV_INPUTSINK, RIDEV_REMOVE, RIDI_DEVICENAME, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE,
     RegisterRawInputDevices,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{RI_KEY_BREAK, RI_KEY_E0, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL};
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, PostMessageW, RI_KEY_BREAK, RI_KEY_E0, RI_MOUSE_HWHEEL, RI_MOUSE_WHEEL, SM_SWAPBUTTON, WM_APP};
+use std::sync::{Arc, Mutex};
 
 /// Generic desktop page: mouse (2) and keyboard (6).
 const USAGES: [(u16, u16); 2] = [(1, 2), (1, 6)];
+
+/// Posted to the window given to [`RawDevices::probe_in_background`] when a device's strings came
+/// back: ask [`RawDevices::enumerate`] again.
+pub(crate) const WM_IDENTITY: u32 = WM_APP + 6;
 
 /// The devices Raw Input knows, and the events being matched.
 #[derive(Default)]
@@ -37,6 +42,22 @@ pub(crate) struct RawDevices {
     next: u32,
     pub(crate) corr: Correlator,
     registered: bool,
+    probes: Option<Probes>,
+}
+
+/// Devices whose HID strings are being asked for on worker threads. Opening a HID interface and
+/// reading its strings is a round trip to the driver: for a sleeping Bluetooth keyboard or a
+/// flaky USB one it can take seconds, and the thread that owns the low-level hooks must not wait
+/// that long (Windows drops a hook whose thread is slow). A device is announced once its answer
+/// is in; until then its input counts as coming from an unknown device, which only the rules
+/// without a device apply to. Only a few workers are waiting on drivers at a time: a device that
+/// finds no free one stays unknown until a worker returns (which asks again), and a worker that
+/// never returns costs a thread, not the hooks.
+struct Probes {
+    window: usize,
+    /// Finished probes, filled by the workers.
+    done: Arc<Mutex<Vec<(isize, Fingerprint)>>>,
+    book: ProbeBook<Fingerprint>,
 }
 
 impl RawDevices {
@@ -54,6 +75,55 @@ impl RawDevices {
             tracing::debug!("Raw Input refused: input from every device counts as unknown");
         }
         self.registered = ok;
+    }
+
+    /// From now on a new device's HID strings are asked for on a worker thread, which posts
+    /// [`WM_IDENTITY`] to `window` when it is done. Without this, they are asked for in
+    /// [`enumerate`](Self::enumerate) itself.
+    pub(crate) fn probe_in_background(&mut self, window: HWND) {
+        self.probes = Some(Probes { window: window as usize, done: Arc::default(), book: ProbeBook::default() });
+    }
+
+    /// Who the device `h` is, or `None` while that is being asked for.
+    fn fingerprint(&mut self, h: isize, kinds: Kinds) -> Option<Fingerprint> {
+        let Some(probes) = &mut self.probes else { return Some(identity(h as HANDLE, kinds)) };
+        if let Some(fingerprint) = probes.book.take(h) {
+            return Some(fingerprint);
+        }
+        // Being asked for, or no worker to ask with: unknown for now, asked again next time.
+        if probes.book.asking(h) || !probes.book.has_room() {
+            return None;
+        }
+        let (done, window) = (Arc::clone(&probes.done), probes.window);
+        let running = probes.book.started(h);
+        let worker = std::thread::Builder::new().name("one-mk-hid-probe".into()).spawn({
+            let running = Arc::clone(&running);
+            move || {
+                let fingerprint = identity(h as HANDLE, kinds);
+                if let Ok(mut done) = done.lock() {
+                    done.push((h, fingerprint));
+                }
+                ProbeBook::<Fingerprint>::returned(&running);
+                // SAFETY: posting to a window handle is safe even if it is gone.
+                unsafe { PostMessageW(window as HWND, WM_IDENTITY, 0, 0) };
+            }
+        });
+        if worker.is_err() {
+            // No thread to ask on: unknown, as while it is asked for (never wait for the driver here).
+            ProbeBook::<Fingerprint>::returned(&running);
+            probes.book.retire(|x| x != h);
+        }
+        None
+    }
+
+    /// Takes in the probes that finished, and forgets what no connected device is waiting for.
+    fn collect_probes(&mut self, listed: &[(isize, u32)]) {
+        let Some(probes) = &mut self.probes else { return };
+        let finished = probes.done.lock().map(|mut done| std::mem::take(&mut *done)).unwrap_or_default();
+        for (h, fingerprint) in finished {
+            probes.book.answered(h, fingerprint);
+        }
+        probes.book.retire(|h| listed.iter().any(|(x, _)| *x == h));
     }
 
     /// Stops reading Raw Input (capture ends); what waits goes to `out`.
@@ -78,6 +148,7 @@ impl RawDevices {
     /// before the new list.
     pub(crate) fn enumerate(&mut self, out: &mut Vec<Correlated>) -> Option<Vec<InputDevice>> {
         let handles = device_list();
+        self.collect_probes(&handles);
         let before: Vec<InputDevice> = self.table.iter().map(|(_, d)| d.clone()).collect();
         self.table.retain(|(h, _)| handles.iter().any(|(x, _)| x == h));
         for d in &before {
@@ -89,10 +160,10 @@ impl RawDevices {
             if self.table.iter().any(|(x, _)| *x == h) {
                 continue;
             }
+            let kinds = Kinds { keyboard: kind == RIM_TYPEKEYBOARD, pointer: kind == RIM_TYPEMOUSE };
+            let Some(fingerprint) = self.fingerprint(h, kinds) else { continue };
             let Some(next) = self.next.checked_add(1) else { break };
             self.next = next;
-            let kinds = Kinds { keyboard: kind == RIM_TYPEKEYBOARD, pointer: kind == RIM_TYPEMOUSE };
-            let fingerprint = identity(h as HANDLE, kinds);
             self.table.push((h, InputDevice { id: DeviceRef(self.next), fingerprint, kinds }));
         }
         let now: Vec<InputDevice> = self.table.iter().map(|(_, d)| d.clone()).collect();
@@ -132,11 +203,16 @@ impl RawDevices {
                 if m.lLastX != 0 || m.lLastY != 0 {
                     self.corr.device_motion(device, now);
                 }
+                // Raw Input reports the physical buttons, the hook the logical ones: with the buttons
+                // swapped, the hook's left click is the right bit here.
+                // SAFETY: plain call.
+                let swapped = unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
                 // Down and up bits per button: left, right, middle, 4, 5.
                 for b in 0..5u32 {
+                    let logical = if swapped && b < 2 { 1 - b } else { b };
                     for (bit, down) in [(1 << (2 * b), true), (1 << (2 * b + 1), false)] {
                         if flags & bit != 0
-                            && let Some(code) = hid_button_to_evdev(b + 1)
+                            && let Some(code) = hid_button_to_evdev(logical + 1)
                         {
                             self.corr.device_event(Token::Press { code, down }, device, now, out);
                         }

@@ -1,8 +1,15 @@
 //! `one-mk pair`: find another computer running `one-mk pair`, show the
 //! same 6-digit code on both, and remember each other once confirmed.
 //!
-//! One candidate is handled at a time. If a session fails or stalls, we go
-//! back to waiting for the next one; only an explicit "no" ends pairing.
+//! Every connection runs its code agreement in a task of its own, so a
+//! computer that connects and says nothing holds up nobody. One candidate
+//! at a time then owns the terminal: it is shown its code and asked. If that
+//! fails or stalls, we go back to waiting for the next one; only an explicit
+//! "no" ends pairing.
+//!
+//! Two computers can end up with two connections to each other (one dialed
+//! by each, through `--connect` and discovery). Both sides serve both, and
+//! both use the one the lower id dialed, so they always pick the same.
 //!
 //! With `--machine` (what the app window uses) the output is one event per
 //! line, tab-separated, and the answer is `yes` or `no` on stdin:
@@ -18,7 +25,7 @@
 
 use anyhow::{Context, Result, bail};
 use one_mk_net::{Device, Discovery, Fingerprint, Identity, Node, Pairing, Peer, TrustStore};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -50,6 +57,21 @@ fn seconds(time: Duration) -> String {
 }
 /// Show troubleshooting hints if nothing turned up by then.
 const HINT_AFTER: Duration = Duration::from_secs(60);
+/// How many code agreements run at once. Past that the oldest one still
+/// running is dropped, so connections that never say anything can't crowd
+/// out the one that does.
+const MAX_STARTING: usize = 16;
+/// How many finished agreements wait for the terminal; the oldest is let go
+/// past that.
+const MAX_READY: usize = 8;
+/// With discovery on, how long a connection dialed by the higher id waits
+/// for the one the lower id dials (see the module docs) before it is used.
+const DUPLICATE_GRACE: Duration = Duration::from_millis(1500);
+
+/// [`DUPLICATE_GRACE`], or what a debug build's test shortened it to.
+fn duplicate_grace() -> Duration {
+    one_mk_net::test_timeout(DUPLICATE_GRACE, "ONE_MK_TEST_PAIR_GRACE_MS")
+}
 
 /// How pairing talks to whoever started it.
 #[derive(Clone, Copy)]
@@ -125,7 +147,7 @@ async fn run_inner(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery:
     );
 
     let mut answers = Answers::spawn(out);
-    let (tx, mut peers) = mpsc::channel::<Peer>(4);
+    let (tx, peers) = mpsc::channel::<Peer>(4);
     {
         let (node, tx) = (node.clone(), tx.clone());
         tokio::spawn(async move {
@@ -138,6 +160,9 @@ async fn run_inner(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery:
             }
         });
     }
+    let (started_tx, mut started) = mpsc::unbounded_channel::<Started>();
+    start_each(peers, identity.clone(), step_timeout(), started_tx);
+    let mut queue: Queue<Ready> = Queue::new(me, discovery.then(duplicate_grace));
     let (dial_err_tx, mut dial_err) = mpsc::unbounded_channel::<String>();
     // Candidates whose every address failed, so a later announcement may
     // be dialed again.
@@ -152,7 +177,31 @@ async fn run_inner(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery:
     let hint = tokio::time::sleep(HINT_AFTER);
     tokio::pin!(hint);
     let mut hinted = false;
+    // The last session: with whom, from when to when. A duplicate connection
+    // to that computer failing meanwhile is not a new failure.
+    let mut last: Option<(Fingerprint, Instant, Instant)> = None;
+    // What finished failing while a person was being asked, for after.
+    let mut backlog: VecDeque<Started> = VecDeque::new();
     loop {
+        // The terminal goes to one candidate at a time.
+        while let Some(ready) = queue.take(Instant::now()) {
+            hinted = true;
+            let (fp, began) = (ready.peer.fingerprint, Instant::now());
+            let res = while_asked(session(dir, ready, &mut trust, &mut answers, out), &mut started, &mut queue, &mut backlog).await;
+            last = Some((fp, began, Instant::now()));
+            match res {
+                Ok(()) => {
+                    node.close();
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    return Ok(());
+                }
+                Err(e) => {
+                    answers.clear();
+                    failed(dir, fp, &e, out);
+                    redial(&node, connect, &tx, &dial_err_tx, &candidates, &mut dialed, me, &unreachable_tx);
+                }
+            }
+        }
         tokio::select! {
             Some(f) = found.recv() => {
                 if !f.pairing || f.fingerprint == me {
@@ -169,35 +218,18 @@ async fn run_inner(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery:
                     dial(node.clone(), f.fingerprint, f.addrs, Duration::ZERO, tx.clone(), unreachable_tx.clone());
                 }
             }
-            Some(peer) = peers.recv() => {
-                if peer.fingerprint == me || peer.conn.close_reason().is_some() {
-                    continue;
-                }
+            Some(one) = next_started(&mut backlog, &mut started) => {
                 hinted = true;
-                let short = peer.fingerprint.short();
-                match session(dir, peer, &identity, &mut trust, &mut answers, out).await {
-                    Ok(()) => break,
-                    Err(e) => {
-                        crate::analytics::record(dir, crate::analytics::Event::PairingFinished, crate::analytics::Origin::Cli,
-                            crate::analytics::Outcome::Failed, crate::analytics::error_code(&e));
-                        out.say(
-                            || format!("\nPairing with {short} did not complete: {e:#}\nWaiting for another try... (Ctrl+C to stop)"),
-                            || format!("retry\t{}", one_line(&format!("{e:#}"))),
-                        );
-                        answers.clear();
-                        // Try the known candidates again, giving the other
-                        // side a moment to go back to waiting too.
-                        let delay = Duration::from_secs(2);
-                        if let Some(addr) = connect {
-                            dial_explicit_after(node.clone(), addr, delay, tx.clone(), dial_err_tx.clone());
-                        } else {
-                            dialed.clear();
-                            for (fp, addrs) in &candidates {
-                                if *fp > me && dialed.insert(*fp) {
-                                    dial(node.clone(), *fp, addrs.clone(), delay, tx.clone(), unreachable_tx.clone());
-                                }
-                            }
+                match one {
+                    Started::Ready(ready) => queue.push(ready),
+                    Started::Failed { fingerprint, error, at } => {
+                        if last.is_some_and(|(fp, began, ended)| fp == fingerprint && began <= at && at <= ended) {
+                            tracing::debug!("{error:#}");
+                            continue;
                         }
+                        failed(dir, fingerprint, &error, out);
+                        answers.clear();
+                        redial(&node, connect, &tx, &dial_err_tx, &candidates, &mut dialed, me, &unreachable_tx);
                     }
                 }
             }
@@ -211,33 +243,226 @@ async fn run_inner(dir: &Path, connect: Option<SocketAddr>, out: Out, discovery:
                     out.say(|| hints(port), || "hint".into());
                 }
             }
+            _ = tokio::time::sleep_until(queue.next_wake().unwrap_or_else(|| Instant::now() + Duration::from_secs(3600))), if queue.next_wake().is_some() => {}
         }
     }
-    node.close();
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    Ok(())
 }
 
-/// One pairing attempt. `Ok` once pairing is over for good (saved, or a
-/// person said no); `Err` if it failed and we should keep waiting.
-async fn session(dir: &Path, peer: Peer, identity: &Identity, trust: &mut TrustStore, answers: &mut Answers, out: Out) -> Result<()> {
+/// The next finished connection: one that failed while a person was asked
+/// first, else the next to report.
+async fn next_started(backlog: &mut VecDeque<Started>, started: &mut mpsc::UnboundedReceiver<Started>) -> Option<Started> {
+    match backlog.pop_front() {
+        Some(one) => Some(one),
+        None => started.recv().await,
+    }
+}
+
+/// Waits for `session` (a person reading a code and answering, up to two
+/// minutes) while the connections that finish meanwhile are still taken in:
+/// the ready ones go through the queue, which lets the oldest beyond
+/// [`MAX_READY`] go, so none pile up live in the channel. The failed ones
+/// (small) are kept in `backlog`, to be told afterwards.
+async fn while_asked<F: Future>(session: F, started: &mut mpsc::UnboundedReceiver<Started>, queue: &mut Queue<Ready>, backlog: &mut VecDeque<Started>) -> F::Output {
+    tokio::pin!(session);
+    loop {
+        tokio::select! {
+            res = &mut session => return res,
+            Some(one) = started.recv() => match one {
+                Started::Ready(ready) => queue.push(ready),
+                failed => {
+                    backlog.push_back(failed);
+                    while backlog.len() > MAX_READY {
+                        backlog.pop_front();
+                    }
+                }
+            },
+        }
+    }
+}
+
+/// Says a pairing attempt failed and that we keep waiting.
+fn failed(dir: &Path, fingerprint: Fingerprint, e: &anyhow::Error, out: Out) {
+    let short = fingerprint.short();
+    crate::analytics::record(dir, crate::analytics::Event::PairingFinished, crate::analytics::Origin::Cli,
+        crate::analytics::Outcome::Failed, crate::analytics::error_code(e));
+    out.say(
+        || format!("\nPairing with {short} did not complete: {e:#}\nWaiting for another try... (Ctrl+C to stop)"),
+        || format!("retry\t{}", one_line(&format!("{e:#}"))),
+    );
+}
+
+/// Tries the known candidates again, giving the other side a moment to go
+/// back to waiting too.
+#[allow(clippy::too_many_arguments)]
+fn redial(
+    node: &Node,
+    connect: Option<SocketAddr>,
+    tx: &mpsc::Sender<Peer>,
+    dial_err_tx: &mpsc::UnboundedSender<String>,
+    candidates: &HashMap<Fingerprint, Vec<SocketAddr>>,
+    dialed: &mut HashSet<Fingerprint>,
+    me: Fingerprint,
+    unreachable_tx: &mpsc::UnboundedSender<Fingerprint>,
+) {
+    let delay = Duration::from_secs(2);
+    if let Some(addr) = connect {
+        dial_explicit_after(node.clone(), addr, delay, tx.clone(), dial_err_tx.clone());
+    } else {
+        dialed.clear();
+        for (fp, addrs) in candidates {
+            if *fp > me && dialed.insert(*fp) {
+                dial(node.clone(), *fp, addrs.clone(), delay, tx.clone(), unreachable_tx.clone());
+            }
+        }
+    }
+}
+
+/// A connection whose code agreement is done and waits for the terminal.
+struct Ready {
+    peer: Peer,
+    pairing: Pairing,
+    since: Instant,
+}
+
+/// What a connection's task reports.
+enum Started {
+    Ready(Ready),
+    Failed { fingerprint: Fingerprint, error: anyhow::Error, at: Instant },
+}
+
+/// Runs the code agreement of every connection that arrives in a task of its
+/// own, each step limited to `limit`: a connection that never says anything
+/// only ever holds up itself. At most [`MAX_STARTING`] run at once.
+fn start_each(mut peers: mpsc::Receiver<Peer>, identity: Arc<Identity>, limit: Duration, report: mpsc::UnboundedSender<Started>) {
+    tokio::spawn(async move {
+        let mut running: VecDeque<(tokio::task::AbortHandle, quinn::Connection)> = VecDeque::new();
+        while let Some(peer) = peers.recv().await {
+            if peer.fingerprint == identity.fingerprint || peer.conn.close_reason().is_some() {
+                continue;
+            }
+            running.retain(|(task, _)| !task.is_finished());
+            while running.len() >= MAX_STARTING {
+                if let Some((task, conn)) = running.pop_front() {
+                    task.abort();
+                    conn.close(0u32.into(), b"too many pairing attempts");
+                }
+            }
+            let conn = peer.conn.clone();
+            let (identity, report) = (identity.clone(), report.clone());
+            let task = tokio::spawn(async move {
+                let fingerprint = peer.fingerprint;
+                let one = match Pairing::start_within(&peer, identity.fingerprint, &identity.name, limit).await {
+                    Ok(pairing) => Started::Ready(Ready { peer, pairing, since: Instant::now() }),
+                    Err(error) => {
+                        peer.conn.close(0u32.into(), b"pairing failed");
+                        Started::Failed { fingerprint, error, at: Instant::now() }
+                    }
+                };
+                let _ = report.send(one);
+            });
+            running.push_back((task.abort_handle(), conn));
+        }
+    });
+}
+
+/// What the queue needs to know of a connection that is ready.
+trait Waiting {
+    fn fingerprint(&self) -> Fingerprint;
+    /// Whether we dialed it.
+    fn initiator(&self) -> bool;
+    fn since(&self) -> Instant;
+    fn alive(&self) -> bool;
+    fn close(self);
+}
+
+impl Waiting for Ready {
+    fn fingerprint(&self) -> Fingerprint {
+        self.peer.fingerprint
+    }
+    fn initiator(&self) -> bool {
+        self.peer.initiator
+    }
+    fn since(&self) -> Instant {
+        self.since
+    }
+    fn alive(&self) -> bool {
+        self.peer.conn.close_reason().is_none()
+    }
+    fn close(self) {
+        self.peer.conn.close(0u32.into(), b"duplicate connection");
+    }
+}
+
+/// The connections whose code agreement is done, in the order they got
+/// there. Of two connections to one computer (one dialed by each) both sides
+/// use the one the lower id dialed, so both pick the same; a connection the
+/// higher id dialed waits `grace` for it, when it may still come.
+struct Queue<T: Waiting> {
+    me: Fingerprint,
+    grace: Option<Duration>,
+    items: Vec<T>,
+}
+
+impl<T: Waiting> Queue<T> {
+    fn new(me: Fingerprint, grace: Option<Duration>) -> Self {
+        Self { me, grace, items: Vec::new() }
+    }
+
+    fn push(&mut self, item: T) {
+        self.items.push(item);
+        while self.items.len() > MAX_READY {
+            self.items.remove(0).close();
+        }
+    }
+
+    /// Whether the lower id dialed this connection.
+    fn preferred(&self, item: &T) -> bool {
+        item.initiator() == (self.me < item.fingerprint())
+    }
+
+    /// The next connection to talk to, if one is due. Any other connection
+    /// to the same computer is the same pairing twice, and is closed.
+    fn take(&mut self, now: Instant) -> Option<T> {
+        self.items.retain(Waiting::alive);
+        let grace = self.grace;
+        let due = |item: &T| grace.is_none_or(|g| now >= item.since() + g);
+        let at = self.items.iter().position(|i| self.preferred(i)).or_else(|| self.items.iter().position(due))?;
+        let chosen = self.items.remove(at);
+        let fingerprint = chosen.fingerprint();
+        let (same, rest): (Vec<T>, Vec<T>) = std::mem::take(&mut self.items).into_iter().partition(|i| i.fingerprint() == fingerprint);
+        self.items = rest;
+        same.into_iter().for_each(Waiting::close);
+        Some(chosen)
+    }
+
+    /// When a connection that is being held back becomes due.
+    fn next_wake(&self) -> Option<Instant> {
+        let grace = self.grace?;
+        self.items.iter().filter(|i| !self.preferred(i)).map(|i| i.since() + grace).min()
+    }
+}
+
+/// One pairing attempt, once its code agreement is done. `Ok` once pairing
+/// is over for good (saved, or a person said no); `Err` if it failed and we
+/// should keep waiting.
+async fn session(dir: &Path, ready: Ready, trust: &mut TrustStore, answers: &mut Answers, out: Out) -> Result<()> {
+    let Ready { peer, pairing, .. } = ready;
     let fingerprint = peer.fingerprint;
     let ip = peer.conn.remote_address().ip().to_canonical();
     out.say(
         || format!("\nPairing with a computer at {ip} (id {})...", fingerprint.short()),
         || format!("peer\t{}\t{ip}", fingerprint.short()),
     );
-    let res = exchange(dir, &peer, identity, trust, answers, out).await;
+    let res = exchange(dir, &peer, pairing, trust, answers, out).await;
     if res.is_err() {
         peer.conn.close(0u32.into(), b"pairing failed");
     }
     res
 }
 
-async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut TrustStore, answers: &mut Answers, out: Out) -> Result<()> {
+async fn exchange(dir: &Path, peer: &Peer, pairing: Pairing, trust: &mut TrustStore, answers: &mut Answers, out: Out) -> Result<()> {
     let fingerprint = peer.fingerprint;
     let port = service_port(dir).await?;
-    let pairing = Pairing::start(peer, identity.fingerprint, &identity.name).await?;
     let name = pairing.peer_name.clone();
 
     // Everything the other computer chose (its name) comes first; the code
@@ -245,6 +470,8 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
     // disguise it.
     let twin = trust.devices().iter().any(|d| d.label().trim().eq_ignore_ascii_case(name.trim()));
     let twin_note = if twin { "  (A computer you already paired is called the same; once paired they are told apart by id, and `one-mk rename` gives either a name of your own.)\n" } else { "" };
+    // Anything typed before this code was shown is not an answer to it.
+    answers.clear();
     out.say(
         || format!("  The other computer says its name is: {name}\n{twin_note}  Check that it shows this same code:\n\n      {}\n", pairing.sas),
         || format!("code\t{name}\t{}", pairing.sas),
@@ -285,7 +512,11 @@ async fn exchange(dir: &Path, peer: &Peer, identity: &Identity, trust: &mut Trus
     crate::analytics::record(dir, crate::analytics::Event::PairingFinished, crate::analytics::Origin::Cli,
         crate::analytics::Outcome::Success, crate::analytics::ErrorCode::None);
     let side = placement.side();
-    let _ = crate::control::request(dir, crate::control::Request::Reload).await?;
+    // Trust is saved and the other computer was told: a running one-mk that is busy only picks the
+    // change up late (or when it next starts), which is no reason to report the pairing as failed.
+    if let Err(e) = crate::control::request(dir, crate::control::Request::Reload).await {
+        tracing::warn!("paired, but the running one-mk did not take the change yet: {e:#}");
+    }
     let (shown, arg) = trust.get(&fingerprint).map_or_else(|| (name.clone(), format!("{:?}", name)), |d| (trust.display(d), trust.arg(d)));
     if placement.placed_by == one_mk_net::PlacedBy::Pending {
         let warning = crate::pairing_layout::warning(&shown, &arg);
@@ -453,6 +684,208 @@ impl Answers {
 mod tests {
     use super::*;
     use one_mk_proto::Side;
+
+    /// A "y" typed while pairing still said it was searching must not approve the first code shown.
+    #[tokio::test]
+    async fn input_typed_before_a_code_is_shown_is_not_its_answer() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut answers = Answers { rx, out: Out::new(true) };
+        tx.send("yes\n".into()).unwrap();
+        answers.clear();
+        assert_eq!(answers.ask("", Duration::from_millis(50)).await, None);
+        tx.send("yes\n".into()).unwrap();
+        assert_eq!(answers.ask("", Duration::from_millis(50)).await, Some(true), "typed after the prompt it counts");
+    }
+
+    /// A stand-in for a ready connection.
+    struct Fake {
+        fp: Fingerprint,
+        initiator: bool,
+        since: Instant,
+        dead: bool,
+        closed: std::rc::Rc<std::cell::Cell<bool>>,
+    }
+
+    impl Waiting for Fake {
+        fn fingerprint(&self) -> Fingerprint {
+            self.fp
+        }
+        fn initiator(&self) -> bool {
+            self.initiator
+        }
+        fn since(&self) -> Instant {
+            self.since
+        }
+        fn alive(&self) -> bool {
+            !self.dead
+        }
+        fn close(self) {
+            self.closed.set(true);
+        }
+    }
+
+    fn fake(fp: u8, initiator: bool, since: Instant) -> (Fake, std::rc::Rc<std::cell::Cell<bool>>) {
+        let closed = std::rc::Rc::new(std::cell::Cell::new(false));
+        (Fake { fp: Fingerprint([fp; 32]), initiator, since, dead: false, closed: closed.clone() }, closed)
+    }
+
+    /// Two computers that each dialed the other end up with two connections. Whichever order they
+    /// arrive in, on whichever computer, the one the lower id dialed is the one used, and the
+    /// other is closed: both sides always agree, so neither is left waiting for a peer that
+    /// is talking to someone else.
+    #[tokio::test]
+    async fn two_connections_to_one_computer_agree_on_the_one_the_lower_id_dialed() {
+        let now = Instant::now();
+        let grace = Some(Duration::from_secs(60));
+        // Computer 1 (lower) saw its own dial (initiator) and the other's (not).
+        for own_first in [true, false] {
+            let mut low = Queue::new(Fingerprint([1; 32]), grace);
+            let (own, own_closed) = fake(2, true, now);
+            let (theirs, theirs_closed) = fake(2, false, now);
+            let order = if own_first { [Some(own), Some(theirs)] } else { [Some(theirs), Some(own)] };
+            let mut order = order.into_iter().flatten();
+            low.push(order.next().unwrap());
+            if !own_first {
+                assert!(low.take(now).is_none(), "a connection the higher id dialed is held while the other may still come");
+                assert!(low.next_wake().is_some());
+            }
+            low.push(order.next().unwrap());
+            let chosen = low.take(now).expect("the preferred one is due at once");
+            assert!(chosen.initiator, "the lower id's own dial");
+            assert!(theirs_closed.get() && !own_closed.get());
+            assert!(low.take(now).is_none());
+        }
+        // Computer 2 (higher) saw the same two connections the other way round.
+        let mut high = Queue::new(Fingerprint([2; 32]), grace);
+        let (own, own_closed) = fake(1, true, now);
+        let (theirs, theirs_closed) = fake(1, false, now);
+        high.push(own);
+        high.push(theirs);
+        let chosen = high.take(now).expect("due");
+        assert!(!chosen.initiator, "the lower id's dial, which is the incoming one here");
+        assert!(own_closed.get() && !theirs_closed.get());
+    }
+
+    #[tokio::test]
+    async fn a_connection_the_higher_id_dialed_alone_is_used_after_the_grace_only_with_discovery() {
+        let start = Instant::now();
+        let grace = Duration::from_millis(500);
+        let mut with = Queue::new(Fingerprint([1; 32]), Some(grace));
+        with.push(fake(2, false, start).0);
+        assert!(with.take(start).is_none());
+        assert_eq!(with.next_wake(), Some(start + grace));
+        assert!(with.take(start + grace).is_some());
+        // No discovery: no other connection will come, so there is nothing to wait for.
+        let mut without = Queue::new(Fingerprint([1; 32]), None);
+        without.push(fake(2, false, start).0);
+        assert_eq!(without.next_wake(), None);
+        assert!(without.take(start).is_some());
+    }
+
+    #[tokio::test]
+    async fn the_queue_drops_closed_connections_and_keeps_its_size() {
+        let now = Instant::now();
+        let mut queue = Queue::new(Fingerprint([1; 32]), None);
+        let (mut gone, _) = fake(2, true, now);
+        gone.dead = true;
+        queue.push(gone);
+        assert!(queue.take(now).is_none());
+        let closed: Vec<_> = (0..MAX_READY as u8 + 3)
+            .map(|n| {
+                let (f, c) = fake(10 + n, true, now);
+                queue.push(f);
+                c
+            })
+            .collect();
+        assert_eq!(queue.items.len(), MAX_READY);
+        assert!(closed[..3].iter().all(|c| c.get()), "the oldest were let go");
+        assert!(closed[3..].iter().all(|c| !c.get()));
+    }
+
+    /// A real peer pairs while connections that never say anything are still waiting out their
+    /// step (30 s in use): their code agreements run on their own, so nothing queues behind them.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn silent_connections_do_not_hold_up_a_real_peer() {
+        let identity = Arc::new(Identity::ephemeral().unwrap());
+        let listener = Node::bind(identity.clone(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = SocketAddr::from(([127, 0, 0, 1], listener.local_addr().unwrap().port()));
+        let (tx, peers) = mpsc::channel::<Peer>(4);
+        let accepting = listener.clone();
+        tokio::spawn(async move {
+            while let Some(res) = accepting.accept().await {
+                if let Ok(p) = res
+                    && tx.send(p).await.is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let (report, mut started) = mpsc::unbounded_channel();
+        // The real step time, so a silent connection could not give up inside this test.
+        start_each(peers, identity, Duration::from_secs(30), report);
+        let mut silent = Vec::new();
+        for _ in 0..MAX_STARTING + 4 {
+            let node = Node::bind(Arc::new(Identity::ephemeral().unwrap()), "127.0.0.1:0".parse().unwrap()).unwrap();
+            let peer = node.connect(addr).await.unwrap();
+            silent.push((node, peer));
+        }
+        let me = Arc::new(Identity::ephemeral().unwrap());
+        let node = Node::bind(me.clone(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let peer = node.connect(addr).await.unwrap();
+        let theirs = tokio::time::timeout(Duration::from_secs(10), Pairing::start_within(&peer, me.fingerprint, "real", Duration::from_secs(10)))
+            .await
+            .expect("not held up by the silent ones")
+            .unwrap();
+        let Started::Ready(ready) = tokio::time::timeout(Duration::from_secs(10), started.recv()).await.unwrap().unwrap() else {
+            panic!("the first to finish is the real one")
+        };
+        assert_eq!(ready.peer.fingerprint, me.fingerprint);
+        assert_eq!(ready.pairing.sas, theirs.sas, "both sides show the same code");
+        // Past MAX_STARTING the oldest silent connections were let go instead of crowding the rest out.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(silent[0].1.conn.close_reason().is_some(), "the oldest silent connection was dropped");
+        assert!(silent.last().unwrap().1.conn.close_reason().is_none());
+        assert!(started.try_recv().is_err(), "the silent ones are still within their step");
+    }
+
+    /// While a person reads a code, other computers keep finishing their agreements: those are
+    /// taken into the bounded queue (the oldest beyond [`MAX_READY`] closed) instead of waiting,
+    /// live, in the channel until the answer is in.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn connections_finishing_during_the_prompt_stay_bounded() {
+        let identity = Arc::new(Identity::ephemeral().unwrap());
+        let listener = Node::bind(identity.clone(), "127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = SocketAddr::from(([127, 0, 0, 1], listener.local_addr().unwrap().port()));
+        let (tx, peers) = mpsc::channel::<Peer>(4);
+        let accepting = listener.clone();
+        tokio::spawn(async move {
+            while let Some(res) = accepting.accept().await {
+                if let Ok(p) = res
+                    && tx.send(p).await.is_err()
+                {
+                    break;
+                }
+            }
+        });
+        let (report, mut started) = mpsc::unbounded_channel();
+        start_each(peers, identity, Duration::from_secs(30), report);
+        let mut others = Vec::new();
+        for _ in 0..MAX_READY + 4 {
+            let me = Arc::new(Identity::ephemeral().unwrap());
+            let node = Node::bind(me.clone(), "127.0.0.1:0".parse().unwrap()).unwrap();
+            let peer = node.connect(addr).await.unwrap();
+            let theirs = Pairing::start_within(&peer, me.fingerprint, "other", Duration::from_secs(10)).await.unwrap();
+            others.push((node, peer, theirs));
+        }
+        let mut queue = Queue::new(Fingerprint([1; 32]), None);
+        let mut backlog = VecDeque::new();
+        let out = while_asked(async { tokio::time::sleep(Duration::from_millis(500)).await; 7 }, &mut started, &mut queue, &mut backlog).await;
+        assert_eq!(out, 7);
+        assert_eq!(queue.items.len(), MAX_READY, "no more than the cap are kept live");
+        assert!(started.try_recv().is_err(), "everything that finished was taken in during the wait");
+        let closed = others.iter().filter(|(_, peer, _)| peer.conn.close_reason().is_some()).count();
+        assert_eq!(closed, 4, "the oldest beyond the cap were let go");
+    }
 
     #[test]
     fn the_times_in_the_messages_are_what_was_waited_for() {

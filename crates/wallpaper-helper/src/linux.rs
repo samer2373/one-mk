@@ -209,13 +209,15 @@ fn uri(path: &Path) -> Result<String> {
 fn snapshot(gst: &Gst, path: &Path, output: &Path, width: u32) -> Result<()> {
     let pipeline = gst.pipeline(&format!("uridecodebin uri={} caps=video/x-raw name=source source. ! queue ! videoconvert ! videoscale ! video/x-raw,width={width},pixel-aspect-ratio=1/1 ! pngenc snapshot=true ! filesink location={}", quoted(&uri(path)?), quoted(&output.to_string_lossy())))?;
     unsafe {
-        (gst.state)(pipeline.raw, 4);
+        ensure!((gst.state)(pipeline.raw, 4) != 0, "The video's first frame could not be read");
         let bus = (gst.bus)(pipeline.raw);
+        // The snapshot is written once the pipeline reaches the end of stream (the only other
+        // message asked for is an error); a timeout is a failure, not a finished file.
         let message = (gst.pop)(bus, 15_000_000_000, 1 | 2);
-        let failed = !message.is_null() && (gst.has_name)(message, c"GstMessageError".as_ptr()) != 0;
+        let finished = !message.is_null() && (gst.has_name)(message, c"GstMessageError".as_ptr()) == 0;
         if !message.is_null() { (gst.mini_unref)(message); }
         (gst.unref)(bus);
-        ensure!(!failed, "The video's first frame could not be read");
+        ensure!(finished, "The video's first frame could not be read");
     }
     Ok(())
 }
@@ -439,6 +441,11 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
     let mut last_sync = Instant::now();
     let mut rate = 1.0;
     let mut last_message = "";
+    // A pause or play was drained since the last pass. It is answered even
+    // when the net effect is nothing (a pause and a play drained together):
+    // the service has already shown "Paused" for the pause and waits for the
+    // helper to say what is really happening.
+    let mut acknowledge = false;
     let power = power_events();
     let mut coverage_changed = true;
     let mut power_changed = true;
@@ -451,7 +458,7 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
             match input {
                 Input::End => { unsafe { (gst.unref)(bus); } return Ok(()); }
                 Input::Offset(offset) => config.clock_offset_ms = offset,
-                Input::Pause(paused) => { config.plan.paused = paused; holds.set(Hold::User, paused); }
+                Input::Pause(paused) => { config.plan.paused = paused; holds.set(Hold::User, paused); acknowledge = true; }
             }
         }
         unsafe {
@@ -469,14 +476,17 @@ pub fn run(mut config: PlayerConfig, receiver: Receiver<Input>) -> Result<()> {
         }
         if power_changed { holds.set(Hold::Battery, config.plan.pause_on_battery && on_battery()); power_changed = false; }
         if coverage_changed { holds.set(Hold::Occluded, desktop.covered(&config)); coverage_changed = false; }
-        if holds.message() != last_message { one_mk_wallpaper::report(&config, &holds); last_message = holds.message(); }
+        let mut said = false;
+        if holds.message() != last_message { one_mk_wallpaper::report(&config, &holds); last_message = holds.message(); said = true; }
         if playing != holds.playing() {
             playing = holds.playing();
             if playing && started { pipeline.segment(position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms), config.plan.media.duration_ms, true); }
             started = true;
             unsafe { (gst.state)(pipeline.raw, if playing { 4 } else { 3 }); }
             if playing { one_mk_wallpaper::event(one_mk_wallpaper::Playback::Ready); }
+            said = true;
         }
+        if std::mem::take(&mut acknowledge) && !said { one_mk_wallpaper::acknowledge(&config, &holds); }
         if playing && last_sync.elapsed() >= Duration::from_secs(2) {
             let mut actual = 0;
             let expected = position(now_ms(), config.clock_offset_ms, config.plan.start_ms, config.plan.media.duration_ms);

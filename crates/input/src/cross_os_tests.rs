@@ -16,6 +16,10 @@ use one_mk_proto::{Edge, Pos, Rect, Side, keynames, mediakeys, swap_ctrl_meta};
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
+// The Windows file-drop zones' scale conversion (pure; its tests live in the file).
+#[path = "dropzone_scale.rs"]
+mod dropzone_scale;
+
 struct Rng(u64);
 
 impl Rng {

@@ -12,15 +12,38 @@ pub(super) struct WallpaperUi {
 impl WallpaperUi {
     /// The poster (up to 1600x900, 5.8 MB on the GPU) is only drawn on this
     /// page: let go on leaving it; the next visit decodes it again.
+    /// The file picker's answer is only taken here too, so it is let go.
     pub(super) fn release(&mut self) {
         self.poster = None;
         self.poster_path = None;
+        // A choice made after leaving would be sent on a later visit, over
+        // whatever was set since: letting the receiver go drops it.
+        self.picker = None;
     }
 }
 
 impl App {
     pub(super) fn wallpaper_command(&mut self, command: Command) {
+        // Whichever control asked (this page, Search, a computer's panel), a
+        // change while a choice is prepared would end it: only turning the
+        // wallpaper off (which cancels it) and the GNOME setup (which the
+        // service keeps apart from the wallpaper) go through.
+        if self.wallpaper_preparing() && !matches!(command, Command::Off | Command::GnomeExtension { .. }) {
+            self.toast("The new wallpaper is still being prepared. Wait for it, or turn the wallpaper off.", self.now);
+            return;
+        }
+        // A new picture or video is prepared for as long as it takes; until it
+        // is done (or fails) the window keeps the other changes waiting, as each
+        // one the service gets ends the one before it.
+        if matches!(command, Command::Set { .. }) {
+            self.busy.push(Job::Wallpaper(command.clone()));
+        }
         self.link.wallpaper(command);
+    }
+
+    /// A choice sent to the service is still being prepared.
+    fn wallpaper_preparing(&self) -> bool {
+        self.busy.iter().any(|job| matches!(job, Job::Wallpaper(Command::Set { .. })))
     }
 
     pub(super) fn choose_video(&mut self, ctx: &egui::Context) {
@@ -46,8 +69,10 @@ impl App {
         let no_wallpaper = Default::default();
         let wallpaper = status.as_ref().and_then(|status| status.wallpaper.as_ref()).unwrap_or(&no_wallpaper);
         // A drop is a choice like Choose…: only while choosing is possible.
-        let dropped = ui.input(|input| input.raw.dropped_files.first().map(|file| file.path().to_path_buf()));
-        if let Some(path) = dropped && accepts_drop(status.is_some(), wallpaper.available) { self.wallpaper_command(Command::Set { path }); }
+        // (Not while a sheet or Search owns the window: a drop on its scrim is not for this page.)
+        let dropped = ui.input(|input| input.raw.dropped_files.first().map(|file| file.path().to_path_buf())).filter(|_| !self.drops_blocked());
+        let preparing = self.wallpaper_preparing();
+        if let Some(path) = dropped && accepts_drop(status.is_some(), wallpaper.available) && !preparing { self.wallpaper_command(Command::Set { path }); }
         let plan = wallpaper.plan.as_ref();
         let canvas = plan.map(|plan| plan.canvas.clone()).unwrap_or_else(|| status.as_deref().map(one_mk_ctl::wallpaper::canvas).unwrap_or_default());
         #[cfg(any(debug_assertions, feature = "design-evidence"))]
@@ -62,7 +87,7 @@ impl App {
             });
             self.wallpaper_ui.poster_path = poster_path;
         }
-        let enabled = accepts_drop(status.is_some(), wallpaper.available);
+        let enabled = accepts_drop(status.is_some(), wallpaper.available) && !preparing;
         let selected = plan.is_some();
         let fit_now = plan.map_or(Fit::Fill, |plan| plan.fit);
         let spread_now = plan.map_or(Spread::Span, |plan| plan.spread);
@@ -117,12 +142,12 @@ impl App {
             if let Some(plan) = plan {
                 let name = fit_text(ui, &plan.title, room * 0.6);
                 let nw = p.text(pos2(foot.left(), foot.center().y), Align2::LEFT_CENTER, &name, medium(T_BODY), pal().ink).width();
-                let what = if plan.paused { "paused".to_owned() } else { plan.playing_summary(&wallpaper.computers).to_lowercase() };
+                let what = if preparing { "preparing the new one…".to_owned() } else if plan.paused { "paused".to_owned() } else { plan.playing_summary(&wallpaper.computers).to_lowercase() };
                 let detail = if plan.picture { what } else { format!("{} loop · {what}", clock(plan.media.duration_ms)) };
                 let detail = fit(p, &detail, &mono(T_META), room - nw - 12.0);
                 p.text(pos2(foot.left() + nw + 12.0, foot.center().y), Align2::LEFT_CENTER, detail, mono(T_META), pal().ink2);
             } else {
-                let hint = if status.is_none() { "Start oneMK to choose a wallpaper" } else if !wallpaper.available { "Wallpaper isn't available on this computer" } else { "Choose a video or picture" };
+                let hint = if preparing { "Preparing the wallpaper…" } else if status.is_none() { "Start oneMK to choose a wallpaper" } else if !wallpaper.available { "Wallpaper isn't available on this computer" } else { "Choose a video or picture" };
                 // Can't be chosen here: said with the "off" mark, not only in words.
                 let blocked = status.is_none() || !wallpaper.available;
                 let x = foot.left() + if blocked { 18.0 } else { 0.0 };
@@ -168,7 +193,7 @@ impl App {
             let fit_w = fit_track_w(row.width(), text_width(ui, "Picture sizing", regular(T_BODY)) + 26.0 + 8.0);
             label_help(ui, row, Id::unique("wallpaper-fit-label"), "Picture sizing", "wallpaper-fit", enabled && selected, fit_w + 12.0);
             let track = Rect::from_min_size(pos2(row.right() - fit_w, row.center().y - 15.0), vec2(fit_w, 30.0));
-            if let Some(chosen) = (Pills { id: Id::unique("wallpaper-fit"), track, cells: Pills::even(track, 3, 2.0), labels: &["Fill", "Fit", "Stretch"], names: vec!["Fill the screens".into(), "Fit inside the screens".into(), "Stretch across the screens".into()], chosen: Some(match fit_now { Fit::Fill => 0, Fit::Fit => 1, Fit::Stretch => 2 }), enabled: vec![enabled && selected; 3], role: Role::RadioGroup, font: T_META }).show(ui, true) {
+            if let Some(chosen) = (Pills { id: Id::unique("wallpaper-fit"), track, cells: Pills::even(track, 3, 2.0), labels: &["Fill", "Fit", "Stretch"], names: vec!["Fill the screens".into(), "Fit inside the screens".into(), "Stretch across the screens".into()], chosen: Some(match fit_now { Fit::Fill => 0, Fit::Fit => 1, Fit::Stretch => 2 }), enabled: vec![enabled && selected; 3], role: Role::RadioGroup, font: T_META }).show(ui, self.arrowed) {
                 self.wallpaper_command(Command::Fit { fit: [Fit::Fill, Fit::Fit, Fit::Stretch][chosen] });
             }
             // One picture across every screen, or the whole of it on each.
@@ -176,7 +201,7 @@ impl App {
             let spread_w = fit_track_w(row.width(), text_width(ui, "On the screens", regular(T_BODY)) + 26.0 + 8.0).min(260.0);
             label_help(ui, row, Id::unique("wallpaper-spread-label"), "On the screens", "wallpaper-spread", enabled && selected, spread_w + 12.0);
             let track = Rect::from_min_size(pos2(row.right() - spread_w, row.center().y - 15.0), vec2(spread_w, 30.0));
-            if let Some(chosen) = (Pills { id: Id::unique("wallpaper-spread"), track, cells: Pills::even(track, 2, 2.0), labels: &["Across", "Each"], names: vec!["One picture across all the screens".into(), "The whole picture on each screen".into()], chosen: Some(match spread_now { Spread::Span => 0, Spread::Each => 1 }), enabled: vec![enabled && selected; 2], role: Role::RadioGroup, font: T_META }).show(ui, true) {
+            if let Some(chosen) = (Pills { id: Id::unique("wallpaper-spread"), track, cells: Pills::even(track, 2, 2.0), labels: &["Across", "Each"], names: vec!["One picture across all the screens".into(), "The whole picture on each screen".into()], chosen: Some(match spread_now { Spread::Span => 0, Spread::Each => 1 }), enabled: vec![enabled && selected; 2], role: Role::RadioGroup, font: T_META }).show(ui, self.arrowed) {
                 self.wallpaper_command(Command::Spread { spread: [Spread::Span, Spread::Each][chosen] });
             }
             let battery = plan.is_none_or(|plan| plan.pause_on_battery);
@@ -448,5 +473,15 @@ mod tests {
         assert!(super::accepts_drop(true, true));
         assert!(!super::accepts_drop(false, true));
         assert!(!super::accepts_drop(true, false));
+    }
+
+    #[test]
+    fn leaving_the_page_lets_go_of_a_choice_made_after_it() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut ui = super::WallpaperUi { picker: Some(receiver), ..Default::default() };
+        ui.release();
+        assert!(ui.picker.is_none(), "Choose… is on again");
+        // The dialog answering now has nobody to tell: nothing is kept to be sent on a later visit.
+        assert!(sender.send(Some(std::path::PathBuf::from("late.mp4"))).is_err());
     }
 }

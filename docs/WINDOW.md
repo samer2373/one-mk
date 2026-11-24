@@ -17,7 +17,8 @@ tooltip shows its key). The window respects the system's reduced-motion setting.
 The pages are text tabs in a bar along the top, with the status line, **Search** (the palette) and the
 one main button (Pair a computer, Start oneMK, Take back…) at its right. The window has a light and a dark
 look: **Appearance** in Settings → General (or "Appearance: Light/Dark/System" in the palette) picks one,
-and System, the default, follows the system's setting as it changes; switching cross-fades. Colour is
+and System, the default, follows the system's setting (on Windows and macOS as it changes; on GNOME it is read when the window opens
+and each time it comes back into focus, because oneMK does not poll); switching cross-fades. Colour is
 never the only sign: every status has a shape too (● online, ◆ needs you, ○ off, ■ error). Narrower
 than 1000 points (the smallest window is 820 × 540) the tabs shorten to Files and Keys, the main button
 reads Pair, the Desk's panel moves under the desk and its toolbar stands at the desk's left.

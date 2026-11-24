@@ -24,6 +24,8 @@ pub fn repair(text: &str) -> Option<(String, Vec<String>)> {
         }
         if key == "input" {
             repair_input(text, &mut table, &mut problems);
+        } else if key == "clipboard" && table.get(&key).is_some_and(toml::Value::is_table) {
+            repair_clipboard(text, &mut table, &mut problems);
         } else {
             let why = why(&table, &key);
             table.remove(&key);
@@ -135,9 +137,66 @@ fn repair_input(text: &str, table: &mut toml::Table, problems: &mut Vec<String>)
     }
 }
 
+/// The sharing switches of `[clipboard]`: one that can't be read counts as
+/// off, never as the default (on), or a typo elsewhere in the table would
+/// share what the file says not to.
+const CLIPBOARD_SWITCHES: [&str; 3] = ["text", "html", "image"];
+
+/// Leaves out the settings of `[clipboard]` that can't be read, one by one,
+/// instead of the whole table. A sharing switch that can't be read is set
+/// to off.
+fn repair_clipboard(text: &str, table: &mut toml::Table, problems: &mut Vec<String>) {
+    let keys: Vec<String> = table.get("clipboard").and_then(toml::Value::as_table).map(|clipboard| clipboard.keys().cloned().collect()).unwrap_or_default();
+    for key in keys {
+        let mut inner = toml::Table::new();
+        if let Some(value) = table.get("clipboard").and_then(toml::Value::as_table).and_then(|clipboard| clipboard.get(&key)) {
+            inner.insert(key.clone(), value.clone());
+        }
+        let mut one = toml::Table::new();
+        one.insert("clipboard".into(), toml::Value::Table(inner));
+        let Err(error) = toml::Value::Table(one).try_into::<Settings>() else { continue };
+        let Some(clipboard) = table.get_mut("clipboard").and_then(toml::Value::as_table_mut) else { return };
+        let closed = CLIPBOARD_SWITCHES.contains(&key.as_str());
+        if closed {
+            clipboard.insert(key.clone(), toml::Value::Boolean(false));
+        } else {
+            clipboard.remove(&key);
+        }
+        problems.push(format!(
+            "{}[clipboard] {key} is ignored{}: {}",
+            at(section_line(text, "clipboard").and_then(|head| key_line(text, head, &key))),
+            if closed { " (sharing stays off)" } else { "" },
+            one_line(&error.to_string())
+        ));
+    }
+}
+
+/// The (1-based) line of `key =` at or after line `from` (1-based).
+fn key_line(text: &str, from: usize, key: &str) -> Option<usize> {
+    let head = format!("{key}=");
+    text.lines().enumerate().skip(from.saturating_sub(1)).find(|(_, line)| compact(line).starts_with(&head)).map(|(index, _)| index + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mistyped size limit must not turn sharing back on: each setting of
+    /// `[clipboard]` is read on its own, and a switch that can't be read is off.
+    #[test]
+    fn a_clipboard_typo_keeps_the_other_settings_and_sharing_off() {
+        let text = "[clipboard]\ntext = false\nhtml = \"no\"\nmax_mb = \"big\"\nimage = true\nskip_sensitive = false\n";
+        let (fixed, problems) = repair(text).unwrap();
+        let settings: Settings = toml::from_str(&fixed).unwrap();
+        assert!(!settings.clipboard.text, "an explicit choice stays");
+        assert!(!settings.clipboard.html, "an unreadable switch is off, not the default");
+        assert!(settings.clipboard.image && !settings.clipboard.skip_sensitive, "readable settings are kept");
+        assert_eq!(settings.clipboard.max_mb, crate::settings::ClipSettings::default().max_mb, "an unreadable limit is the default");
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(problems.iter().any(|p| p.starts_with("settings.toml line 3: [clipboard] html is ignored (sharing stays off)")), "{problems:?}");
+        assert!(problems.iter().any(|p| p.starts_with("settings.toml line 4: [clipboard] max_mb is ignored")), "{problems:?}");
+    }
+
 
     #[test]
     fn a_bad_value_costs_its_rule_not_the_file() {

@@ -566,6 +566,29 @@ async fn per_app_rules_follow_a_switch_with_no_input() {
 
 // ------------------------------------------------------ per-device rules
 
+/// Ctrl held on two keyboards: letting go of one is not letting go of Ctrl.
+/// The release used to reach the mapper twice, the second time finding the
+/// other keyboard's hold, so the target saw Ctrl up while a finger was still on it.
+#[tokio::test]
+async fn releasing_a_key_on_one_keyboard_keeps_it_held_for_the_other() {
+    use one_mk_input::{DeviceRef, fake_keyboard};
+    let mut duo = Duo::start("tune-two-keyboards", None).await;
+    duo.ha.devices(vec![fake_keyboard(7, "Keyboard A"), fake_keyboard(8, "Keyboard B")]);
+    duo.enter_b().await;
+    let (da, db) = (Some(DeviceRef(7)), Some(DeviceRef(8)));
+    duo.ha.key_from(LCTRL, true, da);
+    assert_eq!(next_n(&mut duo, 1).await, [key(LCTRL, true)]);
+    duo.ha.key_from(LCTRL, true, db);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    injected(&mut duo.hb);
+    duo.ha.key_from(LCTRL, false, da);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(injected(&mut duo.hb).into_iter().filter(|i| !matches!(i, Inject::MoveTo(_))).collect::<Vec<_>>(), vec![], "Ctrl is still held on the other keyboard");
+    duo.ha.key_from(LCTRL, false, db);
+    assert_eq!(next_n(&mut duo, 1).await, [key(LCTRL, false)]);
+    duo.stop().await;
+}
+
 /// Caps Lock is Esc on keyboard A only. A's keys follow A's rule; B's,
 /// and keys whose keyboard isn't known, don't. A falls asleep (Bluetooth)
 /// while holding a key: B is told to let go of what A's keys sent, and of

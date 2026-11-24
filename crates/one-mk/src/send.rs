@@ -57,7 +57,15 @@ pub async fn dropped(dir: &Path, paths: Vec<PathBuf>, peer: String) -> Result<()
 }
 
 async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<SocketAddr>) -> Result<(usize, String)> {
-    let (files, skipped) = transfer::collect_noted(&paths)?;
+    // Walking a folder (up to 10000 files, maybe on a slow disk) and reading
+    // the identity and trust files are blocking work: the daemon runs the
+    // edge-drop send on its one thread, where the pointer and keyboard
+    // forwarding would stand still meanwhile.
+    let (files, skipped) = tokio::task::spawn_blocking(move || {
+        #[cfg(test)]
+        gate::wait(&paths);
+        transfer::collect_noted(&paths)
+    }).await.context("listing the files to send")??;
     if let Some(line) = skipped_line(&skipped) {
         eprintln!("{line}");
     }
@@ -68,8 +76,11 @@ async fn send(dir: &Path, paths: Vec<PathBuf>, to: Option<String>, connect: Vec<
     if files.len() > 10_000 || total > 1 << 40 {
         bail!("file batch exceeds the limit of 10000 files or 1 TiB");
     }
-    let identity = Arc::new(Identity::load_or_create(dir)?);
-    let trust = TrustStore::load(dir)?;
+    let owned = dir.to_owned();
+    let (identity, trust) = tokio::task::spawn_blocking(move || -> Result<_> { Ok((Identity::load_or_create(&owned)?, TrustStore::load(&owned)?)) })
+        .await
+        .context("reading the identity and the paired computers")??;
+    let identity = Arc::new(identity);
     let device = pick(&trust, to.as_deref())?.clone();
     let shown = trust.display(&device);
     let fp = device.fingerprint().context("corrupt fingerprint in devices.toml")?;
@@ -377,6 +388,52 @@ fn bytes(n: u64) -> String {
     if u == 0 { format!("{n} B") } else { format!("{v:.1} {}", UNITS[u]) }
 }
 
+/// Test-only: holds the listing of chosen paths until the test lets it go, so that a
+/// test can show what else the runtime does meanwhile without timing real file work.
+#[cfg(test)]
+mod gate {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::time::Duration;
+
+    #[derive(Default)]
+    pub struct Gate {
+        /// (released, gave up waiting)
+        state: Mutex<(bool, bool)>,
+        changed: Condvar,
+    }
+
+    static GATES: Mutex<Vec<(PathBuf, Arc<Gate>)>> = Mutex::new(Vec::new());
+
+    impl Gate {
+        pub fn release(&self) {
+            self.state.lock().unwrap().0 = true;
+            self.changed.notify_all();
+        }
+
+        /// Whether the listing waited in vain: nothing let it go in time.
+        pub fn gave_up(&self) -> bool {
+            self.state.lock().unwrap().1
+        }
+    }
+
+    pub fn arm(path: &Path) -> Arc<Gate> {
+        let gate = Arc::new(Gate::default());
+        GATES.lock().unwrap().push((path.to_owned(), gate.clone()));
+        gate
+    }
+
+    pub fn wait(paths: &[PathBuf]) {
+        let gate = GATES.lock().unwrap().iter().find(|(path, _)| paths.contains(path)).map(|(_, gate)| gate.clone());
+        let Some(gate) = gate else { return };
+        let (state, timeout) = gate.changed.wait_timeout_while(gate.state.lock().unwrap(), Duration::from_secs(5), |(released, _)| !*released).unwrap();
+        if timeout.timed_out() {
+            drop(state);
+            gate.state.lock().unwrap().1 = true;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,6 +541,57 @@ mod tests {
         let sent = send(&home, vec![file], None, vec![]).await;
         let why = format!("{:#}", sent.unwrap_err());
         assert!(why.contains("1 file was not sent"), "{why}");
+    }
+
+    /// A receiver at its connection limit refuses every stream of the first try;
+    /// the whole batch is asked again once, not only the first four files.
+    #[tokio::test]
+    async fn a_busy_receiver_gets_the_whole_batch_again() {
+        let rx = receiver("busybatch");
+        let (home, me) = sender_home("busybatch", &rx);
+        let src = temp("busybatch-src");
+        for n in 0..12 {
+            std::fs::write(src.join(format!("f{n:02}.txt")), format!("file {n}\n")).unwrap();
+        }
+        let mut held: Vec<_> = (0..MAX_CONNS_PER_PEER).map(|_| rx.inbox.admit(me).unwrap()).collect();
+        let free = tokio::spawn(async move {
+            tokio::time::sleep(BUSY_RETRY / 3).await;
+            held.pop();
+            held
+        });
+        let sent = send(&home, vec![src.clone()], None, vec![]).await;
+        assert!(sent.is_ok(), "{sent:?}");
+        let arrived = std::fs::read_dir(rx.root.join(src.file_name().unwrap())).unwrap().flatten().count();
+        assert_eq!(arrived, 12);
+        drop(free.await.unwrap());
+    }
+
+    /// Listing a folder for an edge drop must not hold the one thread the daemon's input
+    /// forwarding runs on. The listing is held until another task of the runtime has run:
+    /// done inline, it would wait on the very thread that task needs, and give up.
+    #[tokio::test(flavor = "current_thread")]
+    async fn listing_files_to_send_does_not_stall_the_runtime() {
+        let src = temp("walk-src");
+        std::fs::write(src.join("f"), []).unwrap();
+        let home = temp("walk-home");
+        let gate = gate::arm(&src);
+        let sending = tokio::spawn({
+            let src = src.clone();
+            async move { send(&home, vec![src], None, vec![]).await }
+        });
+        // The runtime's only thread is free: this task runs while the listing is held.
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let other = tokio::spawn({
+            let ran = ran.clone();
+            async move { ran.store(true, Ordering::SeqCst) }
+        });
+        other.await.unwrap();
+        assert!(ran.load(Ordering::SeqCst));
+        gate.release();
+        // No paired computer: the send ends right after the listing.
+        let result = sending.await.unwrap();
+        assert!(format!("{:#}", result.unwrap_err()).contains("no paired computers"));
+        assert!(!gate.gave_up(), "the runtime stood still while the listing was held");
     }
 
     /// The same path twice used to make two concurrent streams for one

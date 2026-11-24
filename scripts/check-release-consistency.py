@@ -165,7 +165,8 @@ def versions(root, report):
     report.check(rendered.returncode == 0 and f'<release version="{version}" date="2026-01-02">' in rendered.stdout, f"scripts/metainfo.py renders release {version}")
     # The website carries a stamped placeholder; the stamping step has to be there.
     pages = read(root, ".github/workflows/pages.yml")
-    report.check("sh site/tools/stamp.sh _site \"$(sh scripts/version.sh)\"" in pages, "the website is stamped with scripts/version.sh's version when published")
+    report.check("sh site/tools/stamp.sh _site \"$(cat version.txt)\"" in pages and "version=$(sh scripts/version.sh)" in pages,
+                 "the website is stamped with the latest release's version, scripts/version.sh's when that cannot be read")
 
 
 # --------------------------------------------------------------- workflows

@@ -28,6 +28,10 @@ pub(super) fn arm(home: &Path, config: &Config, id: &str, origin: Origin) {
     let dir = home.join(DIR);
     if crate::private::create_dir_all(&dir).is_err() { return; }
     if std::fs::read_dir(&dir).map(|r| r.take(65).count()).unwrap_or(65) >= 64 { return; }
+    // Withdrawal purges under this lock. Re-checking consent inside it means no marker for a
+    // withdrawn identity can appear after the purge. The panic hook itself never takes it.
+    let Ok(_consent) = spool::lock(home) else { return; };
+    if process_revoked() || identity_for(home, config).as_deref() != Some(id) { return; }
     let item = spool::Stored::new(config, id, Event::PanicObserved, origin, Outcome::Failed, ErrorCode::Panic, true);
     let path = dir.join(&item.uuid);
     let Ok(bytes) = serde_json::to_vec(&item) else { return; };
@@ -78,6 +82,15 @@ pub(super) fn recover(home: &Path, config: &Config) {
         let mut signal = Vec::new();
         if std::fs::File::open(&path).and_then(|f| f.take(21).read_to_end(&mut signal)).is_err() { continue; }
         let Some(mut item) = item else { let _ = std::fs::remove_file(&path); let _ = std::fs::remove_file(meta); continue; };
+        // Another environment or project at this home owns this marker (it may belong to a live
+        // process). Only its own recovery decides; here it is left alone until it is too old to matter.
+        if !item.is_for(config) {
+            if path.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > Duration::from_secs(24 * 60 * 60)) {
+                let _ = std::fs::remove_file(&path); let _ = std::fs::remove_file(meta);
+            }
+            continue;
+        }
         if signal.len() == 20 { item.occurred_at(u64::from_le_bytes(signal[12..].try_into().unwrap())); }
         if !item.permitted(home, config) { let _ = std::fs::remove_file(&path); let _ = std::fs::remove_file(meta); continue; }
         if signal.is_empty() { continue; } // An armed process may still be running.
@@ -104,7 +117,7 @@ pub(super) fn frame(site: [u32; 3]) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::consent_test::{set_enabled};
+    use super::super::consent_test::{identity_for, set_enabled, set_enabled_for};
     const CHILD: &str = "ONE_MK_SYNTHETIC_PANIC_CHILD";
     #[test]
     fn isolated_panic_child() {
@@ -143,6 +156,39 @@ mod tests {
         set_enabled(home.path(), false).unwrap();
         assert!(!home.path().join(DIR).exists());
         assert!(!home.path().join("analytics-spool-v2.json").exists());
+    }
+    // Writes the marker pair `arm` would have written, without touching the process-wide slot.
+    fn marker(home: &Path, config: &Config, id: &str, signal: &[u8]) -> (PathBuf, PathBuf) {
+        let item = spool::Stored::new(config, id, Event::PanicObserved, Origin::Daemon, Outcome::Failed, ErrorCode::Panic, true);
+        let dir = home.join(DIR);
+        crate::private::create_dir_all(&dir).unwrap();
+        let path = dir.join(&item.uuid);
+        crate::private::write(&path.with_extension("json"), serde_json::to_vec(&item).unwrap()).unwrap();
+        crate::private::write(&path.with_extension("signal"), signal).unwrap();
+        (path.with_extension("signal"), path.with_extension("json"))
+    }
+    #[test]
+    fn recovery_leaves_another_environments_live_marker_alone() {
+        let home = tempfile::tempdir().unwrap();
+        set_enabled_for(home.path(), true, "production").unwrap();
+        set_enabled_for(home.path(), true, "development").unwrap();
+        let production = Config::scoped("phc_test_only", "https://eu.i.posthog.com", "production").unwrap();
+        let development = Config::scoped("phc_test_only", "https://eu.i.posthog.com", "development").unwrap();
+        let (signal, meta) = marker(home.path(), &production, &identity_for(home.path(), "production").unwrap(), b"");
+        recover(home.path(), &development);
+        assert!(signal.exists() && meta.exists());
+    }
+    #[test]
+    fn a_withdrawn_identity_cannot_arm_a_marker() {
+        let home = tempfile::tempdir().unwrap(); set_enabled(home.path(), true).unwrap();
+        let config = Config::new("phc_test_only", "https://eu.i.posthog.com").unwrap();
+        let id = identity_for(home.path(), "development").unwrap();
+        // Another process withdraws after this one's consent check and before its first arm.
+        set_enabled(home.path(), false).unwrap();
+        arm(home.path(), &config, &id, Origin::Cli);
+        disarm();
+        let left = std::fs::read_dir(home.path().join(DIR)).map(|d| d.count()).unwrap_or(0);
+        assert_eq!(left, 0);
     }
     #[test]
     fn a_windows_panic_location_matches_its_source() {

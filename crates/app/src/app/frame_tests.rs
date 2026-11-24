@@ -532,6 +532,10 @@ mod pages;
 #[cfg(unix)]
 mod qa;
 #[cfg(unix)]
+mod qa_keys_palette;
+#[cfg(unix)]
+mod qa_app3;
+#[cfg(unix)]
 mod qa_files;
 #[cfg(unix)]
 mod qa_settings;
@@ -539,3 +543,5 @@ mod qa_settings;
 mod qa_updates_settings;
 #[cfg(unix)]
 mod qa_wallpaper;
+#[cfg(unix)]
+mod regressions;

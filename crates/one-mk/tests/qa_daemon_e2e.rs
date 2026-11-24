@@ -204,8 +204,19 @@ fn the_controller_going_away_never_leaves_the_other_computer_stuck() {
     assert!(lab.status(&alpha).controlling.is_none() && lab.status(&beta).controlled_by.is_none());
 
     // The other way: the computer being controlled dies; the controller gets its pointer back.
-    Lab::ok(&alpha, &["switch", "beta"]);
-    wait("alpha controls beta", 20, || lab.status(&alpha).controlling.is_some().then_some(()));
+    // Alpha can still be holding the link to the beta it knew before the restart, and a request sent into
+    // it is lost: ask again every few seconds until beta is controlled.
+    let mut asked: Option<std::time::Instant> = None;
+    wait("alpha controls beta", 40, || {
+        if lab.status(&alpha).controlling.is_some() {
+            return Some(());
+        }
+        if asked.is_none_or(|at| at.elapsed() >= Duration::from_secs(4)) {
+            let _ = Lab::run(&alpha, &["switch", "beta"]);
+            asked = Some(std::time::Instant::now());
+        }
+        None
+    });
     lab.kill9(&beta);
     wait("alpha is back after beta died", 40, || lab.status(&alpha).controlling.is_none().then_some(()));
     // The control socket belongs to a dead process; a new daemon takes over the folder.

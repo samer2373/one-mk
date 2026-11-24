@@ -136,18 +136,24 @@
 
   // ------------------------------------------------------- copy buttons --
   $$("[data-copy]").forEach(function (b) {
+    // The label the button had before the first "Copied", and the timer that restores it:
+    // a second click while "Copied" shows must not take "Copied" for the original label.
+    var original = b.getAttribute("aria-label"), restore = 0;
     b.addEventListener("click", function () {
       var text = b.parentNode.querySelector("code").textContent;
       var done = function () {
         b.classList.add("is-done"); b.querySelector("use").setAttribute("href", "#i-check");
-        var label = b.getAttribute("aria-label"); b.setAttribute("aria-label", "Copied");
-        setTimeout(function () { b.classList.remove("is-done"); b.querySelector("use").setAttribute("href", "#i-copy"); b.setAttribute("aria-label", label); }, 1600);
+        b.setAttribute("aria-label", "Copied");
+        clearTimeout(restore);
+        restore = setTimeout(function () { b.classList.remove("is-done"); b.querySelector("use").setAttribute("href", "#i-copy"); b.setAttribute("aria-label", original); }, 1600);
       };
       var fallback = function () {
-        var ta = doc.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+        var ta = doc.createElement("textarea"), copied = false; ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
         doc.body.appendChild(ta); ta.select();
-        try { doc.execCommand("copy"); done(); } catch (e) { /* nothing to do */ }
+        // execCommand answers false (it does not always throw) when nothing was copied.
+        try { copied = doc.execCommand("copy") !== false; } catch (e) { copied = false; }
         doc.body.removeChild(ta);
+        if (copied) done();
       };
       if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
     });
@@ -214,7 +220,7 @@
   var hint = $("[data-stage-hint]"), chips = $$("[data-go]"), presets = $$("[data-remap]"), status = $("[data-remap-status]");
   var controls = $(".stage__controls"), presetBox = $(".presets");
   function hasWebGL() {
-    try { var c = doc.createElement("canvas"); return !!(window.WebGLRenderingContext && (c.getContext("webgl2") || c.getContext("webgl"))); } catch (e) { return false; }
+    try { var c = doc.createElement("canvas"); return !!(window.WebGL2RenderingContext && c.getContext("webgl2")); } catch (e) { return false; }
   }
   var can3D = !reduce.matches && hasWebGL();
   if (!can3D) {

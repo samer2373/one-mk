@@ -192,7 +192,12 @@ impl App {
             _ => {}
         }
         match c.id.as_str() {
-            "updates" if c.fix.as_deref() == Some("update-now") => Some(("Update now", Fix::Update)),
+            // `begin_update` says what the button does where oneMK can't install itself.
+            "updates" if c.fix.as_deref() == Some("update-now") => Some((match self.update_ui.status.as_ref() {
+                Some(status) if !status.can_update && status.move_to_applications => "Open Settings",
+                Some(status) if !status.can_update => "Download",
+                _ => "Update now",
+            }, Fix::Update)),
             "daemon" if self.off() => Some(("Start oneMK", Fix::Start)),
             // Pairing works with oneMK off too; it connects once started.
             "pairing" if self.running().is_none_or(|s| s.peers.is_empty()) => Some(("Pair a computer", Fix::Pair)),
@@ -201,6 +206,8 @@ impl App {
     }
 
     pub(super) fn recheck(&mut self) {
+        // What this check is made against: if that changes before it ends, it runs again.
+        self.health_basis = Some(self.health_basis_now());
         self.busy.push(Job::Doctor);
         self.link.doctor();
     }

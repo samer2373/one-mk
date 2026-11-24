@@ -32,6 +32,11 @@ set -eu
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 
+# ONE_MK_ALLOW_OLDER=1 (exactly 1, as documented) allows an older release;
+# "0", "no" or any other value does not.
+allow_older=
+[ "${ONE_MK_ALLOW_OLDER:-}" != 1 ] || allow_older=1
+
 # The publisher's update key (crates/one-mk/src/update_key.rs, PUBLIC_KEY).
 PUBLIC_KEY='-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAHJamD3QRuJBIp8jnM/Grzzsh1Fn1BwkczvdT8/yIv+s=
@@ -116,7 +121,7 @@ refuse_older_than_installed() {
     have=$(program_version "$1")
     [ -n "$have" ] || return 0
     if version_newer "$have" "$signed_version"; then
-        if [ -n "${ONE_MK_ALLOW_OLDER:-}" ]; then
+        if [ -n "$allow_older" ]; then
             echo "Note: oneMK $have is installed and this is the older $signed_version; installing it because ONE_MK_ALLOW_OLDER is set."
         else
             die "oneMK $have is installed and this release is the older $signed_version, which a replayed or outdated download could be (nothing was installed). To go back on purpose, run this again with ONE_MK_ALLOW_OLDER=1"
@@ -142,7 +147,7 @@ case "$(openssl version 2>/dev/null || true)" in
         case "$sequence" in
             ""|*[!0-9]*) die "the signed update list has no release sequence (nothing was installed)" ;;
         esac
-        if [ -z "${ONE_MK_ALLOW_OLDER:-}" ] && number_lt "$sequence" "$MIN_SEQUENCE"; then
+        if [ -z "$allow_older" ] && number_lt "$sequence" "$MIN_SEQUENCE"; then
             die "this is an older oneMK release (number $sequence) than this installer accepts (at least $MIN_SEQUENCE): it is signed, but whoever serves the download could be replaying it. Get the current install.sh and run it again (nothing was installed)"
         fi
         signed_version=$(grep -o '"version":"[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"}' "$tmp/update-manifest.json" | sed 's/"version":"//; s/"}$//')
@@ -152,7 +157,7 @@ case "$(openssl version 2>/dev/null || true)" in
         if [ -n "${ONE_MK_MAX_AGE_DAYS:-}" ]; then
             case "$ONE_MK_MAX_AGE_DAYS" in *[!0-9]*) die "ONE_MK_MAX_AGE_DAYS must be a whole number of days, not '$ONE_MK_MAX_AGE_DAYS' (nothing was installed)" ;; esac
             [ -n "$age" ] || die "ONE_MK_MAX_AGE_DAYS is set, but the release's age cannot be told (no signed release time, or this computer's clock is before it); nothing was installed"
-            if [ -z "${ONE_MK_ALLOW_OLDER:-}" ] && [ "$age" -gt "$ONE_MK_MAX_AGE_DAYS" ]; then
+            if [ -z "$allow_older" ] && [ "$age" -gt "$ONE_MK_MAX_AGE_DAYS" ]; then
                 die "this release was published $age days ago (${release_time%%T*}), more than the $ONE_MK_MAX_AGE_DAYS days ONE_MK_MAX_AGE_DAYS allows. It is signed, but an old release is also what a replaying download looks like. If it is the newest (https://github.com/samer2373/one-mk/releases/latest), run this again without ONE_MK_MAX_AGE_DAYS or with ONE_MK_ALLOW_OLDER=1 (nothing was installed)"
             fi
         fi
@@ -183,21 +188,38 @@ if [ "$(uname -s)" = Darwin ]; then
     new="$dest/.one-mk.app.new.$$" old="$dest/.one-mk.app.old.$$"
     rm -rf "$new" "$old"
     ditto "$tmp/app/one-mk.app" "$new" || { rm -rf "$new"; die "could not copy oneMK into $dest (nothing was installed)"; }
+    # `one-mk` in the terminal, for the commands (pair, status, send...).
+    # Written before the app is touched, so a failure here still leaves the
+    # previous installation as it was.
+    launcher="$HOME/.local/bin/.one-mk.new.$$"
+    # A folder where the command goes would swallow the staged file (mv moves
+    # a file into a folder and succeeds), so refuse it before the app is touched.
+    if [ -d "$HOME/.local/bin/one-mk" ]; then
+        rm -rf "$new"
+        die "$HOME/.local/bin/one-mk is a folder, not a program; move it out of the way and run this again (nothing was installed)"
+    fi
+    mkdir -p "$HOME/.local/bin" \
+        && printf '#!/bin/sh\nexec "%s/one-mk.app/Contents/MacOS/one-mk" "$@"\n' "$dest" > "$launcher" \
+        && chmod 755 "$launcher" \
+        || { rm -rf "$new"; rm -f "$launcher"; die "could not write the one-mk command into $HOME/.local/bin (nothing was installed)"; }
     pkill -f "$dest/one-mk.app/" 2>/dev/null || true
     if [ -e "$dest/one-mk.app" ]; then
-        mv "$dest/one-mk.app" "$old" || { rm -rf "$new"; die "could not replace $dest/one-mk.app; quit oneMK and run this again"; }
+        mv "$dest/one-mk.app" "$old" || { rm -rf "$new" "$launcher"; die "could not replace $dest/one-mk.app; quit oneMK and run this again"; }
     fi
     if ! mv "$new" "$dest/one-mk.app"; then
         [ -e "$old" ] && mv "$old" "$dest/one-mk.app"
-        rm -rf "$new"
+        rm -rf "$new" "$launcher"
         die "could not install $dest/one-mk.app; the previous app was kept"
     fi
+    # The old app is deleted only once everything is in place: when the
+    # launcher cannot be installed, the previous app goes back.
+    if [ -d "$HOME/.local/bin/one-mk" ] || ! mv -f "$launcher" "$HOME/.local/bin/one-mk"; then
+        rm -f "$launcher"
+        rm -rf "$dest/one-mk.app"
+        if [ -e "$old" ]; then mv "$old" "$dest/one-mk.app"; fi
+        die "could not install the one-mk command into $HOME/.local/bin; the previous app was kept"
+    fi
     rm -rf "$old"
-    # `one-mk` in the terminal, for the commands (pair, status, send...).
-    mkdir -p "$HOME/.local/bin"
-    printf '#!/bin/sh\nexec "%s/one-mk.app/Contents/MacOS/one-mk" "$@"\n' "$dest" > "$HOME/.local/bin/.one-mk.new.$$"
-    chmod 755 "$HOME/.local/bin/.one-mk.new.$$"
-    mv -f "$HOME/.local/bin/.one-mk.new.$$" "$HOME/.local/bin/one-mk"
     echo "Installed $dest/one-mk.app"
     echo "Opening it. It sets itself up and guides you through the permissions macOS asks for."
     open "$dest/one-mk.app"
@@ -273,7 +295,12 @@ else
                     echo "install.sh: $bin/$name is a folder now; the previous $name is in $bin/.$name.old.$$" >&2
                 fi
             elif [ -e "$bin/.$name.old.$$" ]; then
-                mv -f $mv_t "$bin/.$name.old.$$" "$bin/$name" || echo "install.sh: could not put back $bin/$name" >&2
+                if ! mv -f $mv_t "$bin/.$name.old.$$" "$bin/$name"; then
+                    # The kept copy is then the only previous one: it is not
+                    # swept up with the temporary files.
+                    kept=$(printf '%s\n' $kept | grep -vx "$name" || true)
+                    echo "install.sh: could not put back $bin/$name; the previous $name is in $bin/.$name.old.$$" >&2
+                fi
             else
                 rm -f "$bin/$name"
             fi
