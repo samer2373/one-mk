@@ -7,33 +7,40 @@ use std::time::Instant;
 struct Counted;
 
 static COUNTING: AtomicBool = AtomicBool::new(false);
+// Only the thread that runs the decisions is counted: the test runner and the system's own threads
+// (macOS starts some of its own) may allocate while it runs, and that says nothing about the decision.
+thread_local! { static COUNTED_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+
+fn counting() -> bool {
+    COUNTING.load(Ordering::Relaxed) && COUNTED_THREAD.try_with(|counted| counted.get()).unwrap_or(false)
+}
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 static DEALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for Counted {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
+        if counting() {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
-        if COUNTING.load(Ordering::Relaxed) {
+        if counting() {
             DEALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
         unsafe { System.dealloc(pointer, layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
+        if counting() {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
         unsafe { System.alloc_zeroed(layout) }
     }
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        if COUNTING.load(Ordering::Relaxed) {
+        if counting() {
             ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         }
         unsafe { System.realloc(pointer, layout, size) }
@@ -68,6 +75,7 @@ fn decision_allocates_nothing_and_reports_debug_throughput() {
     let iterations = 1_000_000;
     ALLOCATIONS.store(0, Ordering::Relaxed);
     DEALLOCATIONS.store(0, Ordering::Relaxed);
+    COUNTED_THREAD.with(|counted| counted.set(true));
     COUNTING.store(true, Ordering::Relaxed);
     let started = Instant::now();
     for destination in [None, Some(Destination::Local), Some(Destination::Remote)] {
@@ -109,6 +117,7 @@ fn decision_allocates_nothing_and_reports_debug_throughput() {
     }
     let elapsed = started.elapsed();
     COUNTING.store(false, Ordering::Relaxed);
+    COUNTED_THREAD.with(|counted| counted.set(false));
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
     assert_eq!(DEALLOCATIONS.load(Ordering::Relaxed), 0);
     eprintln!("pure decision only (not native hook latency): {iterations} decisions per gate mode in {elapsed:?}");
