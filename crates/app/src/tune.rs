@@ -2029,11 +2029,8 @@ pub fn system_note(what: &What, target: u8) -> Option<String> {
         if missing.is_empty() { return None; }
         let works: Vec<_> = SystemAction::TARGETS.into_iter()
             .filter(|&platform| action.shortcut(platform).is_some()).collect();
-        let name = if *action == SystemAction::AppWindows && works.contains(&os::MACOS) {
-            action.label_for(os::MACOS)
-        } else {
-            action.label_for(target)
-        };
+        // The name the rules list shows for this scope, so the note reads as the same action.
+        let name = action.label_for(target);
         Some((name, missing, works))
     };
     let (name, missing, works) = match what {
@@ -3010,7 +3007,7 @@ mod fixes {
         assert_eq!(out_text_for(&action, os::MACOS), "App Exposé");
         assert_eq!(system_note(&What::To(action.clone()), os::MACOS), None);
         let warning = system_note(&What::To(action), os::UNKNOWN).unwrap();
-        assert!(warning.starts_with("App Exposé does nothing on Windows PCs."));
+        assert!(warning.starts_with("App windows does nothing on Windows PCs."));
         assert!(warning.contains("For:"));
         assert!(button_rule_note(7, os::MACOS).is_some());
         assert!(button_rule_note(7, os::WINDOWS).is_some());

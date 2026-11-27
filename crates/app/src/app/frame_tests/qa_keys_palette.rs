@@ -333,7 +333,7 @@ fn system_warnings_and_the_local_preview_are_shown_in_the_window() {
     assert!(output.contains(if os::local() == os::LINUX { "Ctrl+Alt+Right" } else { "Right" }), "{output}");
     win.send(Event::KeymapCheck(Ok(vec!["Note: os:hide-app has no shortcut on Windows and sends nothing. Scope this rule with --os mac.".into()])));
     assert!(!win.has_text("Scope this rule with --os mac"));
-    let note = win.items().into_iter().filter(|item| item.name.starts_with("App Exposé does nothing on Windows PCs.")).collect::<Vec<_>>();
+    let note = win.items().into_iter().filter(|item| item.name.starts_with("App windows does nothing on Windows PCs.")).collect::<Vec<_>>();
     assert_eq!(note.len(), 1, "{:#?}", win.names());
     assert!(note[0].rect.top() >= win.find_containing("F13 → App windows").unwrap().rect.bottom());
 }
