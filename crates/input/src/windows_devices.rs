@@ -44,9 +44,13 @@ pub(crate) struct RawDevices {
     registered: bool,
     probes: Option<Probes>,
     /// While detecting (`CaptureCmd::Detect`): the devices keys and buttons
-    /// went down on, taken by the window procedure as `Event::PressDevice`.
+    /// went down on (and whether it was a repeat), taken by the window
+    /// procedure as `Event::PressDevice`.
     pub(crate) detecting: bool,
-    pub(crate) presses: Vec<(u32, DeviceRef)>,
+    pub(crate) presses: Vec<(u32, bool, DeviceRef)>,
+    /// Keys and buttons down per device while detecting: Raw Input repeats a
+    /// held key's make code, and a repeat names no press.
+    detect_down: Vec<(u32, DeviceRef)>,
 }
 
 /// Devices whose HID strings are being asked for on worker threads. Opening a HID interface and
@@ -79,6 +83,35 @@ impl RawDevices {
             tracing::debug!("Raw Input refused: input from every device counts as unknown");
         }
         self.registered = ok;
+    }
+
+    /// Detecting starts or ends: what was seen of the last one is forgotten.
+    pub(crate) fn detect(&mut self, on: bool) {
+        self.detecting = on;
+        self.presses.clear();
+        self.detect_down.clear();
+    }
+
+    /// While detecting: a key or button went down or up on `device`. Downs
+    /// are kept for the window procedure, the down of one already down as a
+    /// repeat.
+    fn detect_press(&mut self, code: u32, down: bool, device: DeviceRef) {
+        if !self.detecting {
+            return;
+        }
+        let held = self.detect_down.iter().position(|&(c, d)| c == code && d == device);
+        if !down {
+            if let Some(i) = held {
+                self.detect_down.swap_remove(i);
+            }
+            return;
+        }
+        if held.is_none() && self.detect_down.len() < 64 {
+            self.detect_down.push((code, device));
+        }
+        if self.presses.len() < 64 {
+            self.presses.push((code, held.is_some(), device));
+        }
     }
 
     /// Whether Raw Input is being read.
@@ -201,9 +234,7 @@ impl RawDevices {
                 let extended = u32::from(k.Flags) & RI_KEY_E0 != 0;
                 if let Some(code) = hook_key_to_evdev(u32::from(k.VKey), u32::from(k.MakeCode), extended) {
                     let down = u32::from(k.Flags) & RI_KEY_BREAK == 0;
-                    if self.detecting && down && self.presses.len() < 64 {
-                        self.presses.push((code, device));
-                    }
+                    self.detect_press(code, down, device);
                     self.corr.device_event(Token::Press { code, down }, device, now, out);
                 }
             }
@@ -226,9 +257,7 @@ impl RawDevices {
                         if flags & bit != 0
                             && let Some(code) = hid_button_to_evdev(logical + 1)
                         {
-                            if self.detecting && down && self.presses.len() < 64 {
-                                self.presses.push((code, device));
-                            }
+                            self.detect_press(code, down, device);
                             self.corr.device_event(Token::Press { code, down }, device, now, out);
                         }
                     }

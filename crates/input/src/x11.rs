@@ -47,12 +47,13 @@
 use crate::common_logic::{Backoff, LocalInputGate, drain_coalesced, now_ms};
 use crate::linux_logic::{
     Held, Notches, Pressed, ScrollAxis, XButton, absolute_delta, barrier_line, barrier_open_directions, edge_strips,
-    evdev_to_x_button, evdev_to_xkeycode, fp1616, fp3232, notch_buttons, set_bits, x_button, xkeycode_to_evdev,
+    evdev_to_x_button, evdev_to_xkeycode, fp1616, fp3232, held_keycodes, notch_buttons, set_bits, x_button, xkeycode_to_evdev,
 };
 use crate::linux_rt::{Socket, forward_lock, lock_changed, spawn_thread};
 use crate::linux_devices::{event_node, fingerprint, is_xtest, is_xwayland, read_sysfs};
 use crate::{Backend, CaptureCmd, DeviceRef, Event, Inject, InputDevice, Kinds};
 use anyhow::{Context, Result, bail};
+use one_mk_proto::detect::{self, Press};
 use one_mk_proto::{Desktop, Edge, Mods, Pos, Rect, Side};
 use std::collections::HashMap;
 use std::os::fd::AsRawFd;
@@ -107,8 +108,8 @@ struct Shared {
     held: Held,
     notches: Notches,
     controlled: bool,
-    /// Reporting this machine's own presses (`CaptureCmd::Detect`).
-    detecting: bool,
+    /// Reporting this machine's own presses (`CaptureCmd::Detect`), for this session.
+    detecting: Option<u32>,
     gate: LocalInputGate,
     locked: bool,
     reported: Option<Desktop>,
@@ -169,7 +170,7 @@ async fn run(
         held: Held::default(),
         notches: Notches::default(),
         controlled: false,
-        detecting: false,
+        detecting: None,
         gate: LocalInputGate::default(),
         locked: *locked.borrow_and_update(),
         reported: None,
@@ -438,7 +439,7 @@ impl X {
         self.raw_on_masters = false;
         self.known = now;
         st.report_devices(&self.known);
-        self.select(st.controlled, st.detecting, !st.held.is_empty());
+        self.select(st.controlled, st.detecting.is_some(), !st.held.is_empty());
         Ok(())
     }
 
@@ -633,7 +634,7 @@ impl X {
         // release could undo a press made since, and waiting for the keys would break crossing
         // with a modifier held.
         self.pressed.clear();
-        self.select(st.controlled, st.detecting, !st.held.is_empty());
+        self.select(st.controlled, st.detecting.is_some(), !st.held.is_empty());
         self.conn.flush()?;
         st.send(Event::Modifiers(Mods::from_xkb(u32::from(mask))));
         st.send(Event::Activated { id: st.next_id, side, pos: at });
@@ -647,7 +648,7 @@ impl X {
         self.conn.ungrab_keyboard(CURRENT_TIME)?;
         self.conn.ungrab_pointer(CURRENT_TIME)?;
         self.conn.destroy_window(g.window)?;
-        self.select(st.controlled, st.detecting, !st.held.is_empty());
+        self.select(st.controlled, st.detecting.is_some(), !st.held.is_empty());
         Ok(())
     }
 
@@ -692,7 +693,7 @@ impl X {
         // are those of an injector that died (XTest keeps them pressed).
         self.let_go(st)?;
         self.release_leftovers()?;
-        self.select(st.controlled, st.detecting, !st.held.is_empty());
+        self.select(st.controlled, st.detecting.is_some(), !st.held.is_empty());
         st.report_devices(&self.known);
         st.show(None);
         let mut batch = Vec::new();
@@ -711,7 +712,10 @@ impl X {
                     Some(CaptureCmd::Release { id, pos }) => self.release(st, id, pos)?,
                     Some(CaptureCmd::Detect(on)) => {
                         st.detecting = on;
-                        self.select(st.controlled, st.detecting, !st.held.is_empty());
+                        self.select(st.controlled, on.is_some(), !st.held.is_empty());
+                        if let Some(session) = on {
+                            st.send(Event::DetectHeld { session, codes: self.held_keys() });
+                        }
                     }
                     Some(CaptureCmd::Activate { side }) => {
                         if self.grab.is_none() {
@@ -821,8 +825,7 @@ impl X {
         Ok(())
     }
 
-    /// Real input on this machine while a peer controls it, or while
-    /// detecting (a press is reported once, the release for a modifier).
+    /// Real input on this machine while a peer controls it.
     fn local(&mut self, st: &mut Shared, source: u16) -> bool {
         if self.grab.is_some() {
             return false;
@@ -833,18 +836,35 @@ impl X {
         true
     }
 
-    /// While detecting, a press of this machine's own (never XTest's: that is
-    /// what oneMK and other programs inject).
-    fn detected(&self, st: &Shared, source: u16, code: u32, down: bool) {
-        if st.detecting && !self.known.xtest.contains(&source) {
-            st.send(Event::LocalPress { code, down, device: self.device(source) });
+    /// While detecting, a press of this machine's own, here or captured
+    /// (never XTest's: that is what oneMK and other programs inject). Only a
+    /// report: it is no `LocalInput`, and the input goes where it goes.
+    fn detected(&self, st: &Shared, session: u32, source: u16, code: Option<u32>, down: bool) {
+        if let Some(code) = code
+            && !self.known.xtest.contains(&source)
+        {
+            let press = Press { code, down, device: self.device(source), ..Press::default() };
+            st.send(Event::LocalPress { session, press });
         }
     }
 
+    /// The keys held now (detecting begins: they are no press).
+    fn held_keys(&self) -> Vec<u32> {
+        let Ok(keys) = self.conn.query_keymap().map_err(anyhow::Error::from).and_then(|c| c.reply().map_err(anyhow::Error::from)) else {
+            return Vec::new();
+        };
+        held_keycodes(&keys.keys).filter_map(xkeycode_to_evdev).collect()
+    }
+
     fn raw_key(&mut self, st: &mut Shared, source: u16, keycode: u32, down: bool) {
-        if self.local(st, source) {
-            if let Some(code) = xkeycode_to_evdev(keycode) {
-                self.detected(st, source, code, down);
+        if let Some(session) = st.detecting {
+            self.detected(st, session, source, xkeycode_to_evdev(keycode), down);
+        }
+        if self.grab.is_none() {
+            // Key releases are selected only for detecting: one is never this machine's
+            // own input taking back control from a peer.
+            if down {
+                self.local(st, source);
             }
             return;
         }
@@ -856,19 +876,19 @@ impl X {
     }
 
     fn raw_button(&mut self, st: &mut Shared, source: u16, button: u32, down: bool, emulated: bool) -> Result<()> {
-        if self.local(st, source) {
-            if !emulated && down {
-                match x_button(button) {
-                    Some(XButton::Button(code)) => self.detected(st, source, code, true),
-                    // Wheel clicks are not buttons; buttons past 9 are not forwarded
-                    // here: named, so the person learns that rather than nothing.
-                    Some(XButton::Scroll(..)) => {}
-                    None => self.detected(st, source, one_mk_proto::detect::BEYOND_BUTTONS + (button.saturating_sub(10)).min(7), true),
-                }
+        if let Some(session) = st.detecting
+            && down
+            && !emulated
+        {
+            match x_button(button) {
+                Some(XButton::Button(code)) => self.detected(st, session, source, Some(code), true),
+                // Wheel clicks are not buttons; buttons past 9 are not forwarded: named, so
+                // the person learns that rather than nothing.
+                Some(XButton::Scroll(..)) => {}
+                None => self.detected(st, session, source, Some(detect::BEYOND_BUTTONS + button.saturating_sub(10).min(7)), true),
             }
-            return Ok(());
         }
-        if emulated {
+        if self.local(st, source) || emulated {
             return Ok(());
         }
         match x_button(button) {
@@ -996,10 +1016,10 @@ impl X {
             },
             Inject::Controlled(c) => {
                 st.controlled = c;
-                self.select(st.controlled, st.detecting, !st.held.is_empty());
+                self.select(st.controlled, st.detecting.is_some(), !st.held.is_empty());
             }
         }
-        self.select(st.controlled, st.detecting, !st.held.is_empty());
+        self.select(st.controlled, st.detecting.is_some(), !st.held.is_empty());
         Ok(())
     }
 

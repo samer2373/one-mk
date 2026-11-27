@@ -979,6 +979,7 @@ pub async fn serve(
         if app.next_deadline().is_some_and(|d| d <= Instant::now()) {
             app.on_timer();
         }
+        app.detect_check_abandoned();
         let deadline = app.next_deadline();
         tokio::select! {
             biased;
@@ -1605,7 +1606,7 @@ impl App {
                 self.input_problems.remove(part);
             }
             // Only for detecting (`detect_input`, above).
-            Event::LocalPress { .. } | Event::PressDevice { .. } => {}
+            Event::LocalPress { .. } | Event::PressDevice { .. } | Event::DetectHeld { .. } => {}
         }
     }
 

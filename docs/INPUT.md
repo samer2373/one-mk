@@ -104,9 +104,23 @@ device and for that one. In the window, **Detect key** (Keyboard) and
 with "Only on <device>" offered; mouse buttons 6 to 8 are listed under
 **Other buttons**.
 
+A mouse button is detected on its own: modifiers held with it (Ctrl held
+while pressing Back) are said, and left out, as a button's rule
+(`buttons map`) is for the button alone. Where this computer can't use a
+rule for what was pressed, it says so instead of offering one ("detected,
+but ... can't be changed on this system"): mouse buttons 6 to 8 on macOS and
+Windows (nothing there forwards or remaps them), and, with local key rules
+on, keys local remapping can't apply yet (a rule for one would pause local
+remapping). Where the device comes on another path (Windows, macOS), a press
+is matched with the device reports around it by the system's own event
+times; if two devices pressed that key at once, the device is left unknown
+rather than guessed.
+
 Detecting changes nothing: the key still does what it does (Esc alone
-cancels instead). Key repeats, keys already down when it started, and input
-that programs inject are ignored. It stops when a key is pressed, when the
+cancels instead). Key repeats, keys already down when it started (a
+modifier held from before still counts with the next key, so Ctrl held
+then Tab is `ctrl+tab`), and input that programs inject are ignored, both
+while the pointer is here and while this computer controls another one. It stops when a key is pressed, when the
 time is up, on Esc, when the command is stopped (Ctrl+C) or the window's
 Cancel is used, and when one-mk stops; while nothing is being detected it
 costs nothing.
@@ -116,7 +130,7 @@ costs nothing.
 | Linux, X11 session | every key and button the X server reports, with its device (tried against a private X server) |
 | Linux, GNOME, KDE or wlroots on Wayland | only keys pressed **while oneMK controls another computer** (the desktop shows it no input otherwise): move the pointer onto another computer's screen, then press the key. The window also takes the keys it sees itself (not the keypad, Fn, media keys or a mouse's extra keys) |
 | Windows | keys and buttons 1 to 5, device from Raw Input; compile-checked only |
-| macOS | keys and buttons 1 to 8, device from IOHIDManager; compile-checked only |
+| macOS | keys (Caps Lock and media keys too) and buttons 1 to 5, device from IOHIDManager; buttons 6 to 8 are named but can't be changed; compile-checked only |
 
 Some presses never reach oneMK and can't be detected: keys a keyboard handles
 itself (usually Fn), buttons a mouse only reports to its maker's software, and

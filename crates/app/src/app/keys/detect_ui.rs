@@ -28,6 +28,33 @@ pub(in crate::app) struct Listening {
     capture: Capture,
 }
 
+impl Listening {
+    /// oneMK couldn't listen (`why`): the window's own events count instead,
+    /// and the card says why.
+    fn in_window(self, why: String) -> Self {
+        Listening { daemon: false, window: true, note: Some(why), capture: Capture::default(), ..self }
+    }
+
+    /// Whether the window's own Esc cancels: only where the window listens.
+    /// Where only oneMK does, it owns Esc (its own modifier state knows
+    /// Ctrl+Esc from Esc; the window's tracker never saw Ctrl go down).
+    fn window_esc(&self) -> bool {
+        self.window
+    }
+}
+
+/// The "Pressed on" chips for a press on device `fp`, in `scope`: whether
+/// "Every ..." and "Only on ..." are chosen, and the scope each one sets.
+/// "Every ..." is chosen only when the scope names no device, and sets the
+/// scope without it (keeping the computers it is for).
+pub(in crate::app) fn device_chips(scope: &Scope, fp: &str) -> ((bool, Scope), (bool, Scope)) {
+    let (device, inner) = match scope {
+        Scope::Device(f, inner) => (Some(f.as_str()), (**inner).clone()),
+        other => (None, other.clone()),
+    };
+    ((device.is_none(), inner.clone()), (device == Some(fp), Scope::Device(fp.to_owned(), Box::new(inner))))
+}
+
 /// Mouse button `n`'s name in the panel: the drawn ones' names, then "Button 6"...
 pub(in crate::app) fn button_name(n: u32) -> String {
     tune::BUTTONS.iter().find(|b| b.0 == n).map_or_else(|| format!("Button {n}"), |b| b.1.to_owned())
@@ -118,16 +145,12 @@ impl App {
                 };
                 self.keys.error = Some((area, format!("Nothing was pressed in {secs} seconds.{why} Choose it from the list instead.")));
             }
-            // oneMK can't help; the window's own events still can, if they count.
-            Outcome::Failed(why) if l.window => {
-                if let Some(listening) = self.keys.listening.as_mut() {
-                    listening.daemon = false;
-                    listening.note = Some(why);
-                }
-            }
+            // oneMK can't help (not running, stopped, or a oneMK from before detecting): the
+            // window's own events take over, and the card keeps saying why.
             Outcome::Failed(why) => {
-                self.keys.listening = None;
-                self.keys.error = Some((area, why));
+                if let Some(listening) = self.keys.listening.as_mut() {
+                    *listening = listening.clone().in_window(why);
+                }
             }
         }
     }
@@ -154,32 +177,39 @@ impl App {
             if repeat {
                 continue;
             }
-            if code == 1 && down && !l.capture.holding() {
+            if !l.window_esc() {
+                // Only oneMK listens: the keys are kept from the window, and it decides.
+                continue;
+            }
+            let held = match e {
+                Event::Key { modifiers, .. } if down && keynames::mod_bit(u32::from(code)) == 0 => Some(*modifiers),
+                _ => None,
+            };
+            if code == 1 && down && !l.capture.holding() && held.is_none_or(|m| crate::detect::egui_groups(m) == 0) {
                 self.cancel_detect();
                 return;
             }
-            if !l.window {
-                continue;
-            }
             if let Some(chord) = l.capture.key(code, down) {
-                let groups = (chord.mods | (chord.mods >> 4)) & 0xf;
+                let groups = crate::detect::window_groups(chord.mods, held);
                 self.cancel_detect();
                 self.apply_detected(Detected::key(u32::from(chord.key), groups));
                 return;
             }
         }
         if l.window && l.view == View::Mouse {
-            let clicks: Vec<(egui::PointerButton, Pos2)> = ui.input(|i| {
+            let clicks: Vec<(egui::PointerButton, egui::Modifiers)> = ui.input(|i| {
                 i.events.iter().filter_map(|e| match e {
-                    Event::PointerButton { button, pressed: true, pos, .. } => Some((*button, *pos)),
+                    Event::PointerButton { button, pressed: true, modifiers, .. } => Some((*button, *modifiers)),
                     _ => None,
                 }).collect()
             });
             // A left click here is a click on the window (it stops listening, as through oneMK).
-            if let Some((b, _)) = clicks.into_iter().next() {
+            if let Some((b, mods)) = clicks.into_iter().next() {
                 self.cancel_detect();
                 if b != egui::PointerButton::Primary {
-                    self.apply_detected(Detected::button(crate::detect::pointer_button(b)));
+                    // As oneMK answers: the button alone, saying which modifiers were held.
+                    let dropped = crate::detect::groups_text(crate::detect::egui_groups(mods));
+                    self.apply_detected(Detected { dropped, ..Detected::button(crate::detect::pointer_button(b)) });
                 }
                 return;
             }
@@ -195,7 +225,7 @@ impl App {
         let label = if d.groups != 0 { tune::trigger_text(&d.trigger()) } else { tune::key_label(d.code) };
         if let Some(why) = &d.unusable {
             let area = if d.is_button { "buttons" } else { "keyboard" };
-            self.keys.error = Some((area, format!("{} can't be changed: {why}.", if d.is_button { "That mouse button".to_owned() } else { label })));
+            self.keys.error = Some((area, format!("{} was detected, but it can't be changed on this system: {why}.", if d.is_button { "That mouse button".to_owned() } else { label })));
             return;
         }
         match d.button.filter(|_| d.is_button && d.groups == 0) {
@@ -316,7 +346,6 @@ impl App {
     /// there is nothing to offer).
     pub(in crate::app) fn device_offer(&mut self, ui: &mut Ui, at: Pos2, w: f32, mouse: bool) -> f32 {
         let Some(d) = self.keys.detected.clone() else { return at.y };
-        let Some((fp, name)) = d.device.clone() else { return at.y };
         let this = if mouse {
             self.keys.button.is_some_and(|n| d.button == Some(n) && d.is_button)
         } else {
@@ -325,10 +354,16 @@ impl App {
         if !this {
             return at.y;
         }
-        let (on, inner) = match &self.keys.scope {
-            Scope::Device(f, inner) => (*f == fp, (**inner).clone()),
-            other => (false, other.clone()),
-        };
+        let mut y = at.y;
+        if let Some(held) = &d.dropped {
+            // Ctrl held with a mouse button: the change is for the button alone.
+            let text = format!("{} was held too: a change here is for the button alone.", held_text(held));
+            let h = para(ui, pos2(at.x, y), w - 4.0, &text, regular(T_META), pal().ink2);
+            a11y_text(ui, Id::unique("detect-dropped"), Rect::from_min_size(pos2(at.x, y), vec2(w - 4.0, h)), Role::Label, &text, None);
+            y += h + 8.0;
+        }
+        let Some((fp, name)) = d.device.clone() else { return if y > at.y { y - 6.0 } else { at.y } };
+        let ((all_on, all_scope), (only_on, only_scope)) = device_chips(&self.keys.scope, &fp);
         let all = if mouse {
             "Every mouse"
         } else if self.keys.detected_on_mouse {
@@ -338,20 +373,20 @@ impl App {
         };
         let all = all.to_owned();
         let only = format!("Only on {name}");
-        ui.painter().text(pos2(at.x, at.y + 9.0), Align2::LEFT_CENTER, "Pressed on", regular(T_META), pal().ink2);
+        ui.painter().text(pos2(at.x, y + 9.0), Align2::LEFT_CENTER, "Pressed on", regular(T_META), pal().ink2);
         let room = w - 4.0;
-        let widths = [chip_width(ui, &all, !on).min(room), chip_width(ui, &only, on).min(room)];
+        let widths = [chip_width(ui, &all, all_on).min(room), chip_width(ui, &only, only_on).min(room)];
         let (rects, bottom) = quick_setup_rects(room, 0.0, &widths);
         let busy = self.tuning_busy();
-        let top = at.y + 22.0;
+        let top = y + 22.0;
         for (k, rect) in rects.into_iter().enumerate() {
             let rect = rect.translate(vec2(at.x, top - 38.0));
-            let (label, chosen) = if k == 0 { (&all, !on) } else { (&only, on) };
+            let (label, chosen, scope) = if k == 0 { (&all, all_on, &all_scope) } else { (&only, only_on, &only_scope) };
             let response = chip(ui, rect, Id::unique(("detect-device", k)), label, chosen, !busy, true);
             let help = if k == 0 { "Changes made now are for every device" } else { "Changes made now are only for this device" };
             ui.ctx().accesskit_node_builder(response.id, |node| node.set_description(help));
             if response.clicked() && !chosen {
-                self.keys.scope = if k == 0 { inner.clone() } else { Scope::Device(fp.clone(), Box::new(inner.clone())) };
+                self.keys.scope = scope.clone();
             }
         }
         top + bottom - 38.0 + 10.0
@@ -412,8 +447,51 @@ impl App {
     }
 }
 
+/// The modifiers left out of a button (`ctrl+shift`), as people write them (Ctrl+Shift).
+fn held_text(held: &str) -> String {
+    held.split('+').map(sentence).collect::<Vec<_>>().join("+")
+}
+
 /// A backend's reason as a sentence's start.
 fn sentence(why: &str) -> String {
     let mut c = why.chars();
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_device_is_chosen_only_when_the_scope_names_none() {
+        let mac = Scope::Os(one_mk_proto::os::MACOS);
+        // Detected on B while the scope is device A on Macs: neither chip is chosen, "Every"
+        // clears the device (keeping "Macs"), "Only on B" swaps it.
+        let on_a = Scope::Device("usb/a".into(), Box::new(mac.clone()));
+        let ((all_on, all), (only_on, only)) = device_chips(&on_a, "usb/b");
+        assert!(!all_on && !only_on);
+        assert_eq!(all, mac);
+        assert_eq!(only, Scope::Device("usb/b".into(), Box::new(mac.clone())));
+        // Already on B: "Only" is chosen.
+        let ((all_on, _), (only_on, _)) = device_chips(&only, "usb/b");
+        assert!(!all_on && only_on);
+        // No device: "Every" is chosen.
+        let ((all_on, all), (only_on, _)) = device_chips(&mac, "usb/b");
+        assert!(all_on && !only_on && all == mac);
+    }
+
+    #[test]
+    fn onemk_failing_hands_listening_to_the_window_and_keeps_why() {
+        let l = Listening { n: 1, view: View::Keyboard, daemon: true, window: false, note: None, capture: Capture::default() };
+        assert!(!l.window_esc(), "only oneMK listens: it owns Esc");
+        let l = l.in_window("The oneMK running now is older and can't detect keys.".into());
+        assert!(!l.daemon && l.window && l.window_esc());
+        assert!(l.note.as_deref().is_some_and(|n| n.contains("older")));
+    }
+
+    #[test]
+    fn the_held_modifiers_show_as_people_write_them() {
+        assert_eq!(held_text("ctrl+shift"), "Ctrl+Shift");
+        assert_eq!(held_text("alt"), "Alt");
+    }
 }

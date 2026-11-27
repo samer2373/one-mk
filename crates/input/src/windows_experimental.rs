@@ -45,6 +45,7 @@ use crate::{Backend, CaptureCmd, Event, Inject};
 use crate::localmap_handoff::Destination;
 use crate::windows_localmap::Local;
 use anyhow::{Result, bail};
+use one_mk_proto::detect::Press;
 use one_mk_proto::{Edge, Mods, Rect, Side};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -74,7 +75,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos,
+    CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageTime,
     GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowThreadProcessId, HC_ACTION, HHOOK, HWND_TOPMOST,
     KBDLLHOOKSTRUCT, KillTimer, LLKHF_EXTENDED, LLKHF_INJECTED, LLKHF_UP, LWA_ALPHA, MONITORINFOF_PRIMARY, MSG,
     MSLLHOOKSTRUCT, PostMessageW, PostQuitMessage, RegisterClassW, SM_SWAPBUTTON, SPI_GETKEYBOARDDELAY,
@@ -237,8 +238,11 @@ struct State {
     captured: Option<Captured>,
     /// The last activation id handed out.
     next_id: u32,
-    /// Reporting this machine's own presses (`CaptureCmd::Detect`).
-    detect: bool,
+    /// Reporting this machine's own presses (`CaptureCmd::Detect`), for this session.
+    detect: Option<u32>,
+    /// While detecting: the keys and buttons down (the hook doesn't say
+    /// which "down" is the system's auto-repeat).
+    detect_held: Held,
     /// evdev keys and buttons that went down locally (not forwarded); their
     /// release must reach this machine even while captured, or they would
     /// stay stuck down here. Rebuilt from the real key state when capture
@@ -519,7 +523,8 @@ fn capture_thread(
             cmds: cmd_rx,
             captured: None,
             next_id: 0,
-            detect: false,
+            detect: None,
+            detect_held: Held::default(),
             local: Held::default(),
             fwd: SenderKeys::default(),
             gate: EdgeGate::default(),
@@ -621,6 +626,7 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
         let info = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
         MOUSE_SEEN.store(info.time, Ordering::Relaxed);
         if let Some((swallow, effect, hwnd)) = with_state(|s| {
+            if s.detect.is_some() { s.detect_mouse(wparam as u32, info); }
             let (swallow, effect) = s.on_mouse(wparam as u32, info);
             (swallow, effect, s.hwnd)
         }) {
@@ -645,6 +651,7 @@ unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARA
             return unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) };
         }
         if let Some((swallow, effect, hwnd)) = with_state(|s| {
+            if s.detect.is_some() { s.detect_key(info); }
             let (swallow, effect) = s.on_key(info);
             (swallow, effect, s.hwnd)
         }) {
@@ -865,7 +872,7 @@ impl State {
             Some(c) => {
                 // Events still waiting for their device go now, unknown.
                 let mut out = Vec::new();
-                if self.local_rules.as_ref().is_some_and(|local| local.enabled) || self.detect {
+                if self.local_rules.as_ref().is_some_and(|local| local.enabled) || self.detect.is_some() {
                     self.raw.corr.finish(&mut out);
                 } else {
                     self.raw.unregister(&mut out);
@@ -957,6 +964,62 @@ impl State {
         (true, Effect::Park(park))
     }
 
+    /// Detecting starts (`Some(session)`) or ends: the keys held now are no
+    /// press (`Event::DetectHeld`), and devices are read afresh.
+    fn detect_start(&mut self, on: Option<u32>) {
+        self.detect = on;
+        self.raw.detect(on.is_some());
+        self.detect_held.clear();
+        if let Some(session) = on {
+            let codes: Vec<u32> = (0..512).filter(|&c| self.local.has(c) || self.fwd.held().has(c)).collect();
+            for &c in &codes {
+                self.detect_held.set(c, true);
+            }
+            let _ = self.tx.send(Event::DetectHeld { session, codes });
+        }
+    }
+
+    /// While detecting, before `on_key` decides what a key does: a real key
+    /// of this computer's own (here or captured; never injected) is reported.
+    /// Only a report: nothing `on_key` reads or returns is touched, so
+    /// detecting never changes what a key does. Cheap and non-blocking, as a
+    /// hook callback must be: a bit set and an unbounded channel's send.
+    fn detect_key(&mut self, info: &KBDLLHOOKSTRUCT) {
+        let Some(session) = self.detect else { return };
+        if info.dwExtraInfo == OUR_INPUT || info.flags & LLKHF_INJECTED != 0 {
+            return;
+        }
+        let Some(code) = hook_key_to_evdev(info.vkCode, info.scanCode, info.flags & LLKHF_EXTENDED != 0) else { return };
+        let down = info.flags & LLKHF_UP == 0;
+        let repeat = down && self.detect_held.has(code);
+        self.detect_held.set(code, down);
+        let press = Press { code, down, repeat, device: None, at: Some(u64::from(info.time)) };
+        let _ = self.tx.send(Event::LocalPress { session, press });
+    }
+
+    /// As [`State::detect_key`], for a mouse button, before `on_mouse`.
+    fn detect_mouse(&mut self, msg: u32, info: &MSLLHOOKSTRUCT) {
+        let Some(session) = self.detect else { return };
+        if info.dwExtraInfo == OUR_INPUT || info.flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED) != 0 {
+            return;
+        }
+        let code = match msg {
+            WM_LBUTTONDOWN | WM_LBUTTONUP => BTN_LEFT,
+            WM_RBUTTONDOWN | WM_RBUTTONUP => BTN_RIGHT,
+            WM_MBUTTONDOWN | WM_MBUTTONUP => BTN_MIDDLE,
+            WM_XBUTTONDOWN | WM_XBUTTONUP => match (info.mouseData >> 16) as u16 {
+                XBUTTON1 => BTN_SIDE,
+                XBUTTON2 => BTN_EXTRA,
+                _ => return,
+            },
+            _ => return,
+        };
+        let down = matches!(msg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN);
+        self.detect_held.set(code, down);
+        let press = Press { code, down, repeat: false, device: None, at: Some(u64::from(info.time)) };
+        let _ = self.tx.send(Event::LocalPress { session, press });
+    }
+
     /// Returns whether to swallow the event, and what to do afterwards.
     fn on_mouse(&mut self, msg: u32, info: &MSLLHOOKSTRUCT) -> (bool, Effect) {
         if info.dwExtraInfo == OUR_INPUT {
@@ -980,9 +1043,6 @@ impl State {
         let (x, y) = (info.pt.x, info.pt.y);
 
         let Some(cap) = self.captured else {
-            if self.detect && !injected && let Some(button) = button {
-                let _ = self.tx.send(Event::LocalPress { code: button, down, device: None });
-            }
             if !injected && let Some(button) = button && let Some(local) = self.local_rules.as_mut() {
                 let swallow = local.hook(button, down, Instant::now());
                 unsafe { PostMessageW(self.hwnd, WM_APP_LOCAL, 0, 0) };
@@ -1064,9 +1124,6 @@ impl State {
         let down = info.flags & LLKHF_UP == 0;
         let code = hook_key_to_evdev(info.vkCode, info.scanCode, info.flags & LLKHF_EXTENDED != 0);
         if self.captured.is_none() {
-            if self.detect && !injected && let Some(code) = code {
-                let _ = self.tx.send(Event::LocalPress { code, down, device: None });
-            }
             if let Some(code) = code
                 && let Some(local) = self.local_rules.as_mut()
             {
@@ -1158,7 +1215,7 @@ impl State {
                     self.local_pause();
                     if let Some(local) = self.local_rules.take() { self.local_recovery = Some(local.retire()); }
                     unsafe { KillTimer(self.hwnd, TIMER_LOCAL) };
-                    if self.captured.is_none() && !self.detect {
+                    if self.captured.is_none() && self.detect.is_none() {
                         let mut out = Vec::new();
                         self.raw.unregister(&mut out);
                         self.send_all(out);
@@ -1227,12 +1284,10 @@ impl State {
             CaptureCmd::Detect(on) => {
                 // Raw Input says which device each press came from; it is read while
                 // detecting, as while capturing or with local rules.
-                self.detect = on;
-                self.raw.detecting = on;
-                self.raw.presses.clear();
-                if on && !self.raw.registered() {
+                self.detect_start(on);
+                if on.is_some() && !self.raw.registered() {
                     self.raw.register(self.hwnd);
-                } else if !on && self.captured.is_none() && self.local_rules.is_none() {
+                } else if on.is_none() && self.captured.is_none() && self.local_rules.is_none() {
                     let mut out = Vec::new();
                     self.raw.unregister(&mut out);
                     return self.send_all(out);
@@ -1554,8 +1609,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let effect = with_state(|s| {
                 let mut out = Vec::new();
                 s.raw.on_input(lparam, &mut out);
-                for (code, device) in std::mem::take(&mut s.raw.presses) {
-                    let _ = s.tx.send(Event::PressDevice { code, down: true, device });
+                if let Some(session) = s.detect {
+                    // SAFETY: plain call, for the message being handled.
+                    let at = Some(u64::from(unsafe { GetMessageTime() } as u32));
+                    for (code, repeat, device) in std::mem::take(&mut s.raw.presses) {
+                        let press = Press { code, down: true, repeat, device: None, at };
+                        let _ = s.tx.send(Event::PressDevice { session, press, device });
+                    }
                 }
                 s.send_all(out)
             });

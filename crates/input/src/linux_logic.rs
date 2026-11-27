@@ -119,6 +119,12 @@ pub(crate) enum XButton {
     Scroll(i32, i32),
 }
 
+/// The X keycodes set in a `QueryKeymap` reply's 32-byte bitmap (bit `k`
+/// of byte `k / 8`: keycode `k` is down).
+pub(crate) fn held_keycodes(keys: &[u8]) -> impl Iterator<Item = u32> + '_ {
+    keys.iter().enumerate().flat_map(|(i, byte)| (0..8).filter(move |b| byte & (1 << b) != 0).map(move |b| (i * 8 + b) as u32))
+}
+
 pub(crate) fn x_button(b: u32) -> Option<XButton> {
     Some(match b {
         1 => XButton::Button(BTN_LEFT),
@@ -684,6 +690,16 @@ mod tests {
         let mut unreachable = facts(Some(false), None, true);
         unreachable.wayland = true;
         assert_eq!(choose(&unreachable).0, LinuxBackend::Portal);
+    }
+
+    #[test]
+    fn held_keycodes_read_the_keymap_bitmap() {
+        let mut keys = [0u8; 32];
+        keys[4] = 0b0001_0000; // keycode 36, Return
+        keys[4] |= 0b0000_0010; // 33
+        keys[31] = 0x80; // 255
+        assert_eq!(held_keycodes(&keys).collect::<Vec<_>>(), vec![33, 36, 255]);
+        assert_eq!(xkeycode_to_evdev(36), Some(28));
     }
 
     #[test]

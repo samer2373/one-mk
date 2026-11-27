@@ -654,15 +654,21 @@ async fn per_device_rules_follow_the_keyboard_they_come_from() {
 
 // ------------------------------------------------- detecting a key or button
 
-/// Waits for A's backend to be told to report presses (`on`) or stop.
-async fn detect_switched(duo: &mut Duo, on: bool) {
+/// Waits for A's backend to be told to report presses (`on`) or stop; the
+/// session its reports must carry.
+async fn detect_switched(duo: &mut Duo, on: bool) -> u32 {
     loop {
         match next_capture(&mut duo.ha).await {
-            CaptureCmd::Detect(o) if o == on => return,
-            CaptureCmd::Detect(o) => panic!("detecting turned {o}, not {on}"),
+            CaptureCmd::Detect(o) if o.is_some() == on => return o.unwrap_or(0),
+            CaptureCmd::Detect(o) => panic!("detecting turned {o:?}, not {on}"),
             _ => {}
         }
     }
+}
+
+/// A report of A's backend for detection `session`.
+fn local_press(session: u32, code: u32, down: bool, device: Option<one_mk_input::DeviceRef>) -> Event {
+    Event::LocalPress { session, press: one_mk_proto::detect::Press { code, down, device, ..Default::default() } }
 }
 
 /// Asks A's daemon to detect, in the background; the answer is parsed.
@@ -687,11 +693,11 @@ async fn detected_keys_and_buttons_make_rules_that_apply() {
     let mut duo = Duo::start("detect-rules", None).await;
     duo.ha.devices(vec![mouse.clone(), fake_keyboard(6, "Desk Keyboard")]);
     let mouse_ref = Some(DeviceRef(5));
-    let local = |code, down, device| Event::LocalPress { code, down, device };
 
     // The extra button: Ctrl and Alt go down, then Tab, all from the mouse.
     let answer = detect(&duo, 10);
-    detect_switched(&mut duo, true).await;
+    let id = detect_switched(&mut duo, true).await;
+    let local = |code, down, device| local_press(id, code, down, device);
     for code in [LCTRL, LALT, 15] {
         duo.ha.events.send(local(code, true, mouse_ref)).unwrap();
     }
@@ -706,7 +712,8 @@ async fn detected_keys_and_buttons_make_rules_that_apply() {
 
     // Button 6.
     let answer = detect(&duo, 10);
-    detect_switched(&mut duo, true).await;
+    let id = detect_switched(&mut duo, true).await;
+    let local = |code, down, device| local_press(id, code, down, device);
     duo.ha.events.send(local(0x115, true, mouse_ref)).unwrap();
     let v = answer.await.unwrap();
     assert_eq!((v["kind"].as_str(), v["button"].as_u64(), v["trigger"].as_str()), (Some("button"), Some(6), Some("button6")), "{v}");
@@ -715,8 +722,8 @@ async fn detected_keys_and_buttons_make_rules_that_apply() {
 
     // A key with no name (and on no drawn keyboard), from the desk keyboard.
     let answer = detect(&duo, 10);
-    detect_switched(&mut duo, true).await;
-    duo.ha.events.send(local(0x1b0, true, Some(DeviceRef(6)))).unwrap();
+    let id = detect_switched(&mut duo, true).await;
+    duo.ha.events.send(local_press(id, 0x1b0, true, Some(DeviceRef(6)))).unwrap();
     let v = answer.await.unwrap();
     assert_eq!((v["name"].as_str(), v["trigger"].as_str()), (Some("code:432"), Some("code:432")), "{v}");
     detect_switched(&mut duo, false).await;
@@ -768,7 +775,6 @@ async fn detected_keys_and_buttons_make_rules_that_apply() {
 #[tokio::test]
 async fn detecting_ends_cleanly_however_it_ends() {
     let mut duo = Duo::start("detect-ends", None).await;
-    let local = |code, down| Event::LocalPress { code, down, device: None };
     // Timeout, with why this backend sees no local keys.
     let started = Instant::now();
     let answer = detect(&duo, 1);
@@ -780,9 +786,9 @@ async fn detecting_ends_cleanly_however_it_ends() {
     detect_switched(&mut duo, false).await;
     // Esc cancels; the Enter that started it, and repeats, are not presses.
     let answer = detect(&duo, 10);
-    detect_switched(&mut duo, true).await;
-    duo.ha.events.send(local(28, false)).unwrap();
-    duo.ha.events.send(local(1, true)).unwrap();
+    let id = detect_switched(&mut duo, true).await;
+    duo.ha.events.send(local_press(id, 28, false, None)).unwrap();
+    duo.ha.events.send(local_press(id, 1, true, None)).unwrap();
     assert_eq!(answer.await.unwrap()["result"].as_str(), Some("cancelled"));
     detect_switched(&mut duo, false).await;
     // The asker hangs up.
@@ -803,4 +809,62 @@ async fn detecting_ends_cleanly_however_it_ends() {
     let v = second.await.unwrap();
     assert_eq!(v["result"].as_str(), Some("stopped"), "{v}");
     stop.await.unwrap();
+}
+
+/// A detection belongs to its session: a late report of an earlier one never
+/// counts for the next, keys held when it began (as the backend says) are no
+/// press and their modifiers count, and the first auto-repeat of a key held
+/// from before never wins.
+#[tokio::test]
+async fn detection_sessions_and_keys_held_from_before() {
+    let mut duo = Duo::start("detect-sessions", None).await;
+    let first = detect(&duo, 30);
+    let old = detect_switched(&mut duo, true).await;
+    let second = detect(&duo, 30);
+    assert_eq!(first.await.unwrap()["result"].as_str(), Some("replaced"));
+    let id = detect_switched(&mut duo, true).await;
+    assert_ne!(id, old);
+    // The first session's press arrives late: it is not the second's.
+    duo.ha.events.send(local_press(old, 30, true, None)).unwrap();
+    // Ctrl and A were held when the second began: A's repeat and release are no press, and
+    // Tab with Ctrl still held is Ctrl+Tab.
+    duo.ha.events.send(Event::DetectHeld { session: id, codes: vec![LCTRL, 30] }).unwrap();
+    let repeat = Event::LocalPress { session: id, press: one_mk_proto::detect::Press { code: 30, down: true, repeat: true, ..Default::default() } };
+    duo.ha.events.send(repeat).unwrap();
+    duo.ha.events.send(local_press(id, 30, false, None)).unwrap();
+    duo.ha.events.send(local_press(id, 15, true, None)).unwrap();
+    let v = second.await.unwrap();
+    assert_eq!((v["result"].as_str(), v["trigger"].as_str()), (Some("found"), Some("ctrl+tab")), "{v}");
+    detect_switched(&mut duo, false).await;
+    duo.stop().await;
+}
+
+/// A caller that hangs up while input floods in ends the detection at once:
+/// the daemon looks before taking each event, rather than leaving the
+/// reporting on until the wait runs out.
+#[tokio::test]
+async fn a_dead_caller_ends_detecting_even_under_a_flood_of_input() {
+    let mut duo = Duo::start("detect-flood", None).await;
+    let dir = duo.da.clone();
+    let asker = tokio::spawn(async move { control::request(&dir, Request::Detect { timeout: 600, keys_only: false }).await });
+    detect_switched(&mut duo, true).await;
+    let events = duo.ha.events.clone();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flooding = stop.clone();
+    let flood = std::thread::spawn(move || {
+        while !flooding.load(std::sync::atomic::Ordering::Relaxed) {
+            for _ in 0..64 {
+                let _ = events.send(Event::ScrollStop);
+            }
+            std::thread::yield_now();
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    asker.abort();
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(10), detect_switched(&mut duo, false)).await.expect("reporting turned off");
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    flood.join().unwrap();
+    duo.stop().await;
 }

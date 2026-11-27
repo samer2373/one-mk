@@ -18,6 +18,11 @@ use tokio::time::Instant;
 
 /// One detection in the daemon.
 pub struct Session {
+    /// Its number: the backend's reports carry it (`CaptureCmd::Detect`).
+    pub id: u32,
+    /// The backend reports this computer's own presses (`Event::LocalPress`),
+    /// here and captured: input sent to another computer is not read too.
+    pub local_presses: bool,
     reply: oneshot::Sender<String>,
     /// When the wait is over.
     pub until: Instant,
@@ -34,6 +39,9 @@ pub enum End {
     Found {
         found: Found,
         device: Option<(String, String)>,
+        /// Why no rule for it can work here (`Found::unusable`, or this
+        /// computer's backend can't apply one).
+        unusable: Option<&'static str>,
     },
     Timeout,
     Cancelled,
@@ -45,13 +53,17 @@ pub enum End {
 
 impl Session {
     pub fn new(
+        id: u32,
         reply: oneshot::Sender<String>,
         seconds: u32,
         keys_only: bool,
         hints_expected: bool,
+        local_presses: bool,
         unseen: Option<&'static str>,
     ) -> Self {
         Session {
+            id,
+            local_presses,
             reply,
             until: Instant::now() + std::time::Duration::from_secs(u64::from(seconds)),
             seconds,
@@ -95,14 +107,14 @@ pub fn ended(step: Step) -> Option<End> {
     match step {
         Step::Wait => None,
         Step::Cancel => Some(End::Cancelled),
-        Step::Found(found) => Some(End::Found { found, device: None }),
+        Step::Found(found) => Some(End::Found { found, device: None, unusable: None }),
     }
 }
 
 /// The answer, as one line of JSON.
 pub fn encode(end: &End, seconds: u32, unseen: Option<&str>) -> String {
     let v = match end {
-        End::Found { found, device } => {
+        End::Found { found, device, unusable } => {
             let button = keynames::button_number(found.code);
             json!({
                 "result": "found",
@@ -114,7 +126,8 @@ pub fn encode(end: &End, seconds: u32, unseen: Option<&str>) -> String {
                 "shortcut": found.trigger().has_mods(),
                 "device": device.as_ref().map(|(fingerprint, name)| json!({ "fingerprint": fingerprint, "name": name })),
                 "away": found.away,
-                "unusable": found.unusable(),
+                "unusable": unusable.or(found.unusable()),
+                "dropped": found.dropped_text(),
             })
         }
         End::Timeout => json!({ "result": "timeout", "seconds": seconds, "note": unseen }),
@@ -229,8 +242,14 @@ pub fn found_text(v: &Value) -> String {
         out.push_str(&format!(", on {name}"));
     }
     out.push_str(".\n");
+    if let Some(dropped) = v["dropped"].as_str() {
+        out.push_str(&format!(
+            "{} was held too: a button rule is for the button alone, so it is left out.\n",
+            label(dropped)
+        ));
+    }
     if let Some(why) = v["unusable"].as_str() {
-        out.push_str(&format!("It can't be changed: {why}.\n"));
+        out.push_str(&format!("It was detected, but it can't be changed on this system: {why}.\n"));
         return out;
     }
     let device_arg = device.map(|d| format!(" --device \"{d}\""));
@@ -282,8 +301,9 @@ mod tests {
 
     fn found(code: u32, mods: u8) -> End {
         End::Found {
-            found: Found { code, mods, device: Some(DeviceRef(3)), away: false },
+            found: Found { code, mods, device: Some(DeviceRef(3)), away: false, dropped: 0 },
             device: Some(("usb/046d:c52b//MX Master".into(), "MX Master".into())),
+            unusable: None,
         }
     }
 
@@ -306,15 +326,38 @@ mod tests {
         assert!(timeout_text(&v).contains("move the pointer onto another computer"));
         let v: Value = serde_json::from_str(&encode(
             &End::Found {
-                found: Found { code: one_mk_proto::keynames::CODE_LIMIT, mods: 0, device: None, away: true },
+                found: Found { code: one_mk_proto::keynames::CODE_LIMIT, mods: 0, device: None, away: true, dropped: 0 },
                 device: None,
+                unusable: None,
             },
             5,
             None,
         ))
         .unwrap();
         assert!(v["unusable"].is_string() && v["device"].is_null());
-        assert!(found_text(&v).contains("can't be changed"));
+        assert!(found_text(&v).contains("detected, but it can't be changed on this system"));
+    }
+
+    #[test]
+    fn a_button_with_modifiers_is_offered_as_the_button_alone_and_says_so() {
+        // Ctrl held + Back: `keymap add -- ctrl+button4` is refused, so the answer is button 4
+        // for `buttons map`, which takes it, with the Ctrl said.
+        let found = Found { code: 0x113, mods: 0, device: None, away: false, dropped: keynames::LCTRL };
+        let v: Value = serde_json::from_str(&encode(&End::Found { found, device: None, unusable: None }, 30, None)).unwrap();
+        assert_eq!((v["trigger"].as_str(), v["button"].as_u64(), v["dropped"].as_str()), (Some("button4"), Some(4), Some("ctrl")));
+        let text = found_text(&v);
+        assert!(text.contains("one-mk buttons map -- 4 TO") && !text.contains("keymap add"), "{text}");
+        assert!(text.contains("Ctrl was held too"), "{text}");
+    }
+
+    #[test]
+    fn a_press_this_system_cant_change_is_named_and_not_offered() {
+        let found = Found { code: 0x115, mods: 0, device: None, away: false, dropped: 0 };
+        let why = "oneMK forwards and remaps mouse buttons 1 to 5 here, and this one is further on";
+        let v: Value = serde_json::from_str(&encode(&End::Found { found, device: None, unusable: Some(why) }, 30, None)).unwrap();
+        let text = found_text(&v);
+        assert!(text.starts_with("Mouse button 6") && text.contains(why), "{text}");
+        assert!(!text.contains("buttons map"), "{text}");
     }
 
     #[test]

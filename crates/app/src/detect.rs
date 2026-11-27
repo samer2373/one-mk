@@ -22,6 +22,9 @@ pub struct Detected {
     pub device: Option<(String, String)>,
     /// Why no rule can use it.
     pub unusable: Option<String>,
+    /// Modifiers held with a mouse button, left out of it (`ctrl+shift`):
+    /// a button's change is for the button alone.
+    pub dropped: Option<String>,
 }
 
 /// How a detection came out.
@@ -56,6 +59,7 @@ pub fn parse(text: &str) -> Outcome {
                 is_button: v["kind"].as_str() == Some("button"),
                 device,
                 unusable: v["unusable"].as_str().map(str::to_owned),
+                dropped: v["dropped"].as_str().map(str::to_owned),
             })
         }
         Some("timeout") => Outcome::Timeout(v["seconds"].as_u64().unwrap_or(0), v["note"].as_str().map(str::to_owned)),
@@ -69,6 +73,40 @@ pub fn parse(text: &str) -> Outcome {
         }),
         _ => Outcome::Failed("oneMK answered something unexpected. Restart it, then try again.".into()),
     }
+}
+
+/// The modifier groups (`keynames::CTRL` ...) egui says are held with a key
+/// event: the window's own key events show a modifier only from its press,
+/// so one held since before listening began comes from here.
+pub fn egui_groups(m: egui::Modifiers) -> u8 {
+    let mut g = 0;
+    if m.ctrl {
+        g |= keynames::CTRL;
+    }
+    if m.shift {
+        g |= keynames::SHIFT;
+    }
+    if m.alt {
+        g |= keynames::ALT;
+    }
+    if m.mac_cmd {
+        g |= keynames::META;
+    }
+    g
+}
+
+/// Modifier groups as a rule writes them (`ctrl+shift`), none for none.
+pub fn groups_text(groups: u8) -> Option<String> {
+    (groups != 0).then(|| {
+        let t = keynames::Trigger { groups, sided: 0, key: 30 }.to_string();
+        t.trim_end_matches("+a").to_owned()
+    })
+}
+
+/// The groups of a key the window saw: the chord's own (`tune::Capture`'s
+/// sided bits), and those egui says are held with it.
+pub fn window_groups(chord_mods: u8, event: Option<egui::Modifiers>) -> u8 {
+    ((chord_mods | (chord_mods >> 4)) & 0xf) | event.map_or(0, egui_groups)
 }
 
 /// What the window's own mouse events say: egui's buttons as numbers.
@@ -121,5 +159,20 @@ mod tests {
         assert!(matches!(parse(r#"{"result":"error","message":"the running one-mk is older and can't detect keys"}"#), Outcome::Failed(m) if m.contains("Restart it")));
         assert!(matches!(parse("{\"result\":\"found\""), Outcome::Failed(_)), "cut short");
         assert_eq!(Detected::button(6).code, 0x115);
+        let held = r#"{"button":4,"code":275,"device":null,"kind":"button","result":"found","trigger":"button4","dropped":"ctrl","unusable":null}"#;
+        let Outcome::Found(d) = parse(held) else { panic!() };
+        assert_eq!((d.button, d.groups, d.dropped.as_deref()), (Some(4), 0, Some("ctrl")));
+    }
+
+    #[test]
+    fn a_modifier_held_since_before_counts_in_the_window() {
+        // Ctrl held before listening: the window saw no Ctrl press, but egui says it is held.
+        assert_eq!(window_groups(0, Some(egui::Modifiers::CTRL)), keynames::CTRL);
+        assert_eq!(window_groups(keynames::RSHIFT, Some(egui::Modifiers::CTRL)), keynames::CTRL | keynames::SHIFT);
+        assert_eq!(window_groups(keynames::LALT, None), keynames::ALT);
+        let cmd = egui::Modifiers { mac_cmd: true, command: true, ..Default::default() };
+        assert_eq!(egui_groups(cmd), keynames::META);
+        assert_eq!(groups_text(keynames::CTRL | keynames::SHIFT).as_deref(), Some("ctrl+shift"));
+        assert_eq!(groups_text(0), None);
     }
 }

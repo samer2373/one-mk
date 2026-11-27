@@ -314,8 +314,8 @@ pub(crate) use crate::macos_hidmap::hid_key_to_evdev;
 
 /// A HID button (page 9, 1 = primary) as an evdev button code.
 pub(crate) fn hid_button_to_evdev(n: u32) -> Option<u32> {
-    // Left, right, middle, side (back), extra (forward).
-    [0x110, 0x111, 0x112, 0x113, 0x114].get(n.checked_sub(1)? as usize).copied()
+    // Left, right, middle, side (back), extra (forward): as capture forwards them.
+    crate::native_button(n.checked_sub(1)?)
 }
 
 #[cfg(test)]
