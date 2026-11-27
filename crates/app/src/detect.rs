@@ -62,6 +62,11 @@ pub fn parse(text: &str) -> Outcome {
         Some("cancelled" | "replaced") => Outcome::Cancelled,
         Some("not-running") => Outcome::Failed("oneMK isn't running, so only keys this window sees can be detected.".into()),
         Some("stopped") => Outcome::Failed("oneMK stopped while waiting. Start it again, then try once more.".into()),
+        Some("error") => Outcome::Failed(match v["message"].as_str() {
+            Some(m) if m.contains("older") => "The oneMK running now is older and can't detect keys. Restart it (quit and start oneMK again), then try once more.".into(),
+            Some(m) => format!("oneMK couldn't listen: {m}."),
+            None => "oneMK couldn't listen. Try again.".into(),
+        }),
         _ => Outcome::Failed("oneMK answered something unexpected. Restart it, then try again.".into()),
     }
 }
@@ -113,6 +118,7 @@ mod tests {
         assert_eq!(parse(r#"{"result":"replaced"}"#), Outcome::Cancelled);
         assert!(matches!(parse(r#"{"result":"not-running","message":"m"}"#), Outcome::Failed(m) if m.contains("isn't running")));
         assert!(matches!(parse(""), Outcome::Failed(_)));
+        assert!(matches!(parse(r#"{"result":"error","message":"the running one-mk is older and can't detect keys"}"#), Outcome::Failed(m) if m.contains("Restart it")));
         assert!(matches!(parse("{\"result\":\"found\""), Outcome::Failed(_)), "cut short");
         assert_eq!(Detected::button(6).code, 0x115);
     }

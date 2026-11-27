@@ -1760,13 +1760,40 @@ Options:
 ## one-mk input-devices
 
 ```text
-List the keyboards and mice this computer has seen, for rules that apply to one of them (--device on keymap, buttons, pointer and scroll). Says whether this desktop can tell them apart
+List the keyboards and mice this computer has seen, for rules that apply to one of them (--device on keymap, buttons, pointer and scroll). Says whether this desktop can tell them apart.
 
-Usage: one-mk input-devices [OPTIONS]
+`one-mk input-devices detect` tells which key or mouse button you press.
+
+Usage: one-mk input-devices [OPTIONS] [COMMAND]
+
+Commands:
+  detect  Press a key or mouse button to find out what it is to oneMK, and how to change it
 
 Options:
       --json
           Machine-readable output for a program to read
+```
+
+## one-mk input-devices detect
+
+```text
+Press a key or mouse button to find out what it is to oneMK, and how to change it.
+
+Says its name and code as key rules see them (with the modifiers it sends, for a mouse button that types a shortcut), and which keyboard or mouse it came from where this computer can tell, then prints the commands that change it. Needs one-mk running; the key still does what it does. Esc cancels. On GNOME, KDE and other Wayland desktops oneMK sees keys only while it controls another computer: move the pointer there first. Keys a keyboard handles itself (often Fn) and mouse buttons the system doesn't report as buttons can't be detected.
+
+Usage: one-mk input-devices detect [OPTIONS]
+
+Options:
+      --timeout <TIMEOUT>
+          How long to wait for a press, in seconds (1 to 600)
+          
+          [default: 30]
+
+      --keys-only
+          Only keys: mouse buttons are not what you mean (a click elsewhere doesn't end it)
+
+      --json
+          Print the answer as one line of JSON, for a program to read
 ```
 
 ## one-mk id

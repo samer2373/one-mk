@@ -371,8 +371,6 @@ pub(super) struct KeysUi {
     detect_n: u64,
     /// The press detected last: its device is offered as the scope ("Only on ...").
     pub detected: Option<crate::detect::Detected>,
-    /// The listening card's Cancel as last drawn (a click there is not a press).
-    detect_cancel: Option<Rect>,
     /// Mouse buttons 6 to 8 detected here, listed under "Other buttons".
     pub other_buttons: Vec<u32>,
     /// The window is compact (the panel under the stage), as last drawn.

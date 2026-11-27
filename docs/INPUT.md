@@ -81,6 +81,49 @@ or `forward`, an action, or `none`. **Left and right cannot be made to do
 nothing or hold a layer** (the other computer would have no clicks); they are
 refused, and `keymap check` flags such a rule written by hand.
 
+## Which key is that? `input-devices detect`
+
+A keyboard key that isn't on the drawn keyboard (a macro key, `F13`, a key
+with no name), or a mouse button the drawn mouse doesn't have, can be changed
+once you know what it is to oneMK. Press it:
+
+```
+one-mk input-devices detect               # press the key or button within 30 s
+one-mk input-devices detect --timeout 60 --keys-only
+one-mk input-devices detect --json        # one line of JSON, for programs
+```
+
+It prints the key as rules name it (`f13`, `code:432` for a key with no
+name, `button7`), with the modifiers held with it: a mouse button that types
+a shortcut comes out as that shortcut (`ctrl+alt+tab`), and a rule for that
+shortcut, made for that mouse with `--device`, changes only what the mouse
+sends. Where this computer can tell devices apart it also names the keyboard
+or mouse, and prints the `keymap add` or `buttons map` commands for every
+device and for that one. In the window, **Detect key** (Keyboard) and
+**Detect button** (Mouse) do the same and open the key or button's editor,
+with "Only on <device>" offered; mouse buttons 6 to 8 are listed under
+**Other buttons**.
+
+Detecting changes nothing: the key still does what it does (Esc alone
+cancels instead). Key repeats, keys already down when it started, and input
+that programs inject are ignored. It stops when a key is pressed, when the
+time is up, on Esc, when the command is stopped (Ctrl+C) or the window's
+Cancel is used, and when one-mk stops; while nothing is being detected it
+costs nothing.
+
+| desktop | what can be detected |
+|---|---|
+| Linux, X11 session | every key and button the X server reports, with its device (tried against a private X server) |
+| Linux, GNOME, KDE or wlroots on Wayland | only keys pressed **while oneMK controls another computer** (the desktop shows it no input otherwise): move the pointer onto another computer's screen, then press the key. The window also takes the keys it sees itself (not the keypad, Fn, media keys or a mouse's extra keys) |
+| Windows | keys and buttons 1 to 5, device from Raw Input; compile-checked only |
+| macOS | keys and buttons 1 to 8, device from IOHIDManager; compile-checked only |
+
+Some presses never reach oneMK and can't be detected: keys a keyboard handles
+itself (usually Fn), buttons a mouse only reports to its maker's software, and
+mouse buttons past the eighth (named, but they can't be changed). On X11,
+buttons past the X server's ninth are not forwarded, so they can't be changed
+there either.
+
 ## Mac and PC keyboards: Ctrl and Cmd
 
 When keys go between a Mac and a Windows or Linux computer, Ctrl and Cmd trade places by default, so

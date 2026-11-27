@@ -2655,6 +2655,13 @@ fn toast_bottom(room: Rect, h: f32, window: Rect, sheet: Option<Rect>) -> f32 {
     }
 }
 
+/// A detection still running (`one-mk input-devices detect`) stops with the window.
+impl Drop for App {
+    fn drop(&mut self) {
+        self.link.cancel_detect();
+    }
+}
+
 impl eframe::App for App {
     /// Runs before every frame, and instead of one while the window is
     /// minimised or covered (eframe then draws nothing): the one place that

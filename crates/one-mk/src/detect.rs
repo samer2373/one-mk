@@ -156,7 +156,16 @@ pub async fn command(dir: &Path, seconds: u32, keys_only: bool, json: bool) -> R
     };
     let reply = reply.trim();
     if let Some(error) = reply.strip_prefix("error ") {
-        bail!("{error}");
+        // A one-mk from before this command was added.
+        let message = if error.starts_with("unknown request") {
+            "the running one-mk is older and can't detect keys: restart it (`one-mk stop`, then start it again)".to_owned()
+        } else {
+            error.to_owned()
+        };
+        if json {
+            println!("{}", json!({ "result": "error", "message": message }));
+        }
+        bail!("{message}");
     }
     let v: Value = serde_json::from_str(reply).map_err(|e| {
         anyhow::anyhow!("the running one-mk answered something unexpected ({e}); is it an older version? Restart it")

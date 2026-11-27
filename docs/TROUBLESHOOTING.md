@@ -96,6 +96,12 @@ operating system and desktop, and `one-mk --version`.
   `keymap list` must show the rule for it. Two devices that can't be told apart (same model, no
   serial; on Windows, devices on one USB receiver) share their rules. A oneMK older than this feature
   can't read a `settings.toml` with such rules: remove them first.
+- **A key or mouse button isn't on the drawn keyboard or mouse.** Use **Detect key** / **Detect
+  button** on Keys & mouse, or `one-mk input-devices detect`, and press it. "Nothing was pressed" on
+  GNOME, KDE or wlroots Wayland: oneMK sees keys there only while it controls another computer, so
+  move the pointer onto another computer's screen first. Elsewhere the key never reaches the system
+  as a key (Fn, or a button only the mouse maker's software reads): it can't be remapped. A mouse
+  button past the eighth is named but can't be changed.
 - **A per-app rule never applies.** The controlled computer cannot name its focused app (Wayland
   windows on GNOME and KDE); `one-mk status` says so.
 - **Wrong letters or AltGr characters on the other computer.** Typing forwards physical keys by

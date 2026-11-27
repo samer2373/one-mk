@@ -97,8 +97,10 @@ impl App {
         let Some(l) = self.keys.listening.clone().filter(|l| l.n == n) else { return };
         let area = if l.view == View::Keyboard { "keyboard" } else { "buttons" };
         match outcome {
-            // A click on Cancel is a press of the left button: it cancels.
-            Outcome::Found(d) if d.button == Some(1) && self.pointer_on_cancel() => self.keys.listening = None,
+            // A left click in this window is a click on the window (Cancel, "Listening…", a tab),
+            // not the button being looked for: it stops listening. (The left button is on the
+            // drawn mouse anyway.)
+            Outcome::Found(d) if d.button == Some(1) && self.pointer_in_window() => self.keys.listening = None,
             Outcome::Found(d) => {
                 self.keys.listening = None;
                 self.apply_detected(d);
@@ -130,11 +132,9 @@ impl App {
         }
     }
 
-    /// Whether the pointer is on the listening card's Cancel (so a click
-    /// there, which oneMK sees as the left button, cancels).
-    fn pointer_on_cancel(&self) -> bool {
-        let at = self.ctx.input(|i| i.pointer.latest_pos());
-        matches!((self.keys.detect_cancel, at), (Some(r), Some(p)) if r.expand(4.0).contains(p))
+    /// Whether the pointer is over this window (where oneMK's left button is a click on it).
+    fn pointer_in_window(&self) -> bool {
+        self.ctx.input(|i| i.pointer.has_pointer() || i.pointer.latest_pos().is_some_and(|p| i.content_rect().contains(p)))
     }
 
     /// The window's own events while listening: Esc cancels; where they
@@ -175,10 +175,12 @@ impl App {
                     _ => None,
                 }).collect()
             });
-            let cancel = self.keys.detect_cancel;
-            if let Some((b, _)) = clicks.into_iter().find(|(_, p)| !cancel.is_some_and(|r| r.expand(4.0).contains(*p))) {
+            // A left click here is a click on the window (it stops listening, as through oneMK).
+            if let Some((b, _)) = clicks.into_iter().next() {
                 self.cancel_detect();
-                self.apply_detected(Detected::button(crate::detect::pointer_button(b)));
+                if b != egui::PointerButton::Primary {
+                    self.apply_detected(Detected::button(crate::detect::pointer_button(b)));
+                }
                 return;
             }
         }
@@ -245,7 +247,7 @@ impl App {
         let keyboard = l.view == View::Keyboard;
         let ask = if keyboard { "Press the key on your keyboard…" } else { "Press the button on your mouse…" };
         let heard = self.listened_to(keyboard, l.daemon && !l.window);
-        let esc = "Esc cancels.";
+        let esc = if keyboard { "Esc cancels." } else { "Esc or a left click here cancels." };
         let bw = button_width(ui, "Cancel") - 6.0;
         let tw = w - bw - 52.0;
         let lay = |text: &str, font: egui::FontId, width: f32| {
@@ -280,7 +282,6 @@ impl App {
         let full = [ask, heard.as_str(), esc, l.note.as_deref().unwrap_or("")].join(" ");
         a11y_text(ui, Id::unique("detect-listening"), r, Role::Alert, full.trim(), Some(Live::Polite));
         let br = Rect::from_min_size(pos2(r.right() - 10.0 - bw, r.top() + 10.0), vec2(bw, 28.0));
-        self.keys.detect_cancel = Some(br);
         if button(ui, br, Id::unique("detect-cancel"), "Cancel", Look::Quiet, true, Some("Stop listening")).clicked() {
             self.cancel_detect();
         }
