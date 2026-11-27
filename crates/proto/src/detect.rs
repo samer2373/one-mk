@@ -55,10 +55,15 @@ pub struct Found {
     pub away: bool,
 }
 
+/// A mouse button (one the rules know, or one past the eighth).
+fn is_button(code: u32) -> bool {
+    keynames::is_button(code) || (BEYOND_BUTTONS..BEYOND_BUTTONS_END).contains(&code)
+}
+
 impl Found {
     /// A mouse button (one the rules know, or one past the eighth).
     pub fn is_button(&self) -> bool {
-        keynames::is_button(self.code) || (BEYOND_BUTTONS..BEYOND_BUTTONS_END).contains(&self.code)
+        is_button(self.code)
     }
 
     /// The rule trigger it makes: either side of each modifier held, as
@@ -103,6 +108,8 @@ pub struct Detector {
     /// Device reports come separately (`PressDevice`): a press waits a
     /// little for its own.
     hints_expected: bool,
+    /// Mouse buttons don't count.
+    keys_only: bool,
     /// Keys and buttons seen going down since detecting began, and when.
     down: Vec<(u32, u64)>,
     held: u8,
@@ -113,14 +120,15 @@ pub struct Detector {
 }
 
 impl Detector {
-    /// `hints_expected`: the backend reports devices apart from presses.
-    pub fn new(hints_expected: bool) -> Self {
-        Detector { hints_expected, ..Default::default() }
+    /// `hints_expected`: the backend reports devices apart from presses;
+    /// `keys_only`: mouse buttons don't count.
+    pub fn new(hints_expected: bool, keys_only: bool) -> Self {
+        Detector { hints_expected, keys_only, ..Default::default() }
     }
 
     /// A key or button went down or up (`device` if the event said).
     pub fn press(&mut self, code: u32, down: bool, device: Option<DeviceRef>, away: bool, now: u64) -> Step {
-        if self.pending.is_some() {
+        if self.pending.is_some() || (self.keys_only && is_button(code)) {
             return Step::Wait;
         }
         let bit = keynames::mod_bit(code);
@@ -212,7 +220,7 @@ mod tests {
 
     #[test]
     fn a_key_comes_out_with_the_modifiers_held() {
-        let mut d = Detector::new(false);
+        let mut d = Detector::new(false, false);
         assert_eq!(d.press(CTRL, true, None, false, 0), Step::Wait);
         assert_eq!(d.press(ALT, true, None, false, 1), Step::Wait);
         let Step::Found(f) = d.press(TAB, true, Some(DeviceRef(4)), false, 2) else { panic!() };
@@ -223,14 +231,14 @@ mod tests {
 
     #[test]
     fn a_modifier_alone_is_itself_and_held_keys_from_before_are_ignored() {
-        let mut d = Detector::new(false);
+        let mut d = Detector::new(false, false);
         // The Enter that started the command goes up after detecting began.
         assert_eq!(d.press(28, false, None, false, 0), Step::Wait);
         assert_eq!(d.press(97, true, None, false, 1), Step::Wait);
         let Step::Found(f) = d.press(97, false, None, false, 2) else { panic!() };
         assert_eq!(f.trigger().to_string(), "rctrl");
         // Auto-repeat is one press.
-        let mut d = Detector::new(false);
+        let mut d = Detector::new(false, false);
         assert_eq!(d.press(ALT, true, None, false, 0), Step::Wait);
         assert_eq!(d.press(ALT, true, None, false, 30), Step::Wait);
         assert!(matches!(d.press(ALT, false, None, false, 60), Step::Found(Found { code: ALT, mods: 0, .. })));
@@ -238,19 +246,19 @@ mod tests {
 
     #[test]
     fn esc_alone_cancels_and_with_a_modifier_is_detected() {
-        assert_eq!(Detector::new(false).press(1, true, None, false, 0), Step::Cancel);
-        let mut d = Detector::new(false);
+        assert_eq!(Detector::new(false, false).press(1, true, None, false, 0), Step::Cancel);
+        let mut d = Detector::new(false, false);
         d.press(42, true, None, false, 0);
         assert!(matches!(d.press(1, true, None, false, 1), Step::Found(Found { code: 1, mods: keynames::LSHIFT, .. })));
     }
 
     #[test]
     fn mouse_buttons_and_buttons_past_the_eighth() {
-        let mut d = Detector::new(false);
+        let mut d = Detector::new(false, false);
         let Step::Found(f) = d.press(0x115, true, None, true, 0) else { panic!() };
         assert!(f.is_button() && f.away && f.unusable().is_none());
         assert_eq!(keynames::button_number(f.code), Some(6));
-        let mut d = Detector::new(false);
+        let mut d = Detector::new(false, false);
         let Step::Found(f) = d.press(BEYOND_BUTTONS + 2, true, None, false, 0) else { panic!() };
         assert!(f.is_button() && f.unusable().is_some());
     }
@@ -258,11 +266,11 @@ mod tests {
     #[test]
     fn a_press_waits_briefly_for_its_device_from_either_side() {
         // The device report comes first.
-        let mut d = Detector::new(true);
+        let mut d = Detector::new(true, false);
         assert_eq!(d.device(183, true, DeviceRef(7), 100), Step::Wait);
         assert!(matches!(d.press(183, true, None, false, 110), Step::Found(Found { device: Some(DeviceRef(7)), .. })));
         // It comes after.
-        let mut d = Detector::new(true);
+        let mut d = Detector::new(true, false);
         assert_eq!(d.press(183, true, None, false, 100), Step::Wait);
         assert_eq!(d.deadline(), Some(100 + DEVICE_WAIT_MS));
         assert_eq!(d.device(30, true, DeviceRef(1), 105), Step::Wait, "another key's report");
@@ -271,15 +279,23 @@ mod tests {
             Step::Found(Found { code: 183, device: Some(DeviceRef(7)), .. })
         ));
         // Never: it goes without one.
-        let mut d = Detector::new(true);
+        let mut d = Detector::new(true, false);
         d.press(183, true, None, false, 100);
         assert_eq!(d.tick(150), Step::Wait);
         assert!(matches!(d.tick(160), Step::Found(Found { device: None, .. })));
         assert_eq!(d.deadline(), None);
         // A stale report doesn't count.
-        let mut d = Detector::new(true);
+        let mut d = Detector::new(true, false);
         d.device(183, true, DeviceRef(7), 0);
         assert_eq!(d.press(183, true, None, false, 1000), Step::Wait);
+    }
+
+    #[test]
+    fn keys_only_lets_clicks_pass() {
+        let mut d = Detector::new(false, true);
+        assert_eq!(d.press(0x110, true, None, false, 0), Step::Wait);
+        assert_eq!(d.press(BEYOND_BUTTONS, true, None, false, 1), Step::Wait);
+        assert!(matches!(d.press(30, true, None, false, 2), Step::Found(Found { code: 30, .. })));
     }
 
     #[test]

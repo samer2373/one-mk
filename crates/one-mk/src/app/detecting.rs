@@ -11,7 +11,7 @@ use tokio::time::Instant;
 
 impl App {
     /// `Request::Detect`: a detection begins, in place of any still running.
-    pub(super) fn start_detect(&mut self, seconds: u32, reply: oneshot::Sender<String>) {
+    pub(super) fn start_detect(&mut self, seconds: u32, keys_only: bool, reply: oneshot::Sender<String>) {
         if let Some(old) = self.detect.take() {
             old.finish(End::Replaced);
         }
@@ -19,7 +19,7 @@ impl App {
         let hints = cfg!(any(windows, target_os = "macos")) && self.backend_name == "native";
         let unseen = one_mk_input::detect_support(self.backend_name).err();
         tracing::debug!(seconds, "detecting the next key or button pressed");
-        self.detect = Some(Session::new(reply, seconds, hints, unseen));
+        self.detect = Some(Session::new(reply, seconds, keys_only, hints, unseen));
         let _ = self.capture.send(CaptureCmd::Detect(true));
     }
 

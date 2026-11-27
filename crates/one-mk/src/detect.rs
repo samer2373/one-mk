@@ -47,6 +47,7 @@ impl Session {
     pub fn new(
         reply: oneshot::Sender<String>,
         seconds: u32,
+        keys_only: bool,
         hints_expected: bool,
         unseen: Option<&'static str>,
     ) -> Self {
@@ -54,7 +55,7 @@ impl Session {
             reply,
             until: Instant::now() + std::time::Duration::from_secs(u64::from(seconds)),
             seconds,
-            detector: Detector::new(hints_expected),
+            detector: Detector::new(hints_expected, keys_only),
             epoch: std::time::Instant::now(),
             unseen,
         }
@@ -125,7 +126,7 @@ pub fn encode(end: &End, seconds: u32, unseen: Option<&str>) -> String {
 }
 
 /// `one-mk input-devices detect`.
-pub async fn command(dir: &Path, seconds: u32, json: bool) -> Result<()> {
+pub async fn command(dir: &Path, seconds: u32, keys_only: bool, json: bool) -> Result<()> {
     let not_running = || {
         if json {
             println!("{}", json!({ "result": "not-running", "message": crate::control::NOT_RUNNING }));
@@ -139,9 +140,9 @@ pub async fn command(dir: &Path, seconds: u32, json: bool) -> Result<()> {
     let backend = status.as_ref().map_or("", |s| s.backend.as_str());
     let away = status.as_ref().is_some_and(|s| s.controlling.is_some());
     if !json {
-        eprintln!("{}", waiting_text(backend, away, seconds));
+        eprintln!("{}", waiting_text(backend, away, seconds, keys_only));
     }
-    let reply = match crate::control::request(dir, crate::control::Request::Detect { timeout: seconds }).await? {
+    let reply = match crate::control::request(dir, crate::control::Request::Detect { timeout: seconds, keys_only }).await? {
         Some(text) if !text.trim().is_empty() => text,
         // It hung up without an answer: it stopped (or was killed) meanwhile.
         Some(_) => {
@@ -180,9 +181,10 @@ pub async fn command(dir: &Path, seconds: u32, json: bool) -> Result<()> {
 }
 
 /// What the command says before it waits.
-pub fn waiting_text(backend: &str, away: bool, seconds: u32) -> String {
+pub fn waiting_text(backend: &str, away: bool, seconds: u32, keys_only: bool) -> String {
     let local = one_mk_proto::detect::detect_support(backend);
-    let mut out = format!("Press the key or mouse button (Esc cancels; waiting {seconds} s)…");
+    let what = if keys_only { "key" } else { "key or mouse button" };
+    let mut out = format!("Press the {what} (Esc cancels; waiting {seconds} s)…");
     match local {
         Err(why) if why == LOCAL_UNSEEN && !away => out.push_str(
             "\nOn this desktop oneMK sees keys only while it controls another computer: move the pointer onto another \
@@ -252,10 +254,11 @@ pub fn found_text(v: &Value) -> String {
 fn timeout_text(v: &Value) -> String {
     let seconds = v["seconds"].as_u64().unwrap_or(0);
     match v["note"].as_str() {
-        Some(note) => format!(
+        Some(note) if note == LOCAL_UNSEEN => format!(
             "nothing was pressed in {seconds} s ({note}: move the pointer onto another computer's screen, then press the key; \
-             or choose it from the list with `one-mk keymap add`)"
+             or name it yourself with `one-mk keymap add`)"
         ),
+        Some(note) => format!("nothing was pressed in {seconds} s ({note})"),
         None => format!(
             "nothing was pressed in {seconds} s. Some keys never reach oneMK: keys a keyboard handles itself (often Fn), \
              and mouse buttons the system doesn't report as buttons (vendor buttons that need the maker's software)"
@@ -307,9 +310,9 @@ mod tests {
 
     #[test]
     fn the_wait_says_when_local_keys_cant_be_seen() {
-        assert!(waiting_text("portal", false, 30).contains("only while it controls another computer"));
-        assert!(!waiting_text("portal", true, 30).contains("only while"), "already controlling one");
-        assert!(!waiting_text("x11", false, 30).contains('\n'));
-        assert!(waiting_text("null", false, 5).contains("The null input backend"));
+        assert!(waiting_text("portal", false, 30, false).contains("only while it controls another computer"));
+        assert!(!waiting_text("portal", true, 30, false).contains("only while"), "already controlling one");
+        assert!(!waiting_text("x11", false, 30, false).contains('\n'));
+        assert!(waiting_text("null", false, 5, false).contains("The null input backend"));
     }
 }

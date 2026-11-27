@@ -669,7 +669,7 @@ async fn detect_switched(duo: &mut Duo, on: bool) {
 fn detect(duo: &Duo, seconds: u32) -> tokio::task::JoinHandle<serde_json::Value> {
     let dir = duo.da.clone();
     tokio::spawn(async move {
-        let text = control::request(&dir, Request::Detect { timeout: seconds }).await.unwrap().expect("running");
+        let text = control::request(&dir, Request::Detect { timeout: seconds, keys_only: false }).await.unwrap().expect("running");
         serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("{e}: {text:?}"))
     })
 }
@@ -787,7 +787,7 @@ async fn detecting_ends_cleanly_however_it_ends() {
     detect_switched(&mut duo, false).await;
     // The asker hangs up.
     let dir = duo.da.clone();
-    let asker = tokio::spawn(async move { control::request(&dir, Request::Detect { timeout: 30 }).await });
+    let asker = tokio::spawn(async move { control::request(&dir, Request::Detect { timeout: 30, keys_only: false }).await });
     detect_switched(&mut duo, true).await;
     asker.abort();
     detect_switched(&mut duo, false).await;

@@ -764,8 +764,8 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Gestures { cmd } => tuning::gestures_command(&dir, cmd).await,
             Cmd::Buttons { cmd } => tuning::buttons(&dir, cmd).await,
             Cmd::InputDevices { cmd: None, json } => inputdevices::command(&dir, json).await,
-            Cmd::InputDevices { cmd: Some(InputDevicesCmd::Detect { timeout, json: detect_json }), json } => {
-                detect::command(&dir, timeout, json || detect_json).await
+            Cmd::InputDevices { cmd: Some(InputDevicesCmd::Detect { timeout, keys_only, json: detect_json }), json } => {
+                detect::command(&dir, timeout, keys_only, json || detect_json).await
             }
             Cmd::Id => {
                 let id = Identity::load_or_create(&dir)?;
@@ -941,6 +941,9 @@ enum InputDevicesCmd {
         /// How long to wait for a press, in seconds (1 to 600).
         #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..=600))]
         timeout: u32,
+        /// Only keys: mouse buttons are not what you mean (a click elsewhere doesn't end it).
+        #[arg(long)]
+        keys_only: bool,
         /// Print the answer as one line of JSON, for a program to read.
         #[arg(long)]
         json: bool,

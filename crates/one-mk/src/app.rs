@@ -2991,8 +2991,8 @@ impl App {
             }
             Request::WallpaperStatus => self.wallpaper.status(),
             Request::Status => self.status().encode(),
-            Request::Detect { timeout } => {
-                self.start_detect(timeout, reply);
+            Request::Detect { timeout, keys_only } => {
+                self.start_detect(timeout, keys_only, reply);
                 return false;
             }
             Request::Invitation => {
