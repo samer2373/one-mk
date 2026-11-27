@@ -43,6 +43,7 @@ mod testdir;
 mod live_wallpaper;
 mod hooks;
 mod hotkeys;
+mod detect;
 mod inputdevices;
 mod install;
 mod integrate;
@@ -475,7 +476,10 @@ enum Cmd {
     /// List the keyboards and mice this computer has seen, for rules that
     /// apply to one of them (--device on keymap, buttons, pointer and
     /// scroll). Says whether this desktop can tell them apart.
+    /// `input-devices detect` tells which key or mouse button you press.
     InputDevices {
+        #[command(subcommand)]
+        cmd: Option<InputDevicesCmd>,
         /// Machine-readable output for a program to read.
         #[arg(long)]
         json: bool,
@@ -759,7 +763,10 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Autoscroll(args) => tuning::autoscroll_command(&dir, args).await,
             Cmd::Gestures { cmd } => tuning::gestures_command(&dir, cmd).await,
             Cmd::Buttons { cmd } => tuning::buttons(&dir, cmd).await,
-            Cmd::InputDevices { json } => inputdevices::command(&dir, json).await,
+            Cmd::InputDevices { cmd: None, json } => inputdevices::command(&dir, json).await,
+            Cmd::InputDevices { cmd: Some(InputDevicesCmd::Detect { timeout, json: detect_json }), json } => {
+                detect::command(&dir, timeout, json || detect_json).await
+            }
             Cmd::Id => {
                 let id = Identity::load_or_create(&dir)?;
                 println!("{} ({})", id.name, id.fingerprint.short());
@@ -918,6 +925,26 @@ fn forget(dir: &Path, device: &str) -> Result<()> {
         eprintln!("Warning: its wallpaper permission could not be removed ({e:#}). Fix settings.toml and run `one-mk forget {}` again to remove it.", d.fingerprint);
     }
     Ok(())
+}
+
+#[derive(Subcommand)]
+enum InputDevicesCmd {
+    /// Press a key or mouse button to find out what it is to oneMK: its
+    /// name and code as key rules see them (with the modifiers it sends,
+    /// for a mouse button that types a shortcut), and which keyboard or
+    /// mouse it came from where this computer can tell. Prints the
+    /// commands that change it. Needs one-mk running; the key still does
+    /// what it does. Esc cancels. On GNOME, KDE and other Wayland desktops
+    /// oneMK sees keys only while it controls another computer: move the
+    /// pointer there first.
+    Detect {
+        /// How long to wait for a press, in seconds (1 to 600).
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u32).range(1..=600))]
+        timeout: u32,
+        /// Print the answer as one line of JSON, for a program to read.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[cfg(test)]

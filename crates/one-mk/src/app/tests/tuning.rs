@@ -651,3 +651,156 @@ async fn per_device_rules_follow_the_keyboard_they_come_from() {
     assert_eq!(speeds, [2.0, 1.0, 1.0]);
     duo.stop().await;
 }
+
+// ------------------------------------------------- detecting a key or button
+
+/// Waits for A's backend to be told to report presses (`on`) or stop.
+async fn detect_switched(duo: &mut Duo, on: bool) {
+    loop {
+        match next_capture(&mut duo.ha).await {
+            CaptureCmd::Detect(o) if o == on => return,
+            CaptureCmd::Detect(o) => panic!("detecting turned {o}, not {on}"),
+            _ => {}
+        }
+    }
+}
+
+/// Asks A's daemon to detect, in the background; the answer is parsed.
+fn detect(duo: &Duo, seconds: u32) -> tokio::task::JoinHandle<serde_json::Value> {
+    let dir = duo.da.clone();
+    tokio::spawn(async move {
+        let text = control::request(&dir, Request::Detect { timeout: seconds }).await.unwrap().expect("running");
+        serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("{e}: {text:?}"))
+    })
+}
+
+/// A mouse whose extra button types Ctrl+Alt+Tab and whose sixth button is
+/// BTN_FORWARD, and a key no drawn keyboard has: each is detected as the
+/// rules see it, a rule made from the answer changes it on the other
+/// computer (for that mouse only, where it said which), and the backend
+/// stops reporting presses once the answer is given.
+#[tokio::test]
+async fn detected_keys_and_buttons_make_rules_that_apply() {
+    use one_mk_input::{DeviceRef, Kinds, fake_keyboard};
+    let mouse = one_mk_input::InputDevice { kinds: Kinds { keyboard: true, pointer: true }, ..fake_keyboard(5, "Gaming Mouse") };
+    let fp = mouse.fingerprint.to_string();
+    let mut duo = Duo::start("detect-rules", None).await;
+    duo.ha.devices(vec![mouse.clone(), fake_keyboard(6, "Desk Keyboard")]);
+    let mouse_ref = Some(DeviceRef(5));
+    let local = |code, down, device| Event::LocalPress { code, down, device };
+
+    // The extra button: Ctrl and Alt go down, then Tab, all from the mouse.
+    let answer = detect(&duo, 10);
+    detect_switched(&mut duo, true).await;
+    for code in [LCTRL, LALT, 15] {
+        duo.ha.events.send(local(code, true, mouse_ref)).unwrap();
+    }
+    let v = answer.await.unwrap();
+    assert_eq!((v["result"].as_str(), v["kind"].as_str(), v["trigger"].as_str()), (Some("found"), Some("key"), Some("ctrl+alt+tab")), "{v}");
+    assert_eq!(v["device"]["fingerprint"].as_str(), Some(fp.as_str()));
+    assert_eq!(v["device"]["name"].as_str(), Some("Gaming Mouse"));
+    detect_switched(&mut duo, false).await;
+    for code in [15, LALT, LCTRL] {
+        duo.ha.events.send(local(code, false, mouse_ref)).unwrap();
+    }
+
+    // Button 6.
+    let answer = detect(&duo, 10);
+    detect_switched(&mut duo, true).await;
+    duo.ha.events.send(local(0x115, true, mouse_ref)).unwrap();
+    let v = answer.await.unwrap();
+    assert_eq!((v["kind"].as_str(), v["button"].as_u64(), v["trigger"].as_str()), (Some("button"), Some(6), Some("button6")), "{v}");
+    detect_switched(&mut duo, false).await;
+    duo.ha.events.send(local(0x115, false, mouse_ref)).unwrap();
+
+    // A key with no name (and on no drawn keyboard), from the desk keyboard.
+    let answer = detect(&duo, 10);
+    detect_switched(&mut duo, true).await;
+    duo.ha.events.send(local(0x1b0, true, Some(DeviceRef(6)))).unwrap();
+    let v = answer.await.unwrap();
+    assert_eq!((v["name"].as_str(), v["trigger"].as_str()), (Some("code:432"), Some("code:432")), "{v}");
+    detect_switched(&mut duo, false).await;
+
+    // The rules, as the window and `keymap add` / `buttons map` write them from the answers.
+    let on_mouse = Scope::Device(fp.clone(), Box::new(Scope::Global));
+    set(&duo.da, |s| {
+        s.input.keymap.rule = vec![KeyRule { scope: on_mouse.clone(), ..to("ctrl+alt+tab", "f13") }, to("code:432", "f15")];
+        s.input.button.push(ButtonRule { from: ButtonFrom::Number(6), to: To::One("f14".into()), scope: Scope::Global, app: None });
+    })
+    .await;
+    let check = control::request(&duo.da, Request::Status).await.unwrap().unwrap();
+    assert!(!Status::decode(&check).unwrap().tuning.iter().any(|t| t.contains("problem")), "{check}");
+    duo.enter_b().await;
+    // The mouse's shortcut is F13 on B; the same shortcut typed on the keyboard is not changed.
+    for (code, down) in [(LCTRL, true), (LALT, true), (15, true), (15, false), (LALT, false), (LCTRL, false)] {
+        duo.ha.key_from(code, down, mouse_ref);
+    }
+    let sent = next_n(&mut duo, 6).await;
+    assert!(sent.contains(&key(183, true)) && sent.contains(&key(183, false)) && !sent.contains(&key(15, true)), "{sent:?}");
+    let mut rest = Vec::new();
+    while let Ok(i) = tokio::time::timeout(Duration::from_millis(100), next_non_move(&mut duo.hb)).await { rest.push(i); }
+    assert!(!rest.iter().any(|i| *i == key(15, true)), "{rest:?}");
+    for (code, down) in [(LCTRL, true), (LALT, true), (15, true), (15, false), (LALT, false), (LCTRL, false)] {
+        duo.ha.key_from(code, down, Some(DeviceRef(6)));
+    }
+    assert_eq!(next_n(&mut duo, 6).await, [key(LCTRL, true), key(LALT, true), key(15, true), key(15, false), key(LALT, false), key(LCTRL, false)]);
+    // Button 6 types F14, the unnamed key F15.
+    duo.ha.key_from(0x115, true, mouse_ref);
+    duo.ha.key_from(0x115, false, mouse_ref);
+    duo.ha.key_from(0x1b0, true, Some(DeviceRef(6)));
+    duo.ha.key_from(0x1b0, false, Some(DeviceRef(6)));
+    assert_eq!(next_n(&mut duo, 4).await, [key(184, true), key(184, false), key(185, true), key(185, false)]);
+    // While controlling B, the keys going there are detected too (`away`), and still go there.
+    let answer = detect(&duo, 10);
+    detect_switched(&mut duo, true).await;
+    duo.ha.key_from(30, true, Some(DeviceRef(6)));
+    let v = answer.await.unwrap();
+    assert_eq!((v["name"].as_str(), v["away"].as_bool()), (Some("a"), Some(true)), "{v}");
+    assert_eq!(next_n(&mut duo, 1).await, [key(30, true)]);
+    duo.ha.key_from(30, false, Some(DeviceRef(6)));
+    duo.stop().await;
+}
+
+/// Every way a detection can end without a press turns the reporting off
+/// again: the wait running out, Esc, the asker hanging up, another
+/// detection, the daemon stopping. Key repeats and keys held from before
+/// are not presses.
+#[tokio::test]
+async fn detecting_ends_cleanly_however_it_ends() {
+    let mut duo = Duo::start("detect-ends", None).await;
+    let local = |code, down| Event::LocalPress { code, down, device: None };
+    // Timeout, with why this backend sees no local keys.
+    let started = Instant::now();
+    let answer = detect(&duo, 1);
+    detect_switched(&mut duo, true).await;
+    let v = answer.await.unwrap();
+    assert_eq!(v["result"].as_str(), Some("timeout"), "{v}");
+    assert!(v["note"].as_str().is_some_and(|n| n.contains("null")), "{v}");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    detect_switched(&mut duo, false).await;
+    // Esc cancels; the Enter that started it, and repeats, are not presses.
+    let answer = detect(&duo, 10);
+    detect_switched(&mut duo, true).await;
+    duo.ha.events.send(local(28, false)).unwrap();
+    duo.ha.events.send(local(1, true)).unwrap();
+    assert_eq!(answer.await.unwrap()["result"].as_str(), Some("cancelled"));
+    detect_switched(&mut duo, false).await;
+    // The asker hangs up.
+    let dir = duo.da.clone();
+    let asker = tokio::spawn(async move { control::request(&dir, Request::Detect { timeout: 30 }).await });
+    detect_switched(&mut duo, true).await;
+    asker.abort();
+    detect_switched(&mut duo, false).await;
+    // Another detection replaces it.
+    let first = detect(&duo, 30);
+    detect_switched(&mut duo, true).await;
+    let second = detect(&duo, 30);
+    assert_eq!(first.await.unwrap()["result"].as_str(), Some("replaced"));
+    // Reporting stays on for the second, without a gap.
+    detect_switched(&mut duo, true).await;
+    // The daemon stops: the asker hears so (or the connection closes), and nothing waits.
+    let stop = tokio::spawn(duo.stop());
+    let v = second.await.unwrap();
+    assert_eq!(v["result"].as_str(), Some("stopped"), "{v}");
+    stop.await.unwrap();
+}

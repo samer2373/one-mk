@@ -126,9 +126,20 @@ async fn serve_conn<S: AsyncRead + AsyncWrite + Unpin>(mut s: S, token: Option<S
         Some(req) => {
             // Some requests (a clipboard over a slow link) take longer than the rest.
             let patience = req.reply_timeout();
+            // A detection waits for a person: when the asker hangs up (Ctrl-C, the window's
+            // Cancel), dropping the receiver tells the daemon to stop waiting.
+            let watch = matches!(req, Request::Detect { .. });
             let (reply_tx, reply_rx) = oneshot::channel();
             let _ = tx.send((req, reply_tx));
-            tokio::time::timeout(patience, reply_rx).await.map_or_else(|_| String::new(), Result::unwrap_or_default)
+            let answer = tokio::time::timeout(patience, reply_rx);
+            if watch {
+                tokio::select! {
+                    answer = answer => answer.map_or_else(|_| String::new(), Result::unwrap_or_default),
+                    () = hung_up(&mut s) => return,
+                }
+            } else {
+                answer.await.map_or_else(|_| String::new(), Result::unwrap_or_default)
+            }
         }
         None => "error unknown request\n".to_owned(),
     });
@@ -137,6 +148,18 @@ async fn serve_conn<S: AsyncRead + AsyncWrite + Unpin>(mut s: S, token: Option<S
         s.shutdown().await
     })
     .await;
+}
+
+/// Waits until the client closes its end (or the connection breaks); bytes
+/// it sends meanwhile are ignored.
+async fn hung_up<S: AsyncRead + Unpin>(s: &mut S) {
+    let mut buf = [0u8; 64];
+    loop {
+        match s.read(&mut buf).await {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+    }
 }
 
 /// Compares without stopping at the first difference.
