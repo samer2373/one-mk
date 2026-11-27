@@ -2800,7 +2800,18 @@ impl App {
         let mut recording = ui.ctx().data(|data| data.get_temp::<bool>(capture_id)).unwrap_or(false);
         let mut value = self.drafts.get("gesture-output").cloned().unwrap_or_default();
         let field = Rect::from_min_size(pos2(left, top), vec2(width - 86.0, 28.0));
-        widgets::field(ui, field, Id::unique("gesture-output"), &mut value, "Key or action", "What the gesture does", !recording, false);
+        let field_id = Id::unique("gesture-output");
+        let mut shown = value.clone();
+        if !ui.memory(|m| m.has_focus(field_id)) {
+            if let Ok(action) = value.parse::<one_mk_proto::remap::SystemAction>() {
+                shown = action.label_for(self.facts().os).into();
+            } else if keynames::parse_key(&value).is_ok_and(|code| code == 133) {
+                shown = tune::key_label(133);
+            }
+        }
+        if widgets::field(ui, field, field_id, &mut shown, "Key or action", "What the gesture does", !recording, false).changed() {
+            value = shown;
+        }
         let capture = Rect::from_min_size(pos2(left + width - 80.0, top), vec2(80.0, 28.0));
         let started = button(ui, capture, Id::unique("gesture-record"), if recording { "Cancel" } else { "Record" }, Look::Quiet, true, Some("Press a key or shortcut for this gesture")).clicked();
         if started { recording = !recording; }
@@ -2832,6 +2843,7 @@ impl App {
             match gesture_args(held, direction, &value, &self.keys.scope) {
                 Ok(args) => self.tune_cmds("the gesture", "mouse-modes", vec![args], None),
                 Err(error) => {
+                    let error = tune::plain_problem(&error);
                     let height = widgets::para_code_h(ui, width - 14.0, &error, regular(T_BODY));
                     let message = Rect::from_min_size(pos2(left, top + 38.0), vec2(width, height));
                     ui.expand_to_include_rect(message);

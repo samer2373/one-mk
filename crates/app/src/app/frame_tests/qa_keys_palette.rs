@@ -593,6 +593,14 @@ fn the_gesture_picker_focuses_search_on_open_and_reopen() {
         win.press(Key::Escape);
         assert!(win.app.keys.picker.is_none());
     }
+    win.app.keys.scope = Scope::Os(os::MACOS);
+    win.settle();
+    win.click(choose);
+    win.type_text("mision");
+    win.press(Key::Enter);
+    win.settle();
+    assert!(win.has_text("Mission Control"), "{}", win.texts_joined());
+    assert!(!win.has_text("os:overview"), "{}", win.texts_joined());
 }
 
 #[test]
