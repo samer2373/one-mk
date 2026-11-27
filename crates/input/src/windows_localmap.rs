@@ -320,6 +320,9 @@ impl Local {
 
     pub fn physical_held(&self) -> bool { self.physical.held() }
 
+    /// Whether `code` is physically held, swallowed by a rule or not.
+    pub fn holds(&self, code: u32) -> bool { self.physical.holds(code) }
+
     pub fn action(&self) -> Option<Action> { self.actions.pop() }
 
     pub fn remote_key(&mut self, code: u32, down: bool) -> bool {

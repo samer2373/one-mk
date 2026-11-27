@@ -85,6 +85,8 @@ pub struct Physical {
 
 impl Physical {
     pub fn held(&self) -> bool { !self.down.is_empty() }
+    /// Whether `code` is held on this computer's own keyboard (a key held for a peer is not).
+    pub fn holds(&self, code: u32) -> bool { self.down.is_held(code) && !self.remote.is_held(code) }
     pub fn correlated(&mut self, code: u32, down: bool, device: Option<DeviceRef>) -> bool {
         if let Some((_, held)) = self.sources.iter_mut().find(|(source, _)| *source == device) {
             held.update(code, down);

@@ -686,7 +686,7 @@ impl Ctx {
             },
             _ => return,
         };
-        let at = Some(logic::mach_ms(CGEvent::timestamp(e)));
+        let at = Some(logic::tap_ms(CGEvent::timestamp(e), logic::mach_now()));
         for (code, down, repeat) in logic::detected_presses(tap).into_iter().flatten() {
             let press = Press { code, down, repeat, device: None, at };
             let _ = self.tx.send(Event::LocalPress { session, press });

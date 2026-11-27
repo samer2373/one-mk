@@ -609,10 +609,34 @@ pub fn detected_button(number: i64) -> u32 {
     }
 }
 
-/// Mach absolute time (an IOHID value's time stamp; a tap event's
-/// timestamp, which is the same clock) in milliseconds.
+/// Mach absolute time (an IOHID value's time stamp) in milliseconds.
 #[cfg(target_os = "macos")]
 pub fn mach_ms(ticks: u64) -> u64 {
+    let (numer, denom) = mach_timebase();
+    ticks_ms(ticks, numer, denom)
+}
+
+/// A tap event's timestamp in milliseconds on the same clock as [`mach_ms`].
+/// Apple documents it in nanoseconds, yet some macOS releases give Mach ticks;
+/// on a Mac whose ticks aren't nanoseconds (Apple Silicon) the two differ
+/// ~40-fold, so the reading taken now (`now_ticks`) tells which it is.
+#[cfg(target_os = "macos")]
+pub fn tap_ms(stamp: u64, now_ticks: u64) -> u64 {
+    let (numer, denom) = mach_timebase();
+    tap_stamp_ms(stamp, now_ticks, numer, denom)
+}
+
+#[cfg(target_os = "macos")]
+pub fn mach_now() -> u64 {
+    unsafe extern "C" {
+        fn mach_absolute_time() -> u64;
+    }
+    // SAFETY: plain call.
+    unsafe { mach_absolute_time() }
+}
+
+#[cfg(target_os = "macos")]
+fn mach_timebase() -> (u32, u32) {
     #[repr(C)]
     struct Timebase {
         numer: u32,
@@ -622,12 +646,23 @@ pub fn mach_ms(ticks: u64) -> u64 {
         fn mach_timebase_info(info: *mut Timebase) -> i32;
     }
     static RATIO: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
-    let &(numer, denom) = RATIO.get_or_init(|| {
+    *RATIO.get_or_init(|| {
         let mut t = Timebase { numer: 1, denom: 1 };
         // SAFETY: fills the struct given.
         if unsafe { mach_timebase_info(&mut t) } != 0 || t.denom == 0 { (1, 1) } else { (t.numer, t.denom) }
-    });
-    (u128::from(ticks) * u128::from(numer) / u128::from(denom) / 1_000_000) as u64
+    })
+}
+
+/// Mach ticks to milliseconds, given the timebase.
+pub fn ticks_ms(ticks: u64, numer: u32, denom: u32) -> u64 {
+    (u128::from(ticks) * u128::from(numer) / u128::from(denom.max(1)) / 1_000_000) as u64
+}
+
+/// [`tap_ms`] with the clock given: a stamp no later than now and less than a
+/// minute before it, read as ticks, is ticks; anything else is nanoseconds.
+pub fn tap_stamp_ms(stamp: u64, now_ticks: u64, numer: u32, denom: u32) -> u64 {
+    let ticks = now_ticks.checked_sub(stamp).is_some_and(|age| ticks_ms(age, numer, denom) < 60_000);
+    if ticks { ticks_ms(stamp, numer, denom) } else { stamp / 1_000_000 }
 }
 
 /// A tap event, as detection reads it.
@@ -662,6 +697,21 @@ pub fn detected_presses(tap: TapPress) -> [Option<(u32, bool, bool)>; 2] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_tap_stamp_reads_as_ticks_or_nanoseconds_whichever_it_is() {
+        // Apple Silicon: 125/3 ns a tick. Now is 10 minutes of uptime.
+        let (numer, denom) = (125, 3);
+        let now = 600_000_000_000u64 * 3 / 125;
+        let ms_ago_5 = now - 5_000_000 * 3 / 125;
+        // Ticks: the same as an IOHID stamp of that moment.
+        assert_eq!(tap_stamp_ms(ms_ago_5, now, numer, denom), ticks_ms(ms_ago_5, numer, denom));
+        assert_eq!(tap_stamp_ms(ms_ago_5, now, numer, denom), 599_995);
+        // Nanoseconds, as documented: far past now in ticks.
+        assert_eq!(tap_stamp_ms(599_995_000_000, now, numer, denom), 599_995);
+        // Intel: ticks are nanoseconds, either reading agrees.
+        assert_eq!(tap_stamp_ms(599_995_000_000, 600_000_000_000, 1, 1), 599_995);
+    }
+
     use super::*;
 
     #[test]

@@ -971,7 +971,11 @@ impl State {
         self.raw.detect(on.is_some());
         self.detect_held.clear();
         if let Some(session) = on {
-            let codes: Vec<u32> = (0..512).filter(|&c| self.local.has(c) || self.fwd.held().has(c)).collect();
+            // A key a local rule swallows is in its ledger only, never in `self.local`: still held.
+            let rules = self.local_rules.as_ref();
+            let codes: Vec<u32> = (0..512)
+                .filter(|&c| self.local.has(c) || self.fwd.held().has(c) || rules.is_some_and(|local| local.holds(c)))
+                .collect();
             for &c in &codes {
                 self.detect_held.set(c, true);
             }
