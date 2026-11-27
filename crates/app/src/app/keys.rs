@@ -921,7 +921,8 @@ impl App {
         if let Some(e) = error {
             self.keys.drafts.clear();
             self.prefs = self.link.prefs();
-            self.keys.error = Some((area, format!("Couldn't change {what}: {e}")));
+            let message = tune::plain_problem(&e);
+            self.keys.error = Some((area, format!("Couldn't change {what}. {message}")));
         }
     }
 
@@ -2095,15 +2096,9 @@ impl App {
         let tx = chip_r.right() + 12.0;
         let room = more.left() - 6.0 - tx;
         p.text(pos2(tx, at.y + 11.0), Align2::LEFT_CENTER, fit(&p, &title, &semibold(T_TITLE), room), semibold(T_TITLE), pal().ink);
-        let mut job = egui::text::LayoutJob::simple(now_text.clone(), regular(T_META), pal().ink2, at.x + w - tx);
-        job.wrap.max_rows = 2;
-        let subtitle = p.layout_job(job);
+        let subtitle = p.layout(now_text.clone(), regular(T_META), pal().ink2, at.x + w - tx);
         let sub_at = pos2(tx, at.y + 26.0);
         let sub_height = subtitle.size().y;
-        if subtitle.elided {
-            let rect = Rect::from_min_size(sub_at, subtitle.size());
-            ui.interact(rect, Id::unique("key-editor-now"), Sense::hover()).on_hover_text(&now_text);
-        }
         p.galley(sub_at, subtitle, pal().ink2);
         let head = Rect::from_min_max(at, pos2(at.x + w, (sub_at.y + sub_height + 2.0).max(at.y + 40.0)));
         a11y_text(ui, Id::unique("key-editor-title"), head, Role::Heading, &format!("{title}: {now_text}"), None);
@@ -2537,7 +2532,8 @@ impl App {
             p.rect_filled(r, CornerRadius::same(6), if selected { pal().accent_soft } else { pal().hover });
         }
         widgets::focus_ring(ui, &resp, r.shrink(2.0), 5);
-        let vw = text_width(ui, &choice.value, mono(T_META)).min(r.width() * 0.36);
+        let value = (!choice.value.starts_with("os:")).then_some(choice.value.as_str());
+        let vw = value.map_or(0.0, |text| text_width(ui, text, mono(T_META)).min(r.width() * 0.36));
         let single = compact || choice.detail.is_empty();
         let (label_at, label_align, label_width, value_at, value_align) = if single {
             (r.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, r.width() - vw - 30.0,
@@ -2551,7 +2547,9 @@ impl App {
         };
         p.text(label_at, label_align, fit(p, &choice.label, &semibold(T_BODY), label_width),
             semibold(T_BODY), if available { pal().ink } else { pal().ink3 });
-        widgets::mono_text(p, value_at, value_align, &choice.value, T_META, pal().ink2, vw + 1.0);
+        if let Some(value) = value {
+            widgets::mono_text(p, value_at, value_align, value, T_META, pal().ink2, vw + 1.0);
+        }
         widgets::a11y(&resp, Role::ListItem, &choice.label, Some(selected));
         let hint = choice.disabled_hint.as_deref().filter(|_| !available);
         let full = [Some(choice.label.as_str()), Some(choice.detail.as_str()), hint].into_iter()
@@ -2748,12 +2746,12 @@ impl App {
             top += para(ui, pos2(content.left(), top), content.width(), "No gestures yet. A short click still clicks normally. Use the preset or add your own below.", regular(T_META), pal().ink2);
         }
         for row in gestures {
-            let description = format!("Hold {} and swipe {} to {}{}.", tune::mouse_button_label(&row.button), row.direction, row.to.describe(facts.os), row.app.as_ref().map_or(String::new(), |app| format!(" in app {app}")));
+            let target = Facts::of(&row.scope, &self.scope_peers()).os;
+            let description = format!("Hold {} and swipe {} to {}{}.", tune::mouse_button_label(&row.button), row.direction, row.to.describe(target), row.app.as_ref().map_or(String::new(), |app| format!(" in app {app}")));
             let height = para(ui, pos2(content.left(), top), content.width(), &description, regular(T_BODY), pal().ink);
             a11y_text(ui, Id::unique(("gesture-description", &row.button, &row.direction, row.scope.label(), &row.app)),
                 Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), height)), Role::Label, &description, None);
             top += height + 4.0;
-            let target = Facts::of(&row.scope, &self.scope_peers()).os;
             if let Some(note) = row.to.parse().ok().and_then(|output| tune::system_note(&What::To(output), target)) {
                 let id = Id::unique(("gesture-note", &row.button, &row.direction, row.scope.label(), &row.app));
                 top = rule_note(ui, id, pos2(content.left(), top), content.width(), &note) + 4.0;
@@ -2934,18 +2932,21 @@ impl App {
             let col = if changed { pal().accent_text } else { pal().ink };
             let tx = card.left() + 14.0;
             let room = card.width() - 28.0;
-            let text = fit(&painter, &does, &semibold(T_BODY), room);
+            let mut label_room = *card;
             if card.height() >= 44.0 {
-                painter.text(pos2(tx, card.top() + 15.0), Align2::LEFT_CENTER, fit(&painter, name, &regular(T_CHIP), room), regular(T_CHIP), pal().ink2);
-                painter.text(pos2(tx, card.top() + 32.0), Align2::LEFT_CENTER, &text, semibold(T_BODY), col);
-            } else {
-                // A short stage: what it does, its name on hover.
-                painter.text(pos2(tx, card.center().y), Align2::LEFT_CENTER, &text, semibold(T_BODY), col);
+                painter.text(pos2(tx, card.top() + 13.0), Align2::LEFT_CENTER, name, regular(T_CHIP), pal().ink2);
+                label_room.min.y += 20.0;
             }
+            let mut job = egui::text::LayoutJob::simple(does.clone(), semibold(T_BODY), col, room);
+            job.wrap.max_rows = 2;
+            job.sections[0].format.line_height = Some(13.0);
+            let label = painter.layout_job(job);
+            let elided = label.elided;
+            painter.galley(pos2(tx, label_room.center().y - label.size().y / 2.0), label, col);
             widgets::a11y(&lresp, Role::Button, &format!("{name}: {does}. Change it"), Some(sel));
             let help = if sel { "Activate again to return to the whole mouse." } else { "Select this button to zoom in and change its action." };
             ui.ctx().accesskit_node_builder(lresp.id, |node| node.set_description(help));
-            if lresp.hovered() && (sel || text != does || card.height() < 44.0) {
+            if lresp.hovered() && (sel || elided || card.height() < 44.0) {
                 lresp.clone().on_hover_text(format!("{name}: {does}. {help}"));
             }
             if lresp.clicked() && !busy {

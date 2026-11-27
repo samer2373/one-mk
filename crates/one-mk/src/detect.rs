@@ -240,6 +240,9 @@ pub fn found_text(v: &Value) -> String {
     let trigger = v["trigger"].as_str().unwrap_or("");
     // `f13` as F13, `play/pause` as Play/pause: as people write them.
     let label = |s: &str| -> String {
+        if s == "copy" {
+            return "Copy key".into();
+        }
         let mut c = s.chars();
         c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
     };
@@ -373,6 +376,8 @@ mod tests {
         });
         let text = found_text(&v);
         assert!(text.starts_with("Key code 432.\n"), "{text}");
+        let copy = json!({ "kind": "key", "code": 133, "name": "copy", "trigger": "copy" });
+        assert!(found_text(&copy).starts_with("The key Copy key (code 133)"));
         #[cfg(not(windows))]
         assert!(text.contains(r#"--device 'usb/path/O'\''Brien $key "quoted"'"#), "{text}");
         #[cfg(windows)]

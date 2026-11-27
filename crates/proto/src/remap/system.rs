@@ -98,12 +98,17 @@ impl SystemAction {
         }
     }
 
+    pub fn search_names(self) -> impl Iterator<Item = &'static str> {
+        [self.name(), self.label()].into_iter()
+            .chain(Self::TARGETS.into_iter().map(move |target| self.label_for(target)))
+            .chain(self.search_aliases().iter().copied())
+    }
+
     fn suggestion(query: &str) -> Option<String> {
         let query = fold_action_search(query.trim());
         if query.is_empty() { return None; }
         let (_, action) = Self::ALL.iter().filter_map(|action| {
-            let names = [action.name(), action.label()].into_iter()
-                .chain(action.search_aliases().iter().copied()).map(fold_action_search).collect::<Vec<_>>();
+            let names = action.search_names().map(fold_action_search).collect::<Vec<_>>();
             action_search_rank(&names, &[], &query).map(|rank| (rank, action))
         }).min_by_key(|(rank, _)| *rank)?;
         Some(format!("{action} ({})", action.label_for(os::MACOS)))

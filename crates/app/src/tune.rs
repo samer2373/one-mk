@@ -802,6 +802,7 @@ pub fn key_label(code: u32) -> String {
 /// A key's name on its drawn cap: short.
 pub fn cap_label(code: u16) -> String {
     let s = match code {
+        133 => "Copy key",
         14 => "Bksp",
         58 => "Caps",
         42 | 54 => "Shift",
@@ -1339,15 +1340,14 @@ fn scope_os(scope: &Scope) -> Option<u8> {
 pub fn check_button(n: u32, to: &str, target: u8) -> Result<(), String> {
     let spec = ButtonRule { from: n.to_string(), to: To::One(to.into()), scope: Scope::All, app: None }.spec()?;
     let unavailable = match spec.what {
-        What::To(Output::System(action)) => action.missing_on(target).next(),
+        What::To(Output::System(action)) => action.missing_on(target).next().map(|platform| (action, platform)),
         _ => None,
     };
     if matches!(spec.from.key, 0x110 | 0x111) && !spec.from.has_mods()
         && (unavailable.is_some() || matches!(spec.what, What::To(Output::None | Output::Layer(_))))
     {
-        if let Some(platform) = unavailable {
-            return Err(format!("the {} button must keep clicking: {to} has no shortcut on {}",
-                if spec.from.key == 0x110 { "left" } else { "right" }, platform_name(platform)));
+        if let Some((action, platform)) = unavailable {
+            return Err(primary_action_problem(if spec.from.key == 0x110 { "left" } else { "right" }, action, platform));
         }
         return Err(format!(
             "the {} button must keep clicking: it can't be mapped to {to} (map it to another button or a key instead)",
@@ -1884,7 +1884,25 @@ pub fn side_swipe_conflict(input: &Input, f: &Facts) -> Option<String> {
 
 /// A problem from `one-mk keymap check` in the window's words:
 /// `input.keymap.rule #3: ...` becomes `Key rule 3: ...`.
+fn primary_action_problem(button: &str, action: SystemAction, platform: u8) -> String {
+    let works: Vec<_> = SystemAction::TARGETS.into_iter()
+        .filter(|&target| action.shortcut(target).is_some()).collect();
+    format!("The {button} button must keep clicking. {} does nothing on {}. {}.",
+        action.label(), scope_platform(platform), system_scope_hint(&works))
+}
+
 pub fn plain_problem(p: &str) -> String {
+    if let Some((before, platform)) = p.split_once(" has no shortcut for --os ")
+        && let Some((button, action)) = before.split_once(" button must keep clicking: ")
+        && let Some(button) = button.split_whitespace().last()
+        && let Ok(action) = action.parse()
+        && let Some(platform) = parse_os(platform.trim())
+    {
+        return primary_action_problem(button, action, platform);
+    }
+    if p.contains("unknown system action ") {
+        return "Unknown system action. Choose an action from the list.".into();
+    }
     if let Some((prefix, _)) = p.split_once(" is not a key name")
         && let Some(name) = prefix.rsplit('"').nth(1)
     {
@@ -2089,15 +2107,15 @@ fn system_choice(action: SystemAction, target: u8) -> Choice {
         describe(target)
     };
     let detail = match (target, action) {
-        (os::MACOS | os::UNKNOWN, _) if desktop && (target != os::UNKNOWN || missing.is_empty()) => format!("{detail} · Requires the Mac’s Mission Control shortcuts to be enabled"),
+        (os::MACOS | os::UNKNOWN, _) if desktop && (target != os::UNKNOWN || missing.is_empty()) => format!("{detail} · Enable Mission Control shortcuts on Mac"),
         (os::LINUX, ScreenshotTool) => format!("{detail} · Opens the screenshot UI on GNOME 42+"),
         (os::WINDOWS, ScreenshotTool) => format!("{detail} · Opens the Snipping Tool"),
         (os::LINUX, ShowDesktop) => format!("{detail} · Bind this in Keyboard Shortcuts"),
         (os::LINUX | os::WINDOWS, FullScreen) => format!("{detail} · In apps that use F11"),
         _ => detail,
     };
-    let mut choice = Choice::new(action.label_for(target), &detail, &action.to_string(), group, action.search_aliases());
-    choice.names.push(remap::fold_action_search(action.label()));
+    let mut choice = Choice::new(action.label_for(target), &detail, &action.to_string(), group, &[]);
+    choice.names.extend(action.search_names().map(remap::fold_action_search));
     choice.available = if SystemAction::TARGETS.contains(&target) {
         action.shortcut(target).is_some()
     } else {
@@ -2576,6 +2594,10 @@ os = "mac"
     fn problems_read_without_table_names() {
         assert_eq!(plain_problem("input.keymap.rule #3: from: \"capslok\" is not a key name"), "'capslok' isn't a key. Did you mean Caps Lock?");
         assert_eq!(plain_problem("input.button #1: button 9"), "Button rule 1: button 9");
+        let cli = "input.button #1: the left button must keep clicking: os:hide-app has no shortcut for --os windows";
+        assert_eq!(plain_problem(cli), "The left button must keep clicking. Hide app does nothing on Windows PCs. Choose For: Only Macs to use it.");
+        assert_eq!(plain_problem("unknown system action \"os:mision\"; did you mean os:overview (Mission Control)?"),
+            "Unknown system action. Choose an action from the list.");
         assert_eq!(plain_problem("rules for \"x\" never apply"), "Rules for \"x\" never apply");
     }
 

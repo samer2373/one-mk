@@ -557,6 +557,7 @@ fn a_partial_system_action_can_be_chosen_for_all_computers() {
     win.type_text("app exposé");
     assert!(win.find("App windows").is_some_and(|item| !item.disabled));
     assert!(win.has_text("Mac and Linux · nothing on Windows"));
+    assert!(!win.has_text("os:app-windows"), "{}", win.texts_joined());
     win.press(Key::Enter);
     win.quiet();
     assert_eq!(fake.calls_with(&["keymap", "add"]), vec![args(&["keymap", "add", "--", "capslock", "os:app-windows"])]);
@@ -602,6 +603,25 @@ fn button_labels_and_warnings_follow_the_scope_in_the_window() {
     win.click("Back (side): Mission Control. Change it");
     assert!(win.find("Mission Control").is_some(), "{:#?}", win.names());
     assert!(win.has_text("Button 7 isn't forwarded on Macs."));
+}
+
+#[test]
+fn long_mouse_action_names_are_drawn_in_full() {
+    let (mut win, _) = mouse_window(two(), "[[input.button]]\nfrom = 4\nto = 'os:app-windows'\nscope = { os = 'linux' }\n");
+    win.app.keys.scope = Scope::Os(os::LINUX);
+    win.settle();
+    assert!(win.has_text("Switch windows of the same app"), "{}", win.texts_joined());
+}
+
+#[test]
+fn off_board_and_unnamed_keys_have_their_full_editor_labels() {
+    let (mut win, _) = keys_window(two(), "");
+    for (code, label) in [(183, "F13"), (432, "Key code 432")] {
+        win.app.select_key(code, None);
+        win.settle();
+        assert!(win.has_text(&format!("{label} isn't drawn on this keyboard — change it in the panel on the right")), "{}", win.texts_joined());
+        assert!(win.find_containing(&format!("{label}: Unchanged")).is_some());
+    }
 }
 
 #[test]
