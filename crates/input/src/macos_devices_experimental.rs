@@ -8,6 +8,7 @@
 //! COMPILE-CHECKED ONLY: never run on a real Mac. Unmatched events are
 //! unknown, so only the rules without a device apply to them (safe).
 
+use one_mk_proto::detect::Press;
 use crate::common_logic::now_ms;
 use crate::devcorr::{Correlator, Token, hid_button_to_evdev, hid_key_to_evdev};
 use crate::{Bus, DeviceRef, Event, Fingerprint, InputDevice, Kinds};
@@ -37,6 +38,7 @@ unsafe extern "C-unwind" {
     fn IOHIDDeviceConformsTo(device: Ref, usage_page: u32, usage: u32) -> u8;
     fn IOHIDValueGetElement(value: Ref) -> Ref;
     fn IOHIDValueGetIntegerValue(value: Ref) -> isize;
+    fn IOHIDValueGetTimeStamp(value: Ref) -> u64;
     fn IOHIDElementGetUsagePage(element: Ref) -> u32;
     fn IOHIDElementGetUsage(element: Ref) -> u32;
 }
@@ -54,6 +56,8 @@ struct Inner {
     next: u32,
     corr: Correlator,
     capturing: bool,
+    /// Reporting presses' devices as `Event::PressDevice` (`CaptureCmd::Detect`), for this session.
+    detecting: Option<u32>,
     timer: Option<CFRetained<CFRunLoopTimer>>,
     run_loop: Option<CFRetained<CFRunLoop>>,
     info: usize,
@@ -162,7 +166,7 @@ impl Hid {
     /// Capture starts (true) or ends: device input is read only meanwhile.
     pub(crate) fn capture(&self, on: bool) {
         let Ok(mut inner) = self.inner.try_borrow_mut() else { return };
-        let on = on || inner.local.is_some();
+        let on = on || inner.local.is_some() || inner.detecting.is_some();
         if inner.capturing == on {
             return;
         }
@@ -183,6 +187,15 @@ impl Hid {
             }
             inner.arm();
         }
+    }
+
+    /// Detecting starts (true) or ends: device input is read meanwhile, and
+    /// each key or button going down says its device. `active`: capturing.
+    pub(crate) fn detect(&self, on: Option<u32>, active: bool) {
+        if let Ok(mut inner) = self.inner.try_borrow_mut() {
+            inner.detecting = on;
+        }
+        self.capture(active);
     }
 
     /// An event of the tap: while capturing, it goes once its device is
@@ -328,18 +341,32 @@ unsafe extern "C-unwind" fn on_value(context: *mut c_void, _result: i32, sender:
     let hid = unsafe { &*(context as *const Hid) };
     let _ = std::panic::catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: a valid value, with its element.
-        let (page, usage, v) = unsafe {
+        let (page, usage, v, stamp) = unsafe {
             let e = IOHIDValueGetElement(value);
             if e.is_null() {
                 return;
             }
-            (IOHIDElementGetUsagePage(e), IOHIDElementGetUsage(e), IOHIDValueGetIntegerValue(value))
+            (IOHIDElementGetUsagePage(e), IOHIDElementGetUsage(e), IOHIDValueGetIntegerValue(value), IOHIDValueGetTimeStamp(value))
         };
         let Ok(mut inner) = hid.inner.try_borrow_mut() else { return };
         // The sender of a device's value callback is the device.
         let Some(device) = inner.table.iter().find(|(d, _)| *d == sender as usize).map(|(_, d)| d.id) else { return };
         let now = now_ms();
         let mut out = Vec::new();
+        if let Some(session) = inner.detecting
+            && v != 0
+        {
+            let code = match page {
+                7 => hid_key_to_evdev(usage),
+                9 => hid_button_to_evdev(usage),
+                _ => None,
+            };
+            if let Some(code) = code {
+                // HID reports changes, never a repeat; the time is the tap's clock too.
+                let press = Press { code, down: true, repeat: false, device: None, at: Some(crate::macos_logic::mach_ms(stamp)) };
+                let _ = hid.tx.send(Event::PressDevice { session, press, device });
+            }
+        }
         match (page, usage) {
             (7, u) => {
                 if let Some(code) = hid_key_to_evdev(u) {

@@ -221,3 +221,49 @@ fn emergency_disable_is_separate_from_the_bounded_shortcut_queue() {
         assert!(pump.contains("Event::LocalRulesOff"));
     }
 }
+
+/// Detecting (`one-mk input-devices detect`) is a report taken beside the
+/// physical callbacks, never inside them: the hook or tap calls a report
+/// function, only while detecting, before the unchanged callback, and that
+/// function touches nothing the callback reads or returns. So with detection
+/// off (or on) what a key or click does, and whether it is forwarded or
+/// swallowed, is exactly what it was.
+#[test]
+fn detection_is_a_report_beside_the_physical_callbacks_never_inside_them() {
+    for source in [include_str!("../src/windows.rs"), WINDOWS] {
+        for (hook, report, callback, args) in
+            [("mouse_hook", "detect_mouse", "on_mouse", "wparamasu32,info"), ("keyboard_hook", "detect_key", "on_key", "info")]
+        {
+            let hook = canonical(function(source, hook));
+            let call = format!("ifs.detect.is_some(){{s.{report}({args});}}let(swallow,effect)=s.{callback}({args});");
+            assert!(hook.contains(&call), "{hook}");
+            assert_eq!(hook.matches(&format!("s.{report}(")).count(), 1);
+            let body = canonical(function(source, report));
+            assert!(body.starts_with(&format!("fn{report}(&mutself,")), "{body}");
+            assert!(!body.contains("->"), "a report returns nothing: {body}");
+            // The only state it changes is its own; what else it reads is the event.
+            let mut rest = body.as_str();
+            while let Some(i) = rest.find("self.") {
+                rest = &rest[i + 5..];
+                assert!(
+                    ["detect_held.", "detect", "tx.send("].iter().any(|ok| rest.starts_with(ok)),
+                    "{report} touches self.{}", &rest[..rest.len().min(20)]
+                );
+            }
+            assert!(!canonical(function(source, callback)).contains("detect"), "{callback} itself knows nothing of detecting");
+        }
+    }
+    for source in [include_str!("../src/macos.rs"), MACOS] {
+        let tap = canonical(source.split("unsafe extern \"C-unwind\" fn on_tap(").nth(1).unwrap().split("\n}\n").next().unwrap());
+        assert!(tap.contains("ctx.detect_tap(ty,ev);ctx.on_event(ty,ev)"), "{tap}");
+        let body = canonical(function(source, "detect_tap"));
+        assert!(body.starts_with("fndetect_tap(&self,"), "{body}");
+        assert!(body.contains("self.st.try_borrow().ok().and_then(|st|st.detect)"), "a shared look, released at once: {body}");
+        assert!(!body.contains("try_borrow_mut") && !body.contains("->"));
+        assert!(body.contains("logic::detected_presses(tap)"), "decoded as the captured path decodes it");
+        assert!(body.contains("TapPress::Media(media)") && body.contains("TapPress::Flags{"), "Caps Lock and media keys");
+        for callback in ["on_event", "on_idle", "on_active"] {
+            assert!(!canonical(function(source, callback)).contains("detect"), "{callback} itself knows nothing of detecting");
+        }
+    }
+}

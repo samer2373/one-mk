@@ -84,8 +84,13 @@ and **For:** all computers, one OS or one computer. A **Test it** box runs your 
 there (nothing is sent) and shows what the other computer would get, and whether a tap/hold
 key counted as a tap or a hold. On the mouse side: what each button does (another button, a
 key or shortcut, a system action, switching computers, locking, a media key, a command), pointer speed, and
-scrolling (direction, speed, steps, natural scrolling, Shift to scroll sideways). See
-[INPUT.md](INPUT.md).
+scrolling (direction, speed, steps, natural scrolling, Shift to scroll sideways). **Detect
+key** and **Detect button** listen for the key or button you press and open its editor, also
+for one the drawing doesn't have (mouse buttons 6 to 8 are then listed under **Other
+buttons**); where oneMK can tell which keyboard or mouse it came from, "Only on <device>"
+makes the change for that device. On a Wayland desktop while the pointer is here, or with
+oneMK not running, the window uses its own key and mouse events and says what that leaves
+out. See [INPUT.md](INPUT.md).
 
 Use **Choose from list** for taps and holds, **System action** on a mouse
 button, or **Choose…** on a gesture. Search by name or setting and use the

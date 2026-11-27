@@ -407,15 +407,11 @@ pub fn evdev_to_mac_button(button: u32) -> Option<u32> {
     }
 }
 
+/// macOS button number -> evdev button: the native buttons
+/// ([`crate::native_button`]), as IOHIDManager's attribution
+/// (`hid_button_to_evdev`), detection and local remapping number them.
 pub fn mac_to_evdev_button(n: u32) -> Option<u32> {
-    match n {
-        0 => Some(BTN_LEFT),
-        1 => Some(BTN_RIGHT),
-        2 => Some(BTN_MIDDLE),
-        3 => Some(BTN_SIDE),
-        4 => Some(BTN_EXTRA),
-        _ => None,
-    }
+    crate::native_button(n)
 }
 
 /// `CGEventType` values (down, up, dragged) for a macOS button number.
@@ -597,6 +593,71 @@ pub fn moved_by(desktop: Option<&Desktop>, from: Pos, dx: f64, dy: f64) -> Pos {
     let to = Pos::new(from.x + dx, from.y + dy);
     let Some(d) = desktop.filter(|d| d.screen_at(to).is_none()) else { return to };
     d.screen_at(from).map_or_else(|| d.clamp(to), |r| r.clamp(to))
+}
+
+/// The code a mouse button is detected as (`CaptureCmd::Detect`): macOS
+/// numbers them from 0 (left, right, middle, back, forward...). The ones
+/// capture forwards as [`mac_to_evdev_button`] does; buttons 6 to 8 by their
+/// rule names (which the daemon reports as detected but not changeable on
+/// this system: nothing here forwards or remaps them); past the eighth, a
+/// code that says so ([`one_mk_proto::detect::BEYOND_BUTTONS`]).
+pub fn detected_button(number: i64) -> u32 {
+    use one_mk_proto::detect::BEYOND_BUTTONS;
+    match u32::try_from(number) {
+        Ok(n) => mac_to_evdev_button(n).unwrap_or(if n < 8 { 0x110 + n } else { BEYOND_BUTTONS + (n - 8).min(7) }),
+        Err(_) => BEYOND_BUTTONS + 7,
+    }
+}
+
+/// Mach absolute time (an IOHID value's time stamp; a tap event's
+/// timestamp, which is the same clock) in milliseconds.
+#[cfg(target_os = "macos")]
+pub fn mach_ms(ticks: u64) -> u64 {
+    #[repr(C)]
+    struct Timebase {
+        numer: u32,
+        denom: u32,
+    }
+    unsafe extern "C" {
+        fn mach_timebase_info(info: *mut Timebase) -> i32;
+    }
+    static RATIO: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+    let &(numer, denom) = RATIO.get_or_init(|| {
+        let mut t = Timebase { numer: 1, denom: 1 };
+        // SAFETY: fills the struct given.
+        if unsafe { mach_timebase_info(&mut t) } != 0 || t.denom == 0 { (1, 1) } else { (t.numer, t.denom) }
+    });
+    (u128::from(ticks) * u128::from(numer) / u128::from(denom) / 1_000_000) as u64
+}
+
+/// A tap event, as detection reads it.
+#[derive(Clone, Copy, Debug)]
+pub enum TapPress {
+    Key { keycode: u16, down: bool, repeat: bool },
+    /// `FlagsChanged`: a modifier, or Caps Lock (a toggle).
+    Flags { keycode: u16, flags: u64 },
+    Button { number: i64, down: bool },
+    /// An `NX_SYSDEFINED` media key.
+    Media(MediaEvent),
+}
+
+/// The presses a tap event is for detection: `(code, down, repeat)`, as
+/// the captured path decodes it (Caps Lock, one event per press, is a press
+/// and a release; media keys from `NX_SYSDEFINED`), at most two.
+pub fn detected_presses(tap: TapPress) -> [Option<(u32, bool, bool)>; 2] {
+    match tap {
+        TapPress::Key { keycode, down, repeat } => [mac_to_evdev(keycode).map(|c| (c, down, repeat)), None],
+        TapPress::Flags { keycode, .. } if keycode == MAC_CAPS_LOCK => {
+            [Some((KEY_CAPSLOCK, true, false)), Some((KEY_CAPSLOCK, false, false))]
+        }
+        TapPress::Flags { keycode, flags } => {
+            [modifier_down(keycode, flags).and_then(|down| mac_to_evdev(keycode).map(|c| (c, down, false))), None]
+        }
+        TapPress::Button { number, down } => [Some((detected_button(number), down, false)), None],
+        TapPress::Media(m) => {
+            [one_mk_proto::mediakeys::from_mac_nx(m.nx).map(|c| (c, m.down, m.repeat)), None]
+        }
+    }
 }
 
 #[cfg(test)]
@@ -930,5 +991,38 @@ mod tests {
             lines += a.take(h, v).1;
         }
         assert_eq!(lines, -3);
+    }
+
+    #[test]
+    fn detection_decodes_caps_lock_and_media_keys_as_capture_does() {
+        // Caps Lock's toggle (either state of the flag) is a press and a release.
+        for flags in [flags::ALPHA_SHIFT, 0] {
+            assert_eq!(
+                detected_presses(TapPress::Flags { keycode: MAC_CAPS_LOCK, flags }),
+                [Some((KEY_CAPSLOCK, true, false)), Some((KEY_CAPSLOCK, false, false))]
+            );
+        }
+        // Play/pause from an `NX_SYSDEFINED` event's data1: down, up, and a repeat.
+        let play = |state: i64, repeat: i64| parse_media(NX_SUBTYPE_AUX_CONTROL_BUTTONS, (16 << 16) | (state << 8) | repeat).unwrap();
+        let code = one_mk_proto::mediakeys::from_mac_nx(16).unwrap();
+        assert_eq!(detected_presses(TapPress::Media(play(NX_KEYSTATE_DOWN, 0))), [Some((code, true, false)), None]);
+        assert_eq!(detected_presses(TapPress::Media(play(NX_KEYSTATE_UP, 0))), [Some((code, false, false)), None]);
+        assert_eq!(detected_presses(TapPress::Media(play(NX_KEYSTATE_DOWN, 1))), [Some((code, true, true)), None]);
+        // Keys keep the tap's autorepeat; a left Shift's flags say it went down.
+        assert_eq!(detected_presses(TapPress::Key { keycode: 0, down: true, repeat: true }), [Some((30, true, true)), None]);
+        let shift = detected_presses(TapPress::Flags { keycode: 0x38, flags: flags::SHIFT | flags::DEV_LSHIFT });
+        assert_eq!(shift, [Some((42, true, false)), None]);
+        assert_eq!(detected_presses(TapPress::Button { number: 3, down: true }), [Some((0x113, true, false)), None]);
+    }
+
+    #[test]
+    fn detected_buttons_are_the_rules_buttons_then_beyond() {
+        use one_mk_proto::detect::BEYOND_BUTTONS;
+        assert_eq!(detected_button(0), 0x110);
+        assert_eq!(detected_button(3), 0x113, "back");
+        assert_eq!(detected_button(7), 0x117, "button 8");
+        assert_eq!(detected_button(8), BEYOND_BUTTONS);
+        assert_eq!(detected_button(31), BEYOND_BUTTONS + 7);
+        assert_eq!(detected_button(-1), BEYOND_BUTTONS + 7);
     }
 }

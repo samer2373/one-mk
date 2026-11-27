@@ -235,6 +235,8 @@ pub enum Event {
     /// `one-mk input-devices --json`: the keyboards and mice seen here, or
     /// why they couldn't be listed.
     InputDevices(Result<crate::tune::InputDevices, String>),
+    /// `one-mk input-devices detect` answered (detection `n`).
+    Detected(u64, crate::detect::Outcome),
 }
 
 #[derive(Clone, Debug)]
@@ -330,9 +332,69 @@ pub struct Link {
     /// The number of the newest history list asked for: an older list that
     /// arrives after it is dropped, not shown over it.
     history_latest: Arc<std::sync::Mutex<u64>>,
+    /// The detection running (`one-mk input-devices detect`), to stop it.
+    detecting: Arc<std::sync::Mutex<Option<(u64, std::process::Child)>>>,
 }
 
 impl Link {
+    /// Asks oneMK for the next key (or, without `keys_only`, also mouse
+    /// button) pressed, as detection `n`; the answer comes as
+    /// `Event::Detected`. Any detection still running is stopped first.
+    pub fn detect(&self, n: u64, keys_only: bool, seconds: u32) {
+        self.cancel_detect();
+        let mut cmd = Command::new(&self.daemon);
+        cmd.args(["input-devices", "detect", "--json", "--timeout", &seconds.to_string()]);
+        if keys_only {
+            cmd.arg("--keys-only");
+        }
+        cmd.args(self.home_args()).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        let mut child = match proc::hide_window(&mut cmd).spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                self.send(Event::Detected(n, crate::detect::Outcome::Failed(format!("oneMK's service didn't start: {e}"))));
+                return;
+            }
+        };
+        let stdout = child.stdout.take();
+        *self.detecting.lock().unwrap_or_else(|e| e.into_inner()) = Some((n, child));
+        let link = self.clone();
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut text = String::new();
+            if let Some(mut out) = stdout {
+                // Cut short when the command is stopped (`cancel_detect`).
+                let _ = out.by_ref().take(64 * 1024).read_to_string(&mut text);
+            }
+            let ours = {
+                let mut slot = link.detecting.lock().unwrap_or_else(|e| e.into_inner());
+                match slot.take() {
+                    Some((m, mut child)) if m == n => {
+                        let _ = child.wait();
+                        true
+                    }
+                    other => {
+                        *slot = other;
+                        false
+                    }
+                }
+            };
+            // A stopped detection says nothing: the window already moved on.
+            if ours {
+                link.send(Event::Detected(n, crate::detect::parse(&text)));
+            }
+        });
+    }
+
+    /// Stops the detection running, if any: oneMK sees the command hang up
+    /// and stops listening.
+    pub fn cancel_detect(&self) {
+        let running = self.detecting.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some((_, mut child)) = running {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
     pub fn wallpaper(&self, command: one_mk_wallpaper::Command) {
         self.job(Job::Wallpaper(command.clone()), move |link| {
             let json = serde_json::to_string(&command)?;
@@ -419,7 +481,7 @@ impl Link {
         let me = running_executable()?;
         let daemon = install::sibling(&me, "one-mk").unwrap_or_else(|| PathBuf::from("one-mk"));
         let tray = install::sibling(&me, "one-mk-tray");
-        Ok(Self { dir, custom_home, daemon, tray, tx, ctx, tuning: Default::default(), showing: Showing::new(), history_latest: Default::default() })
+        Ok(Self { dir, custom_home, daemon, tray, tx, ctx, tuning: Default::default(), showing: Showing::new(), history_latest: Default::default(), detecting: Default::default() })
     }
 
     /// A link for the window's own tests: it names a folder of its own, never
@@ -429,7 +491,7 @@ impl Link {
     pub fn detached(dir: PathBuf, tx: Sender<Event>, ctx: egui::Context) -> Self {
         // Relative: never found on a path, and a login entry refuses it.
         let daemon = PathBuf::from("one-mk-absent-in-tests");
-        Self { dir, custom_home: true, daemon, tray: None, tx, ctx, tuning: Default::default(), showing: Showing::new(), history_latest: Default::default() }
+        Self { dir, custom_home: true, daemon, tray: None, tx, ctx, tuning: Default::default(), showing: Showing::new(), history_latest: Default::default(), detecting: Default::default() }
     }
 
     /// The settings folder a login entry for this window names: `None`

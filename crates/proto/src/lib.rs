@@ -9,6 +9,7 @@ pub mod pairing_layout;
 pub mod autoscroll;
 pub mod gesture;
 mod codec;
+pub mod detect;
 pub mod device;
 pub mod drag;
 mod edge;

@@ -816,3 +816,46 @@ fn a_key_held_from_before_the_capture_is_not_forwarded_when_it_goes_up() {
     sender.clear();
     assert!(sender.forward(31, true), "after the capture ends it starts over");
 }
+
+/// Detection never offers a mouse button or key the rest of the native path
+/// can't use: a detected button is changeable on macOS and Windows exactly
+/// when capture forwards it, IOHIDManager / Raw Input name its device by the
+/// same code, and local remapping can apply it; otherwise it is reported as
+/// detected but not changeable here. X11 and the rest leave it to the mapper.
+#[test]
+fn detected_buttons_and_keys_match_what_forwarding_attribution_and_local_remapping_use() {
+    use crate::{DetectSystem, detect_unusable_on, devcorr::hid_button_to_evdev};
+    for number in 0..32i64 {
+        let code = macos_logic::detected_button(number);
+        let n = number as u32;
+        let end_to_end = macos_logic::mac_to_evdev_button(n) == Some(code)
+            && hid_button_to_evdev(n + 1) == Some(code)
+            && crate::macos_localmap_logic::eligible(code);
+        let usable = detect_unusable_on(DetectSystem::Mac, code, 0, true).is_none()
+            && one_mk_proto::detect::Found { code, mods: 0, device: None, away: false, dropped: 0 }.unusable().is_none();
+        assert_eq!(usable, end_to_end, "macOS button number {number} (code {code:#x})");
+        // Without local remapping it is the same for buttons: nothing forwards 6 to 8.
+        assert_eq!(detect_unusable_on(DetectSystem::Mac, code, 0, false).is_none() && usable, end_to_end);
+    }
+    // Buttons 6 to 8 are named (so the person learns which), then refused on a Mac.
+    assert_eq!(macos_logic::detected_button(5), 0x115);
+    assert!(detect_unusable_on(DetectSystem::Mac, 0x115, 0, false).is_some_and(|w| w.contains("1 to 5")));
+    // Windows: the hook knows XBUTTON1/2 as BTN_SIDE/BTN_EXTRA, Raw Input HID buttons 1 to 5.
+    for code in 0x110..0x118u32 {
+        let usable = detect_unusable_on(DetectSystem::Windows, code, 0, true).is_none();
+        let end_to_end = (1..=5).any(|n| hid_button_to_evdev(n) == Some(code)) && win_logic::local_remap_eligible(code);
+        assert_eq!(usable, end_to_end, "Windows button {code:#x}");
+    }
+    // Keys: with local remapping on, only what it can apply; off, anything (the mapper does).
+    for code in 1..300u32 {
+        let mac = detect_unusable_on(DetectSystem::Mac, code, 0, true).is_none();
+        assert_eq!(mac, crate::macos_localmap_logic::eligible(code), "mac key {code}");
+        assert!(detect_unusable_on(DetectSystem::Mac, code, 0, false).is_none() || keynames::is_button(code));
+        let win = detect_unusable_on(DetectSystem::Windows, code, 0, true).is_none();
+        assert_eq!(win, win_logic::local_remap_eligible(code), "Windows key {code}");
+        assert!(detect_unusable_on(DetectSystem::Other, code, 0, true).is_none());
+    }
+    // F5 on a Mac with local remapping on: refused, rather than pausing local remapping.
+    assert!(detect_unusable_on(DetectSystem::Mac, 63, 0, true).is_some());
+    assert!(detect_unusable_on(DetectSystem::Mac, 30, keynames::LCTRL, true).is_none(), "ctrl+a");
+}
