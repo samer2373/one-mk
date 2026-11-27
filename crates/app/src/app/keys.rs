@@ -9,6 +9,7 @@
 use super::*;
 use crate::tune::{self, Capture, Device, Facts, Input, KeyRule, Scope, ScrollChange, Tester, To};
 use egui::{Event, EventFilter};
+use tune::ChoiceGroup;
 use one_mk_proto::keynames;
 use one_mk_proto::remap::What;
 use std::time::Instant;
@@ -59,7 +60,12 @@ fn gesture_args(button: &str, direction: &str, output: &str, scope: &Scope) -> R
     if !["middle", "button4", "button5"].contains(&button) || !["up", "down", "left", "right"].contains(&direction) {
         return Err("Choose a middle or side button and a swipe direction.".into());
     }
-    output.parse::<one_mk_proto::remap::Output>().map_err(|_| "Choose a key or record a shortcut for this gesture.".to_owned())?;
+    use one_mk_proto::remap::Output;
+    match output.parse::<Output>() {
+        Ok(Output::Layer(_)) => return Err("A gesture cannot hold a layer. Choose another action.".into()),
+        Ok(_) => {}
+        Err(error) => return Err(format!("{error}. Choose an action or record a shortcut.")),
+    }
     let mut args = vec!["gestures".into(), "add".into(), button.into(), direction.into(), output.into()];
     args.extend(scope.args());
     Ok(args)
@@ -164,9 +170,10 @@ mod gesture_tests {
         assert_eq!(ButtonKind::of(Some(&out("switch next"))), ButtonKind::Switch);
         assert_eq!(ButtonKind::of(Some(&out("run: notify-send hi"))), ButtonKind::Run);
         assert_eq!(ButtonKind::of(Some(&out("back"))), ButtonKind::Key);
+        assert_eq!(ButtonKind::of(Some(&out("os:overview"))), ButtonKind::System);
         assert_eq!(ButtonKind::of(Some(&out("ctrl+c"))), ButtonKind::Key);
         let labels: Vec<_> = ButtonKind::ALL.iter().map(|k| k.label()).collect();
-        assert_eq!(labels, ["A key or shortcut", "Switch computer", "Run a command", "As it is"]);
+        assert_eq!(labels, ["A key or shortcut", "System action", "Switch computer", "Run a command", "As it is"]);
     }
 
     #[test]
@@ -300,6 +307,14 @@ pub(super) enum Want {
     Hold,
     /// What the selected mouse button does.
     Button,
+    /// The next gesture's output, saved with the rest of its draft.
+    Gesture,
+}
+
+#[derive(Clone, Copy, Default)]
+struct PickerState {
+    group: ChoiceGroup,
+    row: usize,
 }
 
 /// The page's own state.
@@ -339,7 +354,7 @@ pub(super) struct KeysUi {
     pub device: Option<Device>,
     /// The keyboards and mice seen here, for "For:" (`None`: not asked yet).
     pub devices: Option<Result<tune::InputDevices, String>>,
-    choices: Option<(bool, Vec<tune::Choice>)>,
+    choices: Option<(bool, u8, Vec<tune::Choice>)>,
     /// An editor just opened: bring it into view.
     reveal: bool,
     /// The 3D keyboard as last built, and the key the pointer is over.
@@ -369,17 +384,19 @@ pub(super) struct KeysUi {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum ButtonKind {
     Key,
+    System,
     Switch,
     Run,
     AsItIs,
 }
 
 impl ButtonKind {
-    const ALL: [ButtonKind; 4] = [ButtonKind::Key, ButtonKind::Switch, ButtonKind::Run, ButtonKind::AsItIs];
+    const ALL: [ButtonKind; 5] = [Self::Key, Self::System, Self::Switch, Self::Run, Self::AsItIs];
 
     fn label(self) -> &'static str {
         match self {
             ButtonKind::Key => "A key or shortcut",
+            ButtonKind::System => "System action",
             ButtonKind::Switch => "Switch computer",
             ButtonKind::Run => "Run a command",
             ButtonKind::AsItIs => "As it is",
@@ -391,6 +408,7 @@ impl ButtonKind {
         use one_mk_proto::remap::{Action, Output};
         match what {
             None => ButtonKind::AsItIs,
+            Some(Output::System(_)) => ButtonKind::System,
             Some(Output::Action(Action::Switch(_))) => ButtonKind::Switch,
             Some(Output::Action(Action::Run(_))) => ButtonKind::Run,
             Some(_) => ButtonKind::Key,
@@ -902,6 +920,10 @@ impl App {
     pub(super) fn choose(&mut self, want: Want, value: String) {
         self.keys.capture = None;
         self.keys.picker = None;
+        if want == Want::Gesture {
+            self.drafts.insert("gesture-output".into(), value);
+            return;
+        }
         if want == Want::Button {
             let Some(n) = self.keys.button else { return };
             if let Err(e) = tune::check_button(n, &value) {
@@ -1098,7 +1120,7 @@ impl App {
         }
         if self.keys.picker.is_none() {
             // The list focuses its field each time it opens: forget it was opened once it is closed.
-            ui.ctx().data_mut(|d| d.remove::<bool>(Id::unique(("field", "key-search")).with("opened")));
+            ui.ctx().data_mut(|d| d.remove::<PickerState>(Id::unique("output-picker")));
         }
         self.keys_input(ui);
         // A tap/hold key in the test box decides when its time is up.
@@ -2045,7 +2067,8 @@ impl App {
             if let Some((Want::Hold, _)) = self.keys.capture {
                 y = self.capture_box(ui, at.x, y, w, &name, Want::Hold);
             } else if let Some((Want::Hold, query)) = self.keys.picker.clone() {
-                y = self.picker(ui, at.x, y, w, Want::Hold, query, 6);
+                self.picker(ui, Want::Hold, query, false);
+                y += 30.0;
             } else {
                 let mut labels = vec!["Press the key for holding", "Choose from a list"];
                 if hold.is_some() {
@@ -2102,7 +2125,7 @@ impl App {
         y += PANEL_GAP - 6.0;
         match (self.keys.capture, self.keys.picker.clone()) {
             (Some((Want::To, _)), _) => y = self.capture_box(ui, at.x, y, w, &name, Want::To),
-            (_, Some((Want::To, query))) => y = self.picker(ui, at.x, y, w, Want::To, query, 7),
+            (_, Some((Want::To, query))) => { self.picker(ui, Want::To, query, false); y += 36.0; }
             _ => {
                 let bw = (w - 8.0) / 2.0;
                 let press = Rect::from_min_size(pos2(at.x, y), vec2(bw, 36.0));
@@ -2181,7 +2204,7 @@ impl App {
         let ask = match want {
             Want::To => format!("Press the key {name} should become…"),
             Want::Hold => format!("Press the key {name} gives when held…"),
-            Want::Button => "Press the key or shortcut it should give…".to_owned(),
+            Want::Button | Want::Gesture => "Press the key or shortcut it should give…".to_owned(),
         };
         let note = "Esc cancels. Shortcuts work too. The keypad, Fn and a few others can't be pressed here: choose them from the list.";
         let bw = button_width(ui, "Cancel") - 6.0;
@@ -2213,74 +2236,172 @@ impl App {
         r.bottom() + 8.0
     }
 
-    /// The searchable list of what a key or button can become.
-    #[allow(clippy::too_many_arguments)]
-    fn picker(&mut self, ui: &mut Ui, left: f32, y: f32, w: f32, want: Want, query: String, rows: usize) -> f32 {
+    /// The shared chooser for a key, mouse button or gesture.
+    fn picker(&mut self, ui: &Ui, want: Want, query: String, system_only: bool) {
         let buttons = want == Want::Button;
-        if self.keys.choices.as_ref().is_none_or(|(b, _)| *b != buttons) {
-            self.keys.choices = Some((buttons, tune::choices(buttons)));
+        let target = self.facts().os;
+        if self.keys.choices.as_ref().is_none_or(|(b, os, _)| *b != buttons || *os != target) {
+            self.keys.choices = Some((buttons, target, tune::choices(buttons, target)));
         }
-        let bw = button_width(ui, "Cancel") - 6.0;
-        let fr = Rect::from_min_size(pos2(left, y), vec2(w - bw - 8.0, 30.0));
-        let fid = Id::unique(("field", "key-search"));
-        let first = !ui.memory(|m| m.has_focus(fid)) && query.is_empty() && !ui.ctx().data(|d| d.get_temp::<bool>(fid.with("opened")).unwrap_or(false));
-        if first {
-            ui.memory_mut(|m| m.request_focus(fid));
-            ui.ctx().data_mut(|d| d.insert_temp(fid.with("opened"), true));
-        }
-        let mut q = query;
-        let resp = widgets::field(ui, fr, fid, &mut q, "Search: esc, volume, next computer…", "Search for a key or an action", true, false);
-        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-        if button(ui, Rect::from_min_size(pos2(fr.right() + 8.0, y), vec2(bw, 30.0)), Id::unique("pick-cancel"), "Cancel", Look::Quiet, true, Some("Close the list")).clicked()
-            // Esc closes the list whether or not the field still has the keyboard (the field
-            // lets go of it on Esc before this is looked at).
-            || ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
-        {
-            self.keys.picker = None;
-            ui.ctx().data_mut(|d| d.remove::<bool>(fid.with("opened")));
-            return y + 38.0;
-        }
-        let all = &self.keys.choices.as_ref().expect("filled above").1;
-        // The left and right buttons must keep clicking: "Nothing" is not on offer for them.
+        let all = &self.keys.choices.as_ref().expect("filled above").2;
         let primary = buttons && self.keys.button.is_some_and(|n| matches!(n, 1 | 2));
-        let hits: Vec<tune::Choice> = tune::search(all, &q).into_iter().filter(|c| !(primary && c.value == "none")).cloned().collect();
-        self.keys.picker = Some((want, q));
-        let mut picked = enter.then(|| hits.first().map(|c| c.value.clone())).flatten();
-        let rows = hits.len().clamp(3, rows);
-        let list = Rect::from_min_size(pos2(left, y + 38.0), vec2(w, 30.0 * rows as f32 + 6.0));
-        let controls = Rect::from_min_max(fr.min, list.max).expand(4.0);
-        if !ui.clip_rect().contains_rect(controls) {
-            ui.scroll_to_rect(controls, None);
-        }
-        ui.painter().rect(list, CornerRadius::same(8), pal().bg, Stroke::new(1.0, pal().line), StrokeKind::Inside);
-        if hits.is_empty() {
-            ui.painter().text(list.center(), Align2::CENTER_CENTER, "Nothing is called that. Try another word.", regular(T_BODY), pal().ink2);
-        }
-        let mut child = ui.new_child(UiBuilder::new().max_rect(list.shrink(3.0)));
-        child.set_clip_rect(list.shrink(2.0));
-        egui::ScrollArea::vertical().id_salt(("pick-list", buttons)).auto_shrink([false, false]).show(&mut child, |ui| {
+        let owner = match want {
+            Want::To => Id::unique(("key-act", 1)),
+            Want::Hold => Id::unique(("key-hold", 1)),
+            Want::Button if system_only => Id::unique("button-system-list"),
+            Want::Button => Id::unique(("button-act", 1)),
+            Want::Gesture => Id::unique("gesture-choose"),
+        };
+        let title = match want {
+            Want::To => "Choose what the key does when tapped",
+            Want::Hold => "Choose what the key does when held",
+            Want::Button if system_only => "Choose a system action",
+            Want::Button => "Choose what the button does",
+            Want::Gesture => "Choose what the gesture does",
+        };
+        let id = Id::unique("output-picker");
+        let previous = ui.ctx().data(|d| d.get_temp::<PickerState>(id));
+        let mut state = previous.unwrap_or_default();
+        let mut query = query;
+        let frame = egui::Frame::new().fill(pal().surface).stroke(Stroke::new(1.0, pal().line2))
+            .corner_radius(CornerRadius::same(14)).inner_margin(18);
+        let mut sizing = false;
+        let modal = egui::Modal::new(id).frame(frame).show(ui.ctx(), |ui| {
+            sizing = ui.is_sizing_pass();
+            let available = ui.ctx().content_rect().size();
+            let width = (available.x - 80.0).min(684.0);
+            ui.set_width(width);
             ui.spacing_mut().item_spacing.y = 0.0;
-            for (k, c) in hits.iter().enumerate() {
-                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), widgets::sense(ui, Sense::click()));
-                let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered() || resp.has_focus()), 0.1, motion::out_cubic);
-                let p = ui.painter();
-                p.rect_filled(r, CornerRadius::same(6), mix(Color32::TRANSPARENT, pal().hover, hover));
-                widgets::focus_ring(ui, &resp, r.shrink(2.0), 5);
-                let vw = text_width(ui, &c.value, mono(T_META)).min(r.width() * 0.4);
-                p.text(pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, fit(p, &c.label, &regular(T_BODY), r.width() - vw - 30.0), regular(T_BODY), pal().ink);
-                widgets::mono_text(p, pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, &c.value, T_META, pal().ink2, vw);
-                widgets::a11y(&resp, Role::ListItem, &c.label, None);
-                if resp.clicked() {
-                    picked = Some(c.value.clone());
-                }
-                let _ = k;
+
+            let (heading, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
+            ui.painter().text(heading.left_center(), Align2::LEFT_CENTER, title, semibold(T_TITLE), pal().ink);
+            a11y_text(ui, id.with("title"), heading, Role::Heading, title, None);
+            ui.add_space(9.0);
+            let (row, _) = ui.allocate_exact_size(vec2(width, 36.0), Sense::hover());
+            let cancel = Rect::from_min_max(pos2(row.right() - button_width(ui, "Cancel"), row.top()), row.max);
+            let field = Rect::from_min_max(row.min, pos2(cancel.left() - 8.0, row.bottom()));
+            let fid = Id::unique(("field", "key-search"));
+            if previous.is_none() && !sizing {
+                ui.memory_mut(|m| m.request_focus(fid));
             }
+            let searching = ui.memory(|m| m.has_focus(fid));
+            // Read keys here, before the text editor moves its cursor or drops focus.
+            let (enter, step) = if searching {
+                ui.input_mut(|i| {
+                    let down = i.count_and_consume_key(Modifiers::NONE, Key::ArrowDown) as isize;
+                    let up = i.count_and_consume_key(Modifiers::NONE, Key::ArrowUp) as isize;
+                    (i.consume_key(Modifiers::NONE, Key::Enter), down - up)
+                })
+            } else { (false, 0) };
+            let changed = widgets::field(ui, field, fid, &mut query, "Search keys and actions", "Search for a key or an action", true, false).changed();
+            let mut groups = vec![ChoiceGroup::Suggested, ChoiceGroup::Desktop];
+            if target == one_mk_proto::os::MACOS { groups.push(ChoiceGroup::Mac); }
+            if !system_only { groups.push(ChoiceGroup::Media); }
+            groups.push(ChoiceGroup::Editing);
+            if buttons && !system_only { groups.push(ChoiceGroup::Mouse); }
+            if !system_only { groups.extend([ChoiceGroup::OneMk, ChoiceGroup::Keys]); }
+            let labels: Vec<_> = groups.iter().map(|g| g.label()).collect();
+            let (chips, chips_bottom) = flow(ui, row.left(), row.bottom() + 12.0, width, &labels);
+            let old_group = state.group;
+            // At least one category follows the search in the normal Tab order.
+            for (group, rect) in groups.into_iter().zip(chips) {
+                if chip(ui, rect, id.with(group), group.label(), group == state.group, true, true).clicked() {
+                    state.group = group;
+                }
+            }
+            let canceled = button(ui, cancel, id.with("cancel"), "Cancel", Look::Quiet, true, Some("Close the list")).clicked();
+            if canceled { ui.close(); }
+            let reset_scroll = previous.is_none() || changed || old_group != state.group;
+            let typed = !query.trim().is_empty();
+            let mut hits: Vec<_> = tune::search(all, &query).into_iter().filter(|choice| {
+                !(primary && choice.value == "none") && (!system_only || choice.value.starts_with("os:")) && match state.group {
+                    ChoiceGroup::Suggested => typed || choice.suggested,
+                    ChoiceGroup::Mac => choice.mac,
+                    ChoiceGroup::Keys => matches!(choice.group, ChoiceGroup::Keys | ChoiceGroup::Media),
+                    group => group == choice.group,
+                }
+            }).collect();
+            if !typed {
+                hits.sort_by_key(|c| match (c.group, target) {
+                    (ChoiceGroup::Desktop, one_mk_proto::os::MACOS) => 0,
+                    (ChoiceGroup::Keys, _) => 1,
+                    (ChoiceGroup::Desktop, _) => 2,
+                    (ChoiceGroup::Editing, _) => 3,
+                    (ChoiceGroup::Media, _) => 4,
+                    (ChoiceGroup::Mouse, _) => 5,
+                    _ => 6,
+                });
+            }
+            if reset_scroll { state.row = 0; }
+            state.row = state.row.saturating_add_signed(step).min(hits.len().saturating_sub(1));
+            let mut picked = enter.then(|| hits.get(state.row).map(|c| c.value.clone())).flatten();
+            let height = (available.y - (chips_bottom - heading.top()) - 96.0).clamp(160.0, 468.0);
+            ui.advance_cursor_after_rect(Rect::from_min_max(row.min, pos2(row.right(), chips_bottom + 12.0)));
+            let list_frame = egui::Frame::new().fill(pal().bg).stroke(Stroke::new(1.0, pal().line))
+                .corner_radius(CornerRadius::same(9)).inner_margin(4);
+            list_frame.show(ui, |ui| {
+                let list = ui.response().id;
+                let rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), height));
+                a11y_text(ui, list, rect, Role::List, "Matching keys and actions", None);
+                if hits.is_empty() {
+                    let message = "Nothing is called that. Try another word or category.";
+                    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+                    ui.painter().text(rect.center(), Align2::CENTER_CENTER, message, regular(T_BODY), pal().ink2);
+                    a11y_text(ui, id.with("empty"), rect, Role::Status, message, Some(egui::accesskit::Live::Polite));
+                    return;
+                }
+                let mut scroll = egui::ScrollArea::vertical().id_salt("results").auto_shrink([false, false])
+                    .max_height(height).min_scrolled_height(height);
+                if reset_scroll { scroll = scroll.vertical_scroll_offset(0.0); }
+                scroll.show(ui, |ui| {
+                    let mut section = "";
+                    for (index, c) in hits.into_iter().enumerate() {
+                        let group = if typed { "Search results" } else { c.group.label() };
+                        if group != section {
+                            section = group;
+                            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+                            widgets::section_label(ui.painter(), r.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, group, r.width() - 20.0);
+                            a11y_text(ui, id.with(("section", index)), r, Role::Heading, group, None);
+                        }
+                        let selected = index == state.row;
+                        let response = Self::picker_row(ui, c, selected);
+                        if selected && step != 0 && !reset_scroll {
+                            response.scroll_to_me(None);
+                        }
+                        if response.clicked() { picked = Some(c.value.clone()); }
+                    }
+                });
+            });
+            picked
         });
-        if let Some(v) = picked {
-            ui.ctx().data_mut(|d| d.remove::<bool>(fid.with("opened")));
-            self.choose(want, v);
+        if modal.should_close() || modal.inner.is_some() {
+            self.keys.picker = None;
+            ui.ctx().data_mut(|d| d.remove::<PickerState>(id));
+            ui.memory_mut(|m| m.request_focus(owner));
+            if let Some(value) = modal.inner { self.choose(want, value); }
+        } else {
+            self.keys.picker = Some((want, query));
+            if !sizing { ui.ctx().data_mut(|d| d.insert_temp(id, state)); }
         }
-        list.bottom() + 8.0
+    }
+
+    fn picker_row(ui: &mut Ui, choice: &tune::Choice, selected: bool) -> egui::Response {
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+        let p = ui.painter();
+        if selected || resp.hovered() {
+            p.rect_filled(r, CornerRadius::same(6), if selected { pal().accent_soft } else { pal().hover });
+        }
+        widgets::focus_ring(ui, &resp, r.shrink(2.0), 5);
+        let vw = text_width(ui, &choice.value, mono(T_META)).min(r.width() * 0.36);
+        p.text(r.left_top() + vec2(10.0, 6.0), Align2::LEFT_TOP, fit(p, &choice.label, &semibold(T_BODY), r.width() - 20.0),
+            semibold(T_BODY), pal().ink);
+        p.text(r.left_bottom() + vec2(10.0, -6.0), Align2::LEFT_BOTTOM,
+            fit(p, &choice.detail, &regular(T_META), r.width() - vw - 30.0), regular(T_META), pal().ink2);
+        widgets::mono_text(p, r.right_bottom() + vec2(-10.0, -6.0), Align2::RIGHT_BOTTOM, &choice.value, T_META, pal().ink2, vw + 1.0);
+        widgets::a11y(&resp, Role::ListItem, &choice.label, Some(selected));
+        ui.ctx().accesskit_node_builder(resp.id, |node| node.set_description(&choice.detail));
+        if resp.hovered() { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); }
+        resp.on_hover_text(format!("{}\n{}", choice.label, choice.detail))
     }
 
     /// "Test it" (handoff 5.5): a field (38 tall, `bg`, a `line2` edge) where
@@ -2492,7 +2613,7 @@ impl App {
         let mut recording = ui.ctx().data(|data| data.get_temp::<bool>(capture_id)).unwrap_or(false);
         let mut value = self.drafts.get("gesture-output").cloned().unwrap_or_default();
         let field = Rect::from_min_size(pos2(left, top), vec2(width - 86.0, 28.0));
-        widgets::field(ui, field, Id::unique("gesture-output"), &mut value, "Key or shortcut", "What the gesture types", !recording, false);
+        widgets::field(ui, field, Id::unique("gesture-output"), &mut value, "Key or action", "What the gesture does", !recording, false);
         let capture = Rect::from_min_size(pos2(left + width - 80.0, top), vec2(80.0, 28.0));
         let started = button(ui, capture, Id::unique("gesture-record"), if recording { "Cancel" } else { "Record" }, Look::Quiet, true, Some("Press a key or shortcut for this gesture")).clicked();
         if started { recording = !recording; }
@@ -2513,14 +2634,27 @@ impl App {
         ui.ctx().data_mut(|data| data.insert_temp(capture_id, recording));
         self.drafts.insert("gesture-output".into(), value.clone());
         top += 36.0;
-        let rect = Rect::from_min_size(pos2(left, top), vec2(130.0, 28.0));
+        let choose = Rect::from_min_size(pos2(left, top), vec2(96.0, 28.0));
+        if button(ui, choose, Id::unique("gesture-choose"), "Choose…", Look::Quiet, !recording && !self.tuning_busy(), Some("Choose what the gesture does")).clicked() {
+            self.keys.picker = Some((Want::Gesture, String::new()));
+        }
+        let rect = Rect::from_min_size(pos2(choose.right() + 8.0, top), vec2(130.0, 28.0));
         if button(ui, rect, Id::unique("gesture-add"), "Add gesture", Look::Primary, !recording && !value.trim().is_empty() && !self.tuning_busy(), None).clicked() {
             let held = self.drafts.get("Gesture button").map_or("button4", String::as_str);
             let direction = self.drafts.get("Swipe direction").map_or("left", String::as_str);
             match gesture_args(held, direction, &value, &self.keys.scope) {
                 Ok(args) => self.tune_cmds("the gesture", "mouse-modes", vec![args], None),
-                Err(error) => self.keys.error = Some(("mouse-modes", error)),
+                Err(error) => {
+                    let height = widgets::para_code_h(ui, width - 14.0, &error, regular(T_BODY));
+                    let message = Rect::from_min_size(pos2(left, top + 38.0), vec2(width, height));
+                    ui.expand_to_include_rect(message);
+                    ui.scroll_to_rect(message.expand(6.0), None);
+                    self.keys.error = Some(("mouse-modes", error));
+                }
             }
+        }
+        if let Some((Want::Gesture, q)) = self.keys.picker.clone() {
+            self.picker(ui, Want::Gesture, q, false);
         }
         top + 38.0
     }
@@ -2788,7 +2922,7 @@ impl App {
         match kind {
             ButtonKind::Key => match (self.keys.capture, self.keys.picker.clone()) {
                 (Some((Want::Button, _)), _) => y = self.capture_box(ui, left, y, w, name, Want::Button),
-                (_, Some((Want::Button, q))) => y = self.picker(ui, left, y, w, Want::Button, q, 6),
+                (_, Some((Want::Button, q))) => { self.picker(ui, Want::Button, q, false); y += 36.0; }
                 _ => {
                     let labels = ["Press a key or shortcut", "Choose from a list"];
                     // Side by side, equal, when both fit; else one above the other.
@@ -2813,6 +2947,15 @@ impl App {
                     y = bottom;
                 }
             },
+            ButtonKind::System => {
+                let r = Rect::from_min_size(pos2(left, y), vec2(w, 36.0));
+                if let Some((Want::Button, q)) = self.keys.picker.clone() {
+                    self.picker(ui, Want::Button, q, true);
+                } else if widgets::content_button(ui, r, Id::unique("button-system-list"), "Choose system action", Look::Primary, !busy, None).clicked() {
+                    self.keys.picker = Some((Want::Button, String::new()));
+                }
+                y += 36.0;
+            }
             ButtonKind::Switch => {
                 // The next computer, back here, or one by name.
                 let current = doing.map(|o| o.to_string()).unwrap_or_default();

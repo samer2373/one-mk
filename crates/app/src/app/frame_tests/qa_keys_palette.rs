@@ -263,6 +263,37 @@ fn escape_closes_the_list_and_it_takes_typing_each_time_it_opens() {
 }
 
 #[test]
+fn the_picker_gives_search_focus_then_tabs_to_categories_and_applies_the_highlight() {
+    let (mut win, fake) = keys_window(two(), "");
+    win.app.keys.scope = Scope::Os(one_mk_proto::os::MACOS);
+    win.app.select_key(58, None);
+    win.settle();
+    let open = "Choose what Caps Lock becomes from a list";
+    let search = "Search for a key or an action";
+    win.click(open);
+    assert!(win.find(search).is_some_and(|item| item.focused));
+    assert_eq!(win.find("Matching keys and actions").unwrap().role, egui::accesskit::Role::List);
+    assert_eq!(win.find("Mission Control").unwrap().role, egui::accesskit::Role::ListItem);
+    win.press(Key::Tab);
+    assert!(win.find("Suggested").is_some_and(|item| item.focused), "{:#?}", win.names());
+    win.press(Key::Escape);
+    assert!(fake.calls_with(&["keymap", "add"]).is_empty());
+    win.click(open);
+    win.type_text("mision control");
+    assert!(win.find("Mission Control").is_some());
+    win.press(Key::Enter);
+    win.quiet();
+    assert_eq!(fake.calls_with(&["keymap", "add"]), vec![args(&["keymap", "add", "--os=mac", "--", "capslock", "os:overview"])]);
+
+    win.click(open);
+    win.type_text("workspace");
+    win.press(Key::ArrowDown);
+    win.press(Key::Enter);
+    win.quiet();
+    assert_eq!(fake.calls_with(&["keymap", "add"]).last().and_then(|call| call.last()).map(String::as_str), Some("os:previous-desktop"));
+}
+
+#[test]
 fn a_held_click_on_remove_goes_to_the_rule_it_was_pressed_on() {
     let rules = ["from = \"a\"\nto = \"b\"", "from = \"capslock\"\nto = \"esc\"", "from = \"f1\"\nto = \"f2\""];
     let (mut win, fake) = keys_window(two(), &super::qa::rule_toml(&rules));
