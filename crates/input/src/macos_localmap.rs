@@ -275,7 +275,9 @@ impl Local {
         }, dispatch))
     }
 
-    pub fn supported(rules: &Rules) -> bool { rules.maps.supports_local_keys(logic::eligible) }
+    pub fn supported(rules: &Rules) -> bool {
+        rules.maps.supports_local_keys_with_pulses(logic::eligible, logic::eligible_system_output)
+    }
 
     pub fn retire(mut self) -> Recovery {
         self.admission.fail();
