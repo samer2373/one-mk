@@ -1891,17 +1891,21 @@ fn primary_action_problem(button: &str, action: SystemAction, platform: u8) -> S
         action.label(), scope_platform(platform), system_scope_hint(&works))
 }
 
-pub fn plain_problem(p: &str) -> String {
+pub fn system_action_problem(p: &str) -> Option<String> {
     if let Some((before, platform)) = p.split_once(" has no shortcut for --os ")
         && let Some((button, action)) = before.split_once(" button must keep clicking: ")
         && let Some(button) = button.split_whitespace().last()
         && let Ok(action) = action.parse()
         && let Some(platform) = parse_os(platform.trim())
     {
-        return primary_action_problem(button, action, platform);
+        return Some(primary_action_problem(button, action, platform));
     }
-    if p.contains("unknown system action ") {
-        return "Unknown system action. Choose an action from the list.".into();
+    p.contains("unknown system action ").then(|| "Unknown system action. Choose an action from the list.".into())
+}
+
+pub fn plain_problem(p: &str) -> String {
+    if let Some(message) = system_action_problem(p) {
+        return message;
     }
     if let Some((prefix, _)) = p.split_once(" is not a key name")
         && let Some(name) = prefix.rsplit('"').nth(1)

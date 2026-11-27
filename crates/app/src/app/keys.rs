@@ -926,8 +926,11 @@ impl App {
         if let Some(e) = error {
             self.keys.drafts.clear();
             self.prefs = self.link.prefs();
-            let message = tune::plain_problem(&e);
-            self.keys.error = Some((area, format!("Couldn't change {what}. {message}")));
+            let message = match tune::system_action_problem(&e) {
+                Some(message) => format!("Couldn't change {what}. {message}"),
+                None => format!("Couldn't change {what}: {e}"),
+            };
+            self.keys.error = Some((area, message));
         }
     }
 
@@ -2427,9 +2430,6 @@ impl App {
             let cancel = Rect::from_min_max(pos2(row.right() - button_width(ui, "Cancel"), row.top()), row.max);
             let field = Rect::from_min_max(row.min, pos2(cancel.left() - 8.0, row.bottom()));
             let fid = Id::unique(("field", "key-search"));
-            if previous.is_none() && !sizing {
-                ui.memory_mut(|m| m.request_focus(fid));
-            }
             let searching = ui.memory(|m| m.has_focus(fid));
             // Read keys here, before the text editor moves its cursor or drops focus.
             let (enter, step) = if searching {
@@ -2439,7 +2439,13 @@ impl App {
                     (i.consume_key(Modifiers::NONE, Key::Enter), down - up)
                 })
             } else { (false, 0) };
-            let changed = widgets::field(ui, field, fid, &mut query, "Search keys and actions", "Search for a key or an action", true, false).changed();
+            let search = widgets::field(ui, field, fid, &mut query, "Search keys and actions", "Search for a key or an action", true, false);
+            // egui can clear focus on the click that opened the picker. Give
+            // it to the search field after registering the field's interaction.
+            if previous.is_none() && !sizing {
+                search.request_focus();
+            }
+            let changed = search.changed();
             let mut groups = vec![ChoiceGroup::Suggested, ChoiceGroup::Desktop];
             if target == one_mk_proto::os::MACOS { groups.push(ChoiceGroup::Mac); }
             if !system_only { groups.push(ChoiceGroup::Media); }
@@ -2843,7 +2849,7 @@ impl App {
             match gesture_args(held, direction, &value, &self.keys.scope) {
                 Ok(args) => self.tune_cmds("the gesture", "mouse-modes", vec![args], None),
                 Err(error) => {
-                    let error = tune::plain_problem(&error);
+                    let error = tune::system_action_problem(&error).unwrap_or(error);
                     let height = widgets::para_code_h(ui, width - 14.0, &error, regular(T_BODY));
                     let message = Rect::from_min_size(pos2(left, top + 38.0), vec2(width, height));
                     ui.expand_to_include_rect(message);
