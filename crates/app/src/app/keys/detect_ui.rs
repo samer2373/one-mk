@@ -244,7 +244,7 @@ impl App {
         let Some(l) = self.keys.listening.clone() else { return at.y };
         let keyboard = l.view == View::Keyboard;
         let ask = if keyboard { "Press the key on your keyboard…" } else { "Press the button on your mouse…" };
-        let heard = self.listened_to(keyboard, l.daemon);
+        let heard = self.listened_to(keyboard, l.daemon && !l.window);
         let esc = "Esc cancels.";
         let bw = button_width(ui, "Cancel") - 6.0;
         let tw = w - bw - 52.0;
