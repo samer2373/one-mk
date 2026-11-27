@@ -43,6 +43,10 @@ pub(crate) struct RawDevices {
     pub(crate) corr: Correlator,
     registered: bool,
     probes: Option<Probes>,
+    /// While detecting (`CaptureCmd::Detect`): the devices keys and buttons
+    /// went down on, taken by the window procedure as `Event::PressDevice`.
+    pub(crate) detecting: bool,
+    pub(crate) presses: Vec<(u32, DeviceRef)>,
 }
 
 /// Devices whose HID strings are being asked for on worker threads. Opening a HID interface and
@@ -75,6 +79,11 @@ impl RawDevices {
             tracing::debug!("Raw Input refused: input from every device counts as unknown");
         }
         self.registered = ok;
+    }
+
+    /// Whether Raw Input is being read.
+    pub(crate) fn registered(&self) -> bool {
+        self.registered
     }
 
     /// From now on a new device's HID strings are asked for on a worker thread, which posts
@@ -192,6 +201,9 @@ impl RawDevices {
                 let extended = u32::from(k.Flags) & RI_KEY_E0 != 0;
                 if let Some(code) = hook_key_to_evdev(u32::from(k.VKey), u32::from(k.MakeCode), extended) {
                     let down = u32::from(k.Flags) & RI_KEY_BREAK == 0;
+                    if self.detecting && down && self.presses.len() < 64 {
+                        self.presses.push((code, device));
+                    }
                     self.corr.device_event(Token::Press { code, down }, device, now, out);
                 }
             }
@@ -214,6 +226,9 @@ impl RawDevices {
                         if flags & bit != 0
                             && let Some(code) = hid_button_to_evdev(logical + 1)
                         {
+                            if self.detecting && down && self.presses.len() < 64 {
+                                self.presses.push((code, device));
+                            }
                             self.corr.device_event(Token::Press { code, down }, device, now, out);
                         }
                     }

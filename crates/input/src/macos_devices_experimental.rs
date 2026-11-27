@@ -54,6 +54,8 @@ struct Inner {
     next: u32,
     corr: Correlator,
     capturing: bool,
+    /// Reporting presses' devices as `Event::PressDevice` (`CaptureCmd::Detect`).
+    detecting: bool,
     timer: Option<CFRetained<CFRunLoopTimer>>,
     run_loop: Option<CFRetained<CFRunLoop>>,
     info: usize,
@@ -162,7 +164,7 @@ impl Hid {
     /// Capture starts (true) or ends: device input is read only meanwhile.
     pub(crate) fn capture(&self, on: bool) {
         let Ok(mut inner) = self.inner.try_borrow_mut() else { return };
-        let on = on || inner.local.is_some();
+        let on = on || inner.local.is_some() || inner.detecting;
         if inner.capturing == on {
             return;
         }
@@ -183,6 +185,15 @@ impl Hid {
             }
             inner.arm();
         }
+    }
+
+    /// Detecting starts (true) or ends: device input is read meanwhile, and
+    /// each key or button going down says its device. `active`: capturing.
+    pub(crate) fn detect(&self, on: bool, active: bool) {
+        if let Ok(mut inner) = self.inner.try_borrow_mut() {
+            inner.detecting = on;
+        }
+        self.capture(active);
     }
 
     /// An event of the tap: while capturing, it goes once its device is
@@ -340,6 +351,16 @@ unsafe extern "C-unwind" fn on_value(context: *mut c_void, _result: i32, sender:
         let Some(device) = inner.table.iter().find(|(d, _)| *d == sender as usize).map(|(_, d)| d.id) else { return };
         let now = now_ms();
         let mut out = Vec::new();
+        if inner.detecting && v != 0 {
+            let code = match page {
+                7 => hid_key_to_evdev(usage),
+                9 => hid_button_to_evdev(usage),
+                _ => None,
+            };
+            if let Some(code) = code {
+                let _ = hid.tx.send(Event::PressDevice { code, down: true, device });
+            }
+        }
         match (page, usage) {
             (7, u) => {
                 if let Some(code) = hid_key_to_evdev(u) {

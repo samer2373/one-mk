@@ -1003,7 +1003,7 @@ fn controlled_raw_input_is_selected_per_real_slave() {
     let real = [o.xi_id("Xvfb mouse"), o.xi_id("Xvfb keyboard")];
     let xtest = [o.xi_id("Virtual core XTEST pointer"), o.xi_id("Virtual core XTEST keyboard")];
 
-    x.select(true, false);
+    x.select(true, false, false);
     let masks = selected(&x);
     assert_eq!(masks.get(&ALL_MASTER_DEVICES).copied().unwrap_or(0) & RAW_LOCAL, 0, "{masks:?}");
     for id in real { assert_eq!(masks.get(&id), Some(&RAW_LOCAL), "{masks:?}"); }
@@ -1015,22 +1015,68 @@ fn controlled_raw_input_is_selected_per_real_slave() {
     };
     assert_eq!(echoes(&x), 0, "100 injected moves, no raw motion read back");
 
-    x.select(true, true);
+    x.select(true, false, true);
     assert_eq!(selected(&x).get(&real[0]), Some(&RAW_LOCAL), "the held bit changes only the masters");
 
-    x.select(false, false);
+    x.select(false, false, false);
     let masks = selected(&x);
     for id in real { assert_eq!(masks.get(&id).copied().unwrap_or(0), 0, "{masks:?}"); }
 
     // A slave that went away before the server saw the request: refused,
     // and local raw input goes back on the masters with no slave left selected.
     x.raw_slaves = vec![real[0], 250];
-    x.select(true, false);
+    x.select(true, false, false);
     let masks = selected(&x);
     assert_eq!(masks.get(&ALL_MASTER_DEVICES).copied().unwrap_or(0) & RAW_LOCAL, RAW_LOCAL, "{masks:?}");
     for id in real { assert_eq!(masks.get(&id).copied().unwrap_or(0), 0, "{masks:?}"); }
     assert!(x.raw_on_masters && x.raw_slaves.is_empty());
     assert_eq!(echoes(&x), 100, "on the masters (as before this change) every injected move echoes");
-    x.select(false, false);
+    x.select(false, false, false);
     assert_eq!(selected(&x).get(&ALL_MASTER_DEVICES).copied().unwrap_or(0) & RAW_LOCAL, 0);
+}
+
+/// Detecting selects raw presses and releases (no motion) on each real
+/// slave, never on XTest, and nothing once it is over; with a peer in
+/// control as well, both sets. What comes from XTest (what oneMK and other
+/// programs inject) is never reported as a press of this computer's own.
+#[tokio::test]
+async fn detecting_selects_real_slaves_and_ignores_injected_input() {
+    let Some(server) = Xvfb::start() else { return };
+    let o = server.observer();
+    let mut x = X::connect(&Target { display: Some(server.display.clone()), barriers: true }).unwrap();
+    let selected = |x: &X| -> HashMap<u16, u32> {
+        let reply = x.conn.xinput_xi_get_selected_events(x.root).unwrap().reply().unwrap();
+        reply.masks.into_iter().map(|m| (m.deviceid, m.mask.first().copied().map_or(0, u32::from))).collect()
+    };
+    let real = [o.xi_id("Xvfb mouse"), o.xi_id("Xvfb keyboard")];
+    let xtest = [o.xi_id("Virtual core XTEST pointer"), o.xi_id("Virtual core XTEST keyboard")];
+    x.select(false, true, false);
+    let masks = selected(&x);
+    for id in real { assert_eq!(masks.get(&id), Some(&RAW_DETECT), "{masks:?}"); }
+    for id in xtest { assert!(!masks.contains_key(&id), "{masks:?}"); }
+    x.select(true, true, false);
+    for id in real { assert_eq!(selected(&x).get(&id), Some(&(RAW_DETECT | RAW_LOCAL))); }
+    x.select(true, false, false);
+    for id in real { assert_eq!(selected(&x).get(&id), Some(&RAW_LOCAL), "back to what control alone needs"); }
+    x.select(false, false, false);
+    for id in real { assert_eq!(selected(&x).get(&id).copied().unwrap_or(0), 0); }
+    drop(x);
+
+    // Through the backend: injected keys and clicks while detecting are not presses.
+    let (mut b, _locked) = open_on(&server.display).unwrap();
+    devices_where(&mut b.events, |_| true).await;
+    // (Selections are per client: the backend's can't be read from here; the above checked them.)
+    b.capture.send(CaptureCmd::Detect(true)).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    o.fake(2, 38, NONE, 0, 0);
+    o.fake(3, 38, NONE, 0, 0);
+    o.fake(4, 9, NONE, 0, 0);
+    o.fake(5, 9, NONE, 0, 0);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    while let Ok(ev) = b.events.try_recv() {
+        assert!(!matches!(ev, Event::LocalPress { .. } | Event::Key { .. } | Event::Button { .. }), "{ev:?}");
+    }
+    b.capture.send(CaptureCmd::Detect(false)).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!b.events.is_closed(), "the backend runs on");
 }

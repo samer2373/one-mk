@@ -265,6 +265,8 @@ struct State {
     armed: bool,
     cursor_hidden: bool,
     tap: Option<CFRetained<CFMachPort>>,
+    /// Reporting this Mac's own presses (`CaptureCmd::Detect`).
+    detect: bool,
     /// Keys held on this Mac when capture started; their releases are let
     /// through so local apps don't see them stuck.
     local_keys: [bool; 128],
@@ -288,6 +290,7 @@ impl State {
             armed: true,
             cursor_hidden: false,
             tap: None,
+            detect: false,
             local_keys: [false; 128],
             problem: None,
             asked_accessibility: false,
@@ -599,6 +602,10 @@ impl Ctx {
         };
         match msg {
             Msg::Cmd(CaptureCmd::DeviceRules(enabled)) => self.hid.rules(enabled),
+            Msg::Cmd(CaptureCmd::Detect(on)) => {
+                st.detect = on;
+                self.hid.detect(on, st.active);
+            }
             Msg::Cmd(CaptureCmd::SetEdges(edges)) => st.edges = edges,
             Msg::Cmd(CaptureCmd::Release { id, pos }) => {
                 // A release for an earlier activation is stale.
@@ -655,6 +662,22 @@ impl Ctx {
         let Ok(mut st) = self.st.try_borrow_mut() else { return true };
         if st.active {
             return self.on_active(&mut st, ty, ev);
+        }
+        if st.detect
+            && CGEvent::integer_value_field(e, CGEventField::EventSourceStateID) == i64::from(CGEventSourceStateID::HIDSystemState.0)
+        {
+            let key = match ty {
+                CGEventType::KeyDown | CGEventType::KeyUp => logic::mac_to_evdev(keycode(ev)).map(|code| (code, ty == CGEventType::KeyDown)),
+                CGEventType::FlagsChanged => logic::modifier_down(keycode(ev), CGEvent::flags(e).0)
+                    .and_then(|down| logic::mac_to_evdev(keycode(ev)).map(|code| (code, down))),
+                CGEventType::LeftMouseDown | CGEventType::LeftMouseUp => Some((logic::BTN_LEFT, ty == CGEventType::LeftMouseDown)),
+                CGEventType::RightMouseDown | CGEventType::RightMouseUp => Some((logic::BTN_RIGHT, ty == CGEventType::RightMouseDown)),
+                CGEventType::OtherMouseDown | CGEventType::OtherMouseUp => Some((0, ty == CGEventType::OtherMouseDown)),
+                _ => None,
+            };
+            if let Some((code, down)) = key {
+                let _ = self.tx.send(Event::LocalPress { code: detected_code(ty, e, code), down, device: None });
+            }
         }
         // Real input (from the HID system, not posted by software) while a
         // peer is in control here.
@@ -815,6 +838,16 @@ fn read_media(ev: &CGEvent) -> Option<logic::MediaEvent> {
         }
         logic::parse_media(ns.subtype().0, ns.data1() as i64)
     })
+}
+
+/// The code a press is detected as: other mouse buttons by their number
+/// (past the eighth, a code that says so), the rest as the tap reads them.
+fn detected_code(ty: CGEventType, e: Option<&CGEvent>, code: u32) -> u32 {
+    if matches!(ty, CGEventType::OtherMouseDown | CGEventType::OtherMouseUp) {
+        logic::detected_button(CGEvent::integer_value_field(e, CGEventField::MouseEventButtonNumber))
+    } else {
+        code
+    }
 }
 
 fn keycode(ev: &CGEvent) -> u16 {

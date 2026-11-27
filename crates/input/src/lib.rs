@@ -114,6 +114,15 @@ pub fn device_support(backend: &str) -> Result<Option<&'static str>, &'static st
     }
 }
 
+/// Whether a backend can report this computer's own key presses while the
+/// pointer is here (`one-mk input-devices detect`): `Ok` where it can (with
+/// what isn't tested), `Err(why)` where it sees input only while it
+/// controls another computer, or never. Mirrors
+/// [`one_mk_proto::detect::detect_support`], which the window uses.
+pub fn detect_support(backend: &str) -> Result<Option<&'static str>, &'static str> {
+    one_mk_proto::detect::detect_support(backend)
+}
+
 /// From the backend to the daemon.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
@@ -183,6 +192,16 @@ pub enum Event {
     KeyboardLayout(typing::KeyboardLayout),
     KeyboardLayoutUnavailable,
     KeyboardModifiers { depressed: u32, latched: u32, locked: u32, group: u32 },
+    /// While asked to (`CaptureCmd::Detect(true)`) and not capturing: a
+    /// real key or mouse button of this computer went down or up, with its
+    /// device where the backend knows it at once (X11). Injected input is
+    /// left out. The input itself goes where it always goes: this is only
+    /// a report, for `one-mk input-devices detect`.
+    LocalPress { code: u32, down: bool, device: Option<DeviceRef> },
+    /// While detecting: the device side of a press (Windows Raw Input,
+    /// macOS IOHIDManager), which may come a little before or after the
+    /// `LocalPress` or `Key` it belongs to.
+    PressDevice { code: u32, down: bool, device: DeviceRef },
 }
 
 /// From the daemon to the capture side.
@@ -210,6 +229,12 @@ pub enum CaptureCmd {
     /// with `Event::Error` if this backend can't. The daemon decides where
     /// the pointer goes, so the reported position doesn't matter.
     Activate { side: Side },
+    /// Report this computer's own key and button presses as
+    /// `Event::LocalPress` (and their devices as `Event::PressDevice`) until
+    /// `Detect(false)`, without changing what they do. Backends that can't
+    /// see local input (the Wayland portals, wlroots) ignore it: see
+    /// [`detect_support`].
+    Detect(bool),
 }
 
 /// From the daemon to the injection side.

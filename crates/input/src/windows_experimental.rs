@@ -237,6 +237,8 @@ struct State {
     captured: Option<Captured>,
     /// The last activation id handed out.
     next_id: u32,
+    /// Reporting this machine's own presses (`CaptureCmd::Detect`).
+    detect: bool,
     /// evdev keys and buttons that went down locally (not forwarded); their
     /// release must reach this machine even while captured, or they would
     /// stay stuck down here. Rebuilt from the real key state when capture
@@ -517,6 +519,7 @@ fn capture_thread(
             cmds: cmd_rx,
             captured: None,
             next_id: 0,
+            detect: false,
             local: Held::default(),
             fwd: SenderKeys::default(),
             gate: EdgeGate::default(),
@@ -862,7 +865,7 @@ impl State {
             Some(c) => {
                 // Events still waiting for their device go now, unknown.
                 let mut out = Vec::new();
-                if self.local_rules.as_ref().is_some_and(|local| local.enabled) {
+                if self.local_rules.as_ref().is_some_and(|local| local.enabled) || self.detect {
                     self.raw.corr.finish(&mut out);
                 } else {
                     self.raw.unregister(&mut out);
@@ -977,6 +980,9 @@ impl State {
         let (x, y) = (info.pt.x, info.pt.y);
 
         let Some(cap) = self.captured else {
+            if self.detect && !injected && let Some(button) = button {
+                let _ = self.tx.send(Event::LocalPress { code: button, down, device: None });
+            }
             if !injected && let Some(button) = button && let Some(local) = self.local_rules.as_mut() {
                 let swallow = local.hook(button, down, Instant::now());
                 unsafe { PostMessageW(self.hwnd, WM_APP_LOCAL, 0, 0) };
@@ -1058,6 +1064,9 @@ impl State {
         let down = info.flags & LLKHF_UP == 0;
         let code = hook_key_to_evdev(info.vkCode, info.scanCode, info.flags & LLKHF_EXTENDED != 0);
         if self.captured.is_none() {
+            if self.detect && !injected && let Some(code) = code {
+                let _ = self.tx.send(Event::LocalPress { code, down, device: None });
+            }
             if let Some(code) = code
                 && let Some(local) = self.local_rules.as_mut()
             {
@@ -1149,7 +1158,7 @@ impl State {
                     self.local_pause();
                     if let Some(local) = self.local_rules.take() { self.local_recovery = Some(local.retire()); }
                     unsafe { KillTimer(self.hwnd, TIMER_LOCAL) };
-                    if self.captured.is_none() {
+                    if self.captured.is_none() && !self.detect {
                         let mut out = Vec::new();
                         self.raw.unregister(&mut out);
                         self.send_all(out);
@@ -1214,6 +1223,21 @@ impl State {
                 let mut out = Vec::new();
                 self.raw.corr.configure(enabled, &mut out);
                 self.send_all(out)
+            }
+            CaptureCmd::Detect(on) => {
+                // Raw Input says which device each press came from; it is read while
+                // detecting, as while capturing or with local rules.
+                self.detect = on;
+                self.raw.detecting = on;
+                self.raw.presses.clear();
+                if on && !self.raw.registered() {
+                    self.raw.register(self.hwnd);
+                } else if !on && self.captured.is_none() && self.local_rules.is_none() {
+                    let mut out = Vec::new();
+                    self.raw.unregister(&mut out);
+                    return self.send_all(out);
+                }
+                Effect::None
             }
             CaptureCmd::SetEdges(edges) => {
                 let changed = self.edges != edges;
@@ -1530,6 +1554,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let effect = with_state(|s| {
                 let mut out = Vec::new();
                 s.raw.on_input(lparam, &mut out);
+                for (code, device) in std::mem::take(&mut s.raw.presses) {
+                    let _ = s.tx.send(Event::PressDevice { code, down: true, device });
+                }
                 s.send_all(out)
             });
             if let Some(e) = effect {

@@ -173,7 +173,7 @@ async fn run(
                 cmd = cmds.recv() => match cmd {
                     Some(CaptureCmd::SetEdges(e)) => keep.edges = e,
                     Some(CaptureCmd::Activate { .. }) => { let _ = tx.send(Event::Error(NO_CAPTURE.into())); }
-                    Some(CaptureCmd::Release { .. }) => {}
+                    Some(CaptureCmd::Release { .. } | CaptureCmd::Detect(_)) => {}
                     None => return,
                 },
                 m = inj.recv() => if m.is_none() { return },
@@ -438,6 +438,9 @@ impl State {
                             }
                         }
                         Some(CaptureCmd::Activate { side }) => self.activate_cmd(side),
+                        // wlroots shows oneMK no input while the pointer is here: presses
+                        // are detected from the captured input the daemon gets anyway.
+                        Some(CaptureCmd::Detect(_)) => {}
                         None => {
                             self.end_capture(true);
                             self.let_go();

@@ -287,6 +287,8 @@ struct State {
     edge_request: bool,
     cursor_hidden: bool,
     tap: Option<CFRetained<CFMachPort>>,
+    /// Reporting this Mac's own presses (`CaptureCmd::Detect`).
+    detect: bool,
     /// Keys held on this Mac when capture started; their releases are let
     /// through so local apps don't see them stuck.
     local_keys: [bool; 128],
@@ -325,6 +327,7 @@ impl State {
             edge_request: false,
             cursor_hidden: false,
             tap: None,
+            detect: false,
             local_keys: [false; 128],
             local_buttons: 0,
             problem: None,
@@ -961,6 +964,10 @@ impl Ctx {
                 self.end(&mut st);
             }
             Msg::Cmd(CaptureCmd::DeviceRules(enabled)) => self.hid.rules(enabled),
+            Msg::Cmd(CaptureCmd::Detect(on)) => {
+                st.detect = on;
+                self.hid.detect(on, st.active);
+            }
             Msg::Cmd(CaptureCmd::SetEdges(edges)) => {
                 let changed = st.edges != edges;
                 st.edges = edges;
@@ -1071,6 +1078,10 @@ impl Ctx {
         };
         if let Some((code, down)) = key {
             let injected = CGEvent::integer_value_field(e, CGEventField::EventSourceStateID) != i64::from(CGEventSourceStateID::HIDSystemState.0);
+            if st.detect && !st.active && !injected {
+                let code = detected_code(ty, e, code);
+                let _ = self.tx.send(Event::LocalPress { code, down, device: None });
+            }
             if !injected && st.local_rules.is_some() && (secure_input() || st.session_paused) {
                 self.local_pause(&mut st, "inactive: a password field or the lock screen is hiding input; leave it and release all keys to resume automatically");
             }
@@ -1299,6 +1310,16 @@ fn read_media(ev: &CGEvent) -> Option<logic::MediaEvent> {
         }
         logic::parse_media(ns.subtype().0, ns.data1() as i64)
     })
+}
+
+/// The code a press is detected as: other mouse buttons by their number
+/// (past the eighth, a code that says so), the rest as the tap reads them.
+fn detected_code(ty: CGEventType, e: Option<&CGEvent>, code: u32) -> u32 {
+    if matches!(ty, CGEventType::OtherMouseDown | CGEventType::OtherMouseUp) {
+        logic::detected_button(CGEvent::integer_value_field(e, CGEventField::MouseEventButtonNumber))
+    } else {
+        code
+    }
 }
 
 fn keycode(ev: &CGEvent) -> u16 {

@@ -599,6 +599,18 @@ pub fn moved_by(desktop: Option<&Desktop>, from: Pos, dx: f64, dy: f64) -> Pos {
     d.screen_at(from).map_or_else(|| d.clamp(to), |r| r.clamp(to))
 }
 
+/// The code a mouse button is detected as (`CaptureCmd::Detect`): macOS
+/// numbers them from 0 (left, right, middle, back, forward...); past the
+/// eighth, a code that says so ([`one_mk_proto::detect::BEYOND_BUTTONS`]).
+pub fn detected_button(number: i64) -> u32 {
+    use one_mk_proto::detect::BEYOND_BUTTONS;
+    match u32::try_from(number) {
+        Ok(n) if n < 8 => 0x110 + n,
+        Ok(n) => BEYOND_BUTTONS + (n - 8).min(7),
+        Err(_) => BEYOND_BUTTONS + 7,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -930,5 +942,16 @@ mod tests {
             lines += a.take(h, v).1;
         }
         assert_eq!(lines, -3);
+    }
+
+    #[test]
+    fn detected_buttons_are_the_rules_buttons_then_beyond() {
+        use one_mk_proto::detect::BEYOND_BUTTONS;
+        assert_eq!(detected_button(0), 0x110);
+        assert_eq!(detected_button(3), 0x113, "back");
+        assert_eq!(detected_button(7), 0x117, "button 8");
+        assert_eq!(detected_button(8), BEYOND_BUTTONS);
+        assert_eq!(detected_button(31), BEYOND_BUTTONS + 7);
+        assert_eq!(detected_button(-1), BEYOND_BUTTONS + 7);
     }
 }
