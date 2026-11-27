@@ -27,7 +27,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod system;
-pub use system::SystemAction;
+pub use system::{SystemAction, action_search_rank, fold_action_search};
+
+/// The named platform can only forward the five standard mouse buttons.
+pub fn extra_button_unavailable(button: u32, target: u8) -> bool {
+    (6..=8).contains(&button) && matches!(target, os::MACOS | os::WINDOWS)
+}
+
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

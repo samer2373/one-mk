@@ -318,7 +318,10 @@ fn a_picker_chip_returns_typing_to_search_and_disabled_rows_cannot_be_chosen() {
 
 #[test]
 fn system_warnings_and_the_local_preview_are_shown_in_the_window() {
-    let (mut win, _) = keys_window(two(), &super::qa::rule_toml(&["from = 'f9'\nto = 'os:next-desktop'"]));
+    let (mut win, _) = keys_window(two(), &super::qa::rule_toml(&[
+        "from = 'f9'\nto = 'os:next-desktop'",
+        "from = 'f13'\nto = 'os:app-windows'",
+    ]));
     win.app.select_key(67, None);
     win.settle();
     let field = win.find_containing("Type here · nothing is sent: activate").unwrap();
@@ -329,7 +332,10 @@ fn system_warnings_and_the_local_preview_are_shown_in_the_window() {
     let output = win.find_containing("They get:").unwrap().name;
     assert!(output.contains(if os::local() == os::LINUX { "Ctrl+Alt+Right" } else { "Right" }), "{output}");
     win.send(Event::KeymapCheck(Ok(vec!["Note: os:hide-app has no shortcut on Windows and sends nothing. Scope this rule with --os mac.".into()])));
-    assert!(win.find_containing("Scope this rule with --os mac").is_some());
+    assert!(!win.has_text("Scope this rule with --os mac"));
+    let note = win.items().into_iter().filter(|item| item.name.starts_with("App Exposé does nothing on Windows PCs.")).collect::<Vec<_>>();
+    assert_eq!(note.len(), 1, "{:#?}", win.names());
+    assert!(note[0].rect.top() >= win.find_containing("F13 → App windows").unwrap().rect.bottom());
 }
 
 #[test]
@@ -355,7 +361,10 @@ fn the_picker_has_a_dialog_and_virtualized_results_and_clears_when_its_editor_di
     };
     assert!(descendants(dialog).contains(&list));
     let rows = descendants(list).into_iter().filter(|id| win.nodes[id].role() == accesskit::Role::ListItem).count();
-    assert!((1..=12).contains(&rows), "{rows} rows are rendered");
+    assert!((1..=18).contains(&rows), "{rows} rows are rendered");
+    win.type_text("copy");
+    assert!(win.find("Copy key").is_some_and(|item| item.rect.height() <= 30.0));
+    assert!(!win.has_text("Physical key"));
     let now = std::time::Instant::now();
     win.frames(200);
     eprintln!("All keys frame mean: {:.3} ms", now.elapsed().as_secs_f64() * 5.0);
@@ -536,4 +545,73 @@ fn the_list_of_keyboards_is_asked_again_while_it_stays_open() {
     let first = fake.calls_with(&["input-devices"]).len();
     // Left open, it looks again every couple of seconds (a keyboard may have been plugged in).
     win.wait("another look", |_| fake.calls_with(&["input-devices"]).len() > first);
+}
+
+
+#[test]
+fn a_partial_system_action_can_be_chosen_for_all_computers() {
+    let (mut win, fake) = keys_window(two(), "");
+    win.app.select_key(58, None);
+    win.settle();
+    win.click("Choose what Caps Lock becomes from a list");
+    win.type_text("app exposé");
+    assert!(win.find("App windows").is_some_and(|item| !item.disabled));
+    assert!(win.has_text("Mac and Linux · nothing on Windows"));
+    win.press(Key::Enter);
+    win.quiet();
+    assert_eq!(fake.calls_with(&["keymap", "add"]), vec![args(&["keymap", "add", "--", "capslock", "os:app-windows"])]);
+}
+
+#[test]
+fn an_unavailable_action_is_visible_but_cannot_take_over_a_primary_button() {
+    let (mut win, fake) = mouse_window(two(), "");
+    win.app.keys.button = Some(1);
+    win.settle();
+    win.click("Left button: System action");
+    win.click("Choose system action");
+    win.type_text("hide app");
+    let row = win.find("Hide app").unwrap();
+    assert!(row.disabled);
+    win.click_at(row.rect.center());
+    win.press(Key::Enter);
+    win.quiet();
+    assert!(win.app.keys.picker.is_some());
+    assert!(fake.calls_with(&["buttons", "map"]).is_empty());
+}
+
+#[test]
+fn the_gesture_picker_focuses_search_on_open_and_reopen() {
+    let (mut win, _) = mouse_window(two(), "");
+    let choose = "Choose what the gesture does";
+    let search = "Search for a key or an action";
+    for _ in 0..2 {
+        win.click(choose);
+        assert!(win.find(search).is_some_and(|item| item.focused), "{:#?}", win.names());
+        win.type_text("mision");
+        assert!(win.find("Overview").is_some_and(|item| !item.disabled));
+        win.press(Key::Escape);
+        assert!(win.app.keys.picker.is_none());
+    }
+}
+
+#[test]
+fn button_labels_and_warnings_follow_the_scope_in_the_window() {
+    let (mut win, _) = mouse_window(two(), "[[input.button]]\nfrom = 4\nto = 'os:overview'\nscope = { os = 'mac' }\n[[input.button]]\nfrom = 7\nto = 'os:overview'\nscope = { os = 'mac' }\n");
+    win.app.keys.scope = Scope::Os(os::MACOS);
+    win.settle();
+    win.click("Back (side): Mission Control. Change it");
+    assert!(win.find("Mission Control").is_some(), "{:#?}", win.names());
+    assert!(win.has_text("Button 7 isn't forwarded on Macs."));
+}
+
+#[test]
+fn mouse_detection_fallback_paints_the_reason_only_in_a_tooltip() {
+    let (mut win, _) = mouse_window(two(), "");
+    win.status(None);
+    win.app.start_detect(keys::View::Mouse);
+    win.settle();
+    assert!(win.has_text("Listening in this window."));
+    assert!(win.texts.iter().any(|text| text.text == "Why?"));
+    assert!(win.find_containing("Why? oneMK isn't running").is_some());
+    assert!(!win.texts.iter().any(|text| text.text.contains("only what this window sees")));
 }

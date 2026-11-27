@@ -766,7 +766,15 @@ fn run(cli: Cli) -> Result<()> {
             Cmd::Buttons { cmd } => tuning::buttons(&dir, cmd).await,
             Cmd::InputDevices { cmd: None, json } => inputdevices::command(&dir, json).await,
             Cmd::InputDevices { cmd: Some(InputDevicesCmd::Detect { timeout, keys_only, json: detect_json }), json } => {
-                detect::command(&dir, timeout, keys_only, json || detect_json).await
+                if std::env::var_os("ONE_MK_DETECT_CANCEL_ON_STDIN_EOF").is_some() {
+                    tokio::select! {
+                        biased;
+                        _ = detect::stdin_closed() => Ok(()),
+                        result = detect::command(&dir, timeout, keys_only, json || detect_json) => result,
+                    }
+                } else {
+                    detect::command(&dir, timeout, keys_only, json || detect_json).await
+                }
             }
             Cmd::Id => {
                 let id = Identity::load_or_create(&dir)?;

@@ -161,7 +161,7 @@ pub enum GesturesCmd {
     /// Show held-button gestures.
     List,
     /// Hold BUTTON and swipe DIRECTION to type TO on the other computer.
-    #[command(mut_arg("device", |arg| arg.hide(true)))]
+    #[command(after_help = SYSTEM_ACTION_HELP, mut_arg("device", |arg| arg.hide(true)))]
     Add {
         /// Button to hold, for example button4 (not left or right).
         button: String,
@@ -212,6 +212,25 @@ fn set_gesture(rules: &mut Vec<GestureRule>, rule: GestureRule) {
     rules.push(rule);
 }
 
+fn gesture_description(rule: &GestureRule) -> String {
+    let target = scope_os(&rule.scope, &[]).unwrap_or(os::UNKNOWN);
+    let output = match &rule.to {
+        To::One(name) if name == "desktop-left" => "Previous desktop".into(),
+        To::One(name) if name == "desktop-right" => "Next desktop".into(),
+        _ => rule.to.describe_for(target),
+    };
+    let mut qualifiers = vec![format!("{} units", rule.threshold_px)];
+    match rule.scope {
+        Scope::Global => {}
+        Scope::Os(os::MACOS) => qualifiers.push("Macs only".into()),
+        Scope::Os(os::WINDOWS) => qualifiers.push("Windows PCs only".into()),
+        Scope::Os(os::LINUX) => qualifiers.push("Linux only".into()),
+        _ => qualifiers.push(format!("for {}", rule.scope)),
+    }
+    if let Some(app) = &rule.app { qualifiers.push(app_words(app)); }
+    format!("Hold {} and swipe {} to {output} ({}).", rule.button, rule.direction, qualifiers.join(", "))
+}
+
 pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()> {
     match cmd.unwrap_or(GesturesCmd::List) {
         GesturesCmd::List => {
@@ -220,11 +239,12 @@ pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()
                 println!("No gestures yet. Try `one-mk gestures preset side-swipe`, or `one-mk gestures add button4 left back`.");
             }
             for rule in settings.input.gesture {
-                println!("Hold {} and swipe {} to {} ({} units){}.", rule.button, rule.direction, rule.to.describe(), rule.threshold_px, where_suffix(&rule.scope, &rule.app));
+                println!("{}", gesture_description(&rule));
             }
             return Ok(());
         }
         GesturesCmd::Add { button, direction, to, threshold, scope } => {
+            check_trailing_scope(&to)?;
             no_device(&scope)?;
             let button = keynames::key_name(mouse_button(&button).map_err(anyhow::Error::msg)?);
             let output = match to.as_slice() { [one] => To::One(one.clone()), _ => To::Many(to) };

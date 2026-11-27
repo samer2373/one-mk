@@ -428,6 +428,16 @@ pub enum To {
     Many(Vec<String>),
 }
 
+fn output_label(text: &str, target: u8) -> String {
+    if let Ok(action) = text.parse::<remap::SystemAction>() {
+        return action.label_for(target).to_owned();
+    }
+    if text.parse::<keynames::Chord>().is_ok_and(|chord| chord.mods == 0 && chord.key == 133) {
+        return "Copy key".into();
+    }
+    text.to_owned()
+}
+
 impl To {
     fn parse(&self) -> Result<Output, String> {
         match self {
@@ -437,9 +447,13 @@ impl To {
     }
 
     fn describe(&self) -> String {
+        self.describe_for(os::UNKNOWN)
+    }
+
+    fn describe_for(&self, target: u8) -> String {
         match self {
-            To::One(s) => s.parse::<remap::SystemAction>().map_or_else(|_| s.clone(), |action| action.label().to_owned()),
-            To::Many(v) => format!("[{}]", v.join(", ")),
+            To::One(s) => output_label(s, target),
+            To::Many(v) => format!("[{}]", v.iter().map(|step| output_label(step, target)).collect::<Vec<_>>().join(", ")),
         }
     }
 }
@@ -497,13 +511,14 @@ impl KeyRule {
     }
 
     fn describe(&self) -> String {
+        let target = scope_os(&self.scope, &[]).unwrap_or(os::UNKNOWN);
         let what = match (&self.to, &self.tap, &self.hold) {
-            (Some(to), _, _) => format!("-> {}", to.describe()),
-            (None, Some(t), Some(h)) => format!("tap {t}, hold {h}"),
+            (Some(to), _, _) => format!("-> {}", to.describe_for(target)),
+            (None, Some(t), Some(h)) => format!("tap {}, hold {}", output_label(t, target), output_label(h, target)),
             _ => "(incomplete)".into(),
         };
         let layer = self.layer.as_ref().map_or_else(String::new, |l| format!(" in layer {l}"));
-        format!("{}{layer} {what}", self.from)
+        format!("{}{layer} {what}", output_label(&self.from, target))
     }
 }
 
@@ -762,6 +777,33 @@ fn system_notes(scope: &Scope, paired: &[(String, String, u8)], outputs: &[&str]
         }
     }
     notes
+}
+
+fn extra_button_note(from: &Trigger, target: Option<u8>) -> Option<String> {
+    let n = keynames::button_number(u32::from(from.key))?;
+    let target = target?;
+    remap::extra_button_unavailable(n, target).then(|| {
+        format!("button {n} isn't forwarded on {}. Scope this rule with --os linux.", os_name(target))
+    })
+}
+
+const SYSTEM_ACTION_HELP: &str = "\
+OS shortcuts (prefix each name with os:):
+  Desktops: next-desktop, previous-desktop, overview, app-windows, show-desktop
+  Apps: app-launcher, search, force-quit, full-screen, emoji-picker, switch-app,
+        hide-app, close-window, quit-app
+  Screen: screenshot-area, screenshot-tool, lock-screen
+  Editing: copy, cut, paste, undo, redo, select-all, find, save
+  Tabs: new-tab, close-tab, next-tab, previous-tab";
+
+fn check_trailing_scope(outputs: &[String]) -> Result<()> {
+    for text in outputs {
+        let name = text.split_once('=').map_or(text.as_str(), |(name, _)| name);
+        if matches!(name, "--os" | "--peer" | "--device" | "--app") {
+            bail!("put {name} before --");
+        }
+    }
+    Ok(())
 }
 
 fn print_system_notes(notes: Vec<String>) {
@@ -1777,6 +1819,7 @@ pub enum KeymapCmd {
     /// `back`/`forward`, an OS shortcut (`os:overview`), or an action (`switch next`, `lock-pointer`,
     /// `lock-all`, `scroll down`, `run: COMMAND`). Replaces a rule for the
     /// same key in the same scope and layer.
+    #[command(after_help = SYSTEM_ACTION_HELP)]
     Add {
         /// Key or chord to change, for example capslock or ctrl+h.
         from: String,
@@ -1914,6 +1957,7 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
             settings::apply(dir).await?;
         }
         KeymapCmd::Add { from, to, tap, hold, layer, timeout_ms, scope } => {
+            check_trailing_scope(&to)?;
             let app = scope.app()?;
             let scope = scope.scope(dir)?;
             let to = match to.len() {
@@ -2002,6 +2046,11 @@ fn check_command(dir: &Path) -> Result<()> {
     for rule in &s.input.keymap.rule {
         if rule.spec().and_then(|spec| keep_clicking(&spec.from, &spec.what, scope_os(&rule.scope, &paired), || "this rule".into())).is_ok() {
             notes.extend(system_notes(&rule.scope, &paired, &key_rule_outputs(rule)));
+        }
+    }
+    for rule in &s.input.button {
+        if let Ok(trigger) = rule.from.trigger() {
+            notes.extend(extra_button_note(&trigger, scope_os(&rule.scope, &paired)));
         }
     }
     for (scope, to) in s.input.button.iter().filter(|r| {
@@ -2324,6 +2373,7 @@ pub enum ButtonsCmd {
     /// Make button N (1 left, 2 right, 3 middle, 4 back, 5 forward, 6 to 8)
     /// do TO: another button (button1), a key or chord, several (a
     /// sequence), back/forward, an OS shortcut (os:overview), an action, or none.
+    #[command(after_help = SYSTEM_ACTION_HELP)]
     Map {
         #[arg(help = "Mouse button to remap, for example button4")]
         button: String,
@@ -2358,7 +2408,7 @@ fn list_buttons(s: &TuningSettings, unavailable: bool) {
     }
     println!("Button rules:");
     for r in &s.button {
-        println!("  {} -> {}{}{}", r.from.describe(), r.to.describe(), where_suffix(&r.scope, &r.app), device_mark(&r.scope, unavailable));
+        println!("  {} -> {}{}{}", r.from.describe(), r.to.describe_for(scope_os(&r.scope, &[]).unwrap_or(os::UNKNOWN)), where_suffix(&r.scope, &r.app), device_mark(&r.scope, unavailable));
     }
 }
 
@@ -2386,6 +2436,7 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             return Ok(());
         }
         ButtonsCmd::Map { button, to, scope } => {
+            check_trailing_scope(&to)?;
             let app = scope.app()?;
             let scope = scope.scope(dir)?;
             let (from, t) = button_from(&button)?;
@@ -2394,7 +2445,9 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             let spec = rule.spec().map_err(anyhow::Error::msg)?;
             let paired = paired(dir);
             keep_clicking(&spec.from, &spec.what, scope_os(&rule.scope, &paired), || rule.to.describe()).map_err(anyhow::Error::msg)?;
-            let line = format!("{} -> {}{}", rule.from.describe(), rule.to.describe(), where_suffix(&rule.scope, &rule.app));
+            let target = scope_os(&rule.scope, &paired);
+            let line = format!("{} -> {}{}", rule.from.describe(), rule.to.describe_for(target.unwrap_or(os::UNKNOWN)), where_suffix(&rule.scope, &rule.app));
+            let button_note = extra_button_note(&t, target);
             let mapped = match &rule.to { To::One(s) => Some(s.clone()), To::Many(_) => None };
             let scope = rule.scope.clone();
             Settings::update(dir, |s| {
@@ -2404,6 +2457,7 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             println!("{line}.");
             device_note(dir, &scope).await;
             run_note(dir);
+            if let Some(note) = button_note { println!("Note: {note}"); }
             if let Some(to) = &mapped {
                 switch_note(dir, &[to]);
                 print_system_notes(system_notes(&scope, &paired, &[to]));

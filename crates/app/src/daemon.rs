@@ -347,7 +347,9 @@ impl Link {
         if keys_only {
             cmd.arg("--keys-only");
         }
-        cmd.args(self.home_args()).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+        // Leave the pipe in Child so it closes when this window exits, even on forced termination.
+        cmd.env("ONE_MK_DETECT_CANCEL_ON_STDIN_EOF", "1");
+        cmd.args(self.home_args()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
         let mut child = match proc::hide_window(&mut cmd).spawn() {
             Ok(child) => child,
             Err(e) => {
@@ -1065,10 +1067,10 @@ impl Link {
         let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("oneMK's service didn't start: {e}"))?;
         let text = String::from_utf8_lossy(&out.stdout);
         if out.status.success() {
-            return Ok(text.lines().filter(|line| line.starts_with("Note: ")).map(str::to_owned).collect());
+            return Ok(vec![]);
         }
         // Problems are on stdout, one a line; stderr says how many.
-        let problems: Vec<String> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("No input tuning")).map(str::to_owned).collect();
+        let problems: Vec<String> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("No input tuning") && !l.starts_with("Note: ")).map(str::to_owned).collect();
         if problems.is_empty() {
             let err = String::from_utf8_lossy(&out.stderr);
             return Err(err.trim().trim_start_matches("one-mk: ").to_owned());

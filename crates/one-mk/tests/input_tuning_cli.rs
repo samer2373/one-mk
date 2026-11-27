@@ -7,9 +7,9 @@ use std::process::{Command, Output};
 fn command(home: &Path, args: &[&str]) -> Output {
     // Nothing here may reach the real desktop, settings or daemon.
     Command::new(env!("CARGO_BIN_EXE_one-mk"))
-        .args(args)
         .arg("--home")
         .arg(home)
+        .args(args)
         .env("HOME", home)
         .env("XDG_CONFIG_HOME", home.join("c"))
         .env("XDG_DATA_HOME", home.join("d"))
@@ -312,4 +312,107 @@ fn a_relative_home_works_like_an_absolute_one() {
     let out = run(&["keymap", "check", "--home", "rel"]);
     assert!(out.status.success(), "a private relative folder is fine: {}{}", text(&out.stdout), text(&out.stderr));
     assert!(work.join("rel/settings.toml").is_file());
+}
+
+#[test]
+fn output_typos_and_misplaced_scope_flags_have_actionable_errors() {
+    use one_mk_proto::remap::SystemAction;
+    let dir = home();
+    let home = dir.path();
+    for args in [
+        &["keymap", "add", "--", "f19", "os:mision"][..],
+        &["buttons", "map", "--", "4", "os:mision"],
+        &["gestures", "add", "--", "button4", "left", "os:mision"],
+    ] {
+        assert!(refused(home, args).contains("did you mean os:overview (Mission Control)?"));
+    }
+    for (flag, value) in [("--os", "mac"), ("--peer", "peer"), ("--device", "device"), ("--app", "app")] {
+        for flag_arg in [flag.to_owned(), format!("{flag}={value}")] {
+            let error = refused(home, &["buttons", "map", "--", "4", "os:app-windows", &flag_arg]);
+            assert!(error.contains(&format!("put {flag} before --")), "{error}");
+        }
+    }
+    for cmd in [["keymap", "add"], ["buttons", "map"], ["gestures", "add"]] {
+        let help = ok(home, &[cmd[0], cmd[1], "--help"]);
+        let (_, names) = help.split_once("prefix each name with os:").unwrap();
+        for action in SystemAction::ALL {
+            assert!(names.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-').any(|name| name == action.name()), "{action}: {help}");
+        }
+    }
+    assert!(settings(home).is_empty());
+}
+
+#[test]
+fn extra_mouse_buttons_warn_for_scopes_that_cannot_forward_them() {
+    let dir = home();
+    let home = dir.path();
+    for (os, button) in [("mac", "7"), ("windows", "8")] {
+        let note = format!("Note: button {button} isn't forwarded");
+        let saved = ok(home, &["buttons", "map", "--os", os, "--", button, "os:overview"]);
+        assert!(saved.contains(&note), "{saved}");
+        let check = ok(home, &["keymap", "check"]);
+        assert!(check.contains(&note), "{check}");
+    }
+    let saved = ok(home, &["buttons", "map", "--os", "linux", "--", "7", "os:overview"]);
+    assert!(!saved.contains("isn't forwarded"), "{saved}");
+}
+
+#[test]
+fn list_distinguishes_the_copy_key_and_action_and_names_legacy_gestures() {
+    let dir = home();
+    let home = dir.path();
+    ok(home, &["keymap", "add", "f18", "os:copy"]);
+    ok(home, &["keymap", "add", "f19", "copy"]);
+    let keys = ok(home, &["keymap", "list"]);
+    assert!(keys.lines().any(|line| line.trim() == "f18 -> Copy"), "{keys}");
+    assert!(keys.lines().any(|line| line.trim() == "f19 -> Copy key"), "{keys}");
+    ok(home, &["gestures", "add", "--os", "mac", "--", "button4", "left", "desktop-left"]);
+    ok(home, &["gestures", "add", "--os", "mac", "--", "button4", "right", "desktop-right"]);
+    let gestures = ok(home, &["gestures", "list"]);
+    for label in ["Previous desktop", "Next desktop"] {
+        assert!(gestures.contains(&format!("{label} (60 units, Macs only)")), "{gestures}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn detect_exits_and_releases_its_request_when_the_window_pipe_closes() {
+    use std::process::Stdio;
+    use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixListener;
+
+    let dir = home();
+    let home = dir.path();
+    let socket = one_mk_ctl::client::unix_socket_path(home);
+    let listener = UnixListener::bind(socket).unwrap();
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_one-mk"))
+        .args(["input-devices", "detect", "--json", "--timeout", "600", "--home"])
+        .arg(home)
+        .env("ONE_MK_DETECT_CANCEL_ON_STDIN_EOF", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn().unwrap();
+    let window_pipe = child.stdin.take().unwrap();
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = BufReader::new(stream);
+        let mut line = String::new();
+        stream.read_line(&mut line).await.unwrap();
+        assert_eq!(line.trim(), "status");
+        stream.get_mut().write_all(b"ok\n").await.unwrap();
+        drop(stream);
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = BufReader::new(stream);
+        line.clear();
+        stream.read_line(&mut line).await.unwrap();
+        assert_eq!(line.trim(), "detect-input 600");
+        assert!(child.try_wait().unwrap().is_none());
+        drop(window_pipe);
+        assert_eq!(stream.read(&mut [0]).await.unwrap(), 0, "the daemon's request was closed");
+        assert!(child.wait().await.unwrap().success());
+    }).await.expect("the child must exit before its detection timeout");
 }

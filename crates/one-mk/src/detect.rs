@@ -138,6 +138,18 @@ pub fn encode(end: &End, seconds: u32, unseen: Option<&str>) -> String {
     v.to_string()
 }
 
+/// The window retains the write end of a pipe for as long as it lives.
+pub async fn stdin_closed() {
+    let (closed, wait) = oneshot::channel();
+    // A detached thread allows the CLI to exit after a successful detection
+    // even while the window still holds the pipe open.
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+        let _ = closed.send(());
+    });
+    let _ = wait.await;
+}
+
 /// `one-mk input-devices detect`.
 pub async fn command(dir: &Path, seconds: u32, keys_only: bool, json: bool) -> Result<()> {
     let not_running = || {
@@ -234,8 +246,16 @@ pub fn found_text(v: &Value) -> String {
     let mut out = match (v["kind"].as_str(), v["button"].as_u64()) {
         (Some("button"), Some(n)) => format!("Mouse button {n} ({})", keynames::key_name(code as u32)),
         (Some("button"), None) => "A mouse button past the eighth".to_owned(),
-        _ if v["shortcut"].as_bool() == Some(true) => format!("The shortcut {}", label(trigger)),
-        _ => format!("The key {} (code {code})", label(v["name"].as_str().unwrap_or(""))),
+        _ if v["shortcut"].as_bool() == Some(true) => {
+            let shortcut = trigger.split('+').map(|part| {
+                part.strip_prefix("code:").map_or_else(|| label(part), |code| format!("Key code {code}"))
+            }).collect::<Vec<_>>().join("+");
+            format!("The shortcut {shortcut}")
+        }
+        _ => match v["name"].as_str() {
+            Some(name) if !name.starts_with("code:") => format!("The key {} (code {code})", label(name)),
+            _ => format!("Key code {code}"),
+        },
     };
     let device = v["device"]["fingerprint"].as_str();
     if let Some(name) = v["device"]["name"].as_str() {
@@ -252,7 +272,13 @@ pub fn found_text(v: &Value) -> String {
         out.push_str(&format!("It was detected, but it can't be changed on this system: {why}.\n"));
         return out;
     }
-    let device_arg = device.map(|d| format!(" --device \"{d}\""));
+    let device_arg = device.map(|d| {
+        #[cfg(not(windows))]
+        let quoted = format!("'{}'", d.replace('\'', r"'\''"));
+        #[cfg(windows)]
+        let quoted = format!("'{}'", d.replace('\'', "''")); // PowerShell
+        format!(" --device {quoted}")
+    });
     match v["button"].as_u64().filter(|_| v["shortcut"].as_bool() != Some(true)) {
         Some(n) => {
             out.push_str(&format!("\nChange it with:\n  one-mk buttons map -- {n} TO\n"));
@@ -321,7 +347,8 @@ mod tests {
             (Some("key"), Some("ctrl+alt+tab"), Some(true))
         );
         let text = found_text(&v);
-        assert!(text.contains("one-mk keymap add --device \"usb/046d:c52b//MX Master\" -- ctrl+alt+tab TO"), "{text}");
+        assert!(text.starts_with("The shortcut Ctrl+Alt+Tab"), "{text}");
+        assert!(text.contains("one-mk keymap add --device 'usb/046d:c52b//MX Master' -- ctrl+alt+tab TO"), "{text}");
         let v: Value = serde_json::from_str(&encode(&End::Timeout, 30, Some(LOCAL_UNSEEN))).unwrap();
         assert!(timeout_text(&v).contains("move the pointer onto another computer"));
         let v: Value = serde_json::from_str(&encode(
@@ -336,6 +363,20 @@ mod tests {
         .unwrap();
         assert!(v["unusable"].is_string() && v["device"].is_null());
         assert!(found_text(&v).contains("detected, but it can't be changed on this system"));
+    }
+
+    #[test]
+    fn unnamed_keys_and_shell_sensitive_device_names_read_cleanly() {
+        let v = json!({
+            "kind": "key", "code": 432, "name": "code:432", "trigger": "code:432",
+            "device": { "fingerprint": "usb/path/O'Brien $key \"quoted\"" }
+        });
+        let text = found_text(&v);
+        assert!(text.starts_with("Key code 432.\n"), "{text}");
+        #[cfg(not(windows))]
+        assert!(text.contains(r#"--device 'usb/path/O'\''Brien $key "quoted"'"#), "{text}");
+        #[cfg(windows)]
+        assert!(text.contains(r#"--device 'usb/path/O''Brien $key "quoted"'"#), "{text}");
     }
 
     #[test]

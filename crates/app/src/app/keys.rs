@@ -10,7 +10,7 @@ use super::*;
 use crate::tune::{self, Capture, Device, Facts, Input, KeyRule, Scope, ScrollChange, Tester, To};
 use egui::{Event, EventFilter};
 use tune::ChoiceGroup;
-use one_mk_proto::keynames;
+use one_mk_proto::{keynames, os};
 use one_mk_proto::remap::What;
 use std::time::Instant;
 
@@ -22,23 +22,35 @@ use crate::gear::{KEYBOARD_TURN as BOARD_TURN, MOUSE_TURN};
 mod detect_ui;
 use detect_ui::button_name;
 
-fn key_description(code: u16, action: Option<&What>) -> String {
+fn key_description(code: u16, action: Option<&What>, target: u8) -> String {
     let name = tune::key_label(u32::from(code));
     match action {
-        Some(What::To(output)) => format!("{name}: {}", tune::out_text(output)),
-        Some(What::TapHold { tap, hold, .. }) => format!("{name}: {} when tapped, {} when held", tune::out_text(tap), tune::out_text(hold)),
+        Some(What::To(output)) => format!("{name}: {}", tune::out_text_for(output, target)),
+        Some(What::TapHold { tap, hold, .. }) => format!("{name}: {} when tapped, {} when held", tune::out_text_for(tap, target), tune::out_text_for(hold, target)),
         None => format!("{name}: unchanged"),
     }
 }
 
 /// The panel's When tapped and When held for a key that does `what` (the
 /// same both ways without a hold; itself when unchanged).
-fn tap_hold_text(what: Option<&What>, name: &str) -> (String, String) {
+fn tap_hold_text(what: Option<&What>, name: &str, target: u8) -> (String, String) {
     match what {
-        Some(What::To(o)) => (tune::out_text(o), tune::out_text(o)),
-        Some(What::TapHold { tap, hold, .. }) => (tune::out_text(tap), tune::out_text(hold)),
+        Some(What::To(o)) => (tune::out_text_for(o, target), tune::out_text_for(o, target)),
+        Some(What::TapHold { tap, hold, .. }) => (tune::out_text_for(tap, target), tune::out_text_for(hold, target)),
         None => (name.to_owned(), name.to_owned()),
     }
+}
+
+fn rule_note(ui: &mut Ui, id: Id, at: Pos2, width: f32, note: &str) -> f32 {
+    let rect = Rect::from_min_size(at, vec2(width, 20.0));
+    let font = regular(T_META);
+    let line = fit(ui.painter(), note, &font, width);
+    ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, &line, font, pal().ink2);
+    a11y_text(ui, id, rect, Role::Label, note, None);
+    if line != note {
+        ui.interact(rect, id.with("tooltip"), Sense::hover()).on_hover_text(note);
+    }
+    rect.bottom()
 }
 
 fn key_matches_query(code: u16, query: &str) -> bool {
@@ -160,10 +172,10 @@ mod gesture_tests {
         let tap_hold = What::TapHold { tap: "esc".parse().unwrap(), hold: "lctrl".parse().unwrap(), timeout: None };
         // The held key is named the way this system names it (Ctrl, or Control on a Mac).
         let ctrl = if cfg!(target_os = "macos") { "Control" } else { "Ctrl" };
-        assert_eq!(tap_hold_text(Some(&tap_hold), "Caps Lock"), ("Esc".to_owned(), ctrl.to_owned()));
+        assert_eq!(tap_hold_text(Some(&tap_hold), "Caps Lock", os::UNKNOWN), ("Esc".to_owned(), ctrl.to_owned()));
         let to = What::To("esc".parse().unwrap());
-        assert_eq!(tap_hold_text(Some(&to), "Caps Lock"), ("Esc".to_owned(), "Esc".to_owned()));
-        assert_eq!(tap_hold_text(None, "Caps Lock"), ("Caps Lock".to_owned(), "Caps Lock".to_owned()));
+        assert_eq!(tap_hold_text(Some(&to), "Caps Lock", os::UNKNOWN), ("Esc".to_owned(), "Esc".to_owned()));
+        assert_eq!(tap_hold_text(None, "Caps Lock", os::UNKNOWN), ("Caps Lock".to_owned(), "Caps Lock".to_owned()));
     }
 
     #[test]
@@ -181,9 +193,9 @@ mod gesture_tests {
 
     #[test]
     fn key_description_uses_full_name_and_action() {
-        assert_eq!(key_description(102, None), "Home: unchanged");
+        assert_eq!(key_description(102, None, os::UNKNOWN), "Home: unchanged");
         let action = What::To("esc".parse().unwrap());
-        assert_eq!(key_description(58, Some(&action)), "Caps Lock: Esc");
+        assert_eq!(key_description(58, Some(&action), os::UNKNOWN), "Caps Lock: Esc");
     }
 
     #[test]
@@ -339,7 +351,8 @@ pub(super) struct KeysUi {
     pub capture: Option<(Want, Capture)>,
     /// The list is open, with what was typed to search it.
     pub picker: Option<(Want, String)>,
-    picker_drawn: bool,
+    /// Whether the editor requested a picker this frame, and whether it is system-only.
+    picker_request: Option<bool>,
     navigator_query: String,
     /// "Different when held" is open.
     pub more: bool,
@@ -1196,10 +1209,16 @@ impl App {
             }
         }
         let had_picker = self.keys.picker.is_some();
-        self.keys.picker_drawn = false;
+        self.keys.picker_request = None;
         self.keys_panel(ui, lay.panel, lay.compact, now);
-        if had_picker && !self.keys.picker_drawn && self.keys.picker.take().is_some() {
-            ui.ctx().data_mut(|d| d.remove::<PickerState>(Id::unique("output-picker")));
+        if had_picker {
+            if let Some(system_only) = self.keys.picker_request {
+                if let Some((want, query)) = self.keys.picker.clone() {
+                    self.picker(ui, want, query, system_only);
+                }
+            } else if self.keys.picker.take().is_some() {
+                ui.ctx().data_mut(|d| d.remove::<PickerState>(Id::unique("output-picker")));
+            }
         }
     }
 
@@ -1283,19 +1302,9 @@ impl App {
             let (all, _) = ui.allocate_exact_size(vec2(view.width() - 8.0, total + 12.0), Sense::hover());
             let at = all.min + vec2(6.0, 6.0);
             let w = inner.width();
-            let mut note_height = 0.0;
-            if let Some(Ok(problems)) = &self.keys.problems {
-                for note in problems.iter().filter(|line| line.starts_with("Note: ")) {
-                    let pos = at + vec2(0.0, note_height);
-                    let height = para(ui, pos, w, note, regular(T_BODY), pal().ink2);
-                    a11y_text(ui, Id::unique(("input-note", note)), Rect::from_min_size(pos, vec2(w, height)), Role::Status, note, Some(Live::Polite));
-                    note_height += height + 6.0;
-                }
-            }
-            let content = at + vec2(0.0, note_height);
-            let mut used = note_height + match self.keys.view {
-                View::Keyboard => self.keyboard_panel(ui, content, w, (viewport - note_height).max(0.0), compact, now),
-                View::Mouse => self.mouse_panel(ui, content, w, now),
+            let mut used = match self.keys.view {
+                View::Keyboard => self.keyboard_panel(ui, at, w, viewport, compact, now),
+                View::Mouse => self.mouse_panel(ui, at, w, now),
             };
             // Only where it can work: on Linux there is nothing to switch.
             // (Alone on Linux it says why, rather than leaving a rule that seems to do nothing.)
@@ -1476,7 +1485,7 @@ impl App {
                 let alpha = label.chars().count() == 1;
                 let fkey = label.len() > 1 && label.starts_with('F') && label[1..].chars().all(|d| d.is_ascii_digit());
                 let arrow = matches!(c.code, 103 | 105 | 106 | 108);
-                crate::gear::Cap { x: c.x, y: c.y, w: c.w, h: c.h, to: target.get(&c.code).map(tune::cap_target), modifier: !alpha && !fkey && !arrow, label }
+                crate::gear::Cap { x: c.x, y: c.y, w: c.w, h: c.h, to: target.get(&c.code).map(|what| tune::cap_target(what, facts.os)), modifier: !alpha && !fkey && !arrow, label }
             })
             .collect();
         // The case is fitted into a rectangle of the handoff's scale, the
@@ -1564,7 +1573,7 @@ impl App {
                     self.select_key(c.code, None);
                 }
             }
-            let does = key_description(c.code, target.get(&c.code));
+            let does = key_description(c.code, target.get(&c.code), facts.os);
             let selected = self.keys.selected == Some(c.code) && self.keys.layer.is_none();
             widgets::a11y(&kr, Role::Button, &format!("{does}. Arrows move between keys, Enter zooms in to change it"), Some(selected));
             if key_accessibility_activation(ui, &kr) {
@@ -1600,13 +1609,13 @@ impl App {
             && (self.keys.trigger_groups != 0 || !caps.iter().any(|c| c.code == code))
         {
             let text = if self.keys.trigger_groups != 0 {
-                format!("{} isn't one key on this drawing: it is changed in the panel", tune::trigger_text(&self.trigger_of(code)))
+                format!("{} is a shortcut — change it in the panel on the right", tune::trigger_text(&self.trigger_of(code)))
             } else {
-                format!("{} isn't on this drawing: it is changed in the panel", tune::key_label(u32::from(code)))
+                format!("{} isn't drawn on this keyboard — change it in the panel on the right", tune::key_label(u32::from(code)))
             };
             let font = regular(T_META);
             let tw = text_width(ui, &text, font.clone()).min(stage.width() - 40.0);
-            let pill = Rect::from_center_size(pos2(stage.center().x, keyboard_rect(stage).bottom() + 26.0).min(pos2(f32::INFINITY, stage.bottom() - 18.0)), vec2(tw + 28.0, 28.0));
+            let pill = Rect::from_center_size(pos2(stage.center().x, keyboard_rect(stage).bottom() + 26.0).min(pos2(f32::INFINITY, stage.bottom() - 24.0)), vec2(tw + 28.0, 28.0));
             let p = ui.painter();
             p.rect(pill, CornerRadius::same(14), pal().surface, Stroke::new(1.0, pal().accent), StrokeKind::Inside);
             p.text(pill.center(), Align2::CENTER_CENTER, fit(p, &text, &font, tw), font, pal().accent_text);
@@ -1659,7 +1668,7 @@ impl App {
                 // The selected key's own trigger: a detected shortcut is that shortcut.
                 let trigger = if selected == Some(code) { self.trigger_of(code) } else { keynames::Trigger::key(code) };
                 let action = specs.iter().find(|(spec, _)| spec.layer.is_none() && spec.from == trigger).map(|(spec, _)| &spec.what);
-                let text = key_description(code, action);
+                let text = key_description(code, action, self.facts().os);
                 if trigger.has_mods() {
                     text.replacen(&tune::key_label(u32::from(code)), &tune::trigger_text(&trigger), 1)
                 } else {
@@ -1928,7 +1937,8 @@ impl App {
             let ident = (key, *times);
             *times += 1;
             let row = Rect::from_min_size(pos2(left, y), vec2(width, 34.0));
-            let (text, ok) = match tune::sentence(input, r) {
+            let target = Facts::of(&r.scope, &peers).os;
+            let (text, ok) = match tune::sentence_for(input, r, target) {
                 Ok(s) => (s, true),
                 Err(e) => (tune::plain_problem(&e), false),
             };
@@ -2002,6 +2012,9 @@ impl App {
                 }
             }
             y += 34.0 + 2.0;
+            if !on && let Some(note) = r.spec().ok().and_then(|spec| tune::system_note(&spec.what, target)) {
+                y = rule_note(ui, Id::unique(("key-rule-note", &ident)), pos2(left + 10.0, y), width - 20.0, &note) + 3.0;
+            }
         }
         match act {
             Some((i, true)) => {
@@ -2047,19 +2060,20 @@ impl App {
             .into_iter()
             .find(|(s, _)| s.from == trigger && s.layer.as_deref() == self.keys.layer.as_deref().map(str::to_ascii_lowercase).as_deref());
         let shown = effective.as_ref().map(|(_, at)| *at);
+        let target = facts.os;
         let now_text = match (&own, shown) {
-            (Some(r), _) => tune::sentence(input, r).map(|s| s.split_once(" → ").map_or(s.clone(), |(_, t)| t.to_owned())).unwrap_or_else(|e| tune::plain_problem(&e)),
+            (Some(r), _) => tune::sentence_for(input, r, target).map(|s| s.split_once(" → ").map_or(s.clone(), |(_, t)| t.to_owned())).unwrap_or_else(|e| tune::plain_problem(&e)),
             (None, Some(Ok(i))) => {
                 let r = &input.keys[i];
-                let s = tune::sentence(input, r).unwrap_or_default();
+                let s = tune::sentence_for(input, r, target).unwrap_or_default();
                 format!("{} ({})", s.split_once(" → ").map_or(s.as_str(), |(_, t)| t), self.scope_label(&r.scope).to_lowercase())
             }
-            _ => format!("Types {name}, as it is."),
+            _ => "Unchanged".into(),
         };
         // The rule being changed is shown as it is written, whatever its app (the
         // rules a computer inherits leave app rules out).
         let own_what = own.as_ref().and_then(|r| r.spec().ok()).map(|s| s.what);
-        let (tapped, held) = tap_hold_text(own_what.as_ref().or(effective.as_ref().map(|(s, _)| &s.what)), &name);
+        let (tapped, held) = tap_hold_text(own_what.as_ref().or(effective.as_ref().map(|(s, _)| &s.what)), &name, target);
 
         // The key's chip, its name and what it does now; ✕ lets it go.
         let p = ui.painter().clone();
@@ -2081,13 +2095,18 @@ impl App {
         let tx = chip_r.right() + 12.0;
         let room = more.left() - 6.0 - tx;
         p.text(pos2(tx, at.y + 11.0), Align2::LEFT_CENTER, fit(&p, &title, &semibold(T_TITLE), room), semibold(T_TITLE), pal().ink);
-        let sub = fit(&p, &now_text, &regular(T_META), room);
-        p.text(pos2(tx, at.y + 31.0), Align2::LEFT_CENTER, &sub, regular(T_META), pal().ink2);
-        let head = Rect::from_min_max(at, pos2(close.left(), at.y + 40.0));
-        a11y_text(ui, Id::unique("key-editor-title"), head, Role::Heading, &format!("{title}: {now_text}"), None);
-        if sub != now_text {
-            ui.interact(head, Id::unique("key-editor-now"), Sense::hover()).on_hover_text(&now_text);
+        let mut job = egui::text::LayoutJob::simple(now_text.clone(), regular(T_META), pal().ink2, at.x + w - tx);
+        job.wrap.max_rows = 2;
+        let subtitle = p.layout_job(job);
+        let sub_at = pos2(tx, at.y + 26.0);
+        let sub_height = subtitle.size().y;
+        if subtitle.elided {
+            let rect = Rect::from_min_size(sub_at, subtitle.size());
+            ui.interact(rect, Id::unique("key-editor-now"), Sense::hover()).on_hover_text(&now_text);
         }
+        p.galley(sub_at, subtitle, pal().ink2);
+        let head = Rect::from_min_max(at, pos2(at.x + w, (sub_at.y + sub_height + 2.0).max(at.y + 40.0)));
+        a11y_text(ui, Id::unique("key-editor-title"), head, Role::Heading, &format!("{title}: {now_text}"), None);
         let esc = !self.keys_grab(ui.ctx()) && self.keys.picker.is_none() && ui.input(|i| i.key_pressed(Key::Escape)) && !ui.ctx().text_edit_focused();
         if widgets::icon_button(ui, close, Id::unique("key-close"), &format!("Done with {title}"), true, draw_cross).clicked() || esc {
             self.keys.selected = None;
@@ -2122,7 +2141,12 @@ impl App {
             }
             None => {}
         }
-        let mut y = at.y + 40.0 + PANEL_GAP - 10.0;
+        let mut y = head.bottom() + PANEL_GAP - 10.0;
+        if let Some(what) = own_what.as_ref().or(effective.as_ref().map(|(s, _)| &s.what))
+            && let Some(note) = tune::system_note(what, target)
+        {
+            y = rule_note(ui, Id::unique("key-editor-note"), pos2(at.x, y), w, &note) + 4.0;
+        }
         // Detected on a device this computer can name: for it only, or for all?
         let offered = self.device_offer(ui, pos2(at.x, y), w, false);
         if offered > y {
@@ -2176,12 +2200,12 @@ impl App {
             y += 46.0;
             if open {
                 let hold = own.as_ref().and_then(|r| r.hold.clone());
-                let hold_text = hold.as_ref().and_then(|h| h.parse().ok()).map_or("nothing else yet: it types the same".to_owned(), |o| tune::out_text(&o));
+                let hold_text = hold.as_ref().and_then(|h| h.parse().ok()).map_or("nothing else yet: it types the same".to_owned(), |o| tune::out_text_for(&o, target));
                 y += para(ui, pos2(at.x, y), w, &format!("Tapped, it types what is chosen above. Held, it gives: {hold_text}."), regular(T_META), pal().ink2) + 8.0;
                 if let Some((Want::Hold, _)) = self.keys.capture {
                     y = self.capture_box(ui, at.x, y, w, &name, Want::Hold);
-                } else if let Some((Want::Hold, query)) = self.keys.picker.clone() {
-                    self.picker(ui, Want::Hold, query, false);
+                } else if matches!(self.keys.picker, Some((Want::Hold, _))) {
+                    self.keys.picker_request = Some(false);
                     y += 30.0;
                 } else {
                     let mut labels = vec!["Press the key for holding", "Choose from a list"];
@@ -2240,7 +2264,7 @@ impl App {
         y += PANEL_GAP - 6.0;
         match (self.keys.capture, self.keys.picker.clone()) {
             (Some((Want::To, _)), _) => y = self.capture_box(ui, at.x, y, w, &name, Want::To),
-            (_, Some((Want::To, query))) => { self.picker(ui, Want::To, query, false); y += 36.0; }
+            (_, Some((Want::To, _))) => { self.keys.picker_request = Some(false); y += 36.0; }
             _ => {
                 let bw = (w - 8.0) / 2.0;
                 let press = Rect::from_min_size(pos2(at.x, y), vec2(bw, 36.0));
@@ -2353,7 +2377,6 @@ impl App {
 
     /// The shared chooser for a key, mouse button or gesture.
     fn picker(&mut self, ui: &Ui, want: Want, query: String, system_only: bool) {
-        self.keys.picker_drawn = true;
         let buttons = want == Want::Button;
         let target = self.facts().os;
         if self.keys.choices.as_ref().is_none_or(|(b, os, _)| *b != buttons || *os != target) {
@@ -2432,7 +2455,7 @@ impl App {
             let reset_scroll = previous.is_none() || changed || old_group != state.group;
             let typed = !query.trim().is_empty();
             let mut hits: Vec<_> = tune::search(all, &query).into_iter().filter(|choice| {
-                !(primary && (!choice.available || choice.value == "none")) && (!system_only || choice.value.starts_with("os:")) && match state.group {
+                !(primary && choice.value == "none") && (!system_only || choice.value.starts_with("os:")) && match state.group {
                     ChoiceGroup::Suggested => typed || choice.suggested,
                     ChoiceGroup::Mac => choice.mac,
                     ChoiceGroup::Keys => matches!(choice.group, ChoiceGroup::Keys | ChoiceGroup::Media),
@@ -2442,18 +2465,19 @@ impl App {
             if !typed && state.group == ChoiceGroup::Suggested {
                 hits.sort_by_key(|choice| !choice.value.starts_with("os:"));
             }
+            let available_choice = |choice: &tune::Choice| tune::picker_available(choice, primary, target);
             if reset_scroll {
-                state.row = hits.iter().position(|choice| choice.available).unwrap_or(0);
+                state.row = hits.iter().position(|choice| available_choice(choice)).unwrap_or(0);
             }
             for _ in 0..step.unsigned_abs().min(hits.len()) {
                 let next = if step > 0 {
-                    hits.iter().enumerate().skip(state.row + 1).find(|(_, choice)| choice.available)
+                    hits.iter().enumerate().skip(state.row + 1).find(|(_, choice)| available_choice(choice))
                 } else {
-                    hits.iter().enumerate().take(state.row).rfind(|(_, choice)| choice.available)
+                    hits.iter().enumerate().take(state.row).rfind(|(_, choice)| available_choice(choice))
                 };
                 if let Some((index, _)) = next { state.row = index; }
             }
-            let mut picked = hits.get(state.row).filter(|c| enter && c.available).map(|c| c.value.clone());
+            let mut picked = hits.get(state.row).filter(|c| enter && available_choice(c)).map(|c| c.value.clone());
             let height = (available.y - (chips_bottom - heading.top()) - 96.0).clamp(160.0, 468.0);
             ui.advance_cursor_after_rect(Rect::from_min_max(row.min, pos2(row.right(), chips_bottom + 12.0)));
             let list_frame = egui::Frame::new().fill(pal().bg).stroke(Stroke::new(1.0, pal().line))
@@ -2469,7 +2493,8 @@ impl App {
                     a11y_text(ui, id.with("empty"), rect, Role::Status, message, Some(egui::accesskit::Live::Polite));
                     return;
                 }
-                const ROW: f32 = 46.0;
+                let compact = state.group == ChoiceGroup::Keys;
+                let row_height = if compact { 30.0 } else { 54.0 };
                 let scroll_id = "results";
                 let mut scroll = egui::ScrollArea::vertical().id_salt(scroll_id).auto_shrink([false, false])
                     .max_height(height).min_scrolled_height(height);
@@ -2478,13 +2503,13 @@ impl App {
                         egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(egui::IdSalt::new(scroll_id)))
                             .map_or(0.0, |state| state.clamped_offset().y)
                     };
-                    let top = ROW * state.row as f32;
-                    scroll = scroll.vertical_scroll_offset(offset.clamp((top + ROW - height).max(0.0), top));
+                    let top = row_height * state.row as f32;
+                    scroll = scroll.vertical_scroll_offset(offset.clamp((top + row_height - height).max(0.0), top));
                 }
-                scroll.show_rows(ui, ROW, hits.len(), |ui, rows| {
+                scroll.show_rows(ui, row_height, hits.len(), |ui, rows| {
                     for index in rows {
                         let choice = hits[index];
-                        let response = Self::picker_row(ui, choice, index == state.row && choice.available);
+                        let response = Self::picker_row(ui, choice, index == state.row, available_choice(choice), compact, row_height);
                         if response.clicked() { picked = Some(choice.value.clone()); }
                     }
                 });
@@ -2502,28 +2527,41 @@ impl App {
         }
     }
 
-    fn picker_row(ui: &mut Ui, choice: &tune::Choice, selected: bool) -> egui::Response {
-        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
+    fn picker_row(ui: &mut Ui, choice: &tune::Choice, selected: bool, available: bool, compact: bool, height: f32) -> egui::Response {
+        let selected = selected && available;
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
         let id = ui.make_persistent_id(("choice", &choice.value));
-        let resp = ui.interact(r, id, if choice.available { Sense::click() } else { Sense::hover() });
+        let resp = ui.interact(r, id, if available { Sense::click() } else { Sense::hover() });
         let p = ui.painter();
-        if selected || (choice.available && resp.hovered()) {
+        if selected || (available && resp.hovered()) {
             p.rect_filled(r, CornerRadius::same(6), if selected { pal().accent_soft } else { pal().hover });
         }
         widgets::focus_ring(ui, &resp, r.shrink(2.0), 5);
         let vw = text_width(ui, &choice.value, mono(T_META)).min(r.width() * 0.36);
-        p.text(r.left_top() + vec2(10.0, 6.0), Align2::LEFT_TOP, fit(p, &choice.label, &semibold(T_BODY), r.width() - 20.0),
-            semibold(T_BODY), if choice.available { pal().ink } else { pal().ink3 });
-        p.text(r.left_bottom() + vec2(10.0, -6.0), Align2::LEFT_BOTTOM,
-            fit(p, &choice.detail, &regular(T_META), r.width() - vw - 30.0), regular(T_META), pal().ink2);
-        widgets::mono_text(p, r.right_bottom() + vec2(-10.0, -6.0), Align2::RIGHT_BOTTOM, &choice.value, T_META, pal().ink2, vw + 1.0);
+        let single = compact || choice.detail.is_empty();
+        let (label_at, label_align, label_width, value_at, value_align) = if single {
+            (r.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, r.width() - vw - 30.0,
+                r.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER)
+        } else {
+            let mut job = egui::text::LayoutJob::simple(choice.detail.clone(), regular(T_META), pal().ink2, r.width() - vw - 30.0);
+            job.wrap.max_rows = 2;
+            p.galley(r.left_top() + vec2(10.0, 22.0), p.layout_job(job), pal().ink2);
+            (r.left_top() + vec2(10.0, 6.0), Align2::LEFT_TOP, r.width() - 20.0,
+                r.right_bottom() + vec2(-10.0, -6.0), Align2::RIGHT_BOTTOM)
+        };
+        p.text(label_at, label_align, fit(p, &choice.label, &semibold(T_BODY), label_width),
+            semibold(T_BODY), if available { pal().ink } else { pal().ink3 });
+        widgets::mono_text(p, value_at, value_align, &choice.value, T_META, pal().ink2, vw + 1.0);
         widgets::a11y(&resp, Role::ListItem, &choice.label, Some(selected));
+        let hint = choice.disabled_hint.as_deref().filter(|_| !available);
+        let full = [Some(choice.label.as_str()), Some(choice.detail.as_str()), hint].into_iter()
+            .flatten().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n");
         ui.ctx().accesskit_node_builder(resp.id, |node| {
-            node.set_description(&choice.detail);
-            if !choice.available { node.set_disabled(); }
+            node.set_description(&full);
+            if !available { node.set_disabled(); }
         });
-        if choice.available && resp.hovered() { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); }
-        resp.on_hover_text(format!("{}\n{}", choice.label, choice.detail))
+        if available && resp.hovered() { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); }
+        resp.on_hover_text(full)
     }
 
     /// "Test it" (handoff 5.5): a field (38 tall, `bg`, a `line2` edge) where
@@ -2710,11 +2748,16 @@ impl App {
             top += para(ui, pos2(content.left(), top), content.width(), "No gestures yet. A short click still clicks normally. Use the preset or add your own below.", regular(T_META), pal().ink2);
         }
         for row in gestures {
-            let description = format!("Hold {} and swipe {} to {}{}.", tune::mouse_button_label(&row.button), row.direction, row.to.describe(), row.app.as_ref().map_or(String::new(), |app| format!(" in app {app}")));
+            let description = format!("Hold {} and swipe {} to {}{}.", tune::mouse_button_label(&row.button), row.direction, row.to.describe(facts.os), row.app.as_ref().map_or(String::new(), |app| format!(" in app {app}")));
             let height = para(ui, pos2(content.left(), top), content.width(), &description, regular(T_BODY), pal().ink);
             a11y_text(ui, Id::unique(("gesture-description", &row.button, &row.direction, row.scope.label(), &row.app)),
                 Rect::from_min_size(pos2(content.left(), top), vec2(content.width(), height)), Role::Label, &description, None);
             top += height + 4.0;
+            let target = Facts::of(&row.scope, &self.scope_peers()).os;
+            if let Some(note) = row.to.parse().ok().and_then(|output| tune::system_note(&What::To(output), target)) {
+                let id = Id::unique(("gesture-note", &row.button, &row.direction, row.scope.label(), &row.app));
+                top = rule_note(ui, id, pos2(content.left(), top), content.width(), &note) + 4.0;
+            }
             let rect = Rect::from_min_size(pos2(content.left(), top), vec2(100.0_f32.min(content.width()), 30.0));
             let remove = ui.add_enabled_ui(!busy, |ui| chip(ui, rect, Id::unique(("remove-gesture", &row.button, &row.direction, row.scope.label(), &row.app)), "Remove", false, true, false)).inner;
             widgets::a11y(&remove, Role::Button, &format!("Remove gesture: {description}"), None);
@@ -2788,8 +2831,8 @@ impl App {
                 }
             }
         }
-        if let Some((Want::Gesture, q)) = self.keys.picker.clone() {
-            self.picker(ui, Want::Gesture, q, false);
+        if matches!(self.keys.picker, Some((Want::Gesture, _))) {
+            self.keys.picker_request = Some(false);
         }
         top + 38.0
     }
@@ -2964,6 +3007,12 @@ impl App {
                 What::To(o) => Some(o),
                 What::TapHold { .. } => None,
             });
+            let warning = tune::button_rule_note(n, facts.os).or_else(|| {
+                doing.as_ref().and_then(|output| tune::system_note(&What::To(output.clone()), facts.os))
+            });
+            if let Some(note) = warning {
+                y = rule_note(ui, Id::unique(("button-editor-note", n)), pos2(at.x, y), w, &note) + 4.0;
+            }
             let now = ButtonKind::of(doing.as_ref());
             let open = self.keys.button_kind.filter(|(b, _)| *b == n).map_or(now, |(_, k)| k);
             for kind in ButtonKind::ALL {
@@ -3055,7 +3104,7 @@ impl App {
         if input.local_rules && cfg!(any(windows, target_os = "macos")) {
             for rule in input.buttons.iter().filter(|rule| rule.scope.includes_local_os(one_mk_proto::os::local())) {
                 y += 6.0;
-                y += para(ui, pos2(at.x, y), w, &format!("{} → {} · Also here", rule.from, rule.to.describe()), regular(T_META), pal().ink2);
+                y += para(ui, pos2(at.x, y), w, &format!("{} → {} · Also here", rule.from, rule.to.describe(facts.os)), regular(T_META), pal().ink2);
             }
         }
         if let Some((_, e)) = self.keys.error.clone().filter(|(a, _)| *a == "buttons") {
@@ -3073,7 +3122,7 @@ impl App {
         match kind {
             ButtonKind::Key => match (self.keys.capture, self.keys.picker.clone()) {
                 (Some((Want::Button, _)), _) => y = self.capture_box(ui, left, y, w, name, Want::Button),
-                (_, Some((Want::Button, q))) => { self.picker(ui, Want::Button, q, false); y += 36.0; }
+                (_, Some((Want::Button, _))) => { self.keys.picker_request = Some(false); y += 36.0; }
                 _ => {
                     let labels = ["Press a key or shortcut", "Choose from a list"];
                     // Side by side, equal, when both fit; else one above the other.
@@ -3100,9 +3149,13 @@ impl App {
             },
             ButtonKind::System => {
                 let r = Rect::from_min_size(pos2(left, y), vec2(w, 36.0));
-                if let Some((Want::Button, q)) = self.keys.picker.clone() {
-                    self.picker(ui, Want::Button, q, true);
-                } else if widgets::content_button(ui, r, Id::unique("button-system-list"), "Choose system action", Look::Primary, !busy, None).clicked() {
+                let label = match doing {
+                    Some(one_mk_proto::remap::Output::System(action)) => action.label_for(self.facts().os),
+                    _ => "Choose system action",
+                };
+                if matches!(self.keys.picker, Some((Want::Button, _))) {
+                    self.keys.picker_request = Some(true);
+                } else if widgets::content_button(ui, r, Id::unique("button-system-list"), label, Look::Primary, !busy, None).clicked() {
                     self.keys.picker = Some((Want::Button, String::new()));
                 }
                 y += 36.0;

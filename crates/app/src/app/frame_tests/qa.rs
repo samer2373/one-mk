@@ -282,7 +282,7 @@ fn clicking_a_key_opens_its_panel_and_done_closes_it() {
     ] {
         assert!(win.find(name).is_some(), "{name}: {:#?}", win.names());
     }
-    assert!(win.find_containing("Caps Lock: Types Caps Lock, as it is.").is_some(), "{:#?}", win.names());
+    assert!(win.find_containing("Caps Lock: Unchanged").is_some(), "{:#?}", win.names());
     assert!(problems(&win).is_empty(), "{:#?}", problems(&win));
     win.click("Done with Caps Lock");
     assert_eq!(win.app.keys.selected, None);

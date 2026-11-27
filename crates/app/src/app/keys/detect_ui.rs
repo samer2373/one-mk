@@ -276,7 +276,9 @@ impl App {
         let Some(l) = self.keys.listening.clone() else { return at.y };
         let keyboard = l.view == View::Keyboard;
         let ask = if keyboard { "Press the key on your keyboard…" } else { "Press the button on your mouse…" };
-        let heard = self.listened_to(keyboard, l.daemon && !l.window);
+        let mouse_fallback = !keyboard && l.window && l.note.is_some();
+        let heard = if mouse_fallback { "Listening in this window.".into() } else { self.listened_to(keyboard, l.daemon && !l.window) };
+        let why = mouse_fallback.then(|| l.note.as_deref().unwrap());
         let esc = if keyboard { "Esc cancels." } else { "Esc or a left click here cancels." };
         let bw = button_width(ui, "Cancel") - 6.0;
         let tw = w - bw - 52.0;
@@ -286,7 +288,7 @@ impl App {
             ui.painter().layout_job(job).size().y
         };
         let (ah, hh) = (lay(ask, semibold(T_BODY), tw), lay(&format!("{heard} {esc}"), regular(T_META), tw));
-        let nh = l.note.as_deref().map_or(0.0, |n| lay(n, regular(T_META), w - 28.0) + 10.0);
+        let nh = if mouse_fallback { 26.0 } else { l.note.as_deref().map_or(0.0, |n| lay(n, regular(T_META), w - 28.0) + 10.0) };
         let r = Rect::from_min_size(at, vec2(w, 12.0 + ah + 4.0 + hh + nh + 14.0));
         if std::mem::take(&mut self.keys.reveal) || !ui.clip_rect().contains_rect(r.expand(4.0)) {
             ui.scroll_to_rect(r.expand(6.0), None);
@@ -304,7 +306,11 @@ impl App {
         let left = r.left() + 36.0;
         para(ui, pos2(left, r.top() + 12.0), tw, ask, semibold(T_BODY), pal().ink);
         para(ui, pos2(left, r.top() + 16.0 + ah), tw, &format!("{heard} {esc}"), regular(T_META), pal().ink2);
-        if let Some(note) = &l.note {
+        if let Some(why) = why {
+            let br = Rect::from_min_size(pos2(left, r.top() + 20.0 + ah + hh), vec2(53.0, 22.0));
+            let label = format!("Why? {why}");
+            let _ = small_button(ui, br, Id::unique("detect-why"), "Why?", Some(&label)).on_hover_text(why);
+        } else if let Some(note) = &l.note {
             let y = r.top() + 16.0 + ah + hh + 10.0;
             widgets::hairline(ui.painter(), egui::Rangef::new(r.left() + 14.0, r.right() - 14.0), y - 5.0);
             para(ui, pos2(r.left() + 14.0, y), w - 28.0, note, regular(T_META), pal().ink2);
@@ -412,7 +418,7 @@ impl App {
         for n in list {
             let code = keynames::button_code(n).map(|c| c as u16);
             let does = specs.iter().find(|(s, _)| Some(s.from.key) == code && !s.from.has_mods() && s.layer.is_none()).and_then(|(s, _)| match &s.what {
-                What::To(o) => Some(tune::button_text(o)),
+                What::To(o) => Some(tune::button_text(o, facts.os)),
                 What::TapHold { .. } => None,
             });
             let (does, changed) = does.map_or(("Unchanged".to_owned(), false), |d| (d, true));
@@ -441,6 +447,9 @@ impl App {
                 self.keys.picker = None;
             }
             y += 36.0;
+            if !sel && let Some(note) = tune::button_rule_note(n, facts.os) {
+                y = super::rule_note(ui, id.with("note"), pos2(at.x + 10.0, y), w - 20.0, &note);
+            }
         }
         card.end(ui, y - 2.0);
         y - 2.0
