@@ -76,7 +76,7 @@ impl Found {
     /// Why no rule can use it, if none can.
     pub fn unusable(&self) -> Option<&'static str> {
         if (BEYOND_BUTTONS..BEYOND_BUTTONS_END).contains(&self.code) {
-            Some("oneMK can change mouse buttons 1 to 8; this one is further on, so it can't be changed")
+            Some("oneMK can change mouse buttons 1 to 8, and this one is further on")
         } else if self.code == 0 || self.code >= keynames::CODE_LIMIT {
             Some("this key has no code oneMK can use in a rule")
         } else {

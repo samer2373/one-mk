@@ -777,6 +777,10 @@ pub fn key_label(code: u32) -> String {
         _ => {}
     }
     let name = keynames::key_name(code);
+    // A key with no name (a keyboard's own extra key, detected): its number.
+    if name.starts_with("code:") {
+        return format!("Key code {code}");
+    }
     if name.chars().count() == 1 || name.starts_with('f') && name[1..].parse::<u8>().is_ok() {
         return name.to_uppercase();
     }
@@ -1734,6 +1738,12 @@ pub fn buttons_shown(input: &Input, f: &Facts) -> Vec<(u32, String, bool)> {
 pub fn button_has_own_rule(input: &Input, scope: &Scope, n: u32) -> bool {
     let Some(code) = keynames::button_code(n) else { return false };
     input.buttons.iter().any(|b| b.scope == *scope && b.app.is_none() && b.trigger().is_ok_and(|t| t == Trigger::key(code as u16)))
+}
+
+/// Whether any rule (any scope, any app) is for mouse button `n`.
+pub fn button_has_rule(input: &Input, n: u32) -> bool {
+    let Some(code) = keynames::button_code(n) else { return false };
+    input.buttons.iter().any(|b| b.trigger().is_ok_and(|t| t.key == code as u16))
 }
 
 /// Pointer acceleration this computer can do: only the system's, for now.

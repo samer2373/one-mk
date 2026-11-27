@@ -18,6 +18,9 @@ const CAPTURE_ID: &str = "keys-capture";
 const ROW: f32 = 36.0;
 use crate::gear::{KEYBOARD_TURN as BOARD_TURN, MOUSE_TURN};
 
+mod detect_ui;
+use detect_ui::button_name;
+
 fn key_description(code: u16, action: Option<&What>) -> String {
     let name = tune::key_label(u32::from(code));
     match action {
@@ -363,6 +366,22 @@ pub(super) struct KeysUi {
     button_kind: Option<(u32, ButtonKind)>,
     /// The panel's contents as tall as they were last drawn.
     panel_heights: HashMap<&'static str, f32>,
+    /// "Detect key" / "Detect button" listening for a press, and the number of the last one asked for.
+    pub listening: Option<detect_ui::Listening>,
+    detect_n: u64,
+    /// The press detected last: its device is offered as the scope ("Only on ...").
+    pub detected: Option<crate::detect::Detected>,
+    /// The listening card's Cancel as last drawn (a click there is not a press).
+    detect_cancel: Option<Rect>,
+    /// Mouse buttons 6 to 8 detected here, listed under "Other buttons".
+    pub other_buttons: Vec<u32>,
+    /// The window is compact (the panel under the stage), as last drawn.
+    compact: bool,
+    /// The press detected last came while detecting for the mouse.
+    pub detected_on_mouse: bool,
+    /// The modifiers (groups) of the selected key's trigger: a key a mouse
+    /// sends with modifiers, as `ctrl+alt+tab`. 0 for a plain key.
+    pub trigger_groups: u8,
 }
 
 /// What a mouse button does, as the panel's choices group it.
@@ -793,7 +812,7 @@ impl App {
         if !(self.tab == Tab::Keys && self.keys.view == View::Mouse && !matches!(self.keys.scope, Scope::Device(..))) {
             ctx.data_mut(|d| d.remove::<bool>(Id::unique("gesture-recording")));
         }
-        self.tab == Tab::Keys && (self.keys.capture.is_some() || ctx.memory(|m| m.has_focus(Id::unique(TEST_ID))))
+        self.tab == Tab::Keys && (self.keys.capture.is_some() || self.keys.listening.is_some() || ctx.memory(|m| m.has_focus(Id::unique(TEST_ID))))
     }
 
     fn scope_peers(&self) -> Vec<tune::Peer> {
@@ -875,15 +894,22 @@ impl App {
         }
     }
 
+    /// The trigger the selected key's rule has: the key, with the modifiers
+    /// of a shortcut a mouse sends (detected) where there are any.
+    fn trigger_of(&self, code: u16) -> keynames::Trigger {
+        keynames::Trigger { groups: self.keys.trigger_groups, sided: 0, key: code }
+    }
+
     /// The rule for a key in the chosen scope and layer, if there is one.
     fn own_rule(&self, code: u16) -> Option<(usize, KeyRule)> {
         let name = keynames::key_name(u32::from(code));
         let want = KeyRule { scope: self.keys.scope.clone(), layer: self.keys.layer.clone(), ..KeyRule::to(&name, "none") };
+        let trigger = self.trigger_of(code);
         let i = self.prefs.input.keys.iter().position(|r| {
             r.scope == want.scope
                 && tune::same_app(&r.app, &self.keys.app)
                 && r.layer.as_ref().map(|l| l.to_ascii_lowercase()) == want.layer.as_ref().map(|l| l.to_ascii_lowercase())
-                && r.from.parse::<keynames::Trigger>().is_ok_and(|t| t == keynames::Trigger::key(code))
+                && r.from.parse::<keynames::Trigger>().is_ok_and(|t| t == trigger)
         })?;
         Some((i, self.prefs.input.keys[i].clone()))
     }
@@ -893,7 +919,7 @@ impl App {
     fn inherited_rule(&self, code: u16) -> Option<KeyRule> {
         let layer = self.keys.layer.as_deref().map(str::to_ascii_lowercase);
         let (spec, at) = self.prefs.input.specs(&self.facts()).into_iter()
-            .find(|(s, _)| s.from == keynames::Trigger::key(code) && s.layer.as_deref() == layer.as_deref())?;
+            .find(|(s, _)| s.from == self.trigger_of(code) && s.layer.as_deref() == layer.as_deref())?;
         at.ok().and_then(|i| self.prefs.input.keys.get(i).cloned()).filter(|_| matches!(spec.what, What::To(_) | What::TapHold { .. }))
     }
 
@@ -908,12 +934,12 @@ impl App {
                 self.keys.error = Some(("buttons", e));
                 return;
             }
-            let name = tune::BUTTONS.iter().find(|b| b.0 == n).map_or("the button", |b| b.1);
+            let name = button_name(n);
             self.tune_cmds(&name.to_lowercase(), "buttons", vec![tune::button_args(n, Some(&value), &self.keys.scope)], None);
             return;
         }
         let Some(code) = self.keys.selected else { return };
-        let from = keynames::key_name(u32::from(code));
+        let from = self.trigger_of(code).to_string();
         let own = self.own_rule(code).map(|(_, r)| r);
         let base = KeyRule { scope: self.keys.scope.clone(), layer: self.keys.layer.clone(), app: self.keys.app.clone(), ..Default::default() };
         let tap_of = |r: &KeyRule| r.tap.clone().or_else(|| match &r.to {
@@ -957,6 +983,9 @@ impl App {
         self.keys.app = None;
         self.keys.capture = None;
         self.keys.picker = None;
+        // A plain key (a detected shortcut sets its modifiers after this).
+        self.keys.trigger_groups = 0;
+        self.keys.detected = None;
         // The When held row says what it gives; its choices open on a click.
         self.keys.more = false;
         self.keys.reveal = true;
@@ -1024,6 +1053,10 @@ impl App {
 
     /// Key events for a key being pressed for a rule, or for the test box.
     fn keys_input(&mut self, ui: &mut Ui) {
+        if self.keys.listening.is_some() {
+            self.detect_input(ui);
+            return;
+        }
         let take = |ui: &mut Ui, tab_too: bool| -> Vec<Event> {
             ui.input_mut(|i| {
                 let (taken, kept): (Vec<Event>, Vec<Event>) = std::mem::take(&mut i.events).into_iter().partition(|e| match e {
@@ -1115,6 +1148,7 @@ impl App {
             }
         }
         let lay = keys_layout(rect);
+        self.keys.compact = lay.compact;
         self.keys_header(ui, lay.header, now);
         let input = self.prefs.input.clone();
         let facts = self.facts();
@@ -1128,8 +1162,14 @@ impl App {
             View::Mouse => {
                 self.mouse_stage(ui, lay.stage, &input, &facts);
                 if !lay.compact {
-                    let hint = "Click a button on the mouse or its label";
-                    ui.painter().text(lay.foot.center(), Align2::CENTER_CENTER, hint, regular(T_META), pal().ink3);
+                    // The hint, and "Detect button" for one the drawn mouse doesn't have.
+                    let hint = "Click a button on the mouse or its label, or";
+                    let bw = text_width(ui, "Listening…", medium(T_META)).max(text_width(ui, "Detect button", medium(T_META))) + 24.0;
+                    let hw = text_width(ui, hint, regular(T_META));
+                    let left = lay.foot.center().x - (hw + 10.0 + bw) / 2.0;
+                    ui.painter().text(pos2(left, lay.foot.center().y), Align2::LEFT_CENTER, hint, regular(T_META), pal().ink3);
+                    let br = Rect::from_min_size(pos2(left + hw + 10.0, lay.foot.center().y - 14.0), vec2(bw, 28.0));
+                    self.detect_button(ui, br, View::Mouse);
                 }
             }
         }
@@ -1165,6 +1205,9 @@ impl App {
             self.keys.view = if k == 0 { View::Keyboard } else { View::Mouse };
             self.keys.capture = None;
             self.keys.picker = None;
+            if self.keys.listening.as_ref().is_some_and(|l| l.view != self.keys.view) {
+                self.cancel_detect();
+            }
         }
         let room = Rect::from_min_max(pos2(track.right() + 16.0, r.center().y - 16.0), pos2(r.right(), r.center().y + 16.0));
         let scope = self.scope_menu(ui, room);
@@ -1215,7 +1258,7 @@ impl App {
             let w = inner.width();
             let mut used = match self.keys.view {
                 View::Keyboard => self.keyboard_panel(ui, at, w, viewport, compact, now),
-                View::Mouse => self.mouse_panel(ui, at, w),
+                View::Mouse => self.mouse_panel(ui, at, w, now),
             };
             // Only where it can work: on Linux there is nothing to switch.
             // (Alone on Linux it says why, rather than leaving a rule that seems to do nothing.)
@@ -1405,7 +1448,7 @@ impl App {
         // glides across) and back out when it is let go; a drag turns it.
         let area = keyboard_rect(stage);
         self.keys.detail_ok = detail_room(stage);
-        let chosen = caps.iter().position(|c| self.keys.selected == Some(c.code) && self.keys.layer.is_none());
+        let chosen = caps.iter().position(|c| self.keys.selected == Some(c.code) && self.keys.layer.is_none() && self.keys.trigger_groups == 0);
         let dt = ui.input(|i| i.stable_dt);
         let mut moving = self.keys.board_orbit.step(dt);
         let turn = self.keys.board_orbit;
@@ -1513,6 +1556,25 @@ impl App {
             self.keys.focus_key = code;
             ui.memory_mut(|m| m.request_focus(Id::unique(("cap", code))));
         }
+        // A key the drawing doesn't have (detected), or a shortcut: say so under the board, where
+        // the eye looks for the chosen key.
+        // (Not in a compact window: the stage is short there, and the panel is right under it.)
+        if let Some(code) = self.keys.selected.filter(|_| self.keys.layer.is_none() && !compact)
+            && (self.keys.trigger_groups != 0 || !caps.iter().any(|c| c.code == code))
+        {
+            let text = if self.keys.trigger_groups != 0 {
+                format!("{} isn't one key on this drawing: it is changed in the panel", tune::trigger_text(&self.trigger_of(code)))
+            } else {
+                format!("{} isn't on this drawing: it is changed in the panel", tune::key_label(u32::from(code)))
+            };
+            let font = regular(T_META);
+            let tw = text_width(ui, &text, font.clone()).min(stage.width() - 40.0);
+            let pill = Rect::from_center_size(pos2(stage.center().x, keyboard_rect(stage).bottom() + 26.0).min(pos2(f32::INFINITY, stage.bottom() - 18.0)), vec2(tw + 28.0, 28.0));
+            let p = ui.painter();
+            p.rect(pill, CornerRadius::same(14), pal().surface, Stroke::new(1.0, pal().accent), StrokeKind::Inside);
+            p.text(pill.center(), Align2::CENTER_CENTER, fit(p, &text, &font, tw), font, pal().accent_text);
+            a11y_text(ui, Id::unique("keys-off-board"), pill, Role::Label, &text, None);
+        }
         // Over the board (made after it, so it takes its own clicks).
         if !compact {
             self.keyboard_toolbar(ui, Rect::from_min_size(stage.min, vec2(stage.width(), 28.0)), false);
@@ -1526,11 +1588,15 @@ impl App {
     fn keyboard_toolbar(&mut self, ui: &mut Ui, r: Rect, in_panel: bool) -> f32 {
         let small = |ui: &Ui, label: &str| text_width(ui, label, medium(T_META)) + 24.0;
         let keypad = if self.keys.keypad { "Hide keypad" } else { "Show keypad" };
-        let detail = self.keys.selected.filter(|_| self.keys.detail_ok).map(|_| if self.keys.board_detail { "Whole board" } else { "Key detail" });
-        let chooser = self.keys.selected.map_or_else(|| "Choose a key".to_owned(), |code| tune::key_label(u32::from(code)));
+        // Zooming in needs the key on the drawn board (a detected key may not be).
+        let drawn = |code: u16| tune::keyboard(self.keys.keypad, mac()).iter().any(|c| c.code == code);
+        let detail = self.keys.selected.filter(|code| self.keys.detail_ok && self.keys.trigger_groups == 0 && drawn(*code))
+            .map(|_| if self.keys.board_detail { "Whole board" } else { "Key detail" });
+        let chooser = self.keys.selected.map_or_else(|| "Choose a key".to_owned(), |code| tune::trigger_text(&self.trigger_of(code)));
         let chooser_w = (text_width(ui, &chooser, medium(T_META)) + 44.0).clamp(120.0, 200.0);
         // Left to right in the panel; from the right on the stage.
-        let mut widths = vec![chooser_w, small(ui, keypad)];
+        let detect_w = small(ui, "Detect key").max(small(ui, "Listening…"));
+        let mut widths = vec![detect_w, chooser_w, small(ui, keypad)];
         if let Some(d) = detail {
             widths.push(small(ui, d));
         }
@@ -1541,20 +1607,29 @@ impl App {
             x += w + 6.0;
             b
         });
-        let chooser_r = rects.next().expect("three buttons");
-        let keypad_r = rects.next().expect("three buttons");
+        let detect_r = rects.next().expect("four buttons");
+        let chooser_r = rects.next().expect("four buttons");
+        let keypad_r = rects.next().expect("four buttons");
         let detail_r = rects.next();
         if !in_panel {
             let focused = widgets::keyboard_focus(ui.ctx())
                 && ui.memory(|memory| memory.has_focus(Id::unique(("cap", self.keys.focus_key))));
             let code = if focused { Some(self.keys.focus_key) } else { self.keys.board_hover.or(self.keys.selected.filter(|_| self.keys.layer.is_none())) };
+            let selected = self.keys.selected.filter(|_| self.keys.layer.is_none());
             let intro = code.map(|code| {
                 let facts = self.facts();
                 let specs = self.prefs.input.specs(&facts);
-                let action = specs.iter().find(|(spec, _)| spec.layer.is_none() && !spec.from.has_mods() && spec.from.key == code).map(|(spec, _)| &spec.what);
-                key_description(code, action)
+                // The selected key's own trigger: a detected shortcut is that shortcut.
+                let trigger = if selected == Some(code) { self.trigger_of(code) } else { keynames::Trigger::key(code) };
+                let action = specs.iter().find(|(spec, _)| spec.layer.is_none() && spec.from == trigger).map(|(spec, _)| &spec.what);
+                let text = key_description(code, action);
+                if trigger.has_mods() {
+                    text.replacen(&tune::key_label(u32::from(code)), &tune::trigger_text(&trigger), 1)
+                } else {
+                    text
+                }
             }).unwrap_or_else(|| "Click a key to zoom · drag to turn".to_owned());
-            let iw = chooser_r.left() - r.left() - 16.0;
+            let iw = detect_r.left() - r.left() - 16.0;
             let p = ui.painter();
             p.text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, fit(p, &intro, &regular(T_META), iw), regular(T_META), pal().ink3);
             let intro_rect = Rect::from_min_size(r.min, vec2(iw.max(0.0), r.height()));
@@ -1563,6 +1638,7 @@ impl App {
             a11y_text(ui, Id::unique("keys-intro"), intro_rect, Role::Label, &intro, None);
             ui.ctx().accesskit_node_builder(Id::unique("keys-intro"), |node| node.set_description(guidance));
         }
+        self.detect_button(ui, detect_r, View::Keyboard);
         self.keyboard_navigator(ui, chooser_r, &chooser);
         if small_button(ui, keypad_r, Id::unique("keys-more"), keypad, Some(if self.keys.keypad { "Hide keypad" } else { "Show keypad too" })).clicked() {
             self.keys.keypad = !self.keys.keypad;
@@ -1699,6 +1775,9 @@ impl App {
         let mut y = at.y;
         if compact {
             y = self.keyboard_toolbar(ui, Rect::from_min_size(pos2(at.x, y), vec2(w, 28.0)), true) + PANEL_GAP;
+        }
+        if self.keys.listening.as_ref().is_some_and(|l| l.view == View::Keyboard) {
+            y = self.listening_card(ui, pos2(at.x, y), w, now) + PANEL_GAP;
         }
         let header_top = y;
         let selected = self.keys.selected.is_some();
@@ -1856,7 +1935,8 @@ impl App {
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            let editable = r.from.parse::<keynames::Trigger>().is_ok_and(|t| !t.has_mods());
+            // A plain key, or a shortcut with either side of each modifier (a mouse's key, detected).
+            let editable = r.from.parse::<keynames::Trigger>().is_ok_and(|t| t.sided == 0);
             widgets::a11y(&resp, Role::ListItem, &full, Some(on));
             let resp = if !ok {
                 resp.on_hover_text(format!("{}\n{full}", tune::as_written(r)))
@@ -1892,6 +1972,7 @@ impl App {
                 if let Ok(t) = r.from.parse::<keynames::Trigger>() {
                     self.keys.scope = r.scope.clone();
                     self.select_key(t.key, r.layer.clone());
+                    self.keys.trigger_groups = t.groups;
                     self.keys.app = r.app.clone();
                 }
             }
@@ -1911,7 +1992,11 @@ impl App {
     /// Returns its bottom.
     fn key_editor(&mut self, ui: &mut Ui, at: Pos2, w: f32, input: &Input, facts: &Facts) -> f32 {
         let code = self.keys.selected.unwrap_or(58);
-        let name = tune::key_label(u32::from(code));
+        // A shortcut a mouse's key sends (detected) is changed as a whole; it
+        // can't also be different when held (a tap/hold key has no modifiers).
+        let trigger = self.trigger_of(code);
+        let shortcut = trigger.has_mods();
+        let name = tune::trigger_text(&trigger);
         let title = match &self.keys.layer {
             Some(l) => match input.layer_key(l) {
                 Some(k) => format!("{} + {name}", tune::key_label(u32::from(k))),
@@ -1923,7 +2008,7 @@ impl App {
         let effective = input
             .specs(facts)
             .into_iter()
-            .find(|(s, _)| s.from == keynames::Trigger::key(code) && s.layer.as_deref() == self.keys.layer.as_deref().map(str::to_ascii_lowercase).as_deref());
+            .find(|(s, _)| s.from == trigger && s.layer.as_deref() == self.keys.layer.as_deref().map(str::to_ascii_lowercase).as_deref());
         let shown = effective.as_ref().map(|(_, at)| *at);
         let now_text = match (&own, shown) {
             (Some(r), _) => tune::sentence(input, r).map(|s| s.split_once(" → ").map_or(s.clone(), |(_, t)| t.to_owned())).unwrap_or_else(|e| tune::plain_problem(&e)),
@@ -1941,7 +2026,15 @@ impl App {
 
         // The key's chip, its name and what it does now; ✕ lets it go.
         let p = ui.painter().clone();
-        let cap = tune::cap_label(code);
+        // On a chip: the cap's word, or for a key no keyboard here draws (detected), its number.
+        let cap = if keynames::key_name(u32::from(code)).starts_with("code:") {
+            code.to_string()
+        } else if shortcut {
+            tune::key_label(u32::from(code))
+        } else {
+            tune::cap_label(code)
+        };
+        let cap = fit(&p, &cap, &mono_medium(T_META), 90.0);
         let galley = p.layout_no_wrap(cap.clone(), mono_medium(T_META), pal().on_accent);
         let chip_r = Rect::from_min_size(pos2(at.x, at.y + 4.0), vec2((galley.size().x + 18.0).max(32.0), 32.0));
         p.rect_filled(chip_r, CornerRadius::same(8), pal().accent);
@@ -1993,6 +2086,11 @@ impl App {
             None => {}
         }
         let mut y = at.y + 40.0 + PANEL_GAP - 10.0;
+        // Detected on a device this computer can name: for it only, or for all?
+        let offered = self.device_offer(ui, pos2(at.x, y), w, false);
+        if offered > y {
+            y = offered + 4.0;
+        }
 
         // The rows, 46 tall, a hairline between.
         let row = |y: f32| Rect::from_min_size(pos2(at.x, y), vec2(w, 46.0));
@@ -2000,102 +2098,104 @@ impl App {
             ui.painter().text(r.left_center(), Align2::LEFT_CENTER, text, regular(T_BODY), pal().ink);
         };
         let r = row(y);
-        label(ui, r, "When tapped");
+        label(ui, r, if shortcut { "When pressed" } else { "When tapped" });
         kbd_fit(ui.painter(), r.right_center(), Align2::RIGHT_CENTER, &tapped, w - 110.0);
         widgets::hairline(ui.painter(), r.x_range(), r.bottom());
         y += 46.0;
 
-        // When held: a click opens what else it can give when held.
-        let r = row(y);
-        let open = self.keys.more;
-        let resp = ui.interact(r, Id::unique("key-more"), widgets::sense(ui, Sense::click()));
-        let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
-        ui.painter().rect_filled(r.expand2(vec2(6.0, -4.0)), CornerRadius::same(8), mix(Color32::TRANSPARENT, pal().hover, hover));
-        widgets::focus_ring(ui, &resp, r.expand2(vec2(6.0, -4.0)), 8);
-        label(ui, r, "When held");
-        let m = pos2(r.left() + text_width(ui, "When held", regular(T_BODY)) + 12.0, r.center().y);
-        if open {
-            ui.painter().add(egui::Shape::line(vec![m + vec2(-4.0, -2.0), m + vec2(0.0, 2.0), m + vec2(4.0, -2.0)], Stroke::new(1.5, pal().ink3)));
-        } else {
-            crate::icons::draw(ui.painter(), crate::icons::Icon::Chevron, Rect::from_center_size(m, vec2(14.0, 14.0)), pal().ink3);
-        }
-        kbd_fit(ui.painter(), r.right_center(), Align2::RIGHT_CENTER, &held, w - 110.0);
-        let more_label = "More: a different key when held";
-        resp.widget_info(move || egui::WidgetInfo::selected(Role::Button, true, open, more_label));
-        if resp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if resp.clicked() {
-            self.keys.more = !open;
+        if !shortcut {
+            // When held: a click opens what else it can give when held.
+            let r = row(y);
+            let open = self.keys.more;
+            let resp = ui.interact(r, Id::unique("key-more"), widgets::sense(ui, Sense::click()));
+            let hover = tween(ui.ctx(), resp.id.with("hover"), f32::from(resp.hovered()), 0.1, motion::out_cubic);
+            ui.painter().rect_filled(r.expand2(vec2(6.0, -4.0)), CornerRadius::same(8), mix(Color32::TRANSPARENT, pal().hover, hover));
+            widgets::focus_ring(ui, &resp, r.expand2(vec2(6.0, -4.0)), 8);
+            label(ui, r, "When held");
+            let m = pos2(r.left() + text_width(ui, "When held", regular(T_BODY)) + 12.0, r.center().y);
             if open {
-                // Closed, its recorder and list go too: a key pressed later is not theirs.
-                if matches!(self.keys.capture, Some((Want::Hold, _))) {
-                    self.keys.capture = None;
-                }
-                if matches!(self.keys.picker, Some((Want::Hold, _))) {
-                    self.keys.picker = None;
+                ui.painter().add(egui::Shape::line(vec![m + vec2(-4.0, -2.0), m + vec2(0.0, 2.0), m + vec2(4.0, -2.0)], Stroke::new(1.5, pal().ink3)));
+            } else {
+                crate::icons::draw(ui.painter(), crate::icons::Icon::Chevron, Rect::from_center_size(m, vec2(14.0, 14.0)), pal().ink3);
+            }
+            kbd_fit(ui.painter(), r.right_center(), Align2::RIGHT_CENTER, &held, w - 110.0);
+            let more_label = "More: a different key when held";
+            resp.widget_info(move || egui::WidgetInfo::selected(Role::Button, true, open, more_label));
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.clicked() {
+                self.keys.more = !open;
+                if open {
+                    // Closed, its recorder and list go too: a key pressed later is not theirs.
+                    if matches!(self.keys.capture, Some((Want::Hold, _))) {
+                        self.keys.capture = None;
+                    }
+                    if matches!(self.keys.picker, Some((Want::Hold, _))) {
+                        self.keys.picker = None;
+                    }
                 }
             }
-        }
-        y += 46.0;
-        if open {
-            let hold = own.as_ref().and_then(|r| r.hold.clone());
-            let hold_text = hold.as_ref().and_then(|h| h.parse().ok()).map_or("nothing else yet: it types the same".to_owned(), |o| tune::out_text(&o));
-            y += para(ui, pos2(at.x, y), w, &format!("Tapped, it types what is chosen above. Held, it gives: {hold_text}."), regular(T_META), pal().ink2) + 8.0;
-            if let Some((Want::Hold, _)) = self.keys.capture {
-                y = self.capture_box(ui, at.x, y, w, &name, Want::Hold);
-            } else if let Some((Want::Hold, query)) = self.keys.picker.clone() {
-                y = self.picker(ui, at.x, y, w, Want::Hold, query, 6);
-            } else {
-                let mut labels = vec!["Press the key for holding", "Choose from a list"];
-                if hold.is_some() {
-                    labels.push("Not when held");
-                }
-                let (rects, bottom) = flow(ui, at.x, y, w, &labels);
-                for (k, r) in rects.iter().enumerate() {
-                    let names = [format!("Press the key {name} gives when held"), format!("Choose what {name} gives when held"), format!("Make {name} the same when held")];
-                    if button(ui, *r, Id::unique(("key-hold", k)), labels[k], Look::Quiet, !busy, Some(&names[k])).clicked() {
-                        match k {
-                            0 => self.keys.capture = Some((Want::Hold, Capture::default())),
-                            1 => self.keys.picker = Some((Want::Hold, String::new())),
-                            _ => {
-                                if let Some(r) = own.clone() {
-                                    let tap = r.tap.clone().unwrap_or_else(|| r.from.clone());
-                                    self.save_rule(KeyRule { to: Some(tune::To::One(tap)), tap: None, hold: None, timeout_ms: None, ..r });
+            y += 46.0;
+            if open {
+                let hold = own.as_ref().and_then(|r| r.hold.clone());
+                let hold_text = hold.as_ref().and_then(|h| h.parse().ok()).map_or("nothing else yet: it types the same".to_owned(), |o| tune::out_text(&o));
+                y += para(ui, pos2(at.x, y), w, &format!("Tapped, it types what is chosen above. Held, it gives: {hold_text}."), regular(T_META), pal().ink2) + 8.0;
+                if let Some((Want::Hold, _)) = self.keys.capture {
+                    y = self.capture_box(ui, at.x, y, w, &name, Want::Hold);
+                } else if let Some((Want::Hold, query)) = self.keys.picker.clone() {
+                    y = self.picker(ui, at.x, y, w, Want::Hold, query, 6);
+                } else {
+                    let mut labels = vec!["Press the key for holding", "Choose from a list"];
+                    if hold.is_some() {
+                        labels.push("Not when held");
+                    }
+                    let (rects, bottom) = flow(ui, at.x, y, w, &labels);
+                    for (k, r) in rects.iter().enumerate() {
+                        let names = [format!("Press the key {name} gives when held"), format!("Choose what {name} gives when held"), format!("Make {name} the same when held")];
+                        if button(ui, *r, Id::unique(("key-hold", k)), labels[k], Look::Quiet, !busy, Some(&names[k])).clicked() {
+                            match k {
+                                0 => self.keys.capture = Some((Want::Hold, Capture::default())),
+                                1 => self.keys.picker = Some((Want::Hold, String::new())),
+                                _ => {
+                                    if let Some(r) = own.clone() {
+                                        let tap = r.tap.clone().unwrap_or_else(|| r.from.clone());
+                                        self.save_rule(KeyRule { to: Some(tune::To::One(tap)), tap: None, hold: None, timeout_ms: None, ..r });
+                                    }
                                 }
                             }
                         }
                     }
+                    y = bottom + 8.0;
                 }
-                y = bottom + 8.0;
             }
-        }
-        widgets::hairline(ui.painter(), egui::Rangef::new(at.x, at.x + w), y);
+            widgets::hairline(ui.painter(), egui::Rangef::new(at.x, at.x + w), y);
 
-        // Held means after: editable once the key has a hold.
-        let r = row(y);
-        label(ui, r, "Held means after");
-        let cur = own.as_ref().and_then(|r| r.timeout_ms).unwrap_or(input.tap_ms.unwrap_or(200)).to_string();
-        match own.clone().filter(|r| r.hold.is_some()) {
-            Some(rule) => {
-                let ms_w = text_width(ui, "ms", mono(T_META)) + 6.0;
-                ui.painter().text(r.right_center(), Align2::RIGHT_CENTER, "ms", mono(T_META), pal().ink2);
-                let fr = Rect::from_min_size(pos2(r.right() - ms_w - 60.0, r.center().y - 14.0), vec2(60.0, 28.0));
-                if let Some(text) = self.edit_field(ui, fr, "key-timeout", &cur, "200", "Held after this many milliseconds", !busy, true) {
-                    match text.parse::<u32>() {
-                        Ok(ms) if (one_mk_proto::remap::MIN_TAP_MS..=one_mk_proto::remap::MAX_TAP_MS).contains(&ms) => {
-                            self.save_rule(KeyRule { timeout_ms: Some(ms), ..rule });
+            // Held means after: editable once the key has a hold.
+            let r = row(y);
+            label(ui, r, "Held means after");
+            let cur = own.as_ref().and_then(|r| r.timeout_ms).unwrap_or(input.tap_ms.unwrap_or(200)).to_string();
+            match own.clone().filter(|r| r.hold.is_some()) {
+                Some(rule) => {
+                    let ms_w = text_width(ui, "ms", mono(T_META)) + 6.0;
+                    ui.painter().text(r.right_center(), Align2::RIGHT_CENTER, "ms", mono(T_META), pal().ink2);
+                    let fr = Rect::from_min_size(pos2(r.right() - ms_w - 60.0, r.center().y - 14.0), vec2(60.0, 28.0));
+                    if let Some(text) = self.edit_field(ui, fr, "key-timeout", &cur, "200", "Held after this many milliseconds", !busy, true) {
+                        match text.parse::<u32>() {
+                            Ok(ms) if (one_mk_proto::remap::MIN_TAP_MS..=one_mk_proto::remap::MAX_TAP_MS).contains(&ms) => {
+                                self.save_rule(KeyRule { timeout_ms: Some(ms), ..rule });
+                            }
+                            _ => self.keys.error = Some(("keyboard", format!("Type a time from {} to {} ms.", one_mk_proto::remap::MIN_TAP_MS, one_mk_proto::remap::MAX_TAP_MS))),
                         }
-                        _ => self.keys.error = Some(("keyboard", format!("Type a time from {} to {} ms.", one_mk_proto::remap::MIN_TAP_MS, one_mk_proto::remap::MAX_TAP_MS))),
                     }
                 }
+                None => {
+                    widgets::mono_text(ui.painter(), r.right_center(), Align2::RIGHT_CENTER, &format!("{cur} ms"), T_META, pal().ink2, 120.0);
+                }
             }
-            None => {
-                widgets::mono_text(ui.painter(), r.right_center(), Align2::RIGHT_CENTER, &format!("{cur} ms"), T_META, pal().ink2, 120.0);
-            }
+            widgets::hairline(ui.painter(), r.x_range(), r.bottom());
+            y += 46.0;
         }
-        widgets::hairline(ui.painter(), r.x_range(), r.bottom());
-        y += 46.0;
         y = self.app_field(ui, pos2(at.x, y), w, &name);
 
         // The actions, or the key being pressed, or the list.
@@ -2389,10 +2489,15 @@ impl App {
     /// The mouse's panel: the chosen button and what it should do, then the
     /// pointer and scrolling rows, the wheel and touchpad, and autoscroll
     /// and gestures, all in the panel's row style. Returns how tall it is.
-    fn mouse_panel(&mut self, ui: &mut Ui, at: Pos2, w: f32) -> f32 {
+    fn mouse_panel(&mut self, ui: &mut Ui, at: Pos2, w: f32, now: f64) -> f32 {
         let input = self.prefs.input.clone();
         let facts = self.facts();
-        let mut y = self.buttons_card(ui, at, w, &input, &facts);
+        let top = if self.keys.listening.as_ref().is_some_and(|l| l.view == View::Mouse) {
+            self.listening_card(ui, at, w, now) + PANEL_GAP
+        } else {
+            at.y
+        };
+        let mut y = self.buttons_card(ui, pos2(at.x, top), w, &input, &facts);
         y = self.pointer_rows(ui, pos2(at.x, y + PANEL_GAP), w, &input, &facts);
         y = self.scroll_card(ui, pos2(at.x, y + 6.0), w, &input, &facts);
         let mh = self.mouse_modes_card(ui, pos2(at.x, y + 6.0), w, &input, &facts);
@@ -2669,7 +2774,8 @@ impl App {
         let mut y = at.y;
         let busy = self.tuning_busy();
         if let Some(n) = self.keys.button {
-            let name = tune::BUTTONS.iter().find(|b| b.0 == n).map_or("Button", |b| b.1);
+            let name = button_name(n);
+            let name = name.as_str();
             let p = ui.painter().clone();
             let close = Rect::from_center_size(pos2(at.x + w - 13.0, at.y + 13.0), vec2(26.0, 26.0));
             p.text(pos2(at.x, at.y + 11.0), Align2::LEFT_CENTER, fit(&p, name, &semibold(T_TITLE), close.left() - at.x - 6.0), semibold(T_TITLE), pal().ink);
@@ -2685,6 +2791,10 @@ impl App {
                 ui.scroll_to_rect(Rect::from_min_size(pos2(at.x, at.y - 6.0), vec2(w, 60.0)), None);
             }
             y += 40.0 + PANEL_GAP;
+            let offered = self.device_offer(ui, pos2(at.x, y - 6.0), w, true);
+            if offered > y - 6.0 {
+                y = offered + 6.0;
+            }
             let code = keynames::button_code(n).map(|c| c as u16);
             let doing = input.specs(facts).into_iter().find(|(s, _)| Some(s.from.key) == code && !s.from.has_mods() && s.layer.is_none()).and_then(|(s, _)| match s.what {
                 What::To(o) => Some(o),
@@ -2746,9 +2856,20 @@ impl App {
             }
             y -= 6.0;
         } else {
-            y += para(ui, pos2(at.x, y), w, "Click a part of the mouse above, or its label, to change what it does.", regular(T_BODY), pal().ink2);
+            let text = if self.keys.compact {
+                "Click a part of the mouse above, or its label, to change what it does. A button that isn't drawn? Detect it: press it."
+            } else {
+                "Click a part of the mouse above, or its label, to change what it does. A button that isn't drawn? Detect button, under the mouse."
+            };
+            y += para(ui, pos2(at.x, y), w, text, regular(T_BODY), pal().ink2);
+            if self.keys.compact && self.keys.listening.as_ref().is_none_or(|l| l.view != View::Mouse) {
+                let label_w = text_width(ui, "Detect button", medium(T_META)) + 24.0;
+                self.detect_button(ui, Rect::from_min_size(pos2(at.x, y + 10.0), vec2(label_w, 28.0)), View::Mouse);
+                y += 10.0 + 28.0;
+            }
         }
-        y += 12.0;
+        let listed = self.other_buttons(ui, pos2(at.x, y + 12.0), w, input, facts);
+        y = if listed > y + 12.0 { listed + 16.0 } else { y + 12.0 };
         // The one quick setup for buttons.
         let side = "Side buttons go back and forward";
         let on = [(4u32, "back"), (5, "forward")].iter().all(|(n, to)| {
