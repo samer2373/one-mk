@@ -359,7 +359,7 @@ pub struct GestureRule {
 fn gesture_threshold() -> f64 { 60.0 }
 
 impl GestureRule {
-    fn compile(&self, target: remap::Target) -> Result<one_mk_proto::gesture::Rule<Keymap>, String> {
+    fn compile(&self, target: remap::Target) -> Result<(one_mk_proto::gesture::Rule<Keymap>, Vec<String>), String> {
         let button = mouse_button(&self.button)?;
         if matches!(button, 0x110 | 0x111) {
             return Err("primary left/right buttons must remain available for clicking; choose middle or button4 instead".into());
@@ -378,8 +378,8 @@ impl GestureRule {
         };
         if matches!(output, remap::Output::Layer(_)) { return Err("gestures cannot hold a layer; choose a key, chord, sequence or action".into()); }
         let spec = RuleSpec { from: Trigger::key(button as u16), layer: None, what: What::To(output) };
-        let output = Keymap::compile(&[spec], target, remap::DEFAULT_TAP).map_err(|error| error.to_string())?.map;
-        Ok(one_mk_proto::gesture::Rule { button, direction, threshold_px: self.threshold_px, output })
+        let compiled = Keymap::compile(&[spec], target, remap::DEFAULT_TAP).map_err(|error| error.to_string())?;
+        Ok((one_mk_proto::gesture::Rule { button, direction, threshold_px: self.threshold_px, output: compiled.map }, compiled.warnings.into_iter().chain(compiled.system_warnings).collect()))
     }
 }
 
@@ -428,6 +428,16 @@ pub enum To {
     Many(Vec<String>),
 }
 
+fn output_label(text: &str, target: u8) -> String {
+    if let Ok(action) = text.parse::<remap::SystemAction>() {
+        return action.label_for(target).to_owned();
+    }
+    if text.parse::<keynames::Chord>().is_ok_and(|chord| chord.mods == 0 && chord.key == 133) {
+        return "Copy key".into();
+    }
+    text.to_owned()
+}
+
 impl To {
     fn parse(&self) -> Result<Output, String> {
         match self {
@@ -437,9 +447,13 @@ impl To {
     }
 
     fn describe(&self) -> String {
+        self.describe_for(os::UNKNOWN)
+    }
+
+    fn describe_for(&self, target: u8) -> String {
         match self {
-            To::One(s) => s.clone(),
-            To::Many(v) => format!("[{}]", v.join(", ")),
+            To::One(s) => output_label(s, target),
+            To::Many(v) => format!("[{}]", v.iter().map(|step| output_label(step, target)).collect::<Vec<_>>().join(", ")),
         }
     }
 }
@@ -491,19 +505,20 @@ impl KeyRule {
         }
         // A key rule can name a mouse button too (`from = "button1"`): the
         // same guard as `[[input.button]]`, in every layer.
-        keep_clicking(&from, &what, || match &self.to { Some(to) => to.describe(), None => "a tap/hold key".into() })?;
+        keep_clicking(&from, &what, scope_os(&self.scope, &[]), || match &self.to { Some(to) => to.describe(), None => "a tap/hold key".into() })?;
         refuse_emergency_chord(&what)?;
         Ok(RuleSpec { from, layer: self.layer.clone(), what })
     }
 
     fn describe(&self) -> String {
+        let target = scope_os(&self.scope, &[]).unwrap_or(os::UNKNOWN);
         let what = match (&self.to, &self.tap, &self.hold) {
-            (Some(to), _, _) => format!("-> {}", to.describe()),
-            (None, Some(t), Some(h)) => format!("tap {t}, hold {h}"),
+            (Some(to), _, _) => format!("-> {}", to.describe_for(target)),
+            (None, Some(t), Some(h)) => format!("tap {}, hold {}", output_label(t, target), output_label(h, target)),
             _ => "(incomplete)".into(),
         };
         let layer = self.layer.as_ref().map_or_else(String::new, |l| format!(" in layer {l}"));
-        format!("{}{layer} {what}", self.from)
+        format!("{}{layer} {what}", output_label(&self.from, target))
     }
 }
 
@@ -685,7 +700,7 @@ impl ButtonRule {
     fn spec(&self) -> Result<RuleSpec, String> {
         let from = self.from.trigger()?;
         let what = What::To(self.to.parse().map_err(|e| format!("to: {e}"))?);
-        keep_clicking(&from, &what, || self.to.describe())?;
+        keep_clicking(&from, &what, scope_os(&self.scope, &[]), || self.to.describe())?;
         refuse_emergency_chord(&what)?;
         Ok(RuleSpec { from, layer: None, what })
     }
@@ -738,13 +753,79 @@ fn switch_note(dir: &Path, outputs: &[&str]) {
     }
 }
 
+/// A global target covers all OSes. A peer target needs pairing facts.
+fn scope_os(scope: &Scope, paired: &[(String, String, u8)]) -> Option<u8> {
+    match scope.target() {
+        Scope::Os(o) => Some(*o),
+        Scope::Local => Some(os::local()),
+        Scope::Peer(peer) => paired.iter().find(|(name, id, _)| peer_matches(peer, name, id)).map(|(.., o)| *o),
+        _ => Some(os::UNKNOWN),
+    }
+}
+
+fn system_notes(scope: &Scope, paired: &[(String, String, u8)], outputs: &[&str]) -> Vec<String> {
+    let Some(target) = scope_os(scope, paired) else { return vec![] };
+    let mut notes = Vec::new();
+    for action in outputs.iter().filter_map(|text| text.parse::<remap::SystemAction>().ok()) {
+        let supported = remap::SystemAction::TARGETS.into_iter().filter(|&os| action.shortcut(os).is_some())
+            .map(|os| format!("--os {}", os_name(os))).collect::<Vec<_>>().join(" or ");
+        for missing in action.missing_on(target) {
+            if let Some(warning) = action.unavailable(missing, false) {
+                let note = format!("{warning}. Scope this rule with {supported}.");
+                if !notes.contains(&note) { notes.push(note); }
+            }
+        }
+    }
+    notes
+}
+
+fn extra_button_note(from: &Trigger, target: Option<u8>) -> Option<String> {
+    let n = keynames::button_number(u32::from(from.key))?;
+    let target = target?;
+    remap::extra_button_unavailable(n, target).then(|| {
+        format!("button {n} isn't forwarded on {}. Scope this rule with --os linux.", os_name(target))
+    })
+}
+
+const SYSTEM_ACTION_HELP: &str = "\
+OS shortcuts (prefix each name with os:):
+  Desktops: next-desktop, previous-desktop, overview, app-windows, show-desktop
+  Apps: app-launcher, search, force-quit, full-screen, emoji-picker, switch-app,
+        hide-app, close-window, quit-app
+  Screen: screenshot-area, screenshot-tool, lock-screen
+  Editing: copy, cut, paste, undo, redo, select-all, find, save
+  Tabs: new-tab, close-tab, next-tab, previous-tab";
+
+fn check_trailing_scope(outputs: &[String]) -> Result<()> {
+    for text in outputs {
+        let name = text.split_once('=').map_or(text.as_str(), |(name, _)| name);
+        if matches!(name, "--os" | "--peer" | "--device" | "--app") {
+            bail!("put {name} before --");
+        }
+    }
+    Ok(())
+}
+
+fn print_system_notes(notes: Vec<String>) {
+    for note in notes { println!("Note: {note}"); }
+}
+
 /// Left and right click are how the computer is used at all: making either
 /// (without modifiers) do nothing, hold a layer, or wait to tell a tap from
 /// a hold would leave the pointer dead or every click and drag broken.
 /// Shared by button rules and key rules (which can name buttons too), in
 /// every layer. `to` describes the rule's output for the message.
-fn keep_clicking(from: &Trigger, what: &What, to: impl FnOnce() -> String) -> Result<(), String> {
-    if !matches!(from.key, 0x110 | 0x111) || from.has_mods() {
+fn keep_clicking(from: &Trigger, what: &What, target: Option<u8>, to: impl FnOnce() -> String) -> Result<(), String> {
+    if !matches!(from.key, 0x110 | 0x111) {
+        return Ok(());
+    }
+    if let What::To(Output::System(action)) = what
+        && let Some(missing) = target.and_then(|target| action.missing_on(target).next())
+    {
+        return Err(format!("the {} button must keep clicking: {action} has no shortcut for --os {}",
+            if from.key == 0x110 { "left" } else { "right" }, os_name(missing)));
+    }
+    if from.has_mods() {
         return Ok(());
     }
     let dead = match what {
@@ -1035,7 +1116,7 @@ impl TuningSettings {
         // One rule that cannot be built costs only itself, as the file promises.
         let keymap = match Keymap::compile_lenient(&specs, target, self.keymap.tap()) {
             Ok(c) => {
-                warnings.extend(c.warnings);
+                warnings.extend(c.warnings.into_iter().chain(c.system_warnings));
                 c.map
             }
             Err(e) => {
@@ -1064,8 +1145,11 @@ impl TuningSettings {
         let mut gestures: Vec<one_mk_proto::gesture::Rule<Keymap>> = Vec::new();
         for (_, rule) in candidates {
             match rule.compile(target) {
-                Ok(compiled) if enabled && compiled.button == config.button => warnings.push(format!("gesture {} {} is reserved by autoscroll; choose another button or turn autoscroll off", rule.button, rule.direction)),
-                Ok(compiled) if !gestures.iter().any(|other| other.button == compiled.button && other.direction == compiled.direction) => gestures.push(compiled),
+                Ok((compiled, _)) if enabled && compiled.button == config.button => warnings.push(format!("gesture {} {} is reserved by autoscroll; choose another button or turn autoscroll off", rule.button, rule.direction)),
+                Ok((compiled, problems)) if !gestures.iter().any(|other| other.button == compiled.button && other.direction == compiled.direction) => {
+                    warnings.extend(problems.into_iter().map(|problem| format!("gesture: {problem}")));
+                    gestures.push(compiled);
+                }
                 Ok(_) => {},
                 Err(error) => warnings.push(format!("gesture: {error}")),
             }
@@ -1313,14 +1397,14 @@ impl TuningSettings {
             }
         }
         for (i, r) in self.keymap.rule.iter().enumerate() {
-            match r.spec() {
+            match r.spec().and_then(|spec| keep_clicking(&spec.from, &spec.what, scope_os(&r.scope, paired), || "this rule".into())) {
                 Err(e) => out.push(format!("{}: {e}", place("input.keymap.rule", i))),
                 Ok(_) => out.extend(unknown_switch_targets(&key_rule_outputs(r), paired).into_iter().map(|to| format!(
                     "{}: `switch {to}` names no paired computer, so pressing the key only reports that (see `one-mk devices`)", place("input.keymap.rule", i)))),
             }
         }
         for (i, r) in self.button.iter().enumerate() {
-            match r.spec() {
+            match r.spec().and_then(|spec| keep_clicking(&spec.from, &spec.what, scope_os(&r.scope, paired), || r.to.describe())) {
                 Err(e) => out.push(format!("{}: {e}", place("input.button", i))),
                 Ok(_) => {
                     let to = match &r.to { To::One(s) => Some(s.as_str()), To::Many(_) => None };
@@ -1358,36 +1442,44 @@ impl TuningSettings {
             if s.device().is_some() && device.is_none() {
                 continue; // reported above
             }
-            for apps in &focused {
-                let mut facts = match s.target() {
-                    Scope::Os(o) => PeerFacts { name: "", id: "", os: *o, apps, device: None },
-                    Scope::Peer(p) => PeerFacts { name: p, id: "", os: os::UNKNOWN, apps, device: None },
-                    _ => PeerFacts { name: "", id: "", os: os::UNKNOWN, apps, device: None },
-                };
-                facts.device = device.as_ref();
-                let (specs, warnings) = self.specs(&facts);
-                out.extend(warnings.into_iter().filter(|w| !w.contains(" skipped: ")));
-                let target = remap::Target { os: facts.os, swap: false };
-                let what = match apps.first() {
-                    Some(a) => format!("{s}, in app {a}"),
-                    None => s.to_string(),
-                };
-                let resolved = self.resolve(&facts, false);
-                out.extend(resolved.warnings.into_iter().filter(|warning| warning.contains("reserved by autoscroll")));
-                if let Some(config) = resolved.autoscroll
-                    && specs.iter().any(|spec| u32::from(spec.from.key) == config.button) {
-                    out.push(format!("for {what}: autoscroll takes precedence over button/key mappings for its toggle button; choose another button or remove that mapping"));
+            let global_targets = [os::MACOS, os::WINDOWS, os::LINUX].map(|o| ("", "", o));
+            let scoped_target;
+            let targets: &[(&str, &str, u8)] = match s.target() {
+                Scope::Os(o) => { scoped_target = [("", "", *o)]; &scoped_target }
+                Scope::Peer(p) => {
+                    scoped_target = [paired.iter().find(|(n, id, _)| peer_matches(p, n, id))
+                        .map_or((p.as_str(), "", os::UNKNOWN), |(n, id, o)| (n.as_str(), id.as_str(), *o))];
+                    &scoped_target
                 }
-                for gesture in resolved.gestures {
-                    if specs.iter().any(|spec| u32::from(spec.from.key) == gesture.button) {
-                        out.push(format!("for {what}: gesture {} takes precedence over button/key mappings; a short click replays the original button", keynames::key_name(gesture.button)));
+                _ => &global_targets,
+            };
+            for &(name, id, os) in targets {
+                for apps in &focused {
+                    let facts = PeerFacts { name, id, os, apps, device: device.as_ref() };
+                    let (specs, warnings) = self.specs(&facts);
+                    out.extend(warnings.into_iter().filter(|w| !w.contains(" skipped: ")));
+                    let target = remap::Target { os, swap: false };
+                    let what = match apps.first() {
+                        Some(a) => format!("{s}, in app {a}"),
+                        None => s.to_string(),
+                    };
+                    let resolved = self.resolve(&facts, false);
+                    out.extend(resolved.warnings.into_iter().filter(|warning| warning.contains("reserved by autoscroll")));
+                    if let Some(config) = resolved.autoscroll
+                        && specs.iter().any(|spec| u32::from(spec.from.key) == config.button) {
+                        out.push(format!("for {what}: autoscroll takes precedence over button/key mappings for its toggle button; choose another button or remove that mapping"));
                     }
+                    for gesture in resolved.gestures {
+                        if specs.iter().any(|spec| u32::from(spec.from.key) == gesture.button) {
+                            out.push(format!("for {what}: gesture {} takes precedence over button/key mappings; a short click replays the original button", keynames::key_name(gesture.button)));
+                        }
+                    }
+                    match Keymap::compile_lenient(&specs, target, self.keymap.tap()) {
+                        Ok(c) => out.extend(c.warnings),
+                        Err(e) => out.push(format!("for {what}: {e}")),
+                    }
+                    out.extend(self.scroll_for(&facts).1);
                 }
-                match Keymap::compile_lenient(&specs, target, self.keymap.tap()) {
-                    Ok(c) => out.extend(c.warnings),
-                    Err(e) => out.push(format!("for {what}: {e}")),
-                }
-                out.extend(self.scroll_for(&facts).1);
             }
         }
         if self.button.iter().any(|rule| *rule.scope.target() == Scope::Local)
@@ -1724,9 +1816,10 @@ pub enum KeymapCmd {
     },
     /// Make FROM (a key, or a chord like ctrl+h) type TO: a key, a chord
     /// (ctrl+shift+esc), several (a sequence), `none`, `layer:NAME`,
-    /// `back`/`forward`, or an action (`switch next`, `lock-pointer`,
+    /// `back`/`forward`, an OS shortcut (`os:overview`), or an action (`switch next`, `lock-pointer`,
     /// `lock-all`, `scroll down`, `run: COMMAND`). Replaces a rule for the
     /// same key in the same scope and layer.
+    #[command(after_help = SYSTEM_ACTION_HELP)]
     Add {
         /// Key or chord to change, for example capslock or ctrl+h.
         from: String,
@@ -1864,6 +1957,7 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
             settings::apply(dir).await?;
         }
         KeymapCmd::Add { from, to, tap, hold, layer, timeout_ms, scope } => {
+            check_trailing_scope(&to)?;
             let app = scope.app()?;
             let scope = scope.scope(dir)?;
             let to = match to.len() {
@@ -1919,6 +2013,7 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
             device_note(dir, &scope).await;
             run_note(dir);
             switch_note(dir, &key_rule_outputs(&added));
+            print_system_notes(system_notes(&scope, &paired(dir), &key_rule_outputs(&added)));
             if let Some(name) = used_layer {
                 layer_note(dir, &name);
             }
@@ -1944,8 +2039,26 @@ pub async fn keymap(dir: &Path, cmd: Option<KeymapCmd>) -> Result<()> {
 /// `one-mk keymap check`: every problem, exit status 1 if any.
 fn check_command(dir: &Path) -> Result<()> {
     let s = Settings::load_lenient(dir)?;
+    let paired = paired(dir);
     let mut problems = s.problems.clone();
-    problems.extend(s.input.check(&paired(dir)));
+    problems.extend(s.input.check(&paired));
+    let mut notes = std::collections::BTreeSet::new();
+    for rule in &s.input.keymap.rule {
+        if rule.spec().and_then(|spec| keep_clicking(&spec.from, &spec.what, scope_os(&rule.scope, &paired), || "this rule".into())).is_ok() {
+            notes.extend(system_notes(&rule.scope, &paired, &key_rule_outputs(rule)));
+        }
+    }
+    for rule in &s.input.button {
+        if let Ok(trigger) = rule.from.trigger() {
+            notes.extend(extra_button_note(&trigger, scope_os(&rule.scope, &paired)));
+        }
+    }
+    for (scope, to) in s.input.button.iter().filter(|r| {
+        r.spec().and_then(|spec| keep_clicking(&spec.from, &spec.what, scope_os(&r.scope, &paired), || r.to.describe())).is_ok()
+    }).map(|r| (&r.scope, &r.to)).chain(s.input.gesture.iter().map(|r| (&r.scope, &r.to))) {
+        if let To::One(text) = to { notes.extend(system_notes(scope, &paired, &[text])); }
+    }
+    print_system_notes(notes.into_iter().collect());
     if s.input.runs_commands()
         && let Some(reason) = &s.hooks.blocked
     {
@@ -2259,11 +2372,12 @@ pub enum ButtonsCmd {
     List,
     /// Make button N (1 left, 2 right, 3 middle, 4 back, 5 forward, 6 to 8)
     /// do TO: another button (button1), a key or chord, several (a
-    /// sequence), back/forward, an action, or none.
+    /// sequence), back/forward, an OS shortcut (os:overview), an action, or none.
+    #[command(after_help = SYSTEM_ACTION_HELP)]
     Map {
         #[arg(help = "Mouse button to remap, for example button4")]
         button: String,
-        #[arg(required = true, help = "Output button, key, chord, quoted action or sequence")]
+        #[arg(required = true, help = "Output button, key, chord, OS shortcut (os:overview), quoted action or sequence")]
         to: Vec<String>,
         #[command(flatten)]
         scope: ScopeArgs,
@@ -2294,7 +2408,7 @@ fn list_buttons(s: &TuningSettings, unavailable: bool) {
     }
     println!("Button rules:");
     for r in &s.button {
-        println!("  {} -> {}{}{}", r.from.describe(), r.to.describe(), where_suffix(&r.scope, &r.app), device_mark(&r.scope, unavailable));
+        println!("  {} -> {}{}{}", r.from.describe(), r.to.describe_for(scope_os(&r.scope, &[]).unwrap_or(os::UNKNOWN)), where_suffix(&r.scope, &r.app), device_mark(&r.scope, unavailable));
     }
 }
 
@@ -2322,13 +2436,18 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             return Ok(());
         }
         ButtonsCmd::Map { button, to, scope } => {
+            check_trailing_scope(&to)?;
             let app = scope.app()?;
             let scope = scope.scope(dir)?;
             let (from, t) = button_from(&button)?;
             let to = if to.len() == 1 { To::One(to[0].clone()) } else { To::Many(to) };
             let rule = ButtonRule { from, to, scope, app };
-            rule.spec().map_err(anyhow::Error::msg)?;
-            let line = format!("{} -> {}{}", rule.from.describe(), rule.to.describe(), where_suffix(&rule.scope, &rule.app));
+            let spec = rule.spec().map_err(anyhow::Error::msg)?;
+            let paired = paired(dir);
+            keep_clicking(&spec.from, &spec.what, scope_os(&rule.scope, &paired), || rule.to.describe()).map_err(anyhow::Error::msg)?;
+            let target = scope_os(&rule.scope, &paired);
+            let line = format!("{} -> {}{}", rule.from.describe(), rule.to.describe_for(target.unwrap_or(os::UNKNOWN)), where_suffix(&rule.scope, &rule.app));
+            let button_note = extra_button_note(&t, target);
             let mapped = match &rule.to { To::One(s) => Some(s.clone()), To::Many(_) => None };
             let scope = rule.scope.clone();
             Settings::update(dir, |s| {
@@ -2338,7 +2457,11 @@ pub async fn buttons(dir: &Path, cmd: Option<ButtonsCmd>) -> Result<()> {
             println!("{line}.");
             device_note(dir, &scope).await;
             run_note(dir);
-            if let Some(to) = &mapped { switch_note(dir, &[to.as_str()]); }
+            if let Some(note) = button_note { println!("Note: {note}"); }
+            if let Some(to) = &mapped {
+                switch_note(dir, &[to]);
+                print_system_notes(system_notes(&scope, &paired, &[to]));
+            }
         }
         ButtonsCmd::Unmap { button, scope } => {
             let app = scope.app()?;

@@ -790,6 +790,8 @@ async fn capture(
             CaptureCmd::Activate { .. } => {
                 let _ = st.tx.send(Event::Error(NO_CAPTURE.into()));
             }
+            // The portals show oneMK no input while the pointer is here.
+            CaptureCmd::Detect(_) => {}
         });
         if !follow.await {
             return;
@@ -931,6 +933,9 @@ async fn run_capture(
                         cap.release(portal_id, pos, &st.edges).await?;
                     }
                 }
+                // The portals show oneMK no input while the pointer is here: presses
+                // are detected from the captured input the daemon gets anyway.
+                Some(CaptureCmd::Detect(_)) => {}
                 Some(CaptureCmd::Activate { side }) => {
                     if st.activation.is_none() && !was.paused() {
                         push_into_barrier(st, side);

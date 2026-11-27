@@ -458,6 +458,13 @@ impl Held {
     }
 }
 
+impl SenderKeys {
+    /// The keys forwarded and held now.
+    pub(crate) fn held(&self) -> &Held {
+        &self.0
+    }
+}
+
 /// Keys forwarded to a peer while captured. Windows repeats a held key by
 /// sending more "down" events; those are dropped, and the receiver repeats
 /// by itself. That includes Caps Lock, whose repeats would toggle it on a
@@ -678,6 +685,13 @@ pub(crate) fn scan_to_evdev(scan: u16, extended: bool) -> Option<u32> {
 }
 
 /// evdev code to how `SendInput` should type it.
+/// What native local remapping can apply on Windows: the mouse buttons the
+/// hook knows, and keys sent by scan code (`windows_localmap`'s rules check
+/// and its hook use this; so does `detect_unusable`).
+pub(crate) fn local_remap_eligible(code: u32) -> bool {
+    crate::NATIVE_BUTTONS.contains(&code) || matches!(evdev_to_win(code), Some(WinKey::Scan { .. }))
+}
+
 pub(crate) fn evdev_to_win(code: u32) -> Option<WinKey> {
     match code {
         KEY_PAUSE => return Some(WinKey::Vk { vk: VK_PAUSE, scan: 0x45, extended: false }),

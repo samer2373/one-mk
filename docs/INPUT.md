@@ -36,6 +36,7 @@ one-mk keymap add capslock --tap esc --hold lctrl   # tap for Esc, hold for Ctrl
 one-mk keymap add ctrl+h backspace
 one-mk keymap add lalt lmeta --os mac               # only toward Macs
 one-mk keymap add f13 "switch next"                 # an action
+one-mk keymap add f15 os:overview                   # Mission Control, Task View or Activities
 one-mk keymap add ralt layer:nav                    # a layer: on while held
 one-mk keymap add h left --layer nav
 one-mk keymap add f14 "run: notify-send hello"      # run a command
@@ -47,7 +48,7 @@ one-mk keymap clear
 
 A key can become another key, a chord (`ctrl+shift+esc`), a sequence
 (`ctrl+a ctrl+c`), `none` (it does nothing), `layer:NAME`, `back` or
-`forward` (as the target system spells them), or an action: `switch next`,
+`forward`, an OS shortcut such as `os:overview`, or an action: `switch next`,
 `switch here`, `switch NAME`, `lock-pointer`, `lock-all`, `scroll down`,
 `run: COMMAND`. Tap/hold keys decide after 200 ms by default (50 to 2000; set
 `tap_ms` under `[input.keymap]` in `settings.toml`, or `--timeout-ms` on one
@@ -68,7 +69,7 @@ rule).
 
 ```
 one-mk buttons preset side-back-forward   # buttons 4 and 5 go back and forward
-one-mk buttons map 4 back
+one-mk buttons map 4 os:next-desktop
 one-mk buttons map 3 ctrl+w
 one-mk buttons map 5 none --app "code*"
 one-mk buttons unmap 4
@@ -77,9 +78,137 @@ one-mk buttons list
 
 Buttons are numbered 1 left, 2 right, 3 middle, 4 back, 5 forward, 6 to 8
 extra. A button can become another button, a key, a chord, a sequence, `back`
-or `forward`, an action, or `none`. **Left and right cannot be made to do
+or `forward`, an OS shortcut, an action, or `none`. **Left and right cannot be made to do
 nothing or hold a layer** (the other computer would have no clicks); they are
 refused, and `keymap check` flags such a rule written by hand.
+
+## System actions
+
+Use `os:NAME` as a single output in a key rule, either tap/hold slot, a
+mouse button rule or a swipe gesture. The action taps the receiving
+computer's shortcut once per press, without auto-repeat. A single
+`os:switch-app` press toggles between the two most recent apps. Ctrl/Cmd
+swapping still sends the shortcut shown below. **Also on this computer**
+uses the local OS for supported key and button rules on Windows and macOS.
+An unavailable action sends nothing for that OS. The save command and
+`one-mk keymap check` print a note with the supported scopes. A primary
+mouse button requires a shortcut on every OS in its scope. Bare names
+such as `copy`, `paste` and `undo` still mean the corresponding physical keys.
+
+On macOS, keep the defaults enabled in **System Settings → Keyboard →
+Keyboard Shortcuts → Mission Control** for Spaces, Mission Control, App
+Exposé and Show Desktop. oneMK sends the standard F11 key for Show Desktop.
+Apple keyboards may require Fn to produce F11 when pressed by hand. The
+Apps panel or Launchpad can be opened manually with Apple’s Fn shortcut
+or a custom binding. The system action is unavailable on macOS.
+On Linux, the desktop mappings follow GNOME. To use Show Desktop, bind
+Super+D to **Hide all normal windows** in GNOME Keyboard Shortcuts.
+The desktop-switching actions use Ctrl+Alt+Left/Right, which preserves
+the side-swipe preset's bindings for desktops such as Cinnamon and Xfce.
+GNOME also binds these chords alongside Super+Page Up/Down in its
+default schema. Customized shortcuts may differ. [GNOME 40 defaults][gnome-40-schema],
+[current GNOME defaults][gnome-schema].
+
+| Setting | macOS | Windows | Linux (GNOME) | References |
+|---|---|---|---|---|
+| `os:next-desktop` | Ctrl+→ | Ctrl+Win+→ | Ctrl+Alt+→ | [Apple Spaces][apple-spaces], [Microsoft][ms-keys], [GNOME defaults][gnome-schema] |
+| `os:previous-desktop` | Ctrl+← | Ctrl+Win+← | Ctrl+Alt+← | [Apple Spaces][apple-spaces], [Microsoft][ms-keys], [GNOME defaults][gnome-schema] |
+| `os:overview` | Ctrl+↑, Mission Control | Win+Tab, Task View | Super tap, Activities | [Apple Mission Control][apple-mission], [Microsoft][ms-keys], [GNOME][gnome-keys] |
+| `os:app-windows` | Ctrl+↓, App Exposé | Unavailable | Super+key above Tab, switch windows of the same app | [Apple Mission Control][apple-mission], [Microsoft][ms-keys], [GNOME][gnome-keys] |
+| `os:show-desktop` | F11 | Win+D | Super+D, needs a binding on stock GNOME | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME settings][gnome-settings] |
+| `os:app-launcher` | Unavailable | Win tap, Start | Super+A | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME][gnome-keys] |
+| `os:search` | Cmd+Space, Spotlight | Win+S | Super tap, then type | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME overview][gnome-overview] |
+| `os:screenshot-area` | Cmd+Shift+4 | Win+Shift+S | Print, then select an area | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME screenshots][gnome-shot] |
+| `os:screenshot-tool` | Cmd+Shift+5 | Win+Shift+S | Print opens the screenshot UI on GNOME 42+ | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME screenshots][gnome-shot] |
+| `os:lock-screen` | Ctrl+Cmd+Q | Win+L | Super+L | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME][gnome-keys] |
+| `os:force-quit` | Cmd+Option+Esc | Ctrl+Shift+Esc, Task Manager | Unavailable | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME settings][gnome-settings] |
+| `os:full-screen` | Ctrl+Cmd+F in supported apps | F11 in supported apps | F11 in supported apps | [Microsoft Edge][ms-edge], [GNOME Terminal][gnome-terminal] |
+| `os:emoji-picker` | Ctrl+Cmd+Space | Win+. | Unavailable as a desktop shortcut | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME settings][gnome-settings] |
+| `os:switch-app` | Cmd+Tab | Alt+Tab | Alt+Tab | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME defaults][gnome-schema] |
+| `os:hide-app` | Cmd+H | Unavailable | Unavailable | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME settings][gnome-settings] |
+| `os:close-window` | Cmd+W | Alt+F4 | Alt+F4 | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME settings][gnome-settings] |
+| `os:quit-app` | Cmd+Q | Unavailable | Unavailable | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME settings][gnome-settings] |
+| `os:copy`, `os:cut`, `os:paste` | Cmd+C / X / V | Ctrl+C / X / V | Ctrl+C / X / V | [Apple][apple-keys], [Microsoft][ms-keys], [GTK][gtk-text] |
+| `os:undo`, `os:redo` | Cmd+Z / Cmd+Shift+Z | Ctrl+Z / Ctrl+Y | Ctrl+Z / Ctrl+Shift+Z | [Apple][apple-keys], [Microsoft][ms-keys], [GTK][gtk-text] |
+| `os:select-all`, `os:find`, `os:save` | Cmd+A / F / S | Ctrl+A / F / S | Ctrl+A / F / S | [Apple][apple-keys], [Microsoft Edge][ms-edge], [GTK][gtk-text], [Chrome][chrome-keys] |
+| `os:new-tab`, `os:close-tab` | Cmd+T / W | Ctrl+T / W | Ctrl+T / W | [Apple Safari][apple-safari], [Microsoft][ms-keys], [Chrome][chrome-keys] |
+| `os:next-tab`, `os:previous-tab` | Ctrl+Tab / Ctrl+Shift+Tab | Ctrl+Tab / Ctrl+Shift+Tab | Ctrl+Tab / Ctrl+Shift+Tab | [Apple Safari][apple-safari], [Microsoft][ms-keys], [Chrome][chrome-keys] |
+
+Editing and tab shortcuts depend on the focused app. For example,
+GNOME Terminal uses Ctrl+Shift+C and Ctrl+Shift+V for copy and paste.
+
+[apple-keys]: https://support.apple.com/en-us/102650
+[apple-spaces]: https://support.apple.com/guide/mac-help/-mh14112/mac
+[apple-mission]: https://support.apple.com/guide/mac-help/view-open-windows-spaces-mission-control-mh35798/mac
+[apple-safari]: https://support.apple.com/guide/safari/keyboard-shortcuts-and-gestures-cpsh003/mac
+[ms-keys]: https://support.microsoft.com/en-us/accessibility/windows/keyboard-shortcuts-in-windows
+[ms-edge]: https://support.microsoft.com/en-us/edge/keyboard-shortcuts-in-microsoft-edge
+[gnome-settings]: https://help.gnome.org/gnome-help/keyboard-shortcuts-set.html
+[gnome-keys]: https://help.gnome.org/gnome-help/shell-keyboard-shortcuts.html
+[gnome-overview]: https://help.gnome.org/gnome-help/shell-overview.html
+[gnome-shot]: https://help.gnome.org/gnome-help/screen-shot-record.html
+[gnome-terminal]: https://help.gnome.org/gnome-terminal/adv-keyboard-shortcuts.html
+[gnome-40-schema]: https://gitlab.gnome.org/GNOME/gsettings-desktop-schemas/-/blob/40.0/schemas/org.gnome.desktop.wm.keybindings.gschema.xml.in
+[gnome-schema]: https://gitlab.gnome.org/GNOME/gsettings-desktop-schemas/-/blob/main/schemas/org.gnome.desktop.wm.keybindings.gschema.xml.in
+[gtk-text]: https://gnome.pages.gitlab.gnome.org/gtk/gtk4/class.Text.html
+[chrome-keys]: https://support.google.com/chrome/answer/157179
+
+## Which key is that? `input-devices detect`
+
+A keyboard key that isn't on the drawn keyboard (a macro key, `F13`, a key
+with no name), or a mouse button the drawn mouse doesn't have, can be changed
+once you know what it is to oneMK. Press it:
+
+```
+one-mk input-devices detect               # press the key or button within 30 s
+one-mk input-devices detect --timeout 60 --keys-only
+one-mk input-devices detect --json        # one line of JSON, for programs
+```
+
+It prints the key as rules name it (`f13`, `code:432` for a key with no
+name, `button7`), with the modifiers held with it: a mouse button that types
+a shortcut comes out as that shortcut (`ctrl+alt+tab`), and a rule for that
+shortcut, made for that mouse with `--device`, changes only what the mouse
+sends. Where this computer can tell devices apart it also names the keyboard
+or mouse, and prints the `keymap add` or `buttons map` commands for every
+device and for that one. In the window, **Detect key** (Keyboard) and
+**Detect button** (Mouse) do the same and open the key or button's editor,
+with "Only on <device>" offered; mouse buttons 6 to 8 are listed under
+**Other buttons**.
+
+A mouse button is detected on its own: modifiers held with it (Ctrl held
+while pressing Back) are said, and left out, as a button's rule
+(`buttons map`) is for the button alone. Where this computer can't use a
+rule for what was pressed, it says so instead of offering one ("detected,
+but ... can't be changed on this system"): mouse buttons 6 to 8 on macOS and
+Windows (nothing there forwards or remaps them), and, with local key rules
+on, keys local remapping can't apply yet (a rule for one would pause local
+remapping). Where the device comes on another path (Windows, macOS), a press
+is matched with the device reports around it by the system's own event
+times; if two devices pressed that key at once, the device is left unknown
+rather than guessed.
+
+Detecting changes nothing: the key still does what it does (Esc alone
+cancels instead). Key repeats, keys already down when it started (a
+modifier held from before still counts with the next key, so Ctrl held
+then Tab is `ctrl+tab`), and input that programs inject are ignored, both
+while the pointer is here and while this computer controls another one. It stops when a key is pressed, when the
+time is up, on Esc, when the command is stopped (Ctrl+C) or the window's
+Cancel is used, and when one-mk stops; while nothing is being detected it
+costs nothing.
+
+| desktop | what can be detected |
+|---|---|
+| Linux, X11 session | every key and button the X server reports, with its device (tried against a private X server) |
+| Linux, GNOME, KDE or wlroots on Wayland | only keys pressed **while oneMK controls another computer** (the desktop shows it no input otherwise): move the pointer onto another computer's screen, then press the key. The window also takes the keys it sees itself (not the keypad, Fn, media keys or a mouse's extra keys) |
+| Windows | keys and buttons 1 to 5, device from Raw Input; compile-checked only |
+| macOS | keys (Caps Lock and media keys too) and buttons 1 to 5, device from IOHIDManager; buttons 6 to 8 are named but can't be changed; compile-checked only |
+
+Some presses never reach oneMK and can't be detected: keys a keyboard handles
+itself (usually Fn), buttons a mouse only reports to its maker's software, and
+mouse buttons past the eighth (named, but they can't be changed). On X11,
+buttons past the X server's ninth are not forwarded, so they can't be changed
+there either.
 
 ## Mac and PC keyboards: Ctrl and Cmd
 
@@ -142,7 +271,7 @@ one-mk autoscroll --speed 1.5 --dead-zone 8 --vertical-only off
 one-mk autoscroll --off --app "code*"
 one-mk autoscroll --reset --app "code*"    # forget that override
 one-mk gestures preset side-swipe          # hold the back button, swipe: change desktop
-one-mk gestures add button4 left back --threshold 60
+one-mk gestures add button4 left os:previous-desktop --threshold 60
 one-mk gestures add button5 up "ctrl+super+left" --os windows   # not middle: autoscroll uses it while on
 one-mk gestures list
 one-mk gestures remove button4 left
@@ -153,8 +282,9 @@ one-mk gestures remove button4 left
   button, or leave the computer to stop. The toggle click is not sent.
 * Gesture: hold the button and move past the threshold (1 to 10000 motion
   units, 60 by default) in a direction; the output happens once. A short
-  click still clicks. Esc cancels a swipe. `desktop-left` and `desktop-right`
-  switch virtual desktops on any system.
+  click still clicks. Esc cancels a swipe. Use `os:previous-desktop` and
+  `os:next-desktop` for desktop switching with Ctrl/Cmd swap compensation.
+  Older `desktop-left` and `desktop-right` settings retain their original chords.
 * The toggle button of autoscroll belongs to autoscroll: a gesture on it, or
   an autoscroll button that a gesture already uses, is refused. Left and
   right buttons cannot be used for either.
@@ -219,7 +349,8 @@ keyboard behaves. It is off by default, only offered on Windows and macOS (it
 is not available on Linux), and Ctrl+Alt+Shift+Esc turns it off. If it ever
 misbehaves, run `one-mk keymap local off` from another login or computer, or
 stop one-mk (it restores the original mappings). A Mac can map Caps Lock to
-one other key only, and Fn, media and function keys are not available there.
+one other key only. Fn, media and function keys are unavailable as local
+triggers. `os:show-desktop` can output the standard F11 key.
 
 ## Pointer overlay and the GNOME pointer extension
 

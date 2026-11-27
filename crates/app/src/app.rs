@@ -820,6 +820,7 @@ impl App {
                 Event::Doctor(d) => self.doctor = Some((d, now)),
                 Event::KeymapCheck(r) => self.keys.problems = Some(r),
                 Event::InputDevices(r) => self.keys.devices = Some(r),
+                Event::Detected(n, outcome) => self.detect_done(n, outcome),
             }
         }
         // Health is open and nothing ran yet: run the checks.
@@ -1826,7 +1827,11 @@ impl App {
             // again (a few milliseconds) on coming back.
             match self.tab {
                 Tab::Wallpaper => self.wallpaper_ui.release(),
-                Tab::Keys => self.keys.release_meshes(),
+                Tab::Keys => {
+                    self.keys.release_meshes();
+                    // Listening stops with the page: hidden, it would swallow keys.
+                    self.cancel_detect();
+                }
                 _ => {}
             }
             // A drag on the desk belongs to the page it began on: its release
@@ -2481,7 +2486,7 @@ impl App {
 
     /// Ctrl+1 to 7 switch tabs (Cmd on a Mac).
     fn shortcuts(&mut self, ui: &Ui) {
-        if widgets::locked(ui) || self.keys_grab(ui.ctx()) || ui.ctx().data(|data| data.get_temp::<usize>(Id::unique("shortcut-recorder")).is_some() || data.get_temp::<bool>(Id::unique("gesture-recording")).unwrap_or(false)) {
+        if widgets::locked(ui) || (self.tab == Tab::Keys && self.keys.picker.is_some()) || self.keys_grab(ui.ctx()) || ui.ctx().data(|data| data.get_temp::<usize>(Id::unique("shortcut-recorder")).is_some() || data.get_temp::<bool>(Id::unique("gesture-recording")).unwrap_or(false)) {
             return;
         }
         let off = self.off();
@@ -2647,6 +2652,13 @@ fn toast_bottom(room: Rect, h: f32, window: Rect, sheet: Option<Rect>) -> f32 {
         sheet.top() - 12.0
     } else {
         sheet.top() + 8.0 + h
+    }
+}
+
+/// A detection still running (`one-mk input-devices detect`) stops with the window.
+impl Drop for App {
+    fn drop(&mut self) {
+        self.link.cancel_detect();
     }
 }
 
@@ -2962,6 +2974,9 @@ impl eframe::App for App {
 ///   `ONE_MK_APP_KEY_CHOOSE=esc` makes the opened key that, as a click
 ///   would; `ONE_MK_APP_KEY_LATER=capslock` chooses that key at
 ///   `ONE_MK_APP_KEY_AT` seconds (default 1.5), for films of the zoom glide;
+///   `ONE_MK_APP_DETECT=1` listens as "Detect key" (or "Detect button") does;
+///   `ONE_MK_APP_DETECTED=json` as if `one-mk input-devices detect --json`
+///   had answered that;
 ///   `ONE_MK_APP_BUTTON=4` opens a mouse button; `ONE_MK_APP_KEY_TEST=
 ///   58d0,58u85` types into the test box (code, down/up, ms).
 /// - `ONE_MK_APP_COMPUTERS_MENU=1` opens the Desk's Choose computer menu
@@ -3229,6 +3244,21 @@ mod debug {
             }
             if let Some(v) = var("ONE_MK_APP_KEY_CHOOSE").filter(|_| app.keys.selected.is_some()) {
                 app.choose(keys::Want::To, v);
+            }
+            // ONE_MK_APP_DETECT=1: "Detect key" (or button, with ONE_MK_APP_KEYS=mouse) listens;
+            // ONE_MK_APP_DETECTED=json: what `one-mk input-devices detect --json` answered came.
+            if var("ONE_MK_APP_DETECT").is_some() {
+                app.start_detect(app.keys.view);
+            }
+            if let Some(json) = var("ONE_MK_APP_DETECTED") {
+                match crate::detect::parse(&json) {
+                    crate::detect::Outcome::Found(d) => app.apply_detected(d),
+                    other => {
+                        app.start_detect(app.keys.view);
+                        let n = app.keys.listening.as_ref().map_or(0, |l| l.n);
+                        app.detect_done(n, other);
+                    }
+                }
             }
             if let Some(n) = var("ONE_MK_APP_BUTTON").and_then(|n| n.parse().ok()) {
                 app.keys.button = Some(n);

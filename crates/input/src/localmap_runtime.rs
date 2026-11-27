@@ -85,6 +85,8 @@ pub struct Physical {
 
 impl Physical {
     pub fn held(&self) -> bool { !self.down.is_empty() }
+    /// Whether `code` is held on this computer's own keyboard (a key held for a peer is not).
+    pub fn holds(&self, code: u32) -> bool { self.down.is_held(code) && !self.remote.is_held(code) }
     pub fn correlated(&mut self, code: u32, down: bool, device: Option<DeviceRef>) -> bool {
         if let Some((_, held)) = self.sources.iter_mut().find(|(source, _)| *source == device) {
             held.update(code, down);
@@ -781,6 +783,31 @@ mod tests {
         assert!(feedback.acknowledged(2));
         assert_eq!(lease.deadline(&feedback, now + LEASE), None);
         assert!(!lease.expired(&feedback, now + LEASE * 10));
+    }
+
+    #[test]
+    fn local_system_actions_pulse_the_shortcuts_for_the_local_os() {
+        use one_mk_proto::os;
+        #[derive(Default)]
+        struct Posted(Vec<(u32, bool)>);
+        impl Injector for Posted {
+            fn inject(&mut self, keys: &[(u32, bool)]) -> usize {
+                self.0.extend_from_slice(keys);
+                keys.len()
+            }
+        }
+        for (os, modifier) in [(os::MACOS, 125), (os::WINDOWS, 29)] {
+            let spec = RuleSpec { from: "button4".parse().unwrap(), layer: None, what: What::To("os:copy".parse().unwrap()) };
+            let map = Keymap::compile(&[spec], Target { os, swap: false }, one_mk_proto::remap::DEFAULT_TAP).unwrap().map;
+            let rules = Rules { maps: KeymapSet::new(map), count: 1, ..Rules::default() };
+            let mut engine = Engine::new(Posted::default());
+            assert!(engine.fence(0, Destination::Local, Some(&rules)));
+            for (sequence, down) in [(1, true), (2, true), (3, false)] {
+                let key = Key { sequence, code: 0x113, down, at: Instant::now(), keyboard_type: 0, click_state: 0 };
+                assert!(engine.key(key, None));
+            }
+            assert_eq!(engine.injector.0, [(modifier, true), (46, true), (46, false), (modifier, false)]);
+        }
     }
 
     #[test]

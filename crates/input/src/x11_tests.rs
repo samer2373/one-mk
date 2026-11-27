@@ -1003,7 +1003,7 @@ fn controlled_raw_input_is_selected_per_real_slave() {
     let real = [o.xi_id("Xvfb mouse"), o.xi_id("Xvfb keyboard")];
     let xtest = [o.xi_id("Virtual core XTEST pointer"), o.xi_id("Virtual core XTEST keyboard")];
 
-    x.select(true, false);
+    x.select(true, false, false);
     let masks = selected(&x);
     assert_eq!(masks.get(&ALL_MASTER_DEVICES).copied().unwrap_or(0) & RAW_LOCAL, 0, "{masks:?}");
     for id in real { assert_eq!(masks.get(&id), Some(&RAW_LOCAL), "{masks:?}"); }
@@ -1015,22 +1015,122 @@ fn controlled_raw_input_is_selected_per_real_slave() {
     };
     assert_eq!(echoes(&x), 0, "100 injected moves, no raw motion read back");
 
-    x.select(true, true);
+    x.select(true, false, true);
     assert_eq!(selected(&x).get(&real[0]), Some(&RAW_LOCAL), "the held bit changes only the masters");
 
-    x.select(false, false);
+    x.select(false, false, false);
     let masks = selected(&x);
     for id in real { assert_eq!(masks.get(&id).copied().unwrap_or(0), 0, "{masks:?}"); }
 
     // A slave that went away before the server saw the request: refused,
     // and local raw input goes back on the masters with no slave left selected.
     x.raw_slaves = vec![real[0], 250];
-    x.select(true, false);
+    x.select(true, false, false);
     let masks = selected(&x);
     assert_eq!(masks.get(&ALL_MASTER_DEVICES).copied().unwrap_or(0) & RAW_LOCAL, RAW_LOCAL, "{masks:?}");
     for id in real { assert_eq!(masks.get(&id).copied().unwrap_or(0), 0, "{masks:?}"); }
     assert!(x.raw_on_masters && x.raw_slaves.is_empty());
     assert_eq!(echoes(&x), 100, "on the masters (as before this change) every injected move echoes");
-    x.select(false, false);
+    x.select(false, false, false);
     assert_eq!(selected(&x).get(&ALL_MASTER_DEVICES).copied().unwrap_or(0) & RAW_LOCAL, 0);
+}
+
+/// Detecting selects raw presses and releases (no motion) on each real
+/// slave, never on XTest, and nothing once it is over; with a peer in
+/// control as well, both sets. What comes from XTest (what oneMK and other
+/// programs inject) is never reported as a press of this computer's own.
+#[tokio::test]
+async fn detecting_selects_real_slaves_and_ignores_injected_input() {
+    let Some(server) = Xvfb::start() else { return };
+    let o = server.observer();
+    let mut x = X::connect(&Target { display: Some(server.display.clone()), barriers: true }).unwrap();
+    let selected = |x: &X| -> HashMap<u16, u32> {
+        let reply = x.conn.xinput_xi_get_selected_events(x.root).unwrap().reply().unwrap();
+        reply.masks.into_iter().map(|m| (m.deviceid, m.mask.first().copied().map_or(0, u32::from))).collect()
+    };
+    let real = [o.xi_id("Xvfb mouse"), o.xi_id("Xvfb keyboard")];
+    let xtest = [o.xi_id("Virtual core XTEST pointer"), o.xi_id("Virtual core XTEST keyboard")];
+    x.select(false, true, false);
+    let masks = selected(&x);
+    for id in real { assert_eq!(masks.get(&id), Some(&RAW_DETECT), "{masks:?}"); }
+    for id in xtest { assert!(!masks.contains_key(&id), "{masks:?}"); }
+    x.select(true, true, false);
+    for id in real { assert_eq!(selected(&x).get(&id), Some(&(RAW_DETECT | RAW_LOCAL))); }
+    x.select(true, false, false);
+    for id in real { assert_eq!(selected(&x).get(&id), Some(&RAW_LOCAL), "back to what control alone needs"); }
+    x.select(false, false, false);
+    for id in real { assert_eq!(selected(&x).get(&id).copied().unwrap_or(0), 0); }
+    drop(x);
+
+    // Through the backend: injected keys and clicks while detecting are not presses.
+    let (mut b, _locked) = open_on(&server.display).unwrap();
+    devices_where(&mut b.events, |_| true).await;
+    // (Selections are per client: the backend's can't be read from here; the above checked them.)
+    b.capture.send(CaptureCmd::Detect(Some(3))).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Detecting began by saying what was held (nothing, here).
+    let mut held = None;
+    while let Ok(ev) = b.events.try_recv() {
+        if let Event::DetectHeld { session, codes } = ev { held = Some((session, codes)); }
+    }
+    assert_eq!(held, Some((3, vec![])));
+    o.fake(2, 38, NONE, 0, 0);
+    o.fake(3, 38, NONE, 0, 0);
+    o.fake(4, 9, NONE, 0, 0);
+    o.fake(5, 9, NONE, 0, 0);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    while let Ok(ev) = b.events.try_recv() {
+        assert!(!matches!(ev, Event::LocalPress { .. } | Event::Key { .. } | Event::Button { .. }), "{ev:?}");
+    }
+    b.capture.send(CaptureCmd::Detect(None)).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!b.events.is_closed(), "the backend runs on");
+}
+
+/// Key releases are selected only while detecting; with a peer in control,
+/// releasing a key held from before must not take control back (only a
+/// press does, as without detecting). And without detecting, nothing is
+/// reported.
+#[tokio::test]
+async fn detection_only_releases_never_take_back_control() {
+    let Some(server) = Xvfb::start() else { return };
+    let o = server.observer();
+    let mut x = X::connect(&Target { display: Some(server.display.clone()), barriers: true }).unwrap();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut st = Shared {
+        tx,
+        edges: Vec::new(),
+        next_id: 0,
+        held: Held::default(),
+        notches: Notches::default(),
+        controlled: true,
+        detecting: Some(9),
+        gate: LocalInputGate::default(),
+        locked: false,
+        reported: None,
+        shown: None,
+        devices: None,
+        merged: false,
+    };
+    let keyboard = o.xi_id("Xvfb keyboard");
+    let mut drain = || std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    x.raw_key(&mut st, keyboard, 38, false);
+    let out = drain();
+    assert!(!out.contains(&Event::LocalInput), "{out:?}");
+    assert!(matches!(out.as_slice(), [Event::LocalPress { session: 9, press }] if press.code == 30 && !press.down), "{out:?}");
+    // A press is this computer's own input being used, as ever (and reported too).
+    x.raw_key(&mut st, keyboard, 38, true);
+    let out = drain();
+    assert!(out.contains(&Event::LocalInput), "{out:?}");
+    assert!(out.iter().any(|e| matches!(e, Event::LocalPress { session: 9, press } if press.down)), "{out:?}");
+    // XTest's never counts as a press of this computer's own.
+    let xtest = o.xi_id("Virtual core XTEST keyboard");
+    x.raw_key(&mut st, xtest, 38, true);
+    assert!(drain().iter().all(|e| !matches!(e, Event::LocalPress { .. })));
+    // Not detecting: nothing is reported, a release does nothing.
+    st.detecting = None;
+    st.controlled = false;
+    x.raw_key(&mut st, keyboard, 38, false);
+    x.raw_button(&mut st, keyboard, 9, true, false).unwrap();
+    assert_eq!(drain(), vec![]);
 }

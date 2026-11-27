@@ -40,6 +40,7 @@ mod push;
 mod broadcast;
 mod shortcuts;
 mod tune;
+mod detecting;
 
 /// While the pointer is on a peer, resend its position at least this often
 /// so Wi-Fi radios never doze off between mouse movements, and the peer
@@ -693,6 +694,8 @@ struct App {
     dropzones: Option<one_mk_input::dropzone::Handle>,
     dir: PathBuf,
     backend_name: &'static str,
+    /// `one-mk input-devices detect` waiting for a press.
+    detect: Option<crate::detect::Session>,
     node: Node,
     trust: TrustStore,
     trust_reloaded: Option<Instant>,
@@ -879,6 +882,7 @@ pub async fn serve(
         dropzones,
         dir,
         backend_name: name,
+        detect: None,
         node: node.clone(),
         trust,
         trust_reloaded: None,
@@ -975,6 +979,7 @@ pub async fn serve(
         if app.next_deadline().is_some_and(|d| d <= Instant::now()) {
             app.on_timer();
         }
+        app.detect_check_abandoned();
         let deadline = app.next_deadline();
         tokio::select! {
             biased;
@@ -993,6 +998,7 @@ pub async fn serve(
             },
             Some(ev) = rx.recv() => app.on_app(ev, &screens_rx),
             Some((req, reply)) = ipc.recv() => if app.on_request(req, reply) { break },
+            _ = detecting::hung_up(&mut app.detect), if app.detect.is_some() => app.detect_abandoned(),
             Some(ev) = shortcut_events.recv() => app.on_shortcut_event(ev),
             Some(drop) = drops.recv() => {
                 let allowed = app.settings.drag.enabled && !app.locked && !app.lock_sync.is_locked()
@@ -1021,6 +1027,7 @@ pub async fn serve(
         app.sync_focus_watch();
     }
 
+    app.end_detect(crate::detect::End::Stopped);
     app.stop_broadcast(broadcast::End::Quit);
     if let Some((wallpaper, _)) = &app.services.wallpaper { wallpaper.shutdown(); }
     app.go_home();
@@ -1435,6 +1442,7 @@ impl App {
     // ------------------------------------------------------------ local input
 
     fn on_input(&mut self, ev: Event, events: &mut mpsc::UnboundedReceiver<Event>) {
+        if self.detect_input(&ev) { return; }
         if refreshes_layout(&ev) { self.refresh_keyboard(); }
         match ev {
             Event::KeyboardModifiers { depressed, latched, locked, group } => {
@@ -1597,6 +1605,8 @@ impl App {
             Event::Status { part, problem: None } => {
                 self.input_problems.remove(part);
             }
+            // Only for detecting (`detect_input`, above).
+            Event::LocalPress { .. } | Event::PressDevice { .. } | Event::DetectHeld { .. } => {}
         }
     }
 
@@ -2022,7 +2032,7 @@ impl App {
         });
         let lease = lease.into_iter().chain(waits).min();
         let visit = self.remote.as_ref().map(Remote::deadline);
-        lease.into_iter().chain(visit).chain(self.broadcast_deadline()).min()
+        lease.into_iter().chain(visit).chain(self.broadcast_deadline()).chain(self.detect_deadline()).min()
     }
 
     fn on_timer(&mut self) {
@@ -2052,6 +2062,7 @@ impl App {
         }
         self.tune_timer(now.into_std());
         self.broadcast_timer(now);
+        self.detect_timer(now);
         if self.owner.as_ref().and_then(|o| o.focus_check).is_some_and(|t| now >= t) {
             self.report_focus();
         }
@@ -2981,6 +2992,10 @@ impl App {
             }
             Request::WallpaperStatus => self.wallpaper.status(),
             Request::Status => self.status().encode(),
+            Request::Detect { timeout, keys_only } => {
+                self.start_detect(timeout, keys_only, reply);
+                return false;
+            }
             Request::Invitation => {
                 crate::invite::query(&self.dir, reply);
                 return false;

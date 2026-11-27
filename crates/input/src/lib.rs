@@ -114,6 +114,110 @@ pub fn device_support(backend: &str) -> Result<Option<&'static str>, &'static st
     }
 }
 
+/// Whether a backend can report this computer's own key presses while the
+/// pointer is here (`one-mk input-devices detect`): `Ok` where it can (with
+/// what isn't tested), `Err(why)` where it sees input only while it
+/// controls another computer, or never. Mirrors
+/// [`one_mk_proto::detect::detect_support`], which the window uses.
+pub fn detect_support(backend: &str) -> Result<Option<&'static str>, &'static str> {
+    one_mk_proto::detect::detect_support(backend)
+}
+
+/// The system a rule would run on, for [`detect_unusable_on`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetectSystem {
+    Mac,
+    Windows,
+    Other,
+}
+
+impl DetectSystem {
+    pub fn local() -> Self {
+        if cfg!(target_os = "macos") {
+            DetectSystem::Mac
+        } else if cfg!(windows) {
+            DetectSystem::Windows
+        } else {
+            DetectSystem::Other
+        }
+    }
+}
+
+/// Why a rule for `code` (pressed with the sided modifiers `mods`), detected
+/// on this computer, could not take effect here, though the press was seen:
+/// mouse buttons the native backends neither forward nor remap (capture,
+/// IOHIDManager and Raw Input attribution, and local remapping all stop at
+/// button 5), and, with native local remapping on, keys it can't apply (a
+/// rule for one would pause local remapping altogether). `None`: it can.
+pub fn detect_unusable(backend: &str, code: u32, mods: u8, local_rules: bool) -> Option<&'static str> {
+    if backend != "native" {
+        return None;
+    }
+    detect_unusable_on(DetectSystem::local(), code, mods, local_rules && cfg!(feature = "native-local-remap"))
+}
+
+/// [`detect_unusable`] for `system`.
+pub fn detect_unusable_on(system: DetectSystem, code: u32, mods: u8, local_rules: bool) -> Option<&'static str> {
+    if system == DetectSystem::Other {
+        return None;
+    }
+    if one_mk_proto::keynames::is_button(code) && !NATIVE_BUTTONS.contains(&code) {
+        return Some("oneMK forwards and remaps mouse buttons 1 to 5 here, and this one is further on");
+    }
+    let supported = |c: u32| match system {
+        DetectSystem::Mac => native_local_mac(c),
+        DetectSystem::Windows => native_local_windows(c),
+        DetectSystem::Other => true,
+    };
+    let mods_ok = one_mk_proto::keynames::MOD_CODES.iter().enumerate().all(|(i, &m)| mods & (1 << i) == 0 || supported(u32::from(m)));
+    if local_rules && !(supported(code) && mods_ok) {
+        return Some(
+            "local remapping on this computer can't change it yet, and a rule for it would pause local remapping",
+        );
+    }
+    None
+}
+
+/// The mouse buttons the native backends forward, attribute and remap:
+/// left, right, middle, back, forward (evdev `BTN_LEFT` to `BTN_EXTRA`).
+pub const NATIVE_BUTTONS: std::ops::RangeInclusive<u32> = 0x110..=0x114;
+
+/// The native backends' button `n`, counted from 0 (left, right, middle,
+/// back, forward: the order of macOS button numbers and, from 1, of HID
+/// buttons), as an evdev button; none past the fifth. Capture, device
+/// attribution and detection all number buttons by this.
+#[cfg(any(windows, target_os = "macos", test))]
+pub(crate) fn native_button(n: u32) -> Option<u32> {
+    let code = NATIVE_BUTTONS.start().checked_add(n)?;
+    NATIVE_BUTTONS.contains(&code).then_some(code)
+}
+
+/// What native local remapping on a Mac can apply (`macos_localmap_logic::eligible`).
+fn native_local_mac(code: u32) -> bool {
+    #[cfg(any(all(target_os = "macos", feature = "native-local-remap"), test))]
+    {
+        macos_localmap_logic::eligible(code)
+    }
+    #[cfg(not(any(all(target_os = "macos", feature = "native-local-remap"), test)))]
+    {
+        let _ = code;
+        true
+    }
+}
+
+/// What native local remapping on Windows can apply (`windows_localmap`'s check).
+fn native_local_windows(code: u32) -> bool {
+    #[cfg(any(windows, test))]
+    {
+        win_logic::local_remap_eligible(code)
+    }
+    #[cfg(not(any(windows, test)))]
+    {
+        let _ = code;
+        true
+    }
+}
+
 /// From the backend to the daemon.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Event {
@@ -183,6 +287,21 @@ pub enum Event {
     KeyboardLayout(typing::KeyboardLayout),
     KeyboardLayoutUnavailable,
     KeyboardModifiers { depressed: u32, latched: u32, locked: u32, group: u32 },
+    /// While asked to (`CaptureCmd::Detect(Some(session))`): a real key or
+    /// mouse button of this computer went down or up, whether or not the
+    /// pointer is here, with its device where the backend knows it at once
+    /// (X11). Injected input is left out. The input itself goes where it
+    /// always goes: this is only a report, for `one-mk input-devices detect`,
+    /// and never counts as this computer's own input being used
+    /// (`LocalInput`).
+    LocalPress { session: u32, press: one_mk_proto::detect::Press },
+    /// While detecting: the device side of a press (Windows Raw Input,
+    /// macOS IOHIDManager), which may come a little before or after the
+    /// `LocalPress` it belongs to.
+    PressDevice { session: u32, press: one_mk_proto::detect::Press, device: DeviceRef },
+    /// Detecting began: the keys and buttons held then, as the backend read
+    /// them (before any `LocalPress` of that session).
+    DetectHeld { session: u32, codes: Vec<u32> },
 }
 
 /// From the daemon to the capture side.
@@ -210,6 +329,13 @@ pub enum CaptureCmd {
     /// with `Event::Error` if this backend can't. The daemon decides where
     /// the pointer goes, so the reported position doesn't matter.
     Activate { side: Side },
+    /// `Some(session)`: report this computer's own key and button presses as
+    /// `Event::LocalPress` (and their devices as `Event::PressDevice`),
+    /// tagged with `session`, without changing what they do, until
+    /// `Detect(None)` or another session. Backends that can't see local
+    /// input (the Wayland portals, wlroots) ignore it: see
+    /// [`detect_support`].
+    Detect(Option<u32>),
 }
 
 /// From the daemon to the injection side.

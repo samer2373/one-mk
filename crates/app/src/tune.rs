@@ -11,7 +11,7 @@ use crate::view::{Entry, Val};
 use one_mk_proto::device::Fingerprint;
 use one_mk_proto::keynames::{self, Chord, Trigger};
 use one_mk_proto::os;
-use one_mk_proto::remap::{self, Action, Emit, Keymap, Mapper, Nav, Output, RuleSpec, What};
+use one_mk_proto::remap::{self, Action, Emit, Keymap, Mapper, Nav, Output, RuleSpec, SystemAction, What};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -324,17 +324,17 @@ pub enum To {
 }
 
 impl To {
-    pub fn describe(&self) -> String {
+    pub fn describe(&self, target: u8) -> String {
         match self {
             To::One(text) if text.trim().eq_ignore_ascii_case("back") => "go back".into(),
             To::One(text) if text.trim().eq_ignore_ascii_case("forward") => "go forward".into(),
-            To::One(text) if text == "desktop-left" => "go to the desktop on the left".into(),
-            To::One(text) if text == "desktop-right" => "go to the desktop on the right".into(),
-            To::One(text) => text.clone(),
+            To::One(text) if text == "desktop-left" => "Previous desktop".into(),
+            To::One(text) if text == "desktop-right" => "Next desktop".into(),
+            To::One(text) => text.parse::<SystemAction>().map_or_else(|_| text.clone(), |action| action.label_for(target).to_owned()),
             To::Many(steps) => steps.join(", then "),
         }
     }
-    fn parse(&self) -> Result<Output, String> {
+    pub fn parse(&self) -> Result<Output, String> {
         match self {
             To::One(s) => s.parse().map_err(|e: keynames::NameError| e.0),
             To::Many(v) => Output::sequence(v).map_err(|e| e.0),
@@ -661,8 +661,19 @@ impl Input {
 
     /// The keymap for `f`, compiled as a visit would compile it.
     pub fn keymap(&self, f: &Facts) -> Result<Keymap, String> {
-        let specs: Vec<RuleSpec> = self.specs(f).into_iter().map(|(s, _)| s).collect();
-        Keymap::compile(&specs, remap::Target { os: f.os, swap: f.swap }, self.tap()).map(|c| c.map).map_err(|e| e.0)
+        self.compile_for(f, f.os).map(|compiled| compiled.map)
+    }
+
+    pub fn test_keymap(&self, facts: &Facts) -> Result<Keymap, String> {
+        // Keep filtering by the chosen scope. Only shortcut resolution
+        // falls back to this computer's OS for an unspecified target.
+        let os = if facts.os == os::UNKNOWN { os::local() } else { facts.os };
+        self.compile_for(facts, os).map(|compiled| compiled.map)
+    }
+
+    fn compile_for(&self, facts: &Facts, os: u8) -> Result<remap::Compiled, String> {
+        let specs: Vec<_> = self.specs(facts).into_iter().map(|(spec, _)| spec).collect();
+        Keymap::compile(&specs, remap::Target { os, swap: facts.swap }, self.tap()).map_err(|e| e.0)
     }
 
     /// The key that switches layer `name` on, if one does.
@@ -725,6 +736,7 @@ fn title(s: &str) -> String {
 /// A key's name for a sentence: "Caps Lock", "Left Alt", "F13", "A".
 pub fn key_label(code: u32) -> String {
     let fixed = match code {
+        133 => "Copy key",
         1 => "Esc",
         14 => "Backspace",
         15 => "Tab",
@@ -777,6 +789,10 @@ pub fn key_label(code: u32) -> String {
         _ => {}
     }
     let name = keynames::key_name(code);
+    // A key with no name (a keyboard's own extra key, detected): its number.
+    if name.starts_with("code:") {
+        return format!("Key code {code}");
+    }
     if name.chars().count() == 1 || name.starts_with('f') && name[1..].parse::<u8>().is_ok() {
         return name.to_uppercase();
     }
@@ -786,6 +802,7 @@ pub fn key_label(code: u32) -> String {
 /// A key's name on its drawn cap: short.
 pub fn cap_label(code: u16) -> String {
     let s = match code {
+        133 => "Copy key",
         14 => "Bksp",
         58 => "Caps",
         42 | 54 => "Shift",
@@ -881,6 +898,10 @@ fn action_text(a: &Action) -> String {
 /// What an output does, as the end of a sentence: "Esc", "types Ctrl+A,
 /// then Ctrl+C", "does nothing", "switches to the next computer".
 pub fn out_text(o: &Output) -> String {
+    out_text_for(o, os::UNKNOWN)
+}
+
+pub fn out_text_for(o: &Output, target: u8) -> String {
     match o {
         Output::Chord(c) => chord_text(c),
         Output::Sequence(s) => format!("types {}", s.iter().map(chord_text).collect::<Vec<_>>().join(", then ")),
@@ -888,17 +909,18 @@ pub fn out_text(o: &Output) -> String {
         Output::Layer(l) => format!("hold it for the “{l}” keys"),
         Output::Nav(Nav::Back) => "Back (browser)".into(),
         Output::Nav(Nav::Forward) => "Forward (browser)".into(),
+        Output::System(action) => action.label_for(target).into(),
         Output::Action(a) => action_text(a),
     }
 }
 
 /// The same, as the thing a tap or a hold gives: "Esc", "nothing", "the
 /// “nav” keys".
-fn out_noun(o: &Output) -> String {
+fn out_noun(o: &Output, target: u8) -> String {
     match o {
         Output::None => "nothing".into(),
         Output::Layer(l) => format!("the “{l}” keys"),
-        _ => out_text(o),
+        _ => out_text_for(o, target),
     }
 }
 
@@ -923,7 +945,12 @@ pub fn app_text(app: &str) -> String {
 /// A rule in one sentence: "Caps Lock → Esc when tapped, Ctrl when held",
 /// "Ctrl+Space → F13, only in Code"; `Err` with the rule as written and
 /// why it can't be used.
-pub fn sentence(input: &Input, r: &KeyRule) -> Result<String, String> {
+#[cfg(test)]
+fn sentence(input: &Input, r: &KeyRule) -> Result<String, String> {
+    sentence_for(input, r, scope_os(&r.scope).unwrap_or(os::UNKNOWN))
+}
+
+pub fn sentence_for(input: &Input, r: &KeyRule, target: u8) -> Result<String, String> {
     let spec = r.spec()?;
     let from = trigger_text(&spec.from);
     let from = match &spec.layer {
@@ -934,10 +961,10 @@ pub fn sentence(input: &Input, r: &KeyRule) -> Result<String, String> {
         None => from,
     };
     let what = match &spec.what {
-        What::To(o) => out_text(o),
+        What::To(o) => out_text_for(o, target),
         What::TapHold { tap, hold, timeout } => {
             let after = timeout.map_or(String::new(), |t| format!(" (after {} ms)", t.as_millis()));
-            format!("{} when tapped, {} when held{after}", out_noun(tap), out_noun(hold))
+            format!("{} when tapped, {} when held{after}", out_noun(tap, target), out_noun(hold, target))
         }
     };
     let app = r.app.as_deref().map_or(String::new(), |a| format!(", {}", app_text(a)));
@@ -956,7 +983,7 @@ pub fn as_written(r: &KeyRule) -> String {
 
 /// What the rule says the key does, short, for its drawn cap: "Esc",
 /// "Esc/Ctrl", "Off", "Next".
-pub fn cap_target(what: &What) -> String {
+pub fn cap_target(what: &What, target: u8) -> String {
     let short = |o: &Output| match o {
         Output::Chord(c) if c.mods == 0 => cap_label(c.key),
         // A shortcut: its key, marked as one (the whole of it is on hover).
@@ -966,6 +993,23 @@ pub fn cap_target(what: &What) -> String {
         Output::Layer(_) => "Hold".into(),
         Output::Nav(Nav::Back) => "Back".into(),
         Output::Nav(Nav::Forward) => "Fwd".into(),
+        Output::System(action) => match action {
+            SystemAction::NextDesktop => "Next desk",
+            SystemAction::PreviousDesktop => "Prev desk",
+            SystemAction::Overview => action.label_for(target),
+            SystemAction::ScreenshotArea | SystemAction::ScreenshotTool => "Capture",
+            SystemAction::AppWindows if target == os::MACOS => action.label_for(target),
+            SystemAction::AppWindows => "App wins",
+            SystemAction::ShowDesktop => "Desktop",
+            SystemAction::Launcher => "Launcher",
+            SystemAction::Search => "Search",
+            SystemAction::LockScreen => "Lock",
+            SystemAction::FullScreen => "Full scr",
+            SystemAction::Emoji => "Emoji",
+            SystemAction::SwitchApp => "Swap app",
+            SystemAction::CloseWindow => "Close win",
+            _ => action.label(),
+        }.into(),
         Output::Action(Action::Switch(_)) => "Switch".into(),
         Output::Action(Action::LockPointer(_)) => "Lock ptr".into(),
         Output::Action(Action::LockAll) => "Lock all".into(),
@@ -1293,9 +1337,18 @@ fn scope_os(scope: &Scope) -> Option<u8> {
 
 /// Whether `one-mk buttons map N TO` would take it: it must read, and the
 /// left and right buttons must keep clicking (not nothing, not a layer).
-pub fn check_button(n: u32, to: &str) -> Result<(), String> {
+pub fn check_button(n: u32, to: &str, target: u8) -> Result<(), String> {
     let spec = ButtonRule { from: n.to_string(), to: To::One(to.into()), scope: Scope::All, app: None }.spec()?;
-    if matches!(spec.from.key, 0x110 | 0x111) && !spec.from.has_mods() && matches!(spec.what, What::To(Output::None | Output::Layer(_))) {
+    let unavailable = match spec.what {
+        What::To(Output::System(action)) => action.missing_on(target).next().map(|platform| (action, platform)),
+        _ => None,
+    };
+    if matches!(spec.from.key, 0x110 | 0x111) && !spec.from.has_mods()
+        && (unavailable.is_some() || matches!(spec.what, What::To(Output::None | Output::Layer(_))))
+    {
+        if let Some((action, platform)) = unavailable {
+            return Err(primary_action_problem(if spec.from.key == 0x110 { "left" } else { "right" }, action, platform));
+        }
         return Err(format!(
             "the {} button must keep clicking: it can't be mapped to {to} (map it to another button or a key instead)",
             if spec.from.key == 0x110 { "left" } else { "right" }
@@ -1678,26 +1731,17 @@ pub fn button_default(n: u32) -> &'static str {
     }
 }
 
-/// What a button can do, offered in the list: (words, as written).
-pub const BUTTON_CHOICES: [(&str, &str); 14] = [
+/// Mouse button outputs in the picker.
+const BUTTON_CHOICES: [(&str, &str); 5] = [
     ("Left click", "button1"),
     ("Right click", "button2"),
     ("Middle click", "button3"),
-    ("Back (browser)", "back"),
-    ("Forward (browser)", "forward"),
-    ("Switch to the next computer", "switch next"),
-    ("Keep the pointer here (on and off)", "lock-pointer"),
-    ("Lock every screen", "lock-all"),
-    ("Play/pause", "play/pause"),
-    ("Next track", "next track"),
-    ("Previous track", "previous track"),
-    ("Volume up", "volume up"),
-    ("Volume down", "volume down"),
-    ("Nothing", "none"),
+    ("Back button", "button4"),
+    ("Forward button", "button5"),
 ];
 
 /// What a button does, in words.
-pub fn button_text(o: &Output) -> String {
+pub fn button_text(o: &Output, target: u8) -> String {
     if let Output::Chord(c) = o
         && c.mods == 0
         && let Some(n) = keynames::button_number(u32::from(c.key))
@@ -1711,7 +1755,7 @@ pub fn button_text(o: &Output) -> String {
         Output::Nav(Nav::Forward) => "Go forward".into(),
         Output::None => "Nothing".into(),
         Output::Chord(_) | Output::Sequence(_) => title(&out_text(o)),
-        _ => out_text(o),
+        _ => out_text_for(o, target),
     }
 }
 
@@ -1723,7 +1767,7 @@ pub fn buttons_shown(input: &Input, f: &Facts) -> Vec<(u32, String, bool)> {
         .map(|(n, _)| {
             let code = keynames::button_code(*n).expect("1 to 5") as u16;
             match specs.iter().find(|(s, _)| s.from == Trigger::key(code) && s.layer.is_none()) {
-                Some((RuleSpec { what: What::To(o), .. }, _)) => (*n, button_text(o), true),
+                Some((RuleSpec { what: What::To(o), .. }, _)) => (*n, button_text(o, f.os), true),
                 _ => (*n, button_default(*n).into(), false),
             }
         })
@@ -1734,6 +1778,12 @@ pub fn buttons_shown(input: &Input, f: &Facts) -> Vec<(u32, String, bool)> {
 pub fn button_has_own_rule(input: &Input, scope: &Scope, n: u32) -> bool {
     let Some(code) = keynames::button_code(n) else { return false };
     input.buttons.iter().any(|b| b.scope == *scope && b.app.is_none() && b.trigger().is_ok_and(|t| t == Trigger::key(code as u16)))
+}
+
+/// Whether any rule (any scope, any app) is for mouse button `n`.
+pub fn button_has_rule(input: &Input, n: u32) -> bool {
+    let Some(code) = keynames::button_code(n) else { return false };
+    input.buttons.iter().any(|b| b.trigger().is_ok_and(|t| t.key == code as u16))
 }
 
 /// Pointer acceleration this computer can do: only the system's, for now.
@@ -1834,13 +1884,35 @@ pub fn side_swipe_conflict(input: &Input, f: &Facts) -> Option<String> {
 
 /// A problem from `one-mk keymap check` in the window's words:
 /// `input.keymap.rule #3: ...` becomes `Key rule 3: ...`.
+fn primary_action_problem(button: &str, action: SystemAction, platform: u8) -> String {
+    let works: Vec<_> = SystemAction::TARGETS.into_iter()
+        .filter(|&target| action.shortcut(target).is_some()).collect();
+    format!("The {button} button must keep clicking. {} does nothing on {}. {}.",
+        action.label(), scope_platform(platform), system_scope_hint(&works))
+}
+
+pub fn system_action_problem(p: &str) -> Option<String> {
+    if let Some((before, platform)) = p.split_once(" has no shortcut for --os ")
+        && let Some((button, action)) = before.split_once(" button must keep clicking: ")
+        && let Some(button) = button.split_whitespace().last()
+        && let Ok(action) = action.parse()
+        && let Some(platform) = parse_os(platform.trim())
+    {
+        return Some(primary_action_problem(button, action, platform));
+    }
+    p.contains("unknown system action ").then(|| "Unknown system action. Choose an action from the list.".into())
+}
+
 pub fn plain_problem(p: &str) -> String {
+    if let Some(message) = system_action_problem(p) {
+        return message;
+    }
     if let Some((prefix, _)) = p.split_once(" is not a key name")
         && let Some(name) = prefix.rsplit('"').nth(1)
     {
-        let folded = fold(name);
+        let folded = remap::fold_action_search(name);
         let suggestion = keyboard(true, false).iter().map(|cap| key_label(u32::from(cap.code))).find(|label| {
-            let candidate = fold(label);
+            let candidate = remap::fold_action_search(label);
             candidate.char_indices().any(|(index, character)| {
                 let mut shortened = candidate.clone();
                 shortened.replace_range(index..index + character.len_utf8(), "");
@@ -1861,69 +1933,266 @@ pub fn plain_problem(p: &str) -> String {
 
 // ---------- the list to choose from ----------
 
+/// Sections of the action picker. Suggested and Mac each show a subset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ChoiceGroup {
+    #[default]
+    Suggested,
+    Desktop,
+    Mac,
+    Media,
+    Editing,
+    Mouse,
+    OneMk,
+    Keys,
+}
+
+impl ChoiceGroup {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Suggested => "Suggested",
+            Self::Desktop => "Desktop & windows",
+            Self::Mac => "Mac",
+            Self::Media => "Media & volume",
+            Self::Editing => "Editing",
+            Self::Mouse => "Mouse buttons",
+            Self::OneMk => "oneMK",
+            Self::Keys => "All keys",
+        }
+    }
+}
+
 /// One thing a key or button can become, in the searchable list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Choice {
     pub label: String,
+    pub detail: String,
     /// As written in a rule (`esc`, `switch next`).
     pub value: String,
+    pub group: ChoiceGroup,
+    pub suggested: bool,
+    pub mac: bool,
+    pub available: bool,
+    pub disabled_hint: Option<String>,
     /// Every name it answers to, folded for searching.
     names: Vec<String>,
+    words: Vec<String>,
 }
 
-/// Lower case without spaces, `-` and `_`; a name that is only those
-/// (`-`) stays as it is.
-fn fold(s: &str) -> String {
-    let f: String = s.chars().filter(|c| !matches!(c, ' ' | '-' | '_')).flat_map(char::to_lowercase).collect();
-    if f.is_empty() { s.trim().to_owned() } else { f }
+impl Choice {
+    fn new(label: &str, detail: &str, value: &str, group: ChoiceGroup, aliases: &[&str]) -> Self {
+        let names = [label, value].into_iter().chain(aliases.iter().copied()).map(remap::fold_action_search).collect();
+        let words = label.split(|ch: char| !ch.is_alphanumeric()).filter(|word| !word.is_empty()).map(remap::fold_action_search).collect();
+        Self { label: label.into(), detail: detail.into(), value: value.into(), group, suggested: false, mac: false, available: true, disabled_hint: None, names, words }
+    }
 }
 
-/// Everything in the list: what oneMK can do, then every named key
-/// (and, for a mouse button, the other buttons and media keys first).
-pub fn choices(buttons: bool) -> Vec<Choice> {
-    let choice = |label: &str, value: &str, extra: &[&str]| Choice {
-        label: label.into(),
-        value: value.into(),
-        names: std::iter::once(label).chain(std::iter::once(value)).chain(extra.iter().copied()).map(fold).collect(),
+pub fn platform_name(target: u8) -> &'static str {
+    match target {
+        os::MACOS => "Mac",
+        os::WINDOWS => "Windows",
+        os::LINUX => "Linux",
+        _ => "an unknown OS",
+    }
+}
+
+fn scope_platform(platform: u8) -> &'static str {
+    match platform {
+        os::MACOS => "Macs",
+        os::WINDOWS => "Windows PCs",
+        os::LINUX => "Linux",
+        _ => "other computers",
+    }
+}
+
+fn platform_list(platforms: &[u8], name: impl Fn(u8) -> &'static str) -> String {
+    let names: Vec<_> = platforms.iter().map(|&platform| name(platform)).collect();
+    match names.as_slice() {
+        [a, b, c] => format!("{a}, {b} and {c}"),
+        [a, b] => format!("{a} and {b}"),
+        _ => names.join(""),
+    }
+}
+
+fn system_scope_hint(works: &[u8]) -> String {
+    match works {
+        [a] => format!("Choose For: Only {} to use it", os_plural(*a)),
+        [a, b] => format!("Choose For: Only {} or Only {} to use it", os_plural(*a), os_plural(*b)),
+        _ => "Choose a different action".into(),
+    }
+}
+
+pub fn system_note(what: &What, target: u8) -> Option<String> {
+    let warning = |output: &Output| {
+        let Output::System(action) = output else { return None };
+        let missing: Vec<_> = action.missing_on(target).collect();
+        if missing.is_empty() { return None; }
+        let works: Vec<_> = SystemAction::TARGETS.into_iter()
+            .filter(|&platform| action.shortcut(platform).is_some()).collect();
+        // The name the rules list shows for this scope, so the note reads as the same action.
+        let name = action.label_for(target);
+        Some((name, missing, works))
     };
-    let mut out: Vec<Choice> = if buttons {
-        BUTTON_CHOICES.iter().map(|(l, v)| choice(l, v, &[])).collect()
+    let (name, missing, works) = match what {
+        What::To(output) => warning(output)?,
+        What::TapHold { tap, hold, .. } => match (warning(tap), warning(hold)) {
+            (Some(a), Some(b)) if a != b => return Some(format!(
+                "{} does nothing on {} when tapped. {} does nothing on {} when held.",
+                a.0, platform_list(&a.1, scope_platform), b.0, platform_list(&b.1, scope_platform),
+            )),
+            (Some(note), _) | (_, Some(note)) => note,
+            _ => return None,
+        },
+    };
+    Some(format!("{name} does nothing on {}. {}.",
+        platform_list(&missing, scope_platform), system_scope_hint(&works)))
+}
+
+pub fn button_rule_note(button: u32, target: u8) -> Option<String> {
+    remap::extra_button_unavailable(button, target).then(|| {
+        format!("Button {button} isn't forwarded on {}.", scope_platform(target))
+    })
+}
+
+pub fn picker_available(choice: &Choice, primary: bool, target: u8) -> bool {
+    choice.available && (!primary || (choice.value != "none"
+        && !choice.value.parse::<SystemAction>().is_ok_and(|action| action.missing_on(target).next().is_some())))
+}
+
+fn shortcut_text(chord: Chord, target: u8) -> String {
+    let (alt, meta) = match target {
+        os::MACOS => ("Option", "Cmd"),
+        os::WINDOWS => ("Alt", "Win"),
+        _ => ("Alt", "Super"),
+    };
+    let mut words = Vec::new();
+    for (i, name) in ["Ctrl", "Shift", alt, meta].into_iter().enumerate() {
+        if chord.mods & (1 << i) != 0 {
+            words.push(name.to_owned());
+        }
+    }
+    words.push(match chord.key {
+        103 => "↑".into(),
+        105 => "←".into(),
+        106 => "→".into(),
+        108 => "↓".into(),
+        125 => meta.into(),
+        52 => ".".into(),
+        key => key_label(u32::from(key)),
+    });
+    words.join("+")
+}
+
+fn system_choice(action: SystemAction, target: u8) -> Choice {
+    use ChoiceGroup as Group;
+    use SystemAction::*;
+    let desktop = matches!(action, NextDesktop | PreviousDesktop | Overview | AppWindows | ShowDesktop);
+    let group = match action {
+        Copy | Cut | Paste | Undo | Redo | SelectAll | Find | Save | NewTab | CloseTab | NextTab | PreviousTab => Group::Editing,
+        _ => Group::Desktop,
+    };
+    let describe = |platform| {
+        let name = platform_name(platform);
+        match action.shortcut(platform) {
+            Some(chord) => format!("{} on {name}", shortcut_text(chord, platform)),
+            None => format!("Not on {name}"),
+        }
+    };
+    let (works, missing): (Vec<_>, Vec<_>) = SystemAction::TARGETS.into_iter()
+        .partition(|&platform| action.shortcut(platform).is_some());
+    let detail = if target == os::UNKNOWN && !missing.is_empty() {
+        format!("{} · nothing on {}", platform_list(&works, platform_name), platform_list(&missing, platform_name))
+    } else if target == os::UNKNOWN {
+        SystemAction::TARGETS.map(describe).join("  ·  ")
     } else {
-        vec![
-            choice("Nothing (the key does nothing)", "none", &["off", "disable"]),
-            choice("Switch to the next computer", "switch next", &[]),
-            choice("Come back to this computer", "switch here", &[]),
-            choice("Keep the pointer here (on and off)", "lock-pointer", &["lock"]),
-            choice("Lock every screen", "lock-all", &["lock"]),
-            choice("Back (browser)", "back", &[]),
-            choice("Forward (browser)", "forward", &[]),
-        ]
+        describe(target)
     };
+    let detail = match (target, action) {
+        (os::MACOS | os::UNKNOWN, _) if desktop && (target != os::UNKNOWN || missing.is_empty()) => format!("{detail} · Enable Mission Control shortcuts on Mac"),
+        (os::LINUX, ScreenshotTool) => format!("{detail} · Opens the screenshot UI on GNOME 42+"),
+        (os::WINDOWS, ScreenshotTool) => format!("{detail} · Opens the Snipping Tool"),
+        (os::LINUX, ShowDesktop) => format!("{detail} · Bind this in Keyboard Shortcuts"),
+        (os::LINUX | os::WINDOWS, FullScreen) => format!("{detail} · In apps that use F11"),
+        _ => detail,
+    };
+    let mut choice = Choice::new(action.label_for(target), &detail, &action.to_string(), group, &[]);
+    choice.names.extend(action.search_names().map(remap::fold_action_search));
+    choice.available = if SystemAction::TARGETS.contains(&target) {
+        action.shortcut(target).is_some()
+    } else {
+        !works.is_empty()
+    };
+    if !missing.is_empty() {
+        choice.disabled_hint = Some(system_scope_hint(&works));
+    }
+    choice.suggested = desktop || matches!(action, Search | ScreenshotArea | LockScreen | Copy | Paste);
+    choice.mac = action.shortcut(os::MACOS).is_some()
+        && (desktop || matches!(action, Search | ScreenshotTool | ForceQuit | Emoji | HideApp | QuitApp));
+    choice
+}
+
+pub fn choices(buttons: bool, target: u8) -> Vec<Choice> {
+    use ChoiceGroup as Group;
+    let mut out = Vec::new();
+    if buttons {
+        out.extend(BUTTON_CHOICES.iter().map(|(label, value)| {
+            Choice::new(label, "Mouse button", value, Group::Mouse, &[])
+        }));
+    }
+    out.extend(SystemAction::ALL.iter().copied().filter(|&action| {
+        action != SystemAction::ScreenshotArea || !matches!(target, os::WINDOWS | os::LINUX)
+    }).map(|action| system_choice(action, target)));
+    for (label, value) in [
+        ("Switch to the next computer", "switch next"),
+        ("Come back to this computer", "switch here"),
+        ("Keep the pointer here (on and off)", "lock-pointer"),
+        ("Lock every screen", "lock-all"),
+        ("Nothing", "none"),
+    ] {
+        let aliases: &[&str] = match value {
+            "none" => &["off", "disable"],
+            "lock-pointer" | "lock-all" => &["lock"],
+            _ => &[],
+        };
+        let mut choice = Choice::new(label, "oneMK action", value, Group::OneMk, aliases);
+        choice.suggested = value == "switch next";
+        out.push(choice);
+    }
+    for (label, value) in [("Back (browser)", "back"), ("Forward (browser)", "forward")] {
+        let detail = match target {
+            os::MACOS => if value == "back" { "Cmd+[ on Mac" } else { "Cmd+] on Mac" },
+            os::LINUX | os::WINDOWS => if value == "back" { "Alt+←" } else { "Alt+→" },
+            _ => if value == "back" { "Cmd+[ on Mac · Alt+← on Windows and Linux" } else { "Cmd+] on Mac · Alt+→ on Windows and Linux" },
+        };
+        let mut choice = Choice::new(label, detail, value, Group::Desktop, &[]);
+        choice.suggested = true;
+        out.push(choice);
+    }
     for (code, name, names) in keynames::all_names() {
-        if keynames::is_button(code) || out.iter().any(|c| c.value == name) {
+        if keynames::is_button(code) {
             continue;
         }
-        let mut c = choice(&key_label(code), name, names);
-        c.names.push(fold(&keynames::key_name(code)));
-        out.push(c);
+        let media = one_mk_proto::mediakeys::is_media(code);
+        let (group, detail) = if media { (Group::Media, "Media key") } else { (Group::Keys, "") };
+        let mut choice = Choice::new(&key_label(code), detail, name, group, names);
+        choice.suggested = matches!(code, 1 | 28 | 57 | 113..=115 | 164);
+        out.push(choice);
     }
     out
 }
 
-/// The choices that match what was typed: by name, alias or label; the
-/// ones whose name starts with it first.
+/// Rank exact names, prefixes, partial names and misspellings in order.
 pub fn search<'a>(all: &'a [Choice], query: &str) -> Vec<&'a Choice> {
-    let q = fold(query.trim());
+    let q = remap::fold_action_search(query.trim());
     if q.is_empty() {
         return all.iter().collect();
     }
-    let mut hits: Vec<(u8, &Choice)> = all
-        .iter()
-        .filter(|c| c.names.iter().any(|n| n.contains(&q)))
-        .map(|c| (if c.names.contains(&q) { 0 } else if c.names.iter().any(|n| n.starts_with(&q)) { 1 } else { 2 }, c))
-        .collect();
+    let mut hits: Vec<_> = all.iter().filter_map(|choice| {
+        let rank = remap::action_search_rank(&choice.names, &choice.words, &q)?;
+        Some((rank, choice))
+    }).collect();
     hits.sort_by_key(|(rank, _)| *rank);
-    hits.into_iter().map(|(_, c)| c).collect()
+    hits.into_iter().map(|(_, choice)| choice).collect()
 }
 
 // ---------- speeds ----------
@@ -2067,7 +2336,7 @@ os = "mac"
         assert_eq!(input.autoscroll[1].speed, Some(2.0));
         assert_eq!(input.gestures[0].scope, Scope::Peer("Studio PC".into()));
         assert_eq!(input.gestures[0].app.as_deref(), Some("code*"));
-        assert_eq!(input.gestures[0].to.describe(), "go back");
+        assert_eq!(input.gestures[0].to.describe(os::UNKNOWN), "go back");
         assert_eq!(mouse_button_label("button4"), "the back button");
     }
 
@@ -2140,8 +2409,8 @@ os = "mac"
         assert!(!in_app.same_place(&KeyRule::to("ctrl+space", "f12")));
         assert!(in_app.same_place(&KeyRule { app: Some(" code ".into()), ..KeyRule::to("ctrl+space", "f12") }));
         assert_eq!(as_written(&KeyRule::to("capslok", "esc")), "capslok → esc");
-        assert_eq!(cap_target(&i.keys[0].spec().unwrap().what), "Esc/Ctrl");
-        assert_eq!(cap_target(&What::To("ctrl+shift+esc".parse().unwrap())), "+Esc");
+        assert_eq!(cap_target(&i.keys[0].spec().unwrap().what, os::UNKNOWN), "Esc/Ctrl");
+        assert_eq!(cap_target(&What::To("ctrl+shift+esc".parse().unwrap()), os::UNKNOWN), "+Esc");
     }
 
     #[test]
@@ -2240,9 +2509,9 @@ os = "mac"
         }
         let e = check_add(&many, &KeyRule::to("f9", "layer:l8")).unwrap_err();
         assert!(e.contains("at most 8 layers"), "{e}");
-        assert_eq!(check_button(4, "back"), Ok(()));
-        assert!(check_button(4, "switch").unwrap_err().contains("needs `next`"));
-        assert!(check_button(9, "back").unwrap_err().contains("numbered 1 to 8"));
+        assert_eq!(check_button(4, "back", os::UNKNOWN), Ok(()));
+        assert!(check_button(4, "switch", os::UNKNOWN).unwrap_err().contains("needs `next`"));
+        assert!(check_button(9, "back", os::UNKNOWN).unwrap_err().contains("numbered 1 to 8"));
     }
 
     #[test]
@@ -2277,10 +2546,10 @@ os = "mac"
         assert_eq!(b[3], (4, "Go back".to_owned(), true));
         assert_eq!(b[2], (3, "Middle click".to_owned(), false));
         assert_eq!(buttons_shown(&i, &Facts::of(&Scope::Os(os::MACOS), &[]))[2].1, "Locks every screen");
-        assert_eq!(button_text(&"button2".parse().unwrap()), "Right click");
-        assert_eq!(button_text(&"ctrl+c".parse().unwrap()), format!("{}+C", ctrl_word()));
+        assert_eq!(button_text(&"button2".parse().unwrap(), os::UNKNOWN), "Right click");
+        assert_eq!(button_text(&"ctrl+c".parse().unwrap(), os::UNKNOWN), format!("{}+C", ctrl_word()));
         for (_, to) in BUTTON_CHOICES {
-            assert_eq!(check_button(5, to), Ok(()), "{to}");
+            assert_eq!(check_button(5, to, os::UNKNOWN), Ok(()), "{to}");
         }
     }
 
@@ -2326,12 +2595,16 @@ os = "mac"
     fn problems_read_without_table_names() {
         assert_eq!(plain_problem("input.keymap.rule #3: from: \"capslok\" is not a key name"), "'capslok' isn't a key. Did you mean Caps Lock?");
         assert_eq!(plain_problem("input.button #1: button 9"), "Button rule 1: button 9");
+        let cli = "input.button #1: the left button must keep clicking: os:hide-app has no shortcut for --os windows";
+        assert_eq!(plain_problem(cli), "The left button must keep clicking. Hide app does nothing on Windows PCs. Choose For: Only Macs to use it.");
+        assert_eq!(plain_problem("unknown system action \"os:mision\"; did you mean os:overview (Mission Control)?"),
+            "Unknown system action. Choose an action from the list.");
         assert_eq!(plain_problem("rules for \"x\" never apply"), "Rules for \"x\" never apply");
     }
 
     #[test]
     fn the_list_finds_keys_by_any_name() {
-        let keys = choices(false);
+        let keys = choices(false, os::UNKNOWN);
         let first = |q: &str| search(&keys, q).first().map(|c| c.value.clone());
         assert_eq!(first("esc").as_deref(), Some("esc"));
         assert_eq!(first("Escape").as_deref(), Some("esc"));
@@ -2346,7 +2619,7 @@ os = "mac"
         for c in &keys {
             assert!(c.value.parse::<Output>().is_ok(), "{}", c.value);
         }
-        let buttons = choices(true);
+        let buttons = choices(true, os::UNKNOWN);
         assert_eq!(buttons[0].value, "button1");
         assert_eq!(search(&buttons, "play").iter().take(2).map(|c| c.value.as_str()).collect::<Vec<_>>(), ["play", "play/pause"], "the exact name first");
     }
@@ -2524,12 +2797,12 @@ mod fixes {
     #[test]
     fn the_left_and_right_buttons_cannot_be_given_nothing() {
         for n in [1, 2] {
-            let why = check_button(n, "none").unwrap_err();
+            let why = check_button(n, "none", os::UNKNOWN).unwrap_err();
             assert!(why.contains("must keep clicking"), "{why}");
         }
-        assert!(check_button(2, "layer:nav").is_err());
+        assert!(check_button(2, "layer:nav", os::UNKNOWN).is_err());
         for (n, to) in [(1, "button2"), (2, "esc"), (3, "none"), (4, "none"), (5, "back")] {
-            assert!(check_button(n, to).is_ok(), "{n} {to}");
+            assert!(check_button(n, to, os::UNKNOWN).is_ok(), "{n} {to}");
         }
     }
 
@@ -2671,6 +2944,84 @@ mod fixes {
         assert!(swap_applies("on", os::LINUX, os::LINUX) && !swap_applies("off", os::LINUX, os::MACOS));
         let peer = Facts { name: "Mac".into(), id: "ab12-cd34".into(), os: os::MACOS, device: None, swap: true };
         assert!(!peer.with_swap_setting("off").swap);
+    }
+
+    #[test]
+    fn picker_search_ranks_aliases_and_misspelled_words() {
+        let keys = choices(false, os::MACOS);
+        for (query, top) in [
+            ("off", "none"), ("disable", "none"), ("lock", "lock-pointer"),
+            ("mision", "os:overview"), ("mision control", "os:overview"),
+            ("volune", "volume down"), ("scrnshot", "os:screenshot-area"), ("desktp", "os:next-desktop"),
+            ("swipe", "os:next-desktop"), ("three finger", "os:next-desktop"),
+            ("spaces", "os:next-desktop"), ("workspace", "os:next-desktop"), ("expose", "os:app-windows"),
+        ] {
+            let hits = search(&keys, query);
+            assert_eq!(hits.first().map(|choice| choice.value.as_str()), Some(top), "{query}");
+        }
+        assert!(search(&keys, "lock").iter().any(|choice| choice.value == "lock-all"));
+    }
+
+    #[test]
+    fn system_choice_availability_and_screenshot_labels_follow_the_scope() {
+        for target in [os::WINDOWS, os::LINUX] {
+            let choices = choices(false, target);
+            let screenshots = search(&choices, "screenshot");
+            assert_eq!(screenshots.iter().filter(|c| c.value.starts_with("os:screenshot")).count(), 1);
+            let detail = &screenshots[0].detail;
+            assert!(detail.contains(if target == os::LINUX { "GNOME 42+" } else { "Snipping Tool" }));
+        }
+        let mac = choices(false, os::MACOS);
+        assert_eq!(mac.iter().filter(|c| c.value.starts_with("os:screenshot")).count(), 2);
+        assert!(mac.iter().all(|c| c.value != "os:app-launcher" || !c.mac));
+        let windows = choices(false, os::WINDOWS);
+        let hidden = windows.iter().find(|c| c.value == "os:hide-app").unwrap();
+        assert!(!hidden.available);
+        assert_eq!(hidden.detail, "Not on Windows");
+        for button in [1, 2] {
+            assert!(check_button(button, "os:hide-app", os::WINDOWS).is_err());
+            assert!(check_button(button, "os:quit-app", os::UNKNOWN).is_err());
+            assert!(check_button(button, "os:hide-app", os::MACOS).is_ok());
+        }
+        assert!(check_button(4, "os:hide-app", os::WINDOWS).is_ok());
+    }
+
+    #[test]
+    fn partial_actions_are_pickable_except_for_primary_buttons() {
+        let choices = choices(true, os::UNKNOWN);
+        for action in ["os:app-windows", "os:app-launcher", "os:hide-app"] {
+            let choice = choices.iter().find(|c| c.value == action).unwrap();
+            assert!(picker_available(choice, false, os::UNKNOWN));
+            assert!(!picker_available(choice, true, os::UNKNOWN));
+        }
+        let app_windows = choices.iter().find(|c| c.value == "os:app-windows").unwrap();
+        assert_eq!(app_windows.detail, "Mac and Linux · nothing on Windows");
+        let hide = choices.iter().find(|c| c.value == "os:hide-app").unwrap();
+        assert_eq!(hide.disabled_hint.as_deref(), Some("Choose For: Only Macs to use it"));
+        assert!(!picker_available(choices.iter().find(|c| c.value == "none").unwrap(), true, os::UNKNOWN));
+    }
+
+    #[test]
+    fn system_notes_and_labels_follow_the_rule_scope() {
+        let action: Output = "os:app-windows".parse().unwrap();
+        assert_eq!(out_text_for(&action, os::MACOS), "App Exposé");
+        assert_eq!(system_note(&What::To(action.clone()), os::MACOS), None);
+        let warning = system_note(&What::To(action), os::UNKNOWN).unwrap();
+        assert!(warning.starts_with("App windows does nothing on Windows PCs."));
+        assert!(warning.contains("For:"));
+        assert!(button_rule_note(7, os::MACOS).is_some());
+        assert!(button_rule_note(7, os::WINDOWS).is_some());
+        assert!(button_rule_note(7, os::LINUX).is_none());
+        assert_eq!(key_label(133), "Copy key");
+        let list = choices(false, os::UNKNOWN);
+        let copy = list.iter().find(|c| c.value == "copy").unwrap();
+        assert_eq!((&*copy.label, &*copy.detail), ("Copy key", ""));
+    }
+
+    #[test]
+    fn system_actions_have_readable_rule_and_keycap_names() {
+        assert_eq!(To::One("os:previous-desktop".into()).describe(os::UNKNOWN), "Previous desktop");
+        assert_eq!(cap_target(&What::To("os:next-desktop".parse().unwrap()), os::UNKNOWN), "Next desk");
     }
 
     #[test]

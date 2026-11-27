@@ -30,6 +30,7 @@ use crate::macos_logic::{self as logic, MacScroll};
 use crate::localmap_handoff::Destination;
 use crate::macos_localmap::Local;
 use crate::{Backend, CaptureCmd, Event, Inject};
+use one_mk_proto::detect::Press;
 use anyhow::Result;
 use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
 use objc2_core_foundation::{
@@ -287,6 +288,8 @@ struct State {
     edge_request: bool,
     cursor_hidden: bool,
     tap: Option<CFRetained<CFMachPort>>,
+    /// Reporting this Mac's own presses (`CaptureCmd::Detect`), for this session.
+    detect: Option<u32>,
     /// Keys held on this Mac when capture started; their releases are let
     /// through so local apps don't see them stuck.
     local_keys: [bool; 128],
@@ -325,6 +328,7 @@ impl State {
             edge_request: false,
             cursor_hidden: false,
             tap: None,
+            detect: None,
             local_keys: [false; 128],
             local_buttons: 0,
             problem: None,
@@ -961,6 +965,18 @@ impl Ctx {
                 self.end(&mut st);
             }
             Msg::Cmd(CaptureCmd::DeviceRules(enabled)) => self.hid.rules(enabled),
+            Msg::Cmd(CaptureCmd::Detect(on)) => {
+                st.detect = on;
+                self.hid.detect(on, st.active);
+                if let Some(session) = on {
+                    // The keys held now are no press.
+                    let codes = (0..128u16)
+                        .filter(|&k| CGEventSource::key_state(CGEventSourceStateID::HIDSystemState, k))
+                        .filter_map(logic::mac_to_evdev)
+                        .collect();
+                    let _ = self.tx.send(Event::DetectHeld { session, codes });
+                }
+            }
             Msg::Cmd(CaptureCmd::SetEdges(edges)) => {
                 let changed = st.edges != edges;
                 st.edges = edges;
@@ -1019,6 +1035,46 @@ impl Ctx {
                     && let Some(run_loop) = CFRunLoop::current() { run_loop.stop(); }
                 self.update_timer(&mut st);
             }
+        }
+    }
+
+    /// While detecting, before `on_event` decides what an event does: a key
+    /// or button of this Mac's own (from the HID system, never posted by
+    /// software), here or captured, is reported, decoded as the captured
+    /// path decodes it (Caps Lock's toggle, media keys). Only a report:
+    /// nothing `on_event` uses is touched, so detecting never changes what an
+    /// event does.
+    fn detect_tap(&self, ty: CGEventType, ev: &CGEvent) {
+        let Some(session) = self.st.try_borrow().ok().and_then(|st| st.detect) else { return };
+        let e = Some(ev);
+        if CGEvent::integer_value_field(e, CGEventField::EventSourceStateID) != i64::from(CGEventSourceStateID::HIDSystemState.0) {
+            return;
+        }
+        use CGEventType as T;
+        use logic::TapPress;
+        let tap = match ty {
+            T::KeyDown | T::KeyUp => TapPress::Key {
+                keycode: keycode(ev),
+                down: ty == T::KeyDown,
+                repeat: CGEvent::integer_value_field(e, CGEventField::KeyboardEventAutorepeat) != 0,
+            },
+            T::FlagsChanged => TapPress::Flags { keycode: keycode(ev), flags: CGEvent::flags(e).0 },
+            T::LeftMouseDown | T::LeftMouseUp => TapPress::Button { number: 0, down: ty == T::LeftMouseDown },
+            T::RightMouseDown | T::RightMouseUp => TapPress::Button { number: 1, down: ty == T::RightMouseDown },
+            T::OtherMouseDown | T::OtherMouseUp => TapPress::Button {
+                number: CGEvent::integer_value_field(e, CGEventField::MouseEventButtonNumber),
+                down: ty == T::OtherMouseDown,
+            },
+            t if t.0 == NX_SYSDEFINED => match read_media(ev) {
+                Some(media) => TapPress::Media(media),
+                None => return,
+            },
+            _ => return,
+        };
+        let at = Some(logic::tap_ms(CGEvent::timestamp(e), logic::mach_now()));
+        for (code, down, repeat) in logic::detected_presses(tap).into_iter().flatten() {
+            let press = Press { code, down, repeat, device: None, at };
+            let _ = self.tx.send(Event::LocalPress { session, press });
         }
     }
 
@@ -1337,7 +1393,11 @@ unsafe extern "C-unwind" fn on_tap(
 ) -> *mut CGEvent {
     // SAFETY: `info` is the leaked `Ctx`; the event is valid for this call.
     let (ctx, ev) = unsafe { (&*(info as *const Ctx), event.as_ref()) };
-    let keep = std::panic::catch_unwind(AssertUnwindSafe(|| ctx.on_event(ty, ev))).unwrap_or_else(|_| {
+    let keep = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        ctx.detect_tap(ty, ev);
+        ctx.on_event(ty, ev)
+    }))
+    .unwrap_or_else(|_| {
         if let Ok(mut st) = ctx.st.try_borrow_mut() { ctx.local_pause(&mut st, "inactive: local input stopped unexpectedly; release all keys to resume automatically"); }
         true
     });

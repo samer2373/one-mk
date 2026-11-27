@@ -229,7 +229,7 @@ impl Local {
     }
 
     pub fn supported(rules: &Rules) -> bool {
-        rules.maps.supports_local_keys(|code| (0x110..=0x114).contains(&code) || matches!(evdev_to_win(code), Some(WinKey::Scan { .. })))
+        rules.maps.supports_local_keys(crate::win_logic::local_remap_eligible)
     }
 
     pub fn retire(mut self) -> Recovery {
@@ -254,7 +254,7 @@ impl Local {
         let rules = self.snapshots.load();
         let swallow = self.physical.key(PhysicalKey {
             down, injected: false, shortcut: false, owner: Owner::Unknown,
-            eligible: rules.captures(code) && ((0x110..=0x114).contains(&code) || matches!(evdev_to_win(code), Some(WinKey::Scan { .. }))),
+            eligible: rules.captures(code) && crate::win_logic::local_remap_eligible(code),
             healthy: self.enabled && !self.paused,
         }, code, now, &rules, &mut self.admission, |action| self.actions.push(action).is_ok());
         if self.admission.pending() { self.wake.signal(); }
@@ -319,6 +319,9 @@ impl Local {
     }
 
     pub fn physical_held(&self) -> bool { self.physical.held() }
+
+    /// Whether `code` is physically held, swallowed by a rule or not.
+    pub fn holds(&self, code: u32) -> bool { self.physical.holds(code) }
 
     pub fn action(&self) -> Option<Action> { self.actions.pop() }
 

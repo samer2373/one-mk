@@ -6,7 +6,7 @@ use one_mk_proto::device::{Bus, Fingerprint as Device};
 use one_mk_proto::gesture::Direction;
 use one_mk_proto::keynames::{self, Chord, Trigger};
 use one_mk_proto::overlay::DrawMode;
-use one_mk_proto::remap::Output;
+use one_mk_proto::remap::{Output, SystemAction};
 use one_mk_proto::{Modifier, Side, appmatch::AppPattern, sanitize_name};
 
 struct Rng(u64);
@@ -50,6 +50,10 @@ const TOKENS: &[&str] = &[
     "evdev:KEY_A",
     "0x",
     "-1",
+    "os:",
+    "os:overview",
+    "OS:NEXT-DESKTOP",
+    "os:🚀",
     "layer:",
     "layer:nav",
     "run:",
@@ -210,4 +214,21 @@ fn every_key_name_prints_and_parses_back_alone_and_with_modifiers() {
         assert!(keynames::parse_key(bad).is_err(), "{bad}");
     }
     assert_eq!(keynames::parse_key("CODE:0X3A"), keynames::parse_key("code:58"));
+}
+
+#[test]
+fn every_system_action_round_trips_and_unprefixed_keys_keep_their_meaning() {
+    for &action in SystemAction::ALL {
+        let name = action.to_string();
+        assert_eq!(name.parse(), Ok(Output::System(action)));
+        assert_eq!(format!("  {}  ", name.to_ascii_uppercase()).parse(), Ok(Output::System(action)));
+        for target in [one_mk_proto::os::MACOS, one_mk_proto::os::WINDOWS, one_mk_proto::os::LINUX] {
+            if let Some(chord) = action.shortcut(target) {
+                assert_eq!(chord.to_string().parse(), Ok(chord), "{name} on {target}");
+            }
+        }
+    }
+    for key in ["copy", "paste", "cut", "find", "undo", "redo"] {
+        assert_eq!(key.parse(), key.parse::<Chord>().map(Output::Chord));
+    }
 }

@@ -161,14 +161,14 @@ pub enum GesturesCmd {
     /// Show held-button gestures.
     List,
     /// Hold BUTTON and swipe DIRECTION to type TO on the other computer.
-    #[command(mut_arg("device", |arg| arg.hide(true)))]
+    #[command(after_help = SYSTEM_ACTION_HELP, mut_arg("device", |arg| arg.hide(true)))]
     Add {
         /// Button to hold, for example button4 (not left or right).
         button: String,
         /// Direction to swipe while holding the button.
         #[arg(value_parser = ["up", "down", "left", "right"], ignore_case = true)]
         direction: String,
-        /// A key, chord, quoted action, or several chords for a sequence;
+        /// A key, chord, OS shortcut (os:next-desktop), quoted action, or sequence;
         /// desktop-left and desktop-right switch virtual desktops on any OS.
         #[arg(required = true, num_args = 1..)]
         to: Vec<String>,
@@ -212,6 +212,25 @@ fn set_gesture(rules: &mut Vec<GestureRule>, rule: GestureRule) {
     rules.push(rule);
 }
 
+fn gesture_description(rule: &GestureRule) -> String {
+    let target = scope_os(&rule.scope, &[]).unwrap_or(os::UNKNOWN);
+    let output = match &rule.to {
+        To::One(name) if name == "desktop-left" => "Previous desktop".into(),
+        To::One(name) if name == "desktop-right" => "Next desktop".into(),
+        _ => rule.to.describe_for(target),
+    };
+    let mut qualifiers = vec![format!("{} units", rule.threshold_px)];
+    match rule.scope {
+        Scope::Global => {}
+        Scope::Os(os::MACOS) => qualifiers.push("Macs only".into()),
+        Scope::Os(os::WINDOWS) => qualifiers.push("Windows PCs only".into()),
+        Scope::Os(os::LINUX) => qualifiers.push("Linux only".into()),
+        _ => qualifiers.push(format!("for {}", rule.scope)),
+    }
+    if let Some(app) = &rule.app { qualifiers.push(app_words(app)); }
+    format!("Hold {} and swipe {} to {output} ({}).", rule.button, rule.direction, qualifiers.join(", "))
+}
+
 pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()> {
     match cmd.unwrap_or(GesturesCmd::List) {
         GesturesCmd::List => {
@@ -220,11 +239,12 @@ pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()
                 println!("No gestures yet. Try `one-mk gestures preset side-swipe`, or `one-mk gestures add button4 left back`.");
             }
             for rule in settings.input.gesture {
-                println!("Hold {} and swipe {} to {} ({} units){}.", rule.button, rule.direction, rule.to.describe(), rule.threshold_px, where_suffix(&rule.scope, &rule.app));
+                println!("{}", gesture_description(&rule));
             }
             return Ok(());
         }
         GesturesCmd::Add { button, direction, to, threshold, scope } => {
+            check_trailing_scope(&to)?;
             no_device(&scope)?;
             let button = keynames::key_name(mouse_button(&button).map_err(anyhow::Error::msg)?);
             let output = match to.as_slice() { [one] => To::One(one.clone()), _ => To::Many(to) };
@@ -232,6 +252,10 @@ pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()
                 threshold_px: threshold, scope: scope.scope(dir)?, app: scope.app()? };
             rule.compile(remap::Target { os: os::local(), swap: false }).map_err(anyhow::Error::msg)?;
             let paired = paired(dir);
+            let notes = match &rule.to {
+                To::One(text) => system_notes(&rule.scope, &paired, &[text]),
+                To::Many(_) => vec![],
+            };
             Settings::update(dir, |settings| {
                 let known = reserved_gestures(&settings.input, &paired);
                 set_gesture(&mut settings.input.gesture, rule);
@@ -241,6 +265,7 @@ pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()
                 }
             })?;
             println!("Gesture saved. A short click still clicks normally; press Esc to cancel a swipe.");
+            print_system_notes(notes);
             run_note(dir);
         }
         GesturesCmd::Remove { button, direction, scope } => {
@@ -273,9 +298,9 @@ pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()
                 // As `gestures add` does: not saved if autoscroll's toggle
                 // button is button4 (the preset would be skipped for it).
                 let known = reserved_gestures(&settings.input, &paired);
-                for direction in ["left", "right"] {
+                for (direction, output) in [("left", "os:previous-desktop"), ("right", "os:next-desktop")] {
                     set_gesture(&mut settings.input.gesture, GestureRule { button: "button4".into(), direction: direction.into(),
-                        to: To::One(format!("desktop-{direction}")), threshold_px: 60.0, scope: scope.clone(), app: app.clone() });
+                        to: To::One(output.into()), threshold_px: 60.0, scope: scope.clone(), app: app.clone() });
                 }
                 match reserved_gestures(&settings.input, &paired).into_iter().find(|problem| !known.contains(problem)) {
                     Some(problem) => bail!("{problem}; the preset was not saved"),
@@ -336,6 +361,65 @@ mod tests {
         settings.autoscroll.rule.push(AutoscrollRule { enabled: Some(true), scope: Scope::Os(os::WINDOWS), ..Default::default() });
         settings.button.push(ButtonRule { from: ButtonFrom::Number(3), to: To::One("back".into()), scope: Scope::Global, app: None });
         assert!(!settings.check(&[]).iter().any(|warning| warning.contains("autoscroll takes precedence")));
+    }
+
+    #[test]
+    fn system_gestures_emit_target_shortcuts_and_check_resolves_the_peer_os() {
+        let input: TuningSettings = toml::from_str(r#"
+[[gesture]]
+button = "button4"
+direction = "left"
+to = "os:previous-desktop"
+scope = { peer = "Studio" }
+[[gesture]]
+button = "button5"
+direction = "right"
+to = "os:app-launcher"
+scope = { peer = "Studio" }
+[[keymap.rule]]
+from = "a"
+to = "os:app-launcher"
+scope = { peer = "Studio" }
+[[button]]
+from = 3
+to = "os:app-launcher"
+scope = { os = "mac" }
+"#).unwrap();
+        assert!(input.check(&[("Studio".into(), "12345678".into(), os::MACOS)]).is_empty());
+        let peer = PeerFacts { name: "Studio", id: "12345678", os: os::MACOS, apps: &[], device: None };
+        let resolved = input.resolve(&peer, true);
+        for source in ["gesture: button5", "a:", "button3"] {
+            assert!(resolved.warnings.iter().any(|p| p.contains(source) && p.ends_with("macOS and sends nothing")), "{:?}", resolved.warnings);
+        }
+        assert_eq!(resolved.gestures.len(), 2);
+        let mut mapper = remap::Mapper::new(resolved.keymap);
+        let mut keys = Vec::new();
+        for gesture in resolved.gestures {
+            mapper.pulse_binding(&gesture.output, &mut |event| match event {
+                remap::Emit::Key { code, down } => keys.push((one_mk_proto::swap_ctrl_meta(code), down)),
+                _ => panic!("the gesture emits only keystrokes"),
+            });
+        }
+        assert_eq!(keys, [(29, true), (105, true), (105, false), (29, false)]);
+    }
+
+    #[test]
+    fn linux_side_swipes_keep_the_legacy_workspace_chord() {
+        for (direction, code, old, new) in [
+            ("left", 105, "desktop-left", "os:previous-desktop"),
+            ("right", 106, "desktop-right", "os:next-desktop"),
+        ] {
+            for output in [old, new] {
+                let rule = GestureRule { button: "button4".into(), direction: direction.into(), to: To::One(output.into()), threshold_px: 60.0, scope: Scope::Global, app: None };
+                let (gesture, warnings) = rule.compile(remap::Target { os: os::LINUX, swap: false }).unwrap();
+                assert!(warnings.is_empty());
+                let mut keys = Vec::new();
+                remap::Mapper::new(Keymap::default()).pulse_binding(&gesture.output, &mut |event| {
+                    if let remap::Emit::Key { code, down } = event { keys.push((code, down)); }
+                });
+                assert_eq!(keys, [(29, true), (56, true), (code, true), (code, false), (29, false), (56, false)], "{output}");
+            }
+        }
     }
 
     #[test]
