@@ -2481,7 +2481,7 @@ impl App {
 
     /// Ctrl+1 to 7 switch tabs (Cmd on a Mac).
     fn shortcuts(&mut self, ui: &Ui) {
-        if widgets::locked(ui) || self.keys_grab(ui.ctx()) || ui.ctx().data(|data| data.get_temp::<usize>(Id::unique("shortcut-recorder")).is_some() || data.get_temp::<bool>(Id::unique("gesture-recording")).unwrap_or(false)) {
+        if widgets::locked(ui) || (self.tab == Tab::Keys && self.keys.picker.is_some()) || self.keys_grab(ui.ctx()) || ui.ctx().data(|data| data.get_temp::<usize>(Id::unique("shortcut-recorder")).is_some() || data.get_temp::<bool>(Id::unique("gesture-recording")).unwrap_or(false)) {
             return;
         }
         let off = self.off();

@@ -26,6 +26,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod system;
+pub use system::SystemAction;
+
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
@@ -80,6 +83,8 @@ pub enum Output {
     Layer(String),
     /// `back` or `forward` for the target OS.
     Nav(Nav),
+    /// `os:NAME`: tap the system shortcut once.
+    System(SystemAction),
     /// Runs once when the key goes down.
     Action(Action),
 }
@@ -118,6 +123,9 @@ impl FromStr for Output {
         }
         if let Some(name) = lower.strip_prefix("layer:") {
             return Ok(Output::Layer(valid_layer(name.trim())?));
+        }
+        if lower.starts_with("os:") {
+            return Ok(Output::System(t.parse()?));
         }
         Ok(match (head, rest) {
             ("none" | "disabled" | "nothing" | "off", "") => Output::None,
@@ -218,6 +226,7 @@ impl fmt::Display for Output {
             Output::Layer(l) => write!(f, "layer:{l}"),
             Output::Nav(Nav::Back) => f.write_str("back"),
             Output::Nav(Nav::Forward) => f.write_str("forward"),
+            Output::System(a) => write!(f, "{a}"),
             Output::Action(a) => write!(f, "{a}"),
         }
     }
@@ -270,6 +279,7 @@ impl Target {
 enum Out {
     None,
     Chord(Chord),
+    Pulse(Chord),
     Seq { start: u16, len: u16 },
     Action(u16),
     Layer(u8),
@@ -306,6 +316,8 @@ pub struct Keymap {
 pub struct Compiled {
     pub map: Keymap,
     pub warnings: Vec<String>,
+    /// Missing system shortcuts are advisory. Check them against the rule's scope.
+    pub system_warnings: Vec<String>,
 }
 
 impl Keymap {
@@ -334,6 +346,7 @@ impl Keymap {
         }
         let mut map = Keymap::default();
         let mut warnings = Vec::new();
+        let mut system_warnings = Vec::new();
         let mut activated = Vec::new();
         let layer = |map: &mut Keymap, name: &str| -> Result<u8, NameError> {
             if let Some(i) = map.layer_names.iter().position(|n| n.eq_ignore_ascii_case(name)) {
@@ -359,11 +372,21 @@ impl Keymap {
                     Some(name) => layer(&mut map, &valid_layer(name)?)?,
                     None => 0,
                 };
-                let out = |map: &mut Keymap, o: &Output, activated: &mut Vec<u8>| -> Result<Out, NameError> {
+                let mut out = |map: &mut Keymap, o: &Output, activated: &mut Vec<u8>| -> Result<Out, NameError> {
                     Ok(match o {
                         Output::None => Out::None,
                         Output::Chord(c) => Out::Chord(*c),
                         Output::Nav(n) => Out::Chord(target.nav(*n)),
+                        Output::System(action) => match action.chord(target) {
+                            Some(chord) => Out::Pulse(chord),
+                            None => {
+                                let primary = matches!(spec.from.key, 0x110 | 0x111);
+                                if let Some(problem) = action.unavailable(target.os, primary) {
+                                    system_warnings.push(format!("{}: {problem}", where_()));
+                                }
+                                if primary { Out::Chord(Chord { key: spec.from.key, mods: 0 }) } else { Out::None }
+                            }
+                        },
                         Output::Sequence(s) => {
                             if s.is_empty() || s.len() > MAX_SEQUENCE {
                                 return err(format!("{}: a sequence has 1 to {MAX_SEQUENCE} steps", where_()));
@@ -429,7 +452,7 @@ impl Keymap {
             }
         }
         if map.rules.is_empty() {
-            return Ok(Compiled { map: Keymap::default(), warnings });
+            return Ok(Compiled { map: Keymap::default(), warnings, system_warnings });
         }
         // Per layer and key, the most specific trigger first.
         map.rules.sort_by_key(|r| (r.layer, r.trigger.key, std::cmp::Reverse(r.trigger.specificity())));
@@ -441,7 +464,7 @@ impl Keymap {
             }
             slot.1 += 1;
         }
-        Ok(Compiled { map, warnings })
+        Ok(Compiled { map, warnings, system_warnings })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -450,14 +473,20 @@ impl Keymap {
 
     /// Validate native local output before admitting any original key.
     pub fn supports_local_keys(&self, supported: impl Fn(u32) -> bool) -> bool {
-        let chord = |chord: Chord| supported(u32::from(chord.key))
+        self.supports_local_keys_with_pulses(&supported, &supported)
+    }
+
+    /// Some injected system shortcuts can use keys unavailable as physical triggers.
+    pub fn supports_local_keys_with_pulses(&self, supported: &impl Fn(u32) -> bool, pulse_key: &impl Fn(u32) -> bool) -> bool {
+        let chord = |chord: Chord, key_is_supported: &dyn Fn(u32) -> bool| key_is_supported(u32::from(chord.key))
             && MOD_CODES.iter().enumerate().all(|(index, &code)| chord.mods & (1 << index) == 0 || supported(u32::from(code)));
         let output = |output: Out| match output {
-            Out::Chord(value) => chord(value),
+            Out::Chord(value) => chord(value, supported),
+            Out::Pulse(value) => chord(value, pulse_key),
             Out::Action(_) => false,
             _ => true,
         };
-        self.actions.is_empty() && self.chords.iter().all(|&value| chord(value))
+        self.actions.is_empty() && self.chords.iter().all(|&value| chord(value, supported))
             && self.rules.iter().all(|rule| supported(u32::from(rule.trigger.key)) && match rule.kind {
                 Kind::Plain(value) => output(value),
                 Kind::Dual { tap, hold, .. } => output(tap) && output(hold),
@@ -515,6 +544,10 @@ impl KeymapSet {
 
     pub fn supports_local_keys(&self, supported: impl Fn(u32) -> bool) -> bool {
         self.maps.iter().all(|map| map.supports_local_keys(&supported))
+    }
+
+    pub fn supports_local_keys_with_pulses(&self, supported: impl Fn(u32) -> bool, pulse_key: impl Fn(u32) -> bool) -> bool {
+        self.maps.iter().all(|map| map.supports_local_keys_with_pulses(&supported, &pulse_key))
     }
 
     pub fn maps_source(&self, code: u32) -> bool { self.maps.iter().any(|map| map.maps_source(code)) }
@@ -668,7 +701,7 @@ impl Mapper {
         self.interrupt(out);
         match output {
             Out::None | Out::Layer(_) => {}
-            Out::Chord(c) => self.pulse(c, true, out),
+            Out::Chord(c) | Out::Pulse(c) => self.pulse(c, true, out),
             Out::Action(a) => out(Emit::Action(binding.actions[usize::from(a)].clone())),
             Out::Seq { start, len } => {
                 let chords = &binding.chords[usize::from(start)..usize::from(start) + usize::from(len)];
@@ -974,6 +1007,13 @@ impl Mapper {
                 self.hold_chord(c, out);
                 Rec::Held { key: c.key, mods: c.mods, hidden, layer }
             }
+            Out::Pulse(c) => {
+                let hidden = used & !c.mods;
+                self.hide_mods(hidden, out);
+                self.pulse(c, true, out);
+                self.unhide_mods(hidden, out);
+                Rec::Swallow
+            }
             Out::Seq { start, len } => {
                 self.sequence(s, start, len, used, out);
                 Rec::Swallow
@@ -994,7 +1034,7 @@ impl Mapper {
     fn once(&mut self, s: usize, o: Out, out: &mut impl FnMut(Emit)) {
         match o {
             Out::None | Out::Layer(_) => {}
-            Out::Chord(c) => self.pulse(c, true, out),
+            Out::Chord(c) | Out::Pulse(c) => self.pulse(c, true, out),
             Out::Seq { start, len } => self.sequence(s, start, len, 0, out),
             Out::Action(a) => out(Emit::Action(self.map(s).actions[usize::from(a)].clone())),
         }
@@ -1296,6 +1336,67 @@ mod tests {
     }
     fn u(code: u32) -> Emit {
         Emit::Key { code, down: false }
+    }
+
+    #[test]
+    fn system_actions_emit_target_chords_once_with_or_without_swap() {
+        for (os, action, expected) in [
+            (os::MACOS, "os:next-desktop", vec![d(LCTRL), d(106), u(106), u(LCTRL)]),
+            (os::MACOS, "os:copy", vec![d(LMETA), d(C), u(C), u(LMETA)]),
+            (os::WINDOWS, "os:overview", vec![d(LMETA), d(15), u(15), u(LMETA)]),
+            (os::LINUX, "os:overview", vec![d(LMETA), u(LMETA)]),
+        ] {
+            for swap in [false, true] {
+                let compiled = Keymap::compile(&[rule("capslock", action)], Target { os, swap }, DEFAULT_TAP).unwrap();
+                assert!(compiled.warnings.is_empty());
+                let mut mapper = Mapper::new(compiled.map);
+                let mut emitted = Vec::new();
+                for down in [true, true, false] {
+                    mapper.key(CAPS, down, Instant::now(), &mut |event| match event {
+                        Emit::Key { code, down } => emitted.push(Emit::Key {
+                            code: if swap { crate::swap_ctrl_meta(code) } else { code },
+                            down,
+                        }),
+                        _ => panic!("a system shortcut must emit only keystrokes"),
+                    });
+                }
+                assert_eq!(emitted, expected, "{action} target {os}, swap {swap}");
+                assert!(mapper.is_idle());
+            }
+        }
+    }
+
+    #[test]
+    fn missing_primary_system_actions_keep_press_and_release() {
+        for (button, code) in [("button1", 0x110), ("button2", 0x111)] {
+            for target in [os::WINDOWS, os::LINUX, os::UNKNOWN] {
+                let compiled = Keymap::compile(&[rule(button, "os:hide-app")], Target { os: target, swap: false }, DEFAULT_TAP).unwrap();
+                assert!(compiled.system_warnings[0].contains("keeps the original click"));
+                let mut t = T { m: Mapper::new(compiled.map), ..T::new(&[]) };
+                assert_eq!(t.key(code, true), [d(code)]);
+                assert_eq!(t.key(code, false), [u(code)]);
+            }
+        }
+    }
+
+    #[test]
+    fn system_actions_work_in_both_tap_hold_slots_and_swallow_unavailable_bindings() {
+        let mut spec = rule("capslock", "none");
+        spec.what = What::TapHold { tap: "os:overview".parse().unwrap(), hold: "os:next-desktop".parse().unwrap(), timeout: None };
+        let mut t = T::new(&[spec, rule("button4", "os:app-launcher")]);
+        assert_eq!(t.tap(CAPS), [d(LMETA), u(LMETA)]);
+        assert!(t.key(CAPS, true).is_empty());
+        assert_eq!(t.wait(201), [d(LCTRL), d(56), d(106), u(106), u(LCTRL), u(56)]);
+        assert!(t.key(CAPS, false).is_empty());
+        assert_eq!(t.tap(0x113), [d(LMETA), d(A), u(A), u(LMETA)]);
+
+        let compiled = Keymap::compile(&[rule("button4", "os:app-launcher")], Target { os: os::MACOS, swap: false }, DEFAULT_TAP).unwrap();
+        assert_eq!(compiled.system_warnings, ["button4: os:app-launcher has no shortcut on macOS and sends nothing"]);
+        let mut mapper = Mapper::new(compiled.map);
+        for down in [true, false] {
+            mapper.key(0x113, down, Instant::now(), &mut |_| panic!("unavailable action emitted a key"));
+        }
+        assert!(mapper.is_idle());
     }
 
     #[test]

@@ -1052,7 +1052,7 @@ Usage: one-mk keymap [OPTIONS] [COMMAND]
 
 Commands:
   list    Show the key rules
-  add     Make FROM (a key, or a chord like ctrl+h) type TO: a key, a chord (ctrl+shift+esc), several (a sequence), `none`, `layer:NAME`, `back`/`forward`, or an action (`switch next`, `lock-pointer`, `lock-all`, `scroll down`, `run: COMMAND`). Replaces a rule for the same key in the same scope and layer
+  add     Make FROM (a key, or a chord like ctrl+h) type TO: a key, a chord (ctrl+shift+esc), several (a sequence), `none`, `layer:NAME`, `back`/`forward`, an OS shortcut (`os:overview`), or an action (`switch next`, `lock-pointer`, `lock-all`, `scroll down`, `run: COMMAND`). Replaces a rule for the same key in the same scope and layer
   remove  Remove the rule for FROM (in that scope and layer)
   clear   Remove every key rule
   check   Check the rules (also the pointer, scroll and button settings)
@@ -1074,7 +1074,7 @@ Options:
 ### one-mk keymap add
 
 ```text
-Make FROM (a key, or a chord like ctrl+h) type TO: a key, a chord (ctrl+shift+esc), several (a sequence), `none`, `layer:NAME`, `back`/`forward`, or an action (`switch next`, `lock-pointer`, `lock-all`, `scroll down`, `run: COMMAND`). Replaces a rule for the same key in the same scope and layer
+Make FROM (a key, or a chord like ctrl+h) type TO: a key, a chord (ctrl+shift+esc), several (a sequence), `none`, `layer:NAME`, `back`/`forward`, an OS shortcut (`os:overview`), or an action (`switch next`, `lock-pointer`, `lock-all`, `scroll down`, `run: COMMAND`). Replaces a rule for the same key in the same scope and layer
 
 Usage: one-mk keymap add [OPTIONS] <FROM> [TO]...
 
@@ -1554,7 +1554,7 @@ Arguments:
           [possible values: up, down, left, right]
 
   <TO>...
-          A key, chord, quoted action, or several chords for a sequence; desktop-left and desktop-right switch virtual desktops on any OS
+          A key, chord, OS shortcut (os:next-desktop), quoted action, or sequence; desktop-left and desktop-right switch virtual desktops on any OS
 
 Options:
       --threshold <THRESHOLD>
@@ -1650,7 +1650,7 @@ Usage: one-mk buttons [OPTIONS] [COMMAND]
 
 Commands:
   list    Show the button rules
-  map     Make button N (1 left, 2 right, 3 middle, 4 back, 5 forward, 6 to 8) do TO: another button (button1), a key or chord, several (a sequence), back/forward, an action, or none
+  map     Make button N (1 left, 2 right, 3 middle, 4 back, 5 forward, 6 to 8) do TO: another button (button1), a key or chord, several (a sequence), back/forward, an OS shortcut (os:overview), an action, or none
   unmap   Remove the rule for button N
   preset  side-back-forward: buttons 4 and 5 go back and forward (Alt+Left/Right; Cmd+[ and Cmd+] on a Mac)
   clear   Remove every button rule
@@ -1672,7 +1672,7 @@ Options:
 ### one-mk buttons map
 
 ```text
-Make button N (1 left, 2 right, 3 middle, 4 back, 5 forward, 6 to 8) do TO: another button (button1), a key or chord, several (a sequence), back/forward, an action, or none
+Make button N (1 left, 2 right, 3 middle, 4 back, 5 forward, 6 to 8) do TO: another button (button1), a key or chord, several (a sequence), back/forward, an OS shortcut (os:overview), an action, or none
 
 Usage: one-mk buttons map [OPTIONS] <BUTTON> <TO>...
 
@@ -1681,7 +1681,7 @@ Arguments:
           Mouse button to remap, for example button4
 
   <TO>...
-          Output button, key, chord, quoted action or sequence
+          Output button, key, chord, OS shortcut (os:overview), quoted action or sequence
 
 Options:
       --peer <COMPUTER>

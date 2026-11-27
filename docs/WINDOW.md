@@ -83,9 +83,16 @@ Cmd for Mac keyboards, arrow keys on Right Alt + HJKL), problems from `one-mk ke
 and **For:** all computers, one OS or one computer. A **Test it** box runs your rules right
 there (nothing is sent) and shows what the other computer would get, and whether a tap/hold
 key counted as a tap or a hold. On the mouse side: what each button does (another button, a
-key or shortcut, switching computers, locking, a media key, a command), pointer speed, and
+key or shortcut, a system action, switching computers, locking, a media key, a command), pointer speed, and
 scrolling (direction, speed, steps, natural scrolling, Shift to scroll sideways). See
 [INPUT.md](INPUT.md).
+
+Use **Choose from list** for taps and holds, **System action** on a mouse
+button, or **Choose…** on a gesture. Search by name or setting and use the
+categories to browse. The picker shows the shortcut for the **For:** scope.
+Press Up or Down in search to highlight a result, Enter to use it, Tab to
+reach the categories, or Esc to close. On a gesture, **Add gesture** saves
+the choice together with the button and direction.
 
 ![Keys & mouse: the 3D keyboard with changed keys marked](screens/keys.png)
 

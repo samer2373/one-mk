@@ -34,6 +34,12 @@ pub fn eligible(code: u32) -> bool {
         && logic::evdev_to_mac(code).is_some()
 }
 
+/// Show Desktop injects the standard F11 key. The top-row key on the
+/// physical keyboard can still be a media key, so it stays out of capture.
+pub fn eligible_system_output(code: u32) -> bool {
+    code == 87 || eligible(code)
+}
+
 #[derive(Default)]
 pub struct Flags {
     physical: HeldKeys,
@@ -167,6 +173,20 @@ mod tests {
         assert_eq!(receipt((TAG | 42) as i64), Some(42));
         assert_eq!(receipt(crate::macos_localmap_logic::TAG.wrapping_add(1 << 32) as i64), None);
         assert_eq!(receipt(0x6f6e_655f_6d6b), None);
+    }
+
+    #[test]
+    fn show_desktop_accepts_injected_f11_without_admitting_it_as_a_physical_trigger() {
+        use one_mk_proto::remap::{DEFAULT_TAP, Keymap, RuleSpec, Target, What};
+        let build = |from: &str, to: &str| {
+            let spec = RuleSpec { from: from.parse().unwrap(), layer: None, what: What::To(to.parse().unwrap()) };
+            Keymap::compile(&[spec], Target { os: one_mk_proto::os::MACOS, swap: false }, DEFAULT_TAP).unwrap().map
+        };
+        let supported = |map: Keymap| map.supports_local_keys_with_pulses(&eligible, &eligible_system_output);
+        assert_eq!(logic::evdev_to_mac(87), Some(0x67));
+        assert!(supported(build("a", "os:show-desktop")));
+        assert!(!supported(build("a", "f11")));
+        assert!(!supported(build("f11", "os:overview")));
     }
 
     #[test]

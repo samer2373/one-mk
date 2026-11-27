@@ -1003,7 +1003,7 @@ impl Link {
         let out = proc::hide_window(&mut cmd).output().map_err(|e| format!("oneMK's service didn't start: {e}"))?;
         let text = String::from_utf8_lossy(&out.stdout);
         if out.status.success() {
-            return Ok(vec![]);
+            return Ok(text.lines().filter(|line| line.starts_with("Note: ")).map(str::to_owned).collect());
         }
         // Problems are on stdout, one a line; stderr says how many.
         let problems: Vec<String> = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("No input tuning")).map(str::to_owned).collect();
