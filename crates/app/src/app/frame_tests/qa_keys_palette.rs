@@ -616,11 +616,19 @@ fn long_mouse_action_names_are_drawn_in_full() {
 #[test]
 fn off_board_and_unnamed_keys_have_their_full_editor_labels() {
     let (mut win, _) = keys_window(two(), "");
-    for (code, label) in [(183, "F13"), (432, "Key code 432")] {
-        win.app.select_key(code, None);
-        win.settle();
-        assert!(win.has_text(&format!("{label} isn't drawn on this keyboard — change it in the panel on the right")), "{}", win.texts_joined());
-        assert!(win.find_containing(&format!("{label}: Unchanged")).is_some());
+    for (width, height, panel) in [(1440.0, 900.0, "on the right"), (820.0, 600.0, "below")] {
+        win.resize(width, height);
+        for (code, label) in [(183, "F13"), (432, "Key code 432")] {
+            win.app.select_key(code, None);
+            win.settle();
+            let note = format!("{label} isn't drawn on this keyboard — change it in the panel {panel}");
+            assert!(win.has_text(&note), "{}", win.texts_joined());
+            let pill = win.find(&note).unwrap();
+            let editor = win.find_containing(&format!("{label}: Unchanged")).unwrap();
+            if panel == "below" {
+                assert!(pill.rect.bottom() + 10.0 < editor.rect.top());
+            }
+        }
     }
 }
 

@@ -44,7 +44,12 @@ fn tap_hold_text(what: Option<&What>, name: &str, target: u8) -> (String, String
 fn rule_note(ui: &mut Ui, id: Id, at: Pos2, width: f32, note: &str) -> f32 {
     let rect = Rect::from_min_size(at, vec2(width, 20.0));
     let font = regular(T_META);
-    let line = fit(ui.painter(), note, &font, width);
+    let line = if text_width(ui, note, font.clone()) <= width {
+        note.to_owned()
+    } else {
+        let message = note.find(". ").map_or(note, |end| &note[..=end]);
+        fit(ui.painter(), message, &font, width)
+    };
     ui.painter().text(rect.left_center(), Align2::LEFT_CENTER, &line, font, pal().ink2);
     a11y_text(ui, id, rect, Role::Label, note, None);
     if line != note {
@@ -1493,7 +1498,14 @@ impl App {
         // same whether or not a key is chosen: the camera goes in on the
         // chosen key (from wherever it is now, so choosing the next one
         // glides across) and back out when it is let go; a drag turns it.
-        let area = keyboard_rect(stage);
+        let off_board = self.keys.selected.filter(|&code| {
+            self.keys.layer.is_none() && (self.keys.trigger_groups != 0 || !caps.iter().any(|c| c.code == code))
+        });
+        let mut board_stage = stage;
+        if compact && off_board.is_some() {
+            board_stage.max.y -= 24.0;
+        }
+        let area = keyboard_rect(board_stage);
         self.keys.detail_ok = detail_room(stage);
         let chosen = caps.iter().position(|c| self.keys.selected == Some(c.code) && self.keys.layer.is_none() && self.keys.trigger_groups == 0);
         let dt = ui.input(|i| i.stable_dt);
@@ -1605,18 +1617,17 @@ impl App {
         }
         // A key the drawing doesn't have (detected), or a shortcut: say so under the board, where
         // the eye looks for the chosen key.
-        // (Not in a compact window: the stage is short there, and the panel is right under it.)
-        if let Some(code) = self.keys.selected.filter(|_| self.keys.layer.is_none() && !compact)
-            && (self.keys.trigger_groups != 0 || !caps.iter().any(|c| c.code == code))
-        {
+        if let Some(code) = off_board {
+            let panel = if compact { "below" } else { "on the right" };
             let text = if self.keys.trigger_groups != 0 {
-                format!("{} is a shortcut — change it in the panel on the right", tune::trigger_text(&self.trigger_of(code)))
+                format!("{} is a shortcut — change it in the panel {panel}", tune::trigger_text(&self.trigger_of(code)))
             } else {
-                format!("{} isn't drawn on this keyboard — change it in the panel on the right", tune::key_label(u32::from(code)))
+                format!("{} isn't drawn on this keyboard — change it in the panel {panel}", tune::key_label(u32::from(code)))
             };
             let font = regular(T_META);
             let tw = text_width(ui, &text, font.clone()).min(stage.width() - 40.0);
-            let pill = Rect::from_center_size(pos2(stage.center().x, keyboard_rect(stage).bottom() + 26.0).min(pos2(f32::INFINITY, stage.bottom() - 24.0)), vec2(tw + 28.0, 28.0));
+            let baseline = if compact { stage.bottom() - 4.0 } else { (area.bottom() + 26.0).min(stage.bottom() - 24.0) };
+            let pill = Rect::from_center_size(pos2(stage.center().x, baseline), vec2(tw + 28.0, 28.0));
             let p = ui.painter();
             p.rect(pill, CornerRadius::same(14), pal().surface, Stroke::new(1.0, pal().accent), StrokeKind::Inside);
             p.text(pill.center(), Align2::CENTER_CENTER, fit(p, &text, &font, tw), font, pal().accent_text);
@@ -2935,7 +2946,7 @@ impl App {
             let mut label_room = *card;
             if card.height() >= 44.0 {
                 painter.text(pos2(tx, card.top() + 13.0), Align2::LEFT_CENTER, name, regular(T_CHIP), pal().ink2);
-                label_room.min.y += 20.0;
+                label_room.min.y += 18.0;
             }
             let mut job = egui::text::LayoutJob::simple(does.clone(), semibold(T_BODY), col, room);
             job.wrap.max_rows = 2;
