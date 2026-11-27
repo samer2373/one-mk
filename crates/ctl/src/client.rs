@@ -64,7 +64,14 @@ pub enum Request {
     /// Shut the daemon down, as if it had been sent Ctrl-C.
     Stop,
     LocalRulesOff,
+    /// Report the next key or mouse button pressed on this computer, as the
+    /// key rules see it (`one-mk input-devices detect`): waits at most this
+    /// many seconds, and stops when the asker hangs up.
+    Detect { timeout: u32 },
 }
+
+/// The longest wait [`Request::Detect`] may ask for, in seconds.
+pub const MAX_DETECT_SECS: u32 = 600;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HistoryAction {
@@ -206,6 +213,7 @@ impl Request {
             Request::DismissSuggestion => "dismiss-suggestion",
             Request::Stop => "stop",
             Request::LocalRulesOff => "local-rules-off",
+            Request::Detect { .. } => "detect-input",
         }
     }
 
@@ -216,6 +224,7 @@ impl Request {
             Request::ClipHistory { action, json } => format!("clip-history {}{}", action.line(), if *json { " --json" } else { "" }),
             Request::Partials { clear } => if *clear { "partials clear".to_owned() } else { "partials".to_owned() },
             Request::Switch(to) => format!("switch {}", to.as_str()),
+            Request::Detect { timeout } => format!("detect-input {timeout}"),
             Request::LockPointer(t) => format!("lock-pointer {}", t.as_str()),
             Request::Broadcast(t) => format!("broadcast {}", t.as_str()),
             Request::ClipSend(d) | Request::ClipSendSensitive(d) | Request::ClipGet(d) => {
@@ -258,6 +267,9 @@ impl Request {
             "local-rules-off" if arg.is_empty() => Some(Request::LocalRulesOff),
             "dismiss-suggestion" if arg.is_empty() => Some(Request::DismissSuggestion),
             "switch" => SwitchTo::parse(arg).map(Request::Switch),
+            "detect-input" if !arg.is_empty() && arg.bytes().all(|b| b.is_ascii_digit()) && arg.len() <= 4 => {
+                arg.parse().ok().filter(|t| (1..=MAX_DETECT_SECS).contains(t)).map(|timeout| Request::Detect { timeout })
+            }
             "lock-pointer" => Toggle::parse(arg).map(Request::LockPointer),
             "broadcast" => Toggle::parse(arg).map(Request::Broadcast),
             "settings" if arg.is_empty() => Some(Request::Settings),
@@ -293,6 +305,8 @@ impl Request {
             Request::LiveWallpaper(_) => Duration::from_secs(660),
             Request::ClipSend(_) | Request::ClipSendSensitive(_) | Request::ClipGet(_) | Request::FetchClipboard
                 | Request::ClipHistory { action: HistoryAction::Copy(_) | HistoryAction::CopyChecked(..), .. } => Duration::from_secs(45),
+            // The daemon answers when the wait is over; a little longer for the answer to come.
+            Request::Detect { timeout } => Duration::from_secs(u64::from(*timeout) + 5),
             _ => Duration::from_secs(5),
         }
     }
@@ -455,6 +469,8 @@ mod tests {
             Request::LocalRulesOff,
             Request::LockAll,
             Request::DismissSuggestion,
+            Request::Detect { timeout: 1 },
+            Request::Detect { timeout: MAX_DETECT_SECS },
             Request::Switch(SwitchTo::Here),
             Request::Switch(SwitchTo::Next),
             Request::Switch(SwitchTo::Device("mac mini".into())),
@@ -488,6 +504,10 @@ mod tests {
         assert!(Request::ClipGet(None).reply_timeout() > Request::Status.reply_timeout());
         assert_eq!(Request::FetchClipboard.reply_timeout(), Request::ClipGet(None).reply_timeout());
         assert_eq!(Request::ClipHistory { action: HistoryAction::Copy(1), json: false }.reply_timeout(), Request::ClipGet(None).reply_timeout());
+        for bad in ["detect-input", "detect-input 0", "detect-input 601", "detect-input -5", "detect-input 1e3", "detect-input 10 20", "detect-input ١", "detect-input 99999999999"] {
+            assert_eq!(Request::parse(bad), None, "{bad:?}");
+        }
+        assert_eq!(Request::Detect { timeout: 30 }.reply_timeout(), Duration::from_secs(35));
         assert_eq!(Request::parse("format c:"), None);
         assert_eq!(Request::parse("status now"), None);
         assert_eq!(Request::parse("switch"), None);
