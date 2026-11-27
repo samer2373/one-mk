@@ -75,6 +75,35 @@ fn the_left_and_right_buttons_cannot_be_made_dead() {
 }
 
 #[test]
+fn unsupported_system_actions_warn_except_on_primary_buttons() {
+    let dir = home();
+    let home = dir.path();
+    for (button, to, scope) in [("1", "os:hide-app", &["--os", "windows"][..]), ("2", "os:quit-app", &[][..])] {
+        let mut args = vec!["buttons", "map", button, to];
+        args.extend(scope);
+        assert!(refused(home, &args).contains("must keep clicking"));
+    }
+    assert!(settings(home).is_empty());
+    ok(home, &["buttons", "map", "1", "os:hide-app", "--os", "mac"]);
+    for args in [
+        &["keymap", "add", "f13", "os:hide-app"][..],
+        &["buttons", "map", "4", "os:hide-app"][..],
+        &["gestures", "add", "button5", "left", "os:hide-app"][..],
+    ] {
+        let saved = ok(home, args);
+        assert!(saved.contains("Note: ") && saved.contains("Windows") && saved.contains("Linux") && saved.contains("--os mac"), "{saved}");
+    }
+    let check = ok(home, &["keymap", "check"]);
+    assert!(check.contains("Note: ") && check.contains("--os mac"), "{check}");
+    let gestures = ok(home, &["gestures", "list"]);
+    assert!(gestures.contains("Hide app") && !gestures.contains("os:hide-app"), "{gestures}");
+    std::fs::write(home.join("settings.toml"), "[[input.button]]\nfrom = 2\nto = 'os:quit-app'\n").unwrap();
+    let check = command(home, &["keymap", "check"]);
+    assert!(!check.status.success());
+    assert!(text(&check.stdout).contains("must keep clicking"));
+}
+
+#[test]
 fn the_emergency_chord_cannot_be_remapped() {
     let dir = home();
     let error = refused(dir.path(), &["keymap", "add", "ctrl+alt+shift+esc", "a"]);

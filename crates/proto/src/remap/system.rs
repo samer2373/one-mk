@@ -30,8 +30,8 @@ macro_rules! system_actions {
 }
 
 system_actions! {
-    NextDesktop, "next-desktop", "Next desktop" => [Some("ctrl+right"), Some("ctrl+super+right"), Some("super+pagedown")];
-    PreviousDesktop, "previous-desktop", "Previous desktop" => [Some("ctrl+left"), Some("ctrl+super+left"), Some("super+pageup")];
+    NextDesktop, "next-desktop", "Next desktop" => [Some("ctrl+right"), Some("ctrl+super+right"), Some("ctrl+alt+right")];
+    PreviousDesktop, "previous-desktop", "Previous desktop" => [Some("ctrl+left"), Some("ctrl+super+left"), Some("ctrl+alt+left")];
     Overview, "overview", "Overview: Mission Control / Task View / Activities" => [Some("ctrl+up"), Some("super+tab"), Some("super")];
     AppWindows, "app-windows", "App windows" => [Some("ctrl+down"), None, Some("super+grave")];
     ShowDesktop, "show-desktop", "Show desktop" => [Some("f11"), Some("super+d"), Some("super+d")];
@@ -83,7 +83,17 @@ impl SystemAction {
         Some(chord)
     }
 
-    pub fn unavailable(self, os: u8) -> Option<String> {
+    /// The platforms for which system shortcuts can be defined.
+    pub const TARGETS: [u8; 3] = [os::MACOS, os::WINDOWS, os::LINUX];
+
+    /// A known target narrows the scope. An unspecified target covers all platforms.
+    pub fn missing_on(self, target: u8) -> impl Iterator<Item = u8> {
+        Self::TARGETS.into_iter().filter(move |&platform| {
+            (!Self::TARGETS.contains(&target) || platform == target) && self.shortcut(platform).is_none()
+        })
+    }
+
+    pub fn unavailable(self, os: u8, keeps_clicking: bool) -> Option<String> {
         self.shortcut(os).is_none().then(|| {
             let platform = match os {
                 os::MACOS => "macOS",
@@ -91,7 +101,8 @@ impl SystemAction {
                 os::LINUX => "Linux",
                 _ => "an unknown target OS",
             };
-            format!("{self} has no shortcut on {platform} and sends nothing")
+            let result = if keeps_clicking { "keeps the original click" } else { "sends nothing" };
+            format!("{self} has no shortcut on {platform} and {result}")
         })
     }
 }

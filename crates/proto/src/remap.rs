@@ -316,6 +316,8 @@ pub struct Keymap {
 pub struct Compiled {
     pub map: Keymap,
     pub warnings: Vec<String>,
+    /// Missing system shortcuts are advisory. Check them against the rule's scope.
+    pub system_warnings: Vec<String>,
 }
 
 impl Keymap {
@@ -344,6 +346,7 @@ impl Keymap {
         }
         let mut map = Keymap::default();
         let mut warnings = Vec::new();
+        let mut system_warnings = Vec::new();
         let mut activated = Vec::new();
         let layer = |map: &mut Keymap, name: &str| -> Result<u8, NameError> {
             if let Some(i) = map.layer_names.iter().position(|n| n.eq_ignore_ascii_case(name)) {
@@ -377,10 +380,11 @@ impl Keymap {
                         Output::System(action) => match action.chord(target) {
                             Some(chord) => Out::Pulse(chord),
                             None => {
-                                if let Some(problem) = action.unavailable(target.os) {
-                                    warnings.push(format!("{}: {problem}", where_()));
+                                let primary = matches!(spec.from.key, 0x110 | 0x111);
+                                if let Some(problem) = action.unavailable(target.os, primary) {
+                                    system_warnings.push(format!("{}: {problem}", where_()));
                                 }
-                                Out::None
+                                if primary { Out::Chord(Chord { key: spec.from.key, mods: 0 }) } else { Out::None }
                             }
                         },
                         Output::Sequence(s) => {
@@ -448,7 +452,7 @@ impl Keymap {
             }
         }
         if map.rules.is_empty() {
-            return Ok(Compiled { map: Keymap::default(), warnings });
+            return Ok(Compiled { map: Keymap::default(), warnings, system_warnings });
         }
         // Per layer and key, the most specific trigger first.
         map.rules.sort_by_key(|r| (r.layer, r.trigger.key, std::cmp::Reverse(r.trigger.specificity())));
@@ -460,7 +464,7 @@ impl Keymap {
             }
             slot.1 += 1;
         }
-        Ok(Compiled { map, warnings })
+        Ok(Compiled { map, warnings, system_warnings })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1363,18 +1367,31 @@ mod tests {
     }
 
     #[test]
+    fn missing_primary_system_actions_keep_press_and_release() {
+        for (button, code) in [("button1", 0x110), ("button2", 0x111)] {
+            for target in [os::WINDOWS, os::LINUX, os::UNKNOWN] {
+                let compiled = Keymap::compile(&[rule(button, "os:hide-app")], Target { os: target, swap: false }, DEFAULT_TAP).unwrap();
+                assert!(compiled.system_warnings[0].contains("keeps the original click"));
+                let mut t = T { m: Mapper::new(compiled.map), ..T::new(&[]) };
+                assert_eq!(t.key(code, true), [d(code)]);
+                assert_eq!(t.key(code, false), [u(code)]);
+            }
+        }
+    }
+
+    #[test]
     fn system_actions_work_in_both_tap_hold_slots_and_swallow_unavailable_bindings() {
         let mut spec = rule("capslock", "none");
         spec.what = What::TapHold { tap: "os:overview".parse().unwrap(), hold: "os:next-desktop".parse().unwrap(), timeout: None };
         let mut t = T::new(&[spec, rule("button4", "os:app-launcher")]);
         assert_eq!(t.tap(CAPS), [d(LMETA), u(LMETA)]);
         assert!(t.key(CAPS, true).is_empty());
-        assert_eq!(t.wait(201), [d(LMETA), d(109), u(109), u(LMETA)]);
+        assert_eq!(t.wait(201), [d(LCTRL), d(56), d(106), u(106), u(LCTRL), u(56)]);
         assert!(t.key(CAPS, false).is_empty());
         assert_eq!(t.tap(0x113), [d(LMETA), d(A), u(A), u(LMETA)]);
 
         let compiled = Keymap::compile(&[rule("button4", "os:app-launcher")], Target { os: os::MACOS, swap: false }, DEFAULT_TAP).unwrap();
-        assert_eq!(compiled.warnings, ["button4: os:app-launcher has no shortcut on macOS and sends nothing"]);
+        assert_eq!(compiled.system_warnings, ["button4: os:app-launcher has no shortcut on macOS and sends nothing"]);
         let mut mapper = Mapper::new(compiled.map);
         for down in [true, false] {
             mapper.key(0x113, down, Instant::now(), &mut |_| panic!("unavailable action emitted a key"));

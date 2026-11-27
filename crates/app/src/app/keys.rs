@@ -336,6 +336,7 @@ pub(super) struct KeysUi {
     pub capture: Option<(Want, Capture)>,
     /// The list is open, with what was typed to search it.
     pub picker: Option<(Want, String)>,
+    picker_drawn: bool,
     navigator_query: String,
     /// "Different when held" is open.
     pub more: bool,
@@ -486,6 +487,7 @@ impl KeysUi {
     /// go on leaving it, built again from the same model on the next visit.
     /// (The model's small file stays, as do the turns the person gave each.)
     pub fn release_meshes(&mut self) {
+        self.picker = None;
         self.board = None;
         self.mouse = None;
     }
@@ -926,7 +928,7 @@ impl App {
         }
         if want == Want::Button {
             let Some(n) = self.keys.button else { return };
-            if let Err(e) = tune::check_button(n, &value) {
+            if let Err(e) = tune::check_button(n, &value, self.facts().os) {
                 self.keys.error = Some(("buttons", e));
                 return;
             }
@@ -1018,7 +1020,7 @@ impl App {
         let input = &self.prefs.input;
         let fresh = !self.keys.tester.as_ref().is_some_and(|(_, i, f)| i == input && *f == facts);
         if fresh {
-            match input.keymap(&facts) {
+            match input.test_keymap(&facts) {
                 Ok(map) => {
                     self.keys.tester_error = None;
                     let swap = facts.swap;
@@ -1155,7 +1157,12 @@ impl App {
                 }
             }
         }
+        let had_picker = self.keys.picker.is_some();
+        self.keys.picker_drawn = false;
         self.keys_panel(ui, lay.panel, lay.compact, now);
+        if had_picker && !self.keys.picker_drawn && self.keys.picker.take().is_some() {
+            ui.ctx().data_mut(|d| d.remove::<PickerState>(Id::unique("output-picker")));
+        }
     }
 
     /// Title (22/600), Keyboard | Mouse, and "For: All computers ▾" at the right.
@@ -1235,9 +1242,19 @@ impl App {
             let (all, _) = ui.allocate_exact_size(vec2(view.width() - 8.0, total + 12.0), Sense::hover());
             let at = all.min + vec2(6.0, 6.0);
             let w = inner.width();
-            let mut used = match self.keys.view {
-                View::Keyboard => self.keyboard_panel(ui, at, w, viewport, compact, now),
-                View::Mouse => self.mouse_panel(ui, at, w),
+            let mut note_height = 0.0;
+            if let Some(Ok(problems)) = &self.keys.problems {
+                for note in problems.iter().filter(|line| line.starts_with("Note: ")) {
+                    let pos = at + vec2(0.0, note_height);
+                    let height = para(ui, pos, w, note, regular(T_BODY), pal().ink2);
+                    a11y_text(ui, Id::unique(("input-note", note)), Rect::from_min_size(pos, vec2(w, height)), Role::Status, note, Some(Live::Polite));
+                    note_height += height + 6.0;
+                }
+            }
+            let content = at + vec2(0.0, note_height);
+            let mut used = note_height + match self.keys.view {
+                View::Keyboard => self.keyboard_panel(ui, content, w, (viewport - note_height).max(0.0), compact, now),
+                View::Mouse => self.mouse_panel(ui, content, w),
             };
             // Only where it can work: on Linux there is nothing to switch.
             // (Alone on Linux it says why, rather than leaving a rule that seems to do nothing.)
@@ -1797,7 +1814,7 @@ impl App {
         }
         match &self.keys.problems {
             Some(Ok(list)) => {
-                for prob in list {
+                for prob in list.iter().filter(|line| !line.starts_with("Note: ")) {
                     y += error_line(ui, left, y, width, &tune::plain_problem(prob)) + 6.0;
                 }
             }
@@ -2238,6 +2255,7 @@ impl App {
 
     /// The shared chooser for a key, mouse button or gesture.
     fn picker(&mut self, ui: &Ui, want: Want, query: String, system_only: bool) {
+        self.keys.picker_drawn = true;
         let buttons = want == Want::Button;
         let target = self.facts().os;
         if self.keys.choices.as_ref().is_none_or(|(b, os, _)| *b != buttons || *os != target) {
@@ -2275,7 +2293,8 @@ impl App {
 
             let (heading, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
             ui.painter().text(heading.left_center(), Align2::LEFT_CENTER, title, semibold(T_TITLE), pal().ink);
-            a11y_text(ui, id.with("title"), heading, Role::Heading, title, None);
+            a11y_text(ui, ui.unique_id(), heading, Role::Dialog, title, None);
+            ui.ctx().accesskit_node_builder(ui.unique_id(), |node| node.set_modal());
             ui.add_space(9.0);
             let (row, _) = ui.allocate_exact_size(vec2(width, 36.0), Sense::hover());
             let cancel = Rect::from_min_max(pos2(row.right() - button_width(ui, "Cancel"), row.top()), row.max);
@@ -2307,6 +2326,7 @@ impl App {
             for (group, rect) in groups.into_iter().zip(chips) {
                 if chip(ui, rect, id.with(group), group.label(), group == state.group, true, true).clicked() {
                     state.group = group;
+                    ui.memory_mut(|m| m.request_focus(fid));
                 }
             }
             let canceled = button(ui, cancel, id.with("cancel"), "Cancel", Look::Quiet, true, Some("Close the list")).clicked();
@@ -2314,33 +2334,34 @@ impl App {
             let reset_scroll = previous.is_none() || changed || old_group != state.group;
             let typed = !query.trim().is_empty();
             let mut hits: Vec<_> = tune::search(all, &query).into_iter().filter(|choice| {
-                !(primary && choice.value == "none") && (!system_only || choice.value.starts_with("os:")) && match state.group {
+                !(primary && (!choice.available || choice.value == "none")) && (!system_only || choice.value.starts_with("os:")) && match state.group {
                     ChoiceGroup::Suggested => typed || choice.suggested,
                     ChoiceGroup::Mac => choice.mac,
                     ChoiceGroup::Keys => matches!(choice.group, ChoiceGroup::Keys | ChoiceGroup::Media),
                     group => group == choice.group,
                 }
             }).collect();
-            if !typed {
-                hits.sort_by_key(|c| match (c.group, target) {
-                    (ChoiceGroup::Desktop, one_mk_proto::os::MACOS) => 0,
-                    (ChoiceGroup::Keys, _) => 1,
-                    (ChoiceGroup::Desktop, _) => 2,
-                    (ChoiceGroup::Editing, _) => 3,
-                    (ChoiceGroup::Media, _) => 4,
-                    (ChoiceGroup::Mouse, _) => 5,
-                    _ => 6,
-                });
+            if !typed && state.group == ChoiceGroup::Suggested {
+                hits.sort_by_key(|choice| !choice.value.starts_with("os:"));
             }
-            if reset_scroll { state.row = 0; }
-            state.row = state.row.saturating_add_signed(step).min(hits.len().saturating_sub(1));
-            let mut picked = enter.then(|| hits.get(state.row).map(|c| c.value.clone())).flatten();
+            if reset_scroll {
+                state.row = hits.iter().position(|choice| choice.available).unwrap_or(0);
+            }
+            for _ in 0..step.unsigned_abs().min(hits.len()) {
+                let next = if step > 0 {
+                    hits.iter().enumerate().skip(state.row + 1).find(|(_, choice)| choice.available)
+                } else {
+                    hits.iter().enumerate().take(state.row).rfind(|(_, choice)| choice.available)
+                };
+                if let Some((index, _)) = next { state.row = index; }
+            }
+            let mut picked = hits.get(state.row).filter(|c| enter && c.available).map(|c| c.value.clone());
             let height = (available.y - (chips_bottom - heading.top()) - 96.0).clamp(160.0, 468.0);
             ui.advance_cursor_after_rect(Rect::from_min_max(row.min, pos2(row.right(), chips_bottom + 12.0)));
             let list_frame = egui::Frame::new().fill(pal().bg).stroke(Stroke::new(1.0, pal().line))
                 .corner_radius(CornerRadius::same(9)).inner_margin(4);
             list_frame.show(ui, |ui| {
-                let list = ui.response().id;
+                let list = ui.unique_id();
                 let rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), height));
                 a11y_text(ui, list, rect, Role::List, "Matching keys and actions", None);
                 if hits.is_empty() {
@@ -2350,25 +2371,23 @@ impl App {
                     a11y_text(ui, id.with("empty"), rect, Role::Status, message, Some(egui::accesskit::Live::Polite));
                     return;
                 }
-                let mut scroll = egui::ScrollArea::vertical().id_salt("results").auto_shrink([false, false])
+                const ROW: f32 = 46.0;
+                let scroll_id = "results";
+                let mut scroll = egui::ScrollArea::vertical().id_salt(scroll_id).auto_shrink([false, false])
                     .max_height(height).min_scrolled_height(height);
-                if reset_scroll { scroll = scroll.vertical_scroll_offset(0.0); }
-                scroll.show(ui, |ui| {
-                    let mut section = "";
-                    for (index, c) in hits.into_iter().enumerate() {
-                        let group = if typed { "Search results" } else { c.group.label() };
-                        if group != section {
-                            section = group;
-                            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
-                            widgets::section_label(ui.painter(), r.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, group, r.width() - 20.0);
-                            a11y_text(ui, id.with(("section", index)), r, Role::Heading, group, None);
-                        }
-                        let selected = index == state.row;
-                        let response = Self::picker_row(ui, c, selected);
-                        if selected && step != 0 && !reset_scroll {
-                            response.scroll_to_me(None);
-                        }
-                        if response.clicked() { picked = Some(c.value.clone()); }
+                if reset_scroll || step != 0 {
+                    let offset = if reset_scroll { 0.0 } else {
+                        egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(egui::IdSalt::new(scroll_id)))
+                            .map_or(0.0, |state| state.clamped_offset().y)
+                    };
+                    let top = ROW * state.row as f32;
+                    scroll = scroll.vertical_scroll_offset(offset.clamp((top + ROW - height).max(0.0), top));
+                }
+                scroll.show_rows(ui, ROW, hits.len(), |ui, rows| {
+                    for index in rows {
+                        let choice = hits[index];
+                        let response = Self::picker_row(ui, choice, index == state.row && choice.available);
+                        if response.clicked() { picked = Some(choice.value.clone()); }
                     }
                 });
             });
@@ -2386,21 +2405,26 @@ impl App {
     }
 
     fn picker_row(ui: &mut Ui, choice: &tune::Choice, selected: bool) -> egui::Response {
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::click());
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
+        let id = ui.make_persistent_id(("choice", &choice.value));
+        let resp = ui.interact(r, id, if choice.available { Sense::click() } else { Sense::hover() });
         let p = ui.painter();
-        if selected || resp.hovered() {
+        if selected || (choice.available && resp.hovered()) {
             p.rect_filled(r, CornerRadius::same(6), if selected { pal().accent_soft } else { pal().hover });
         }
         widgets::focus_ring(ui, &resp, r.shrink(2.0), 5);
         let vw = text_width(ui, &choice.value, mono(T_META)).min(r.width() * 0.36);
         p.text(r.left_top() + vec2(10.0, 6.0), Align2::LEFT_TOP, fit(p, &choice.label, &semibold(T_BODY), r.width() - 20.0),
-            semibold(T_BODY), pal().ink);
+            semibold(T_BODY), if choice.available { pal().ink } else { pal().ink3 });
         p.text(r.left_bottom() + vec2(10.0, -6.0), Align2::LEFT_BOTTOM,
             fit(p, &choice.detail, &regular(T_META), r.width() - vw - 30.0), regular(T_META), pal().ink2);
         widgets::mono_text(p, r.right_bottom() + vec2(-10.0, -6.0), Align2::RIGHT_BOTTOM, &choice.value, T_META, pal().ink2, vw + 1.0);
         widgets::a11y(&resp, Role::ListItem, &choice.label, Some(selected));
-        ui.ctx().accesskit_node_builder(resp.id, |node| node.set_description(&choice.detail));
-        if resp.hovered() { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); }
+        ui.ctx().accesskit_node_builder(resp.id, |node| {
+            node.set_description(&choice.detail);
+            if !choice.available { node.set_disabled(); }
+        });
+        if choice.available && resp.hovered() { ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand); }
         resp.on_hover_text(format!("{}\n{}", choice.label, choice.detail))
     }
 
@@ -2417,8 +2441,11 @@ impl App {
         {
             t.clear();
         }
+        let preview = (self.facts().os == one_mk_proto::os::UNKNOWN).then(|| {
+            format!("System shortcuts are previewed as they work on this computer ({}).", tune::platform_name(one_mk_proto::os::local()))
+        });
         let intro = match &self.keys.scope {
-            Scope::All => "Type in the box to see what every computer would get. Nothing is sent.".to_owned(),
+            Scope::All => "Type in the box to see what the rules for all computers send. Nothing is sent.".to_owned(),
             Scope::Os(o) => format!("Type in the box to see what {} would get. Nothing is sent.", tune::os_plural(*o)),
             Scope::Peer(p) => format!("Type in the box to see what {} would get. Nothing is sent.", self.peer_name(p)),
             Scope::Device(fp, _) => format!("Type in the box to see what typing on {} would send. Nothing is sent.", tune::device_name(fp)),
@@ -2496,6 +2523,11 @@ impl App {
         if let Some(note) = note {
             y += para(ui, pos2(at.x, y), w, &note, regular(T_META), pal().ink2) + 6.0;
         }
+        if let Some(preview) = preview {
+            let height = para(ui, pos2(at.x, y), w, &preview, regular(T_META), pal().ink2);
+            a11y_text(ui, Id::unique("keys-test-platform"), Rect::from_min_size(pos2(at.x, y), vec2(w, height)), Role::Label, &preview, None);
+            y += height + 5.0;
+        }
         let safe = format!("{} always brings the mouse and keyboard back here. No rule can change it.", crate::view::chord_label("ctrl+alt+shift+esc", mac()));
         let safety_at = pos2(at.x, y);
         let safety_height = widgets::para_code(ui, safety_at, w, &safe, regular(T_META), pal().ink3);
@@ -2529,7 +2561,7 @@ impl App {
             return card.end(ui, top);
         }
         if let Some(Ok(problems)) = &self.keys.problems {
-            for problem in problems.iter().filter(|problem| problem.contains("autoscroll") || problem.contains("gesture") || problem.contains("primary left/right")) {
+            for problem in problems.iter().filter(|problem| !problem.starts_with("Note: ") && (problem.contains("autoscroll") || problem.contains("gesture") || problem.contains("primary left/right"))) {
                 top += error_line(ui, content.left(), top, content.width(), &tune::plain_problem(problem)) + 6.0;
             }
         }

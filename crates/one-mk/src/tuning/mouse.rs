@@ -232,6 +232,10 @@ pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()
                 threshold_px: threshold, scope: scope.scope(dir)?, app: scope.app()? };
             rule.compile(remap::Target { os: os::local(), swap: false }).map_err(anyhow::Error::msg)?;
             let paired = paired(dir);
+            let notes = match &rule.to {
+                To::One(text) => system_notes(&rule.scope, &paired, &[text]),
+                To::Many(_) => vec![],
+            };
             Settings::update(dir, |settings| {
                 let known = reserved_gestures(&settings.input, &paired);
                 set_gesture(&mut settings.input.gesture, rule);
@@ -241,6 +245,7 @@ pub async fn gestures_command(dir: &Path, cmd: Option<GesturesCmd>) -> Result<()
                 }
             })?;
             println!("Gesture saved. A short click still clicks normally; press Esc to cancel a swipe.");
+            print_system_notes(notes);
             run_note(dir);
         }
         GesturesCmd::Remove { button, direction, scope } => {
@@ -360,12 +365,12 @@ from = 3
 to = "os:app-launcher"
 scope = { os = "mac" }
 "#).unwrap();
-        let problems = input.check(&[("Studio".into(), "12345678".into(), os::MACOS)]);
-        for source in ["gesture: button5", "a:", "button3"] {
-            assert!(problems.iter().any(|p| p.contains(source) && p.ends_with("macOS and sends nothing")), "{problems:?}");
-        }
+        assert!(input.check(&[("Studio".into(), "12345678".into(), os::MACOS)]).is_empty());
         let peer = PeerFacts { name: "Studio", id: "12345678", os: os::MACOS, apps: &[], device: None };
         let resolved = input.resolve(&peer, true);
+        for source in ["gesture: button5", "a:", "button3"] {
+            assert!(resolved.warnings.iter().any(|p| p.contains(source) && p.ends_with("macOS and sends nothing")), "{:?}", resolved.warnings);
+        }
         assert_eq!(resolved.gestures.len(), 2);
         let mut mapper = remap::Mapper::new(resolved.keymap);
         let mut keys = Vec::new();
@@ -376,6 +381,25 @@ scope = { os = "mac" }
             });
         }
         assert_eq!(keys, [(29, true), (105, true), (105, false), (29, false)]);
+    }
+
+    #[test]
+    fn linux_side_swipes_keep_the_legacy_workspace_chord() {
+        for (direction, code, old, new) in [
+            ("left", 105, "desktop-left", "os:previous-desktop"),
+            ("right", 106, "desktop-right", "os:next-desktop"),
+        ] {
+            for output in [old, new] {
+                let rule = GestureRule { button: "button4".into(), direction: direction.into(), to: To::One(output.into()), threshold_px: 60.0, scope: Scope::Global, app: None };
+                let (gesture, warnings) = rule.compile(remap::Target { os: os::LINUX, swap: false }).unwrap();
+                assert!(warnings.is_empty());
+                let mut keys = Vec::new();
+                remap::Mapper::new(Keymap::default()).pulse_binding(&gesture.output, &mut |event| {
+                    if let remap::Emit::Key { code, down } = event { keys.push((code, down)); }
+                });
+                assert_eq!(keys, [(29, true), (56, true), (code, true), (code, false), (29, false), (56, false)], "{output}");
+            }
+        }
     }
 
     #[test]

@@ -86,10 +86,13 @@ refused, and `keymap check` flags such a rule written by hand.
 
 Use `os:NAME` as a single output in a key rule, either tap/hold slot, a
 mouse button rule or a swipe gesture. The action taps the receiving
-computer's shortcut once. Ctrl/Cmd swapping still sends the shortcut
-shown below. **Also on this computer** uses the local OS for supported
-key and button rules on Windows and macOS. An unavailable action sends
-nothing for that OS and appears in `one-mk keymap check`. Bare names
+computer's shortcut once per press, without auto-repeat. A single
+`os:switch-app` press toggles between the two most recent apps. Ctrl/Cmd
+swapping still sends the shortcut shown below. **Also on this computer**
+uses the local OS for supported key and button rules on Windows and macOS.
+An unavailable action sends nothing for that OS. The save command and
+`one-mk keymap check` print a note with the supported scopes. A primary
+mouse button requires a shortcut on every OS in its scope. Bare names
 such as `copy`, `paste` and `undo` still mean the corresponding physical keys.
 
 On macOS, keep the defaults enabled in **System Settings → Keyboard →
@@ -100,19 +103,23 @@ Apps panel or Launchpad can be opened manually with Apple’s Fn shortcut
 or a custom binding. The system action is unavailable on macOS.
 On Linux, the desktop mappings follow GNOME. To use Show Desktop, bind
 Super+D to **Hide all normal windows** in GNOME Keyboard Shortcuts.
-Other desktops and customized shortcuts may differ.
+The desktop-switching actions use Ctrl+Alt+Left/Right, which preserves
+the side-swipe preset's bindings for desktops such as Cinnamon and Xfce.
+GNOME also binds these chords alongside Super+Page Up/Down in its
+default schema. Customized shortcuts may differ. [GNOME 40 defaults][gnome-40-schema],
+[current GNOME defaults][gnome-schema].
 
 | Setting | macOS | Windows | Linux (GNOME) | References |
 |---|---|---|---|---|
-| `os:next-desktop` | Ctrl+→ | Ctrl+Win+→ | Super+Page Down | [Apple Spaces][apple-spaces], [Microsoft][ms-keys], [GNOME][gnome-keys] |
-| `os:previous-desktop` | Ctrl+← | Ctrl+Win+← | Super+Page Up | [Apple Spaces][apple-spaces], [Microsoft][ms-keys], [GNOME][gnome-keys] |
+| `os:next-desktop` | Ctrl+→ | Ctrl+Win+→ | Ctrl+Alt+→ | [Apple Spaces][apple-spaces], [Microsoft][ms-keys], [GNOME defaults][gnome-schema] |
+| `os:previous-desktop` | Ctrl+← | Ctrl+Win+← | Ctrl+Alt+← | [Apple Spaces][apple-spaces], [Microsoft][ms-keys], [GNOME defaults][gnome-schema] |
 | `os:overview` | Ctrl+↑, Mission Control | Win+Tab, Task View | Super tap, Activities | [Apple Mission Control][apple-mission], [Microsoft][ms-keys], [GNOME][gnome-keys] |
 | `os:app-windows` | Ctrl+↓, App Exposé | Unavailable | Super+key above Tab, switch windows of the same app | [Apple Mission Control][apple-mission], [Microsoft][ms-keys], [GNOME][gnome-keys] |
 | `os:show-desktop` | F11 | Win+D | Super+D, needs a binding on stock GNOME | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME settings][gnome-settings] |
 | `os:app-launcher` | Unavailable | Win tap, Start | Super+A | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME][gnome-keys] |
 | `os:search` | Cmd+Space, Spotlight | Win+S | Super tap, then type | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME overview][gnome-overview] |
 | `os:screenshot-area` | Cmd+Shift+4 | Win+Shift+S | Print, then select an area | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME screenshots][gnome-shot] |
-| `os:screenshot-tool` | Cmd+Shift+5 | Win+Shift+S | Print | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME screenshots][gnome-shot] |
+| `os:screenshot-tool` | Cmd+Shift+5 | Win+Shift+S | Print opens the screenshot UI on GNOME 42+ | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME screenshots][gnome-shot] |
 | `os:lock-screen` | Ctrl+Cmd+Q | Win+L | Super+L | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME][gnome-keys] |
 | `os:force-quit` | Cmd+Option+Esc | Ctrl+Shift+Esc, Task Manager | Unavailable | [Apple][apple-keys], [Microsoft][ms-keys], [GNOME settings][gnome-settings] |
 | `os:full-screen` | Ctrl+Cmd+F in supported apps | F11 in supported apps | F11 in supported apps | [Microsoft Edge][ms-edge], [GNOME Terminal][gnome-terminal] |
@@ -141,6 +148,7 @@ GNOME Terminal uses Ctrl+Shift+C and Ctrl+Shift+V for copy and paste.
 [gnome-overview]: https://help.gnome.org/gnome-help/shell-overview.html
 [gnome-shot]: https://help.gnome.org/gnome-help/screen-shot-record.html
 [gnome-terminal]: https://help.gnome.org/gnome-terminal/adv-keyboard-shortcuts.html
+[gnome-40-schema]: https://gitlab.gnome.org/GNOME/gsettings-desktop-schemas/-/blob/40.0/schemas/org.gnome.desktop.wm.keybindings.gschema.xml.in
 [gnome-schema]: https://gitlab.gnome.org/GNOME/gsettings-desktop-schemas/-/blob/main/schemas/org.gnome.desktop.wm.keybindings.gschema.xml.in
 [gtk-text]: https://gnome.pages.gitlab.gnome.org/gtk/gtk4/class.Text.html
 [chrome-keys]: https://support.google.com/chrome/answer/157179
